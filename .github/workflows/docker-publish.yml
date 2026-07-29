@@ -1,0 +1,135 @@
+name: Publish Unraid Image
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: unraid-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: noneye-byte/oppailib
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.11.1"
+
+      - name: Read app version
+        id: version
+        shell: bash
+        run: |
+          version="$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' unraid/oppailib.xml)"
+          test -n "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Build APK for the image
+        working-directory: android
+        run: gradle --no-daemon :app:assembleDebug
+
+      - name: Stage APK
+        run: cp android/app/build/outputs/apk/debug/app-debug.apk oppailib.apk
+
+      - name: Upload APK for image build
+        uses: actions/upload-artifact@v4
+        with:
+          name: unraid-image-apk
+          path: oppailib.apk
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: apk
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Download APK
+        uses: actions/download-artifact@v4
+        with:
+          name: unraid-image-apk
+          path: docker/apk
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate full-image metadata
+        id: full-meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest
+            type=raw,value=${{ needs.apk.outputs.version }}
+            type=sha,prefix=sha-
+
+      - name: Build and publish full Unraid image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: runtime-onnx
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.full-meta.outputs.tags }}
+          labels: ${{ steps.full-meta.outputs.labels }}
+          build-args: OPPAI_VERSION=${{ needs.apk.outputs.version }}+${{ github.sha }}
+          cache-from: type=gha,scope=unraid-full
+          cache-to: type=gha,mode=max,scope=unraid-full
+
+      - name: Generate lean-image metadata
+        id: lean-meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=lean
+            type=raw,value=${{ needs.apk.outputs.version }}-lean
+
+      - name: Build and publish lean image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: runtime
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.lean-meta.outputs.tags }}
+          labels: ${{ steps.lean-meta.outputs.labels }}
+          build-args: OPPAI_VERSION=${{ needs.apk.outputs.version }}+${{ github.sha }}
+          cache-from: type=gha,scope=unraid-lean
+          cache-to: type=gha,mode=max,scope=unraid-lean

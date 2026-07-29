@@ -2,7 +2,7 @@ services:
   oppailib:
     build: .
     # Or pull the prebuilt image from the GitHub Container Registry:
-    # image: ghcr.io/errorwave/oppailib:latest
+    # image: ghcr.io/noneye-byte/oppailib:latest
     container_name: oppailib
     restart: unless-stopped
     ports:

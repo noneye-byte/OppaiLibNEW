@@ -75,7 +75,7 @@ Web UI ──────┼──▶ Go API ──▶ crypto (envelope AES-256-
 ## Quick start (docker-compose)
 
 ```bash
-git clone https://github.com/ErrorWave/OppaiLib.git oppailib && cd oppailib
+git clone https://github.com/noneye-byte/OppaiLibNEW.git oppailib && cd oppailib
 cp .env.example .env
 # edit .env: set OPPAI_PASSPHRASE and OPPAI_ADMIN_PASSWORD
 docker compose up -d
@@ -91,11 +91,11 @@ Registry (GHCR)** on every push to `main` and on version tags (see
 [.github/workflows/docker-publish.yml](.github/workflows/docker-publish.yml)):
 
 ```
-ghcr.io/errorwave/oppailib:latest
+ghcr.io/noneye-byte/oppailib:latest
 ```
 
 > The GHCR package is created **private** on the first publish. Make it public
-> once at *github.com/users/ErrorWave/packages/container/oppailib/settings →
+> once at *github.com/users/noneye-byte/packages/container/oppailib/settings →
 > Danger Zone → Change visibility → Public*. After that, Unraid pulls it with
 > **no authentication**.
 
@@ -224,7 +224,7 @@ ones), and one-frame noise is pruned from densely sampled clips. Per-tag timesta
 are recorded so the viewer can mark them on the video's timeline.
 
 This makes the image ~540MB. If you would rather not carry the model, pull
-`ghcr.io/errorwave/oppailib:lean` (or build `--target runtime`) for a lean,
+`ghcr.io/noneye-byte/oppailib:lean` (or build `--target runtime`) for a lean,
 cgo-free image that falls back to structural `meta` tags only. See
 [docs/AI.md](docs/AI.md) to swap the model or tune thresholds.
 

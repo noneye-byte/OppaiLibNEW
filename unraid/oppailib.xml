@@ -1,20 +1,20 @@
 <?xml version="1.0"?>
 <Container version="2">
   <Name>OppaiLib</Name>
-  <Version>0.23.0</Version>
-  <Repository>ghcr.io/errorwave/oppailib:latest</Repository>
-  <Registry>https://github.com/ErrorWave/OppaiLib/pkgs/container/oppailib</Registry>
+  <Version>0.24.0</Version>
+  <Repository>ghcr.io/noneye-byte/oppailib:latest</Repository>
+  <Registry>https://github.com/noneye-byte/OppaiLibNEW/pkgs/container/oppailib</Registry>
   <Network>bridge</Network>
   <MyIP/>
   <Shell>bash</Shell>
   <Privileged>false</Privileged>
-  <Support>https://github.com/ErrorWave/OppaiLib/issues</Support>
-  <Project>https://github.com/ErrorWave/OppaiLib</Project>
+  <Support>https://github.com/noneye-byte/OppaiLibNEW/issues</Support>
+  <Project>https://github.com/noneye-byte/OppaiLibNEW</Project>
   <Overview>OppaiLib — a private, self-hosted, encrypted media library for adult content (videos, GIFs, images, comics, and game entries) with tagging, URL scraping, and fully local AI auto-tagging. Also includes Libby, an in-app chat companion with importable character cards, which talks to an OpenAI-compatible LLM you run yourself. Everything stays on your box: no cloud storage, no cloud AI, no telemetry.</Overview>
   <Category>MediaApp:Other</Category>
   <WebUI>http://[IP]:[PORT:8080]/</WebUI>
-  <TemplateURL>https://raw.githubusercontent.com/ErrorWave/OppaiLib/main/unraid/oppailib.xml</TemplateURL>
-  <Icon>https://raw.githubusercontent.com/ErrorWave/OppaiLib/main/web/public/icon.png</Icon>
+  <TemplateURL>https://raw.githubusercontent.com/noneye-byte/OppaiLibNEW/main/unraid/oppailib.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/noneye-byte/OppaiLibNEW/main/web/public/icon.png</Icon>
   <ExtraParams/>
   <PostArgs/>
   <CPUset/>
