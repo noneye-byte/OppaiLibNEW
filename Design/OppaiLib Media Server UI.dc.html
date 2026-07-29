@@ -1,0 +1,507 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;600;700&family=Roboto+Flex:opsz,wght@10..144,400..700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,400,0,0" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body { font-family: 'Roboto', system-ui, sans-serif; }
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-thumb { background: #42483F; border-radius: 8px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    .material-symbols-rounded { font-variation-settings: 'opsz' 24, 'wght' 400, 'FILL' 0, 'GRAD' 0; line-height: 1; user-select: none; }
+    .fill-icon { font-variation-settings: 'opsz' 24, 'wght' 500, 'FILL' 1, 'GRAD' 0; }
+    input::placeholder { color: #939C8E; }
+    button { font-family: inherit; }
+  </style>
+</helmet>
+
+<div style="display:flex; width:100vw; height:100vh; background:#0F130E; color:#E1E4DC; overflow:hidden; position:relative;">
+
+  <!-- NAV RAIL -->
+  <nav style="width:96px; flex-shrink:0; height:100%; background:#161A15; border-right:1px solid #262B24; display:flex; flex-direction:column; align-items:center; padding:20px 0 16px; gap:20px;">
+    <button onclick="{{ toggleUpload }}" style="width:56px; height:56px; border-radius:16px; background:#0B5A2C; border:none; color:#92F8AC; display:flex; align-items:center; justify-content:center; cursor:pointer; box-shadow:0 1px 3px rgba(0,0,0,.4);">
+      <span class="material-symbols-rounded" style="font-size:26px;">add</span>
+    </button>
+
+    <div style="display:flex; flex-direction:column; gap:6px; width:100%; align-items:center;">
+      <sc-for list="{{ navItems }}" as="nav" hint-placeholder-count="6">
+        <button onclick="{{ nav.onClick }}" style="background:none; border:none; cursor:pointer; display:flex; flex-direction:column; align-items:center; gap:4px; padding:0; width:64px;">
+          <span style="width:56px; height:32px; border-radius:16px; display:flex; align-items:center; justify-content:center; background:{{ nav.pillBg }};">
+            <span class="material-symbols-rounded {{ nav.iconClass }}" style="font-size:22px; color:{{ nav.iconColor }};">{{ nav.icon }}</span>
+          </span>
+          <span style="font-size:11px; font-weight:500; color:{{ nav.labelColor }}; letter-spacing:.2px;">{{ nav.label }}</span>
+        </button>
+      </sc-for>
+    </div>
+
+    <div style="flex:1;"></div>
+
+    <button style="width:48px; height:48px; border-radius:24px; background:#262B24; border:none; color:#C2C9BD; display:flex; align-items:center; justify-content:center; cursor:pointer;">
+      <span class="material-symbols-rounded" style="font-size:22px;">settings</span>
+    </button>
+    <div style="width:40px; height:40px; border-radius:20px; background:#354B38; display:flex; align-items:center; justify-content:center; color:#D0E8D1; font-size:13px; font-weight:600;">JD</div>
+  </nav>
+
+  <!-- MAIN COLUMN -->
+  <div style="flex:1; min-width:0; display:flex; flex-direction:column; height:100%;">
+
+    <!-- TOP APP BAR -->
+    <header style="height:72px; flex-shrink:0; display:flex; align-items:center; gap:16px; padding:0 28px; border-bottom:1px solid #1E221C;">
+      <sc-if value="{{ isViewer }}" hint-placeholder-val="{{ false }}">
+        <button onclick="{{ closeItem }}" style="background:none; border:none; cursor:pointer; color:#E1E4DC; display:flex; align-items:center; justify-content:center; width:40px; height:40px; border-radius:20px; flex-shrink:0;">
+          <span class="material-symbols-rounded" style="font-size:24px;">arrow_back</span>
+        </button>
+      </sc-if>
+
+      <h1 style="font-size:20px; font-weight:500; margin:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:280px; flex-shrink:0;">{{ headerTitle }}</h1>
+
+      <div style="flex:1; max-width:520px; height:44px; background:#262B24; border-radius:22px; display:flex; align-items:center; gap:10px; padding:0 16px;">
+        <span class="material-symbols-rounded" style="font-size:20px; color:#C2C9BD;">search</span>
+        <input value="{{ search }}" oninput="{{ handleSearchInput }}" placeholder="Search photos, videos, games, comics..." style="flex:1; background:none; border:none; outline:none; color:#E1E4DC; font-size:14px;" />
+        <sc-if value="{{ hasSearch }}" hint-placeholder-val="{{ false }}">
+          <button onclick="{{ clearSearch }}" style="background:none; border:none; cursor:pointer; color:#C2C9BD; display:flex;">
+            <span class="material-symbols-rounded" style="font-size:18px;">close</span>
+          </button>
+        </sc-if>
+      </div>
+
+      <div style="flex:1;"></div>
+
+      <button style="background:none; border:1px solid #42483F; border-radius:20px; height:40px; padding:0 14px; display:flex; align-items:center; gap:6px; color:#C2C9BD; cursor:pointer; flex-shrink:0;">
+        <span class="material-symbols-rounded" style="font-size:18px;">tune</span>
+        <span style="font-size:13px; font-weight:500;">Filters</span>
+      </button>
+    </header>
+
+    <!-- CONTENT -->
+    <main style="flex:1; overflow-y:auto; padding:28px 32px 60px;">
+
+      <!-- HOME DASHBOARD -->
+      <sc-if value="{{ isHome }}" hint-placeholder-val="{{ false }}">
+        <div>
+          <h2 style="font-size:28px; font-weight:400; margin:0 0 4px;">Good evening</h2>
+          <p style="font-size:14px; color:#C2C9BD; margin:0 0 32px;">Here's what's new across your library</p>
+
+          <sc-for list="{{ homeRows }}" as="row" hint-placeholder-count="5">
+            <section style="margin-bottom:36px;">
+              <div style="display:flex; align-items:center; gap:10px; margin-bottom:14px;">
+                <span class="material-symbols-rounded" style="font-size:22px; color:#92F8AC;">{{ row.icon }}</span>
+                <h3 style="font-size:18px; font-weight:500; margin:0; flex:1;">{{ row.label }}</h3>
+                <button onclick="{{ row.onSeeAll }}" style="background:none; border:none; color:#92F8AC; font-size:13px; font-weight:600; cursor:pointer; display:flex; align-items:center; gap:2px;">
+                  See all
+                  <span class="material-symbols-rounded" style="font-size:16px;">chevron_right</span>
+                </button>
+              </div>
+              <div style="display:flex; gap:16px; overflow-x:auto; padding-bottom:8px;">
+                <sc-for list="{{ row.items }}" as="item" hint-placeholder-count="6">
+                  <div onclick="{{ item.onOpen }}" style="flex-shrink:0; width:200px; cursor:pointer;">
+                    <div style="position:relative; width:200px; aspect-ratio:{{ item.aspect }}; border-radius:16px; overflow:hidden; background:{{ item.swatchBg }};">
+                      <div style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; flex-direction:column; gap:6px; opacity:.55;">
+                        <span class="material-symbols-rounded" style="font-size:30px; color:#fff;">{{ item.typeIcon }}</span>
+                        <span style="font:600 10px ui-monospace,monospace; color:#fff; letter-spacing:1px;">{{ item.typeLabel }}</span>
+                      </div>
+                      <button onclick="{{ item.onFav }}" style="position:absolute; top:8px; right:8px; width:32px; height:32px; border-radius:16px; background:rgba(0,0,0,.4); border:none; display:flex; align-items:center; justify-content:center; cursor:pointer;">
+                        <span class="material-symbols-rounded fill-icon" style="font-size:18px; color:{{ item.favColor }};">{{ item.favIcon }}</span>
+                      </button>
+                      <span style="position:absolute; bottom:6px; right:8px; font-size:11px; font-weight:600; color:#fff; background:rgba(0,0,0,.5); padding:2px 6px; border-radius:6px;">{{ item.stat }}</span>
+                    </div>
+                    <div style="padding:10px 2px 0;">
+                      <div style="font-size:13px; font-weight:500; color:#E1E4DC; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ item.title }}</div>
+                      <div style="font-size:12px; color:#8C9388; margin-top:2px;">{{ item.tag }}</div>
+                    </div>
+                  </div>
+                </sc-for>
+              </div>
+            </section>
+          </sc-for>
+        </div>
+      </sc-if>
+
+      <!-- GRID-LIKE (category / favorites / search) -->
+      <sc-if value="{{ isGridLike }}" hint-placeholder-val="{{ false }}">
+        <div>
+          <div style="display:flex; align-items:baseline; gap:12px; margin-bottom:6px;">
+            <h2 style="font-size:26px; font-weight:400; margin:0;">{{ gridTitle }}</h2>
+            <span style="font-size:13px; color:#8C9388;">{{ gridCountLabel }}</span>
+          </div>
+
+          <sc-if value="{{ showFilters }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex; gap:8px; margin:18px 0 24px; flex-wrap:wrap;">
+              <sc-for list="{{ filterChips }}" as="chip" hint-placeholder-count="5">
+                <button onclick="{{ chip.onClick }}" style="height:36px; padding:0 16px; border-radius:18px; font-size:13px; font-weight:500; cursor:pointer; display:flex; align-items:center; gap:6px; background:{{ chip.bg }}; color:{{ chip.color }}; border:1px solid {{ chip.border }};">
+                  <sc-if value="{{ chip.active }}" hint-placeholder-val="{{ false }}">
+                    <span class="material-symbols-rounded" style="font-size:16px;">check</span>
+                  </sc-if>
+                  {{ chip.label }}
+                </button>
+              </sc-for>
+            </div>
+          </sc-if>
+          <sc-if value="{{ showFilters }}" hint-placeholder-val="{{ true }}"></sc-if>
+
+          <div style="margin-top:{{ gridTopSpacer }}px; display:grid; grid-template-columns:repeat(auto-fill, minmax(200px, 1fr)); gap:22px;">
+            <sc-for list="{{ gridItems }}" as="item" hint-placeholder-count="10">
+              <div onclick="{{ item.onOpen }}" style="cursor:pointer;">
+                <div style="position:relative; width:100%; aspect-ratio:{{ item.aspect }}; border-radius:16px; overflow:hidden; background:{{ item.swatchBg }};">
+                  <div style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; flex-direction:column; gap:6px; opacity:.55;">
+                    <span class="material-symbols-rounded" style="font-size:32px; color:#fff;">{{ item.typeIcon }}</span>
+                    <span style="font:600 10px ui-monospace,monospace; color:#fff; letter-spacing:1px;">{{ item.typeLabel }}</span>
+                  </div>
+                  <button onclick="{{ item.onFav }}" style="position:absolute; top:8px; right:8px; width:32px; height:32px; border-radius:16px; background:rgba(0,0,0,.4); border:none; display:flex; align-items:center; justify-content:center; cursor:pointer;">
+                    <span class="material-symbols-rounded fill-icon" style="font-size:18px; color:{{ item.favColor }};">{{ item.favIcon }}</span>
+                  </button>
+                  <span style="position:absolute; bottom:6px; right:8px; font-size:11px; font-weight:600; color:#fff; background:rgba(0,0,0,.5); padding:2px 6px; border-radius:6px;">{{ item.stat }}</span>
+                </div>
+                <div style="padding:10px 2px 0;">
+                  <div style="font-size:13px; font-weight:500; color:#E1E4DC; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ item.title }}</div>
+                  <div style="font-size:12px; color:#8C9388; margin-top:2px;">{{ item.tag }}</div>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+
+          <sc-if value="{{ gridEmpty }}" hint-placeholder-val="{{ false }}">
+            <div style="text-align:center; padding:80px 0; color:#8C9388;">
+              <span class="material-symbols-rounded" style="font-size:40px; display:block; margin-bottom:12px;">search_off</span>
+              <div style="font-size:14px;">No items match your search or filter.</div>
+            </div>
+          </sc-if>
+        </div>
+      </sc-if>
+
+      <!-- VIEWER -->
+      <sc-if value="{{ isViewer }}" hint-placeholder-val="{{ false }}">
+        <div style="max-width:1100px; margin:0 auto;">
+
+          <!-- VIDEO / GIF PLAYER -->
+          <sc-if value="{{ activeIsMotion }}" hint-placeholder-val="{{ false }}">
+            <div>
+              <div style="width:100%; aspect-ratio:16/9; border-radius:20px; overflow:hidden; background:{{ activeItem.swatchBg }}; position:relative; display:flex; align-items:center; justify-content:center;">
+                <button style="width:72px; height:72px; border-radius:36px; background:rgba(0,0,0,.45); border:none; display:flex; align-items:center; justify-content:center; cursor:pointer;">
+                  <span class="material-symbols-rounded fill-icon" style="font-size:36px; color:#fff;">play_arrow</span>
+                </button>
+              </div>
+              <div style="display:flex; align-items:center; gap:14px; margin-top:14px; background:#1C201B; border-radius:16px; padding:10px 16px;">
+                <span class="material-symbols-rounded" style="font-size:22px; cursor:pointer;">play_arrow</span>
+                <span style="font-size:12px; color:#C2C9BD; width:36px;">0:00</span>
+                <div style="flex:1; height:4px; border-radius:2px; background:#42483F; position:relative;">
+                  <div style="position:absolute; left:0; top:0; height:100%; width:28%; border-radius:2px; background:#74DB94;"></div>
+                </div>
+                <span style="font-size:12px; color:#C2C9BD; width:36px;">{{ activeItem.stat }}</span>
+                <span class="material-symbols-rounded" style="font-size:22px; cursor:pointer;">volume_up</span>
+                <span class="material-symbols-rounded" style="font-size:22px; cursor:pointer;">fullscreen</span>
+              </div>
+            </div>
+          </sc-if>
+
+          <!-- PHOTO VIEWER -->
+          <sc-if value="{{ activeIsPhoto }}" hint-placeholder-val="{{ false }}">
+            <div style="width:100%; aspect-ratio:4/3; max-height:64vh; border-radius:20px; overflow:hidden; background:{{ activeItem.swatchBg }}; display:flex; align-items:center; justify-content:center; flex-direction:column; gap:8px; opacity:.9;">
+              <span class="material-symbols-rounded" style="font-size:48px; color:#fff;">photo_library</span>
+              <span style="font:600 12px ui-monospace,monospace; color:#fff; letter-spacing:1px;">{{ activeItem.stat }}</span>
+            </div>
+          </sc-if>
+
+          <!-- COMIC READER -->
+          <sc-if value="{{ activeIsComic }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex; align-items:center; justify-content:center; gap:24px;">
+              <button style="width:44px; height:44px; border-radius:22px; background:#262B24; border:none; color:#E1E4DC; display:flex; align-items:center; justify-content:center; cursor:pointer;">
+                <span class="material-symbols-rounded" style="font-size:22px;">chevron_left</span>
+              </button>
+              <div style="width:340px; aspect-ratio:2/3; border-radius:16px; overflow:hidden; background:{{ activeItem.swatchBg }}; display:flex; align-items:center; justify-content:center; flex-direction:column; gap:8px;">
+                <span class="material-symbols-rounded" style="font-size:40px; color:#fff;">auto_stories</span>
+                <span style="font:600 11px ui-monospace,monospace; color:#fff;">PAGE 1 OF {{ activeItem.pageCount }}</span>
+              </div>
+              <button style="width:44px; height:44px; border-radius:22px; background:#262B24; border:none; color:#E1E4DC; display:flex; align-items:center; justify-content:center; cursor:pointer;">
+                <span class="material-symbols-rounded" style="font-size:22px;">chevron_right</span>
+              </button>
+            </div>
+          </sc-if>
+
+          <!-- GAME DETAIL -->
+          <sc-if value="{{ activeIsGame }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex; gap:32px;">
+              <div style="width:260px; aspect-ratio:3/4; border-radius:20px; overflow:hidden; background:{{ activeItem.swatchBg }}; flex-shrink:0; display:flex; align-items:center; justify-content:center;">
+                <span class="material-symbols-rounded" style="font-size:48px; color:#fff;">sports_esports</span>
+              </div>
+              <div style="flex:1; padding-top:8px;">
+                <h2 style="font-size:26px; font-weight:500; margin:0 0 8px;">{{ activeItem.title }}</h2>
+                <div style="font-size:13px; color:#8C9388; margin-bottom:18px;">{{ activeItem.tag }} · {{ activeItem.stat }}</div>
+                <div style="display:flex; gap:12px; margin-bottom:20px;">
+                  <button style="height:44px; padding:0 24px; border-radius:22px; background:#74DB94; color:#00391A; border:none; font-size:14px; font-weight:600; cursor:pointer; display:flex; align-items:center; gap:8px;">
+                    <span class="material-symbols-rounded fill-icon" style="font-size:20px;">play_arrow</span>
+                    Play
+                  </button>
+                  <button onclick="{{ activeItem.onFav }}" style="height:44px; padding:0 20px; border-radius:22px; background:none; color:#E1E4DC; border:1px solid #42483F; font-size:14px; font-weight:600; cursor:pointer; display:flex; align-items:center; gap:8px;">
+                    <span class="material-symbols-rounded" style="font-size:20px; color:{{ activeItem.favColor }};">{{ activeItem.favIcon }}</span>
+                    Favorite
+                  </button>
+                </div>
+                <p style="font-size:14px; line-height:1.6; color:#C2C9BD; max-width:520px;">A locally-installed title from your library. Launch to play, or add it to your favorites collection for quick access later.</p>
+              </div>
+            </div>
+          </sc-if>
+
+          <!-- SHARED META (title/tags) for non-game types -->
+          <sc-if value="{{ activeShowsMeta }}" hint-placeholder-val="{{ false }}">
+            <div style="margin-top:24px;">
+              <div style="display:flex; align-items:center; gap:14px;">
+                <h2 style="font-size:24px; font-weight:500; margin:0; flex:1;">{{ activeItem.title }}</h2>
+                <button onclick="{{ activeItem.onFav }}" style="width:44px; height:44px; border-radius:22px; background:#262B24; border:none; display:flex; align-items:center; justify-content:center; cursor:pointer;">
+                  <span class="material-symbols-rounded fill-icon" style="font-size:22px; color:{{ activeItem.favColor }};">{{ activeItem.favIcon }}</span>
+                </button>
+              </div>
+              <div style="display:flex; gap:8px; margin-top:14px;">
+                <span style="font-size:12px; font-weight:500; padding:6px 14px; border-radius:14px; background:#354B38; color:#D0E8D1;">{{ activeItem.tag }}</span>
+                <span style="font-size:12px; font-weight:500; padding:6px 14px; border-radius:14px; background:#262B24; color:#C2C9BD;">{{ activeItem.typeLabel }}</span>
+              </div>
+              <p style="font-size:14px; line-height:1.6; color:#C2C9BD; max-width:640px; margin-top:16px;">Part of your personal library. Streamed directly from your OppaiLib server — no re-encoding, no external uploads.</p>
+            </div>
+          </sc-if>
+
+        </div>
+      </sc-if>
+    </main>
+  </div>
+
+  <!-- UPLOAD DIALOG -->
+  <sc-if value="{{ uploadOpen }}" hint-placeholder-val="{{ false }}">
+    <div style="position:absolute; inset:0; background:rgba(0,0,0,.55); display:flex; align-items:center; justify-content:center; z-index:20;">
+      <div style="width:480px; background:#262B24; border-radius:28px; padding:28px;">
+        <h2 style="font-size:20px; font-weight:500; margin:0 0 20px;">Upload media</h2>
+        <div style="border:1.5px dashed #6C756A; border-radius:16px; padding:40px 20px; text-align:center; color:#C2C9BD;">
+          <span class="material-symbols-rounded" style="font-size:36px; display:block; margin-bottom:10px;">upload_file</span>
+          <div style="font-size:14px;">Drag files here, or click to browse</div>
+          <div style="font-size:12px; color:#8C9388; margin-top:4px;">Photos, GIFs, videos, games, comics</div>
+        </div>
+        <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:24px;">
+          <button onclick="{{ toggleUpload }}" style="height:40px; padding:0 20px; border-radius:20px; background:none; border:none; color:#92F8AC; font-size:14px; font-weight:600; cursor:pointer;">Cancel</button>
+          <button onclick="{{ toggleUpload }}" style="height:40px; padding:0 20px; border-radius:20px; background:#74DB94; border:none; color:#00391A; font-size:14px; font-weight:600; cursor:pointer;">Upload</button>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+const CATEGORY_META = {
+  photos: { label: 'Photos', icon: 'photo_library', aspect: '4/3', tags: ['Nature', 'Portrait', 'Architecture', 'Abstract'],
+    titles: ['Sunset Ridge', 'Harbor Lights', 'Autumn Path', 'Quiet Market', 'Glass Towers', 'Desert Bloom', 'Snow Trail', 'Old Bridge', 'Morning Fog'],
+    stat: (i) => ['4032×3024', '6000×4000', '3840×2160', '5184×3456'][i % 4] },
+  gifs: { label: 'GIFs', icon: 'animation', aspect: '1/1', tags: ['Loop', 'Meme', 'Nature', 'Glitch'],
+    titles: ['Loop 01', 'Reaction Pack A', 'Idle Animation', 'Transition FX', 'Pixel Bounce', 'Glitch Cycle', 'Wave Loop', 'Spin Cycle', 'Blink Loop'],
+    stat: (i) => '0:0' + ((i % 5) + 1) },
+  videos: { label: 'Videos', icon: 'movie', aspect: '16/9', tags: ['Action', 'Documentary', 'Music', 'Tutorial'],
+    titles: ['Coastal Drive', 'Studio Session', 'City Timelapse', 'Behind the Scenes', 'Product Demo', 'Live Set', 'Short Film', 'Tutorial: Basics', 'Interview Clip'],
+    stat: (i) => (3 + i) + ':' + String((i * 7) % 60).padStart(2, '0') },
+  games: { label: 'Games', icon: 'sports_esports', aspect: '3/4', tags: ['Indie', 'Action', 'Puzzle', 'RPG'],
+    titles: ['Nebula Drift', 'Pixel Keep', 'Trail Runner', 'Block Theory', 'Quiet Forest', 'Neon Sprint', 'Tower Watch', 'Sky Farmer', 'Circuit Break'],
+    stat: (i) => ['842 MB', '1.2 GB', '356 MB', '2.1 GB'][i % 4] },
+  comics: { label: 'Comics', icon: 'auto_stories', aspect: '2/3', tags: ['Fantasy', 'Sci-Fi', 'Slice of Life', 'Horror'],
+    titles: ['Iron Horizon', 'Paper Moons', 'The Last Signal', 'Glasshouse', 'Nightshade', 'Static Bloom', 'Wire & Bone', 'Faded Ink', 'Hollow Sky'],
+    stat: (i) => (18 + (i * 3) % 20) + ' pages' },
+};
+
+const SWATCHES = [
+  'linear-gradient(135deg, oklch(30% 0.045 150), oklch(20% 0.04 150))',
+  'linear-gradient(135deg, oklch(30% 0.045 200), oklch(20% 0.04 200))',
+  'linear-gradient(135deg, oklch(30% 0.045 260), oklch(20% 0.04 260))',
+  'linear-gradient(135deg, oklch(32% 0.05 60), oklch(20% 0.04 60))',
+  'linear-gradient(135deg, oklch(30% 0.05 15), oklch(20% 0.04 15))',
+];
+
+const NAV_SECTIONS = [
+  { id: 'home', label: 'Home', icon: 'home' },
+  { id: 'photos', label: 'Photos', icon: 'photo_library' },
+  { id: 'gifs', label: 'GIFs', icon: 'animation' },
+  { id: 'videos', label: 'Videos', icon: 'movie' },
+  { id: 'games', label: 'Games', icon: 'sports_esports' },
+  { id: 'comics', label: 'Comics', icon: 'auto_stories' },
+  { id: 'favorites', label: 'Favorites', icon: 'favorite' },
+];
+
+function buildAllItems() {
+  const items = [];
+  Object.keys(CATEGORY_META).forEach((catId) => {
+    const meta = CATEGORY_META[catId];
+    for (let i = 0; i < 9; i++) {
+      items.push({
+        id: catId + '-' + i,
+        categoryId: catId,
+        title: meta.titles[i % meta.titles.length],
+        tag: meta.tags[i % meta.tags.length],
+        aspect: meta.aspect,
+        typeIcon: meta.icon,
+        typeLabel: catId.slice(0, -1).toUpperCase(),
+        stat: meta.stat(i),
+        pageCount: catId === 'comics' ? (18 + (i * 3) % 20) : null,
+        swatchBg: SWATCHES[i % SWATCHES.length],
+      });
+    }
+  });
+  return items;
+}
+
+const ALL_ITEMS = buildAllItems();
+
+class Component extends DCLogic {
+  state = {
+    activeSection: 'home',
+    activeItemId: null,
+    search: '',
+    filters: {},
+    favorites: {},
+    uploadOpen: false,
+  };
+
+  selectSection = (id) => this.setState({ activeSection: id, activeItemId: null, search: '' });
+  openItem = (id) => this.setState({ activeItemId: id });
+  closeItem = () => this.setState({ activeItemId: null });
+  toggleUpload = () => this.setState((s) => ({ uploadOpen: !s.uploadOpen }));
+  handleSearchInput = (e) => this.setState({ search: e.target.value, activeItemId: null });
+  clearSearch = () => this.setState({ search: '' });
+  setFilter = (section, tag) => this.setState((s) => ({ filters: { ...s.filters, [section]: tag } }));
+  toggleFavorite = (id, e) => {
+    if (e && e.stopPropagation) e.stopPropagation();
+    this.setState((s) => ({ favorites: { ...s.favorites, [id]: !s.favorites[id] } }));
+  };
+
+  decorate(item) {
+    const fav = !!this.state.favorites[item.id];
+    return {
+      ...item,
+      fav,
+      favIcon: fav ? 'favorite' : 'favorite_border',
+      favColor: fav ? '#FFB4AB' : 'rgba(255,255,255,0.9)',
+      onOpen: () => this.openItem(item.id),
+      onFav: (e) => this.toggleFavorite(item.id, e),
+    };
+  }
+
+  renderVals() {
+    const { activeSection, activeItemId, search, filters, uploadOpen } = this.state;
+    const hasSearch = search.trim().length > 0;
+    const isViewer = !!activeItemId;
+    const isFavorites = !isViewer && activeSection === 'favorites' && !hasSearch;
+    const isHome = !isViewer && activeSection === 'home' && !hasSearch && !isFavorites;
+    const isSearch = !isViewer && hasSearch;
+    const isGrid = !isViewer && !isHome && !isFavorites && !isSearch;
+    const isGridLike = isGrid || isFavorites || isSearch;
+
+    const navItems = NAV_SECTIONS.map((n) => {
+      const active = activeSection === n.id;
+      return {
+        ...n,
+        onClick: () => this.selectSection(n.id),
+        pillBg: active ? '#0B5A2C' : 'transparent',
+        iconColor: active ? '#92F8AC' : '#C2C9BD',
+        iconClass: active ? 'fill-icon' : '',
+        labelColor: active ? '#E1E4DC' : '#8C9388',
+      };
+    });
+
+    let headerTitle = 'Library';
+    let activeItem = null;
+    if (isViewer) {
+      const found = ALL_ITEMS.find((it) => it.id === activeItemId);
+      activeItem = found ? this.decorate(found) : null;
+      headerTitle = activeItem ? activeItem.title : 'Library';
+    } else if (isSearch) {
+      headerTitle = 'Search results';
+    } else if (isFavorites) {
+      headerTitle = 'Favorites';
+    } else if (isHome) {
+      headerTitle = 'Library';
+    } else {
+      headerTitle = CATEGORY_META[activeSection] ? CATEGORY_META[activeSection].label : 'Library';
+    }
+
+    const homeRows = isHome
+      ? NAV_SECTIONS.filter((n) => CATEGORY_META[n.id]).map((n) => ({
+          id: n.id,
+          label: CATEGORY_META[n.id].label,
+          icon: n.icon,
+          onSeeAll: () => this.selectSection(n.id),
+          items: ALL_ITEMS.filter((it) => it.categoryId === n.id).slice(0, 6).map((it) => this.decorate(it)),
+        }))
+      : [];
+
+    let gridTitle = '';
+    let gridItems = [];
+    let showFilters = false;
+    let filterChips = [];
+    const activeFilter = filters[activeSection] || 'All';
+
+    if (isFavorites) {
+      gridTitle = 'Favorites';
+      gridItems = ALL_ITEMS.filter((it) => this.state.favorites[it.id]).map((it) => this.decorate(it));
+    } else if (isSearch) {
+      gridTitle = 'Search results';
+      const q = search.trim().toLowerCase();
+      gridItems = ALL_ITEMS.filter((it) => it.title.toLowerCase().includes(q) || it.tag.toLowerCase().includes(q)).map((it) => this.decorate(it));
+    } else if (isGrid) {
+      const meta = CATEGORY_META[activeSection];
+      gridTitle = meta ? meta.label : '';
+      showFilters = true;
+      const tags = ['All', ...(meta ? meta.tags : [])];
+      filterChips = tags.map((tag) => {
+        const active = activeFilter === tag;
+        return {
+          label: tag,
+          active,
+          onClick: () => this.setFilter(activeSection, tag),
+          bg: active ? '#354B38' : 'transparent',
+          color: active ? '#D0E8D1' : '#C2C9BD',
+          border: active ? '#354B38' : '#42483F',
+        };
+      });
+      gridItems = ALL_ITEMS.filter((it) => it.categoryId === activeSection && (activeFilter === 'All' || it.tag === activeFilter)).map((it) => this.decorate(it));
+    }
+
+    const gridCountLabel = isGridLike ? gridItems.length + (gridItems.length === 1 ? ' item' : ' items') : '';
+
+    return {
+      navItems,
+      headerTitle,
+      search,
+      hasSearch,
+      handleSearchInput: this.handleSearchInput,
+      clearSearch: this.clearSearch,
+      toggleUpload: this.toggleUpload,
+      uploadOpen,
+      closeItem: this.closeItem,
+      isHome,
+      isGridLike,
+      isViewer,
+      homeRows,
+      gridTitle,
+      gridItems,
+      gridEmpty: isGridLike && gridItems.length === 0,
+      gridCountLabel,
+      showFilters,
+      filterChips,
+      gridTopSpacer: showFilters ? 0 : 24,
+      activeItem,
+      activeIsMotion: isViewer && activeItem && (activeItem.categoryId === 'videos' || activeItem.categoryId === 'gifs'),
+      activeIsPhoto: isViewer && activeItem && activeItem.categoryId === 'photos',
+      activeIsComic: isViewer && activeItem && activeItem.categoryId === 'comics',
+      activeIsGame: isViewer && activeItem && activeItem.categoryId === 'games',
+      activeShowsMeta: isViewer && activeItem && activeItem.categoryId !== 'games',
+    };
+  }
+}
+</script>
+</body>
+</html>

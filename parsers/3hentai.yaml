@@ -1,0 +1,74 @@
+# ── 3hentai site parser ──────────────────────────────────────────────────
+# Imports a gallery as a single comic entry with its tags filed under the
+# taxonomy the site puts them in (artist, group, parody, character, …) rather
+# than flattened into one undifferentiated pile.
+#
+# Copy into /config/parsers/ to enable. Respect the site's robots.txt and the
+# politeness delay in Settings — the scraper honors both.
+#
+# ── VERIFY THE SELECTORS BEFORE TRUSTING THIS ───────────────────────────────
+# These selectors target the taxonomy *link paths* (a[href^="/artist/"]) rather
+# than CSS class names, because the paths are the stable part of a gallery site:
+# classes get restyled, but /artist/<name> is load-bearing for the site's own
+# navigation. They are still a best guess at the markup.
+#
+# To check against the real page, open a gallery and run in the browser console:
+#
+#   ['tag','artist','group','parody','character','language','category']
+#     .forEach(c => console.log(c,
+#       [...document.querySelectorAll(`a[href^="/${c}/"]`)].map(a => a.textContent.trim())))
+#
+# If a taxonomy comes back empty, inspect one of its links and correct the
+# prefix below. If the site nests them under a container (e.g. #tags), tighten
+# each selector by prefixing it — that guards against picking up links from the
+# page's header, sidebar or "related galleries" strip.
+
+name: 3hentai
+
+match_hosts:
+  - 3hentai.net
+  - "*.3hentai.net"
+
+# A gallery is an ordered run of page images → one comic entry, not one entry
+# per page.
+kind: comic
+
+selectors:
+  title:
+    selector: "h1"
+    attr: text
+
+  # Page images. Gallery sites lazy-load, so the real source is often in a
+  # data-* attribute while src holds a placeholder; if pages come through blank,
+  # switch attr to data-src.
+  media:
+    selector: "#thumbnail-container img, .thumb-container img"
+    attr: src
+
+  # Plain content tags → category "general".
+  tags:
+    selector: "a[href^='/tag/']"
+    attr: text
+
+  # Everything else keeps its own taxonomy. These category names are written
+  # verbatim into tags.category, so they're free-form: add a taxonomy here and
+  # it exists — no code change, no migration.
+  tag_groups:
+    artist:
+      selector: "a[href^='/artist/']"
+      attr: text
+    group:
+      selector: "a[href^='/group/']"
+      attr: text
+    parody:
+      selector: "a[href^='/parody/']"
+      attr: text
+    character:
+      selector: "a[href^='/character/']"
+      attr: text
+    language:
+      selector: "a[href^='/language/']"
+      attr: text
+    category:
+      selector: "a[href^='/category/']"
+      attr: text

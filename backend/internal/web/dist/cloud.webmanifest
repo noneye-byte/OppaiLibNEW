@@ -1,0 +1,13 @@
+{
+  "name": "Nextcloud",
+  "short_name": "Nextcloud",
+  "description": "Your files, calendar and contacts.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0082c9",
+  "theme_color": "#0082c9",
+  "icons": [
+    { "src": "/cloud-icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

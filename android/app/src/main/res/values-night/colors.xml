@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Dark: the bright mark on the app's own near-black surface. See values/colors.xml
+         for why the two themes ink the same mark differently. -->
+    <color name="ic_launcher_background">#191410</color>
+    <color name="ic_launcher_foreground">#FE6A11</color>
+
+    <color name="window_background">#141218</color>
+</resources>

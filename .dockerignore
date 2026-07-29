@@ -1,0 +1,11 @@
+# Keep the build context small and avoid host-specific artifacts.
+**/node_modules
+web/dist
+backend/internal/web/dist
+backend/oppailib
+backend/bin
+android/
+data/
+.git
+*.log
+.env

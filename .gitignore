@@ -1,0 +1,47 @@
+# Secrets / local config
+.env
+*.key
+keystore.json
+
+# Runtime data
+/media/
+/config/
+/db/
+*.sqlite
+*.sqlite-*
+
+# Go
+/backend/oppailib
+/backend/bin/
+*.exe
+
+# Web
+/web/node_modules/
+/web/dist/
+/web/.vite/
+
+# Android
+/android/.gradle/
+/android/.gradle-*/
+/android/.kotlin/
+/android/build/
+/android/app/build/
+/android/local.properties
+*.apk
+*.keystore
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
+*.log
+
+# AI models (large binaries — user supplies)
+/config/models/*.onnx
+
+# Exported Docker images (`docker save`) — hundreds of MB, rebuilt on demand
+*.tar
+
+# The APK is baked into the image by CI (see docker/apk/README.md); the built
+# artifact itself is never committed.
+docker/apk/*.apk

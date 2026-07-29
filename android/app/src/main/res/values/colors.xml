@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The launcher icon's two layers, held as colours rather than baked into the
+         vector, so they can differ by theme — values-night carries the dark set. The
+         launcher resolves them against the *system* configuration, so the icon on the
+         home screen turns over with the phone's light/dark setting instead of being an
+         orange-on-near-black plate in both.
+
+         (On Android 13+ "themed icons" goes further still and ignores both of these,
+         tinting ic_launcher_monochrome from the wallpaper. This is the fallback for
+         everyone who hasn't turned that on, which is most people.)
+
+         Light: the mark in a deeper orange on a warm plate. The brighter #FE6A11 the
+         dark icon uses washes out against a pale background — same mark, different
+         ink, so it stays legible either way. -->
+    <color name="ic_launcher_background">#FFF1E4</color>
+    <color name="ic_launcher_foreground">#D2560A</color>
+
+    <color name="window_background">#FFFBFE</color>
+</resources>

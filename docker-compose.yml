@@ -1,0 +1,38 @@
+services:
+  oppailib:
+    build: .
+    # Or pull the prebuilt image from the GitHub Container Registry:
+    # image: ghcr.io/errorwave/oppailib:latest
+    container_name: oppailib
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      OPPAI_PASSPHRASE: "${OPPAI_PASSPHRASE:-}"
+      OPPAI_ADMIN_USER: "${OPPAI_ADMIN_USER:-admin}"
+      OPPAI_ADMIN_PASSWORD: "${OPPAI_ADMIN_PASSWORD:-}"
+      OPPAI_AI_ENABLED: "${OPPAI_AI_ENABLED:-true}"
+      OPPAI_AI_DEVICE: "${OPPAI_AI_DEVICE:-cpu}"
+      OPPAI_SCRAPE_DELAY_MS: "${OPPAI_SCRAPE_DELAY_MS:-1500}"
+      # How long a browser session may sit unused before it is signed out. Browser
+      # sessions are also dropped on restart; the Android app is exempt from both.
+      # 0 disables the idle check.
+      OPPAI_WEB_IDLE_MINUTES: "${OPPAI_WEB_IDLE_MINUTES:-60}"
+    volumes:
+      - ./data/media:/media       # encrypted blob store
+      # keystore + site parsers. The AI model is baked into the image at
+      # /opt/oppailib/models, deliberately outside this mount.
+      - ./data/config:/config
+      - ./data/db:/db             # sqlite metadata
+      # Upload staging and processing scratch. Regenerable, but not small — a
+      # resumable upload parks the whole file here before it is stored — so it is
+      # mapped out rather than left to grow inside the container.
+      - ./data/cache:/cache
+    # For GPU acceleration (Unraid + Nvidia), uncomment:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]

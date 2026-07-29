@@ -1,0 +1,63 @@
+# ── OppaiLib site parser template ────────────────────────────────────────
+# Copy this file into /config/parsers/ (one file per site) and edit the
+# selectors to match the site's HTML. OppaiLib loads every *.yaml here on start.
+# If no site parser matches a URL, the built-in generic OpenGraph parser is used.
+#
+# This is YOUR tool for YOUR use. OppaiLib ships no commercial-site parsers and
+# rate-limits + honors robots.txt. Add parsers only for sites you're permitted
+# to scrape.
+
+# Human-readable name (defaults to the filename if omitted).
+name: example-gallery
+
+# Hostnames this parser handles. Supports exact hosts and a single leading
+# "*." wildcard, e.g. "*.example.com".
+match_hosts:
+  - example.com
+  - "*.example.com"
+
+# Default media kind for entries from this site: image | video | gif | comic | game
+kind: image
+
+# How to extract each field. `attr` is one of:
+#   text  → the element's text content (default)
+#   html  → the element's inner HTML
+#   <name>→ an attribute value, e.g. src, href, data-src, content
+selectors:
+  title:
+    selector: "h1.post-title"
+    attr: text
+
+  description:
+    selector: "div.post-description"
+    attr: text
+
+  # Multi-value: every matching element contributes one tag.
+  tags:
+    selector: "ul.tags li a"
+    attr: text
+
+  performers:
+    selector: "div.performers a"
+    attr: text
+
+  # Multi-value: media URLs (resolved to absolute automatically).
+  media:
+    selector: "video source, img.full-res"
+    attr: src
+
+  # Optional. Tags that belong to a specific taxonomy rather than the general
+  # pile. Each key is a tag category, stored verbatim in the tags.category
+  # column — categories are free-form, so inventing one here is enough to make
+  # it exist. Nothing to recompile, no migration to run.
+  #
+  # Use this on sites that file their tags into sections (most doujin/gallery
+  # sites do). Without it, an artist's name and a content tag are indistinguishable
+  # once imported. See 3hentai.yaml for a full worked example.
+  tag_groups:
+    artist:
+      selector: "div.artists a"
+      attr: text
+    character:
+      selector: "div.characters a"
+      attr: text

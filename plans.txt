@@ -1,0 +1,1634 @@
+OppaiLib Development and Improvement Brief
+
+STATUS KEY — updated 2026-07-26 (eighth pass). Proceeded down the list in order.
+  [DONE]      implemented, tests green, committed on main
+  [PARTIAL]   the substance is in; what is left is named on the line
+  [TODO]      not started
+
+  1 [DONE]      2 [DONE]      3 [DONE]      4 [DONE]      5 [DONE]      6 [DONE]
+  7 [DONE]      8 [TODO — deliberately, see the section]
+  9 [DONE]     10 [DONE]     11 [DONE]     12 [DONE]     13 [DONE]     14 [PARTIAL]
+ 15 [DONE]     16 [PARTIAL]  17 [PARTIAL]  18 [DONE]     19 [PARTIAL]  20 [DONE]
+ 21 [PARTIAL]  22 [DONE]     23 [PARTIAL]  24 [DONE]     25 [PARTIAL]  26 [PARTIAL]
+ 27 [PARTIAL]
+
+The eighth pass completed §10's named remainder. Every built-in source now declares
+its authentication posture and content warning; older custom sources say unknown
+rather than being silently presented as public. YAML adapters carry the same fields,
+and site analysis deliberately writes authentication: review because a fetched HTML
+page cannot prove that the rest of a site has no login wall. The proposal cannot be
+saved until a reviewer changes that to none, optional or required; optional/required
+also need a note explaining what must be configured. A required generic adapter is
+shown but not fetched, since a selector file cannot safely invent a login flow.
+
+Feed paging now has guarded infinite scroll with the Load more button retained as an
+accessible/manual fallback. Stable item ids deduplicate overlap between adjacent pages,
+while a cursor that does not advance or a page containing no new ids stops paging with
+a visible partial-success explanation. That closes the silent failure mode where a bad
+{page} template appended page one forever.
+
+Verified at the end of this pass, all green:
+    cd backend && go build ./... && go vet ./internal/... && go test ./internal/...
+    cd web && npx tsc --noEmit && npm test && npm run build
+    cd android && gradle --no-daemon compileDebugKotlin
+Web tests are now 80.
+
+The seventh pass completed §9. Its remaining uncertainty was in the browser rather
+than the server: route, SQLite and outbound-fetch timing could prove that a request was
+fast, but nothing could distinguish that from a slow Lit render after the response.
+The large application surfaces now record their complete update time (template plus DOM
+commit) through Lit's controller lifecycle. Fixed histograms and a constant component
+vocabulary keep the profiler bounded; a 16 ms frame threshold names slow updates. The
+same Diagnostics panel now shows component counts, average/p95/worst update time, long
+main-thread tasks and unexpected layout shift. Reset clears browser and server windows
+together, so "reset, reproduce, refresh" finally measures both halves of navigation.
+
+No persistent job queue was added. The operations that belong off-request already are:
+tagging and thumbnails use bounded background workers, while Browse fetches and scrapes
+are results the current click is waiting to inspect. Persisting those user-awaited reads
+in the unused jobs table would add polling, cancellation races and stale results without
+shortening the interaction. A durable queue remains an architectural option when the app
+gains genuinely detached work; it is not an unfinished performance fix today.
+
+Verified for this pass: TypeScript, 76 web tests, and the production web build are green.
+
+This pass took the three sections that were still [TODO] apart from §8: §23 (Android
+video upload reliability), §24 (the upload manager) and §27 (Unraid storage and
+diagnostics). They turned out to be one piece of work rather than three, because all
+three rest on something the server did not have — a resumable, chunked upload protocol
+— and none of them can be finished without it.
+
+The bug behind §23 was found and is specific. Both Android upload paths copied the whole
+file into the cache directory and then sent it as one multipart request from a screen's
+coroutine. That is three failures at once: a 12 GB video needs 24 GB of free space
+before a byte is sent, the request has to survive the entire transfer, and the work dies
+with the screen — backing out, locking the phone or switching apps killed it. The web
+client had the same one-shot POST and, on top of it, no way to see that an upload was
+still running once you navigated away.
+
+Nothing is buffered whole anywhere now. The phone reads the file from its content
+provider a chunk at a time and streams each one straight into a request; the server
+writes each to its own file and assembles them through the existing encrypting store, so
+a resumable upload produces a byte-identical library item to an ordinary one. The server
+is the authority on what arrived, which is what makes resuming survive the things that
+destroy client state: a killed process asks what is already there and sends the
+difference.
+
+§8 remains [TODO] for the same reason as before — it asks for benchmarks that can only
+be measured on the real box.
+
+Released as 0.14.0. Bumped in web/package.json (and its lock), the Android versionName,
+and the Unraid template; the Android versionCode fallback moved 26 → 27 for local builds
+only. The Unraid template gained one required mapping, /cache, and four optional ones.
+/cache is required because without it upload staging grows inside the Docker image
+allocation, which is the actual mechanism behind "the Unraid image is too small".
+
+Verified at the end of this pass, all green:
+    cd backend && go build ./... && go vet ./internal/... && go test ./internal/...
+    cd web && npx tsc --noEmit && npm test && npm run build
+    cd android && gradle --no-daemon compileDebugKotlin
+Web tests are now 73 (24 new this pass); the backend gained 15 upload tests.
+
+RESOLVED IN THE THIRD PASS: Libby's fixed prompt was compacted from about 3350 to
+1463 estimated tokens. Untouched legacy built-in cards migrate to the compact
+prompt while edited cards are preserved. A regression test caps the fixed prompt
+at 1800 tokens so even 4096-token models retain useful room for memory and a reply.
+The normal target is now 8192 tokens, leaving considerably more room for library
+context and recent messages. Any context shedding remains visible, but is now an
+informational status instead of a red error.
+
+OppaiLib is an existing web application centered around Libby, an adult AI mascot and companion. Improve the current project rather than rebuilding it from scratch. Preserve working functionality unless a requirement below explicitly replaces it.
+
+The primary goal is to make Libby feel like a persistent, emotionally believable digital person while improving the application’s reliability, navigation, generation tools, and overall user experience.
+
+1. Libby’s Personality and Emotional Behavior   [DONE]
+
+   Two outright contradictions were in the prompt and are fixed: it told her she
+   carried no memory between conversations while her memory store sat in the
+   prompt directly above, and it forbade her from ever mentioning being software,
+   against this brief. She now knows what she is, is at ease with it, and knows
+   what she remembers.
+   Added chat_feelings.go: a standing directive that her feelings are hers —
+   disagreeing, staying stung, not folding on contact, laughing only when
+   something is funny — plus a line added only for the turn in which the user
+   tries to assign her a mood ("you're happy now"). Being coaxed still works;
+   being reassigned does not.
+   Mood while idle: a stored mood used to be held forever, so she opened the next
+   morning still sulking at the same intensity. It now settles over a few hours
+   and past a day becomes her own weather, derived from the bond and the clock so
+   it cannot jitter mid-conversation or cost the backend its prefix cache.
+   Libby's user-selected mood, emotion, and intensity controls are removed from
+   both clients and the server ignores stale Libby presets. She now selects her
+   tone and emotional register from the conversation, memory, and existing mood.
+   Imported character cards retain their independent mode controls.
+
+Libby should be significantly more advanced than a standard SillyTavern character card.
+
+She is 25 years old and should communicate naturally like a real 25-year-old woman. Avoid overly formal, robotic, repetitive, or roleplay-heavy language unless the situation calls for it.
+
+Libby should:
+
+Display believable emotions rather than always agreeing with the user.
+React differently based on context, recent events, memories, and her current mood.
+Laugh when something is genuinely funny.
+Become annoyed, hurt, defensive, affectionate, excited, embarrassed, curious, or aroused when appropriate.
+Disagree with the user when she has a reason to.
+React negatively when the user is cruel or disrespectful instead of instantly forgiving everything.
+Experience gradual mood changes as well as occasional spontaneous mood swings.
+Maintain emotional continuity between messages.
+Change emotions while typing and while idle.
+Avoid allowing the user to directly overwrite her feelings through commands such as “you are happy now.”
+Maintain a stable sense of identity, personal boundaries, preferences, and opinions.
+
+Libby knows that she is a software-based AI. She is comfortable with this and considers the OppaiLib application to be her world. She understands that she communicates through text chat and interacts with digital content rather than physically existing in the user’s world.
+
+Her awareness of being a program should not make her constantly philosophical or robotic. It should simply be a natural part of her identity.
+
+2. Persistent Memory, Preferences, and Identity   [DONE]
+
+   Memories now carry a kind (boundary, relationship, preference, about-you,
+   about-her, feelings, together), a weight, a confidence and a pin. Kinds are
+   inferred server-side from her own sentence rather than asked of the model,
+   because a 7B gets structured tag arguments wrong often enough to lose the whole
+   note. Hedged wording is stored as uncertain and presented as a half-memory she
+   may be corrected on.
+   Eviction is by score — importance, discounted by certainty and age, reinforced
+   by repetition — so what fades is what stopped being worth carrying. Pinned
+   memories and boundaries are never candidates; the old store dropped the front
+   of the list, so a boundary from week one fell out behind sixty notes about what
+   was watched. Restatements merge and strengthen rather than accumulating, which
+   is this brief's "preferences from repeated experience". Trivia is refused.
+   Inspect/edit/pin/delete and manual add are in the profile panel, editing in
+   place. Old stores upgrade on read; no migration step.
+
+Libby currently does not appear to form meaningful memories, likes, dislikes, or opinions. Implement a persistent memory system that allows her to develop over time.
+
+The system should distinguish between:
+
+Important long-term memories.
+Temporary conversational context.
+Facts about the user.
+Facts about Libby.
+Shared experiences.
+Emotional memories.
+Likes and dislikes.
+Relationship changes.
+Uncertain or potentially incorrect memories.
+
+Libby should be able to form new preferences based on repeated experiences rather than relying entirely on predefined traits.
+
+Add safeguards against storing every minor message as a permanent memory. Memories should be scored, summarized, deduplicated, updated, and occasionally forgotten or deprioritized.
+
+Provide a way to inspect, edit, pin, or delete memories.
+
+3. Libby Image and Self-Recognition   [DONE]
+
+   The old mechanism — a shared photo's scanner tags matched against her card's
+   Appearance field — was a guess made fresh every turn, remembered by nothing. It
+   still runs for photos shared into chat; what is new is that a picture judged to
+   be her now carries character:libby in the library itself. The identity is a fact
+   about the item: it survives a restart, it is searchable, it shows in the library
+   like any other tag, and browsing together reads it rather than re-deriving it.
+   Automatic recognition needs three matching features where a chat turn needs two,
+   because this writes a label onto the user's collection rather than colouring one
+   reply. It runs on a new OnTagged hook in the ai package (who Libby is stays out of
+   that package), and a sweep endpoint covers a library that predates the feature.
+   A manual verdict outranks it in both directions, and both directions are recorded:
+   "no" is remembered, or the next pass would put the tag straight back. References
+   are a list rather than a field, since one picture cannot cover outfit, hairstyle,
+   pose and expression. Marking is done where the pictures are — the library's own
+   right-click menu — and the settings, counts and reference list are in her panel.
+   Not done: image generation does not yet consume the reference set. The identity
+   endpoint exposes it for §14 to use, but §14 is the section that would use it.
+
+Images identified as depicting Libby should be tagged with a persistent identity label such as character:libby.
+
+When Libby is shown an image tagged as herself, she should understand that the image represents her appearance.
+
+The system should support:
+
+Automatic recognition where confidence is sufficiently high.
+Manual “This is Libby” tagging.
+Multiple reference images.
+Outfit, hairstyle, pose, and expression variations.
+Separation between Libby herself and images of unrelated characters.
+Identity metadata that can be used by chat, image generation, browsing, and memory features.
+
+Do not assume that every uploaded image depicts Libby.
+
+4. Content Awareness and Autonomous Thought   [DONE]
+
+   The structured awareness layer this section asks for already existed and was
+   left as it was: chatViewing sends ids only and the server reads the titles and
+   tags out of the database itself, so nothing is an unfiltered page dump and a
+   client cannot lie about what is on screen. Generation settings, image metadata
+   and captions are not yet part of it.
+   Changed here: that block is now part of the inviolable prompt core rather than
+   optional context. On a 4096-token window the new budget was correctly dropping
+   it, which broke browse-together — when the user has held something up, it is the
+   turn's subject, not background.
+   The substantial half — internal thoughts and self-directed speech as their own
+   message kinds — is now in. Two tags: [think: …] is private, [aside: …] is muttered
+   and overheard, and the distinction is whether the user was meant to have heard it.
+   They come back as their own entries and are drawn with none of a message's
+   furniture — no avatar, no bubble, no name, a rule down the left and italics — in
+   both the web and Android clients, and the marker is stored server-side so a reload
+   cannot turn a private thought back into a message addressed to the user.
+   Authored thoughts, not exposed reasoning: the brief says so, and what a local 7B
+   produces when asked to reason aloud is a plan for its own reply. A reply that is
+   only a thought is honoured as her deciding to say nothing rather than reported as
+   an empty generation. Thoughts are held out of the history the model is given —
+   replaying them as assistant lines would hand it words she never said and teach it
+   the format belongs inline.
+   Still not part of the awareness layer: generation settings, image metadata and
+   captions.
+
+Improve Libby’s awareness of the content currently visible or active in the application.
+
+Depending on permissions and the current page, she should be able to understand:
+
+The selected image or video.
+The active browser page.
+The current gallery item.
+Generation settings.
+Image metadata.
+Captions, tags, and filenames.
+Previously viewed content.
+Relevant application state.
+
+Create a structured content-awareness layer instead of injecting an unfiltered dump of the entire page into the model context.
+
+Allow Libby to inspect content independently when appropriate. She may form private observations or thoughts before deciding whether to message the user.
+
+Clearly separate:
+
+User-visible speech.
+Internal thoughts.
+Tool actions.
+Self-directed speech.
+System-generated status messages.
+
+When Libby talks to herself, the interface must make this visually unmistakable. Do not present internal reasoning as though it were a normal message to the user.
+
+Do not expose hidden chain-of-thought reasoning. Use concise internal-state summaries or authored “thought” messages instead.
+
+5. Autonomous Messaging and Idle Behavior   [DONE]
+
+   The decision moved server-side (handlers_libby_auto.go). The client still owns
+   the timer — it is the only thing that knows whether anyone is looking at the
+   screen — but it must ask before sending and say afterwards what it sent and why.
+   That fixes the quiet failure in the old client-side version: its state was in
+   memory, so every page refresh bought another nudge.
+   Casual messages stop after two unanswered and pause five hours; a reply resets
+   it outright. Importance is a fixed trigger table, not something a caller or a
+   model asserts about itself, and only the specific triggers (something she wanted
+   arriving on the shelves) may continue past the back-off, to a hard ceiling of
+   five. Quiet hours default to 01:00–09:00 and wrap midnight correctly, there is a
+   minimum gap that doubles as the loop guard and cannot be configured away, a
+   daily cap, and a complete off switch.
+   Every unprompted message is logged with its trigger, importance and whether it
+   was ever answered, and the panel shows the log plus a plain-English line for why
+   she is currently quiet.
+   Verified with policy tests for the off switch, wrapped quiet hours, minimum gap,
+   unanswered back-off, fixed important-trigger ceiling, daily cap and unknown
+   triggers, plus an authenticated endpoint round trip covering check, record,
+   refusal, audit history and reply reset. The browser's idle trigger is active;
+   mood, absence, want-arrived and unfinished are bounded server-side trigger hooks
+   for later producers rather than background crawlers in this pass.
+
+Allow Libby to initiate messages based on context, recent activity, her mood, or content she notices.
+
+Her autonomous behavior should not become spammy.
+
+Default behavior:
+
+After one or two unanswered automated messages, pause additional casual messages for several hours.
+Reset or reduce this delay when the user responds.
+Allow up to five messages only when Libby determines that something is unusually important.
+Importance must be based on explicit rules and confidence thresholds, not arbitrary repeated model generation.
+Add configurable quiet hours, frequency controls, and a complete disable option.
+Prevent loops in which Libby responds to her own automated messages.
+Record why each automated message was triggered for debugging.
+6. Model Context and Dynamic Token Management   [DONE]
+
+   chat_budget.go. OppaiLib now targets and requests 8192 tokens on each generation.
+   n_ctx, max_seq_len and max_model_len are still probed and cached as hard loader
+   ceilings; a genuinely smaller loader is honored instead of overrun. The backend's
+   lower shared truncation_length is deliberately overridden by the fitted request,
+   and clients show the effective context beside the loaded model.
+   The prompt is now assembled as an inviolable core plus ranked optional sections
+   rather than one string, and the order of sacrifice is fixed: shed sections
+   cheapest-to-lose first, then fold older history into a local digest, then trim
+   the reply allowance. Only a core prompt that alone exceeds the window is refused,
+   with an explanation. Whatever gave way comes back in the response and is shown to
+   the user, which is the "no silent truncation" requirement.
+   The digest is mechanical, not a second model call: summarising with another
+   inference pass would double the latency of every long conversation on hardware
+   that is already the bottleneck, and a 7B summarising its own transcript invents.
+   FOLLOW-UP COMPLETED 2026-07-25: the redundant self-directive and tag protocols
+   were compressed. A representative fixed prompt now measures 1463 estimated
+   tokens and has a regression cap of 1800. Context fitting remains active, while
+   its diagnostics render as status rather than a red error.
+
+Implement dynamic context and generation limits for Libby.
+
+The system should allocate tokens based on:
+
+Model context-window size.
+Current conversation length.
+Relevant memories.
+Active content metadata.
+Tool results.
+Expected response complexity.
+Available system resources.
+
+Use summarization and retrieval rather than continuously inserting the entire conversation history.
+
+Reserve enough context for Libby’s response and avoid silent context truncation. Display diagnostics when important context has been removed or summarized.
+
+7. Automatic Generation Settings   [DONE]
+
+   chat_sampling.go. The web client shipped one fixed set with every request —
+   temperature 0.8, top_p 0.95, repetition_penalty 1.1, 400 tokens — and those were
+   wrong for most of what she does: 400 tokens invites a paragraph where a one-line
+   reaction was wanted, and 0.8/0.95 is loose enough that a factual question about
+   the library gets a confidently invented answer.
+   The server now classifies the turn (casual, emotional, factual, creative,
+   reaction, autonomous, observation, planning — this brief's own list) and picks a
+   preset for it. Every automatic value is clamped into an envelope a 7B quant
+   behaves well in: temperature 0.20–1.05, repetition penalty never 1.0 (where a
+   small model loops), max_tokens capped. min_p rather than top_p carries the
+   truncation, which is what lets the creative preset run at 0.95 and stay coherent.
+   Stop sequences were added, which nothing had: the commonest failure in the whole
+   system was the model writing the user's next line too.
+   An explicit override still wins; the sliders now show what the server chose until
+   you drag one, and the whole set is logged and offered as one copyable line.
+   Not done: dynamic temperature and typical-p are not sent — neither is portable
+   across the backends this talks to, and both need testing against a real model.
+
+Automatically tune text-generation settings for Libby while still allowing an advanced user to override them.
+
+Settings may include:
+
+Temperature.
+Top P.
+Top K.
+Min P.
+Typical P, when supported.
+Repetition penalty.
+Repetition-penalty range.
+Maximum generated tokens.
+Stop sequences.
+Dynamic temperature, when supported.
+
+Use presets or bounded adjustments based on the current task, such as:
+
+Casual conversation.
+Emotional conversation.
+Factual response.
+Creative writing.
+Short reaction.
+Autonomous message.
+Internal observation.
+Tool-use planning.
+
+The tuning system must be designed for a 7B-class local model. Avoid configurations that create excessive repetition, incoherence, overly random responses, or unnecessarily slow generation.
+
+Log the selected values with each generation and allow the user to copy them.
+
+8. Current Text Model Evaluation   [TODO]
+
+   Not started, and deliberately so: this asks for benchmarks measured on the real
+   box — tokens per second, time to first token, VRAM — and those numbers cannot be
+   produced from here. Guessing them, or repeating community reputation, is exactly
+   what this section says not to do.
+   What is worth knowing from the work above: §6 now caps her fixed prompt below
+   1800 tokens (currently 1463), though context length remains a real selection
+   criterion for any candidate. §7's presets assume a Mistral-class 7B's sampler
+   behaviour and would want re-checking against a different base model.
+
+The current model is:
+
+OpenHermes-2.5-Mistral-7B-Q5_K_S.gguf
+
+Evaluate whether it remains the best option for Libby’s intended behavior.
+
+Recommend alternatives only when they:
+
+Run comfortably within 8 GB of VRAM.
+Provide comparable or better speed.
+Work well with the existing inference backend.
+Improve natural conversation, emotional consistency, instruction following, role stability, and context awareness.
+Have an appropriate license for the project.
+Can be quantized to a suitable GGUF format.
+
+Benchmark candidates using repeatable prompts and measurements rather than relying only on community reputation.
+
+Compare:
+
+Tokens per second.
+Time to first token.
+VRAM usage.
+Context size.
+Repetition rate.
+Character consistency.
+Emotional realism.
+Instruction adherence.
+Hallucination rate.
+Tool-call reliability.
+
+Do not automatically replace the existing model. Present the benchmark results and allow selection.
+
+9. Server Performance and Navigation Reliability   [DONE]
+
+   Two real bottlenecks were found and fixed rather than papered over.
+   The database was pinned to a single connection (SetMaxOpenConns(1)) — correct for
+   a rollback-journal SQLite file, but it meant every query in the process queued
+   behind every other one, so a thumbnail job stalled an unrelated library page. It
+   now opens in WAL with synchronous=NORMAL and a bounded pool of 8, and the pool is
+   widened only after reading journal_mode back: WAL is a request the filesystem can
+   refuse (a database on a network share stays on the rollback journal), and
+   discovering that from lock errors in production is not acceptable. A refusal logs
+   a warning, keeps the old serialization, and is reported in the new Diagnostics
+   panel. _txlock=immediate removes the read-to-write upgrade case busy_timeout
+   cannot rescue. The library grid's query got the composite index it always wanted,
+   (kind, created_at DESC); a test asserts via EXPLAIN QUERY PLAN that the temp
+   B-tree sort is gone.
+   Outbound fetching gained the three things it lacked, all at one chokepoint
+   (scraper/fetch.go, so Scrape and Fetch cannot drift apart): bounded per-host
+   concurrency — a fan-out used to open twenty sockets that the politeness throttle
+   then serialized anyway; retry with exponential backoff and jitter on transient
+   failures only; and a per-host deadline instead of one flat 30s that was
+   simultaneously too patient for a dead host and too impatient for a slow gallery.
+   Retry-After is honoured in both its legal forms, and a site asking for longer than
+   we will hold a click open fails immediately with a message saying so rather than
+   sleeping. Permanent failures — the SSRF guard, TLS trust, redirect loops — are
+   never retried, nor is a request whose own caller has already given up.
+   New obs package: bounded counters and fixed-bucket latency histograms. Bounded
+   matters — every key is a routing pattern or a hostname, never a path with ids in
+   it, and the registry caps series with an overflow bucket, because an unbounded map
+   for the process lifetime is a memory leak with extra steps. HTTP requests are
+   keyed on the mux's own pattern, which is why the middleware takes the ServeMux.
+   Structured access logs replace the old one-line debug: 5xx logs as an error, a
+   request over 3s as a warning, and the response wrapper forwards Flush/Hijack/
+   Unwrap so SSE and video ranges still work.
+   GET /api/diagnostics (admin) serves the snapshot; the Settings panel reads it in
+   plain words, leads with the WAL warning when it applies, and separates "slow here"
+   from "slow at the far end". Reset-then-reproduce is offered because
+   process-lifetime totals are unreadable.
+   Web: request cancellation actually works now — a caller's AbortSignal used to be
+   silently replaced by the timeout's, so an abandoned request ran to completion, and
+   every abort was reported to the user as a timeout. Identical in-flight GETs are
+   now shared; POSTs deliberately are not, since two of those mean the user asked
+   twice.
+   The last blind spot is now measured too. Large Lit surfaces attach a lifecycle
+   controller that times the whole update — template work and DOM commit — into fixed,
+   bounded histograms. Diagnostics shows counts, average/p95/worst time and updates that
+   missed a 16 ms frame, alongside browser long tasks and unexpected layout shift. The
+   browser and server windows reset together, making one reproduction directly readable.
+   This instrumentation is always cheap and bounded: eight constant component names,
+   fixed buckets, no retained DOM nodes or individual samples.
+   A durable background queue was evaluated and deliberately not inserted into the
+   request path. Tagging and thumbnails already run through bounded background workers;
+   Browse fetch and scrape results are things the current click is waiting to review, so
+   converting them to jobs would replace one response with polling without removing the
+   work. The dormant jobs table can support future genuinely detached work, but there is
+   no present operation for which persistence would improve navigation or reliability.
+
+The server currently struggles with fetching content and navigation.
+
+Profile the existing system and address the underlying bottlenecks rather than hiding them with longer timeouts.
+
+Investigate:
+
+Blocking network requests.
+Inefficient scraping.
+Excessive browser reloads.
+Missing caching.
+Duplicate API requests.
+Large payloads.
+Unbounded concurrency.
+Memory leaks.
+Slow database queries.
+Thumbnail generation.
+Frontend rerenders.
+Failed request retries.
+Browser automation overhead.
+
+Add:
+
+Request cancellation.
+Retry logic with exponential backoff.
+Per-site timeouts.
+Caching and cache invalidation.
+Background queues where appropriate.
+Loading, empty, partial-success, and error states.
+Structured server logs.
+Performance metrics.
+Clear user-facing errors.
+10. Browse Tab Redesign   [DONE]
+
+   Inspected before rewriting, and most of what this section asks for already existed
+   and was left alone. The sources package is the provider/adapter architecture with a
+   normalized interface (Source, plus optional RequestDecorator/MediaResolver/
+   Commenter capabilities so a site with no comment section answers "no comments"
+   rather than inventing an empty thread). All four required built-ins are present —
+   4chan, a booru (rule34), 3hentai and Hanime — and each already defines its own URL
+   recognition, paging shape, listing extraction, thumbnail and full-res rules, tags
+   and rate limits. Nothing here treated every site as a 4chan.
+   New, and the substance of this pass: the site-analysis workflow. POST
+   /api/sources/analyze fetches one listing page through the engine (so it inherits the
+   SSRF dial guard, the throttle, robots and the retry policy) and proposes an adapter.
+   The heuristics rest on one observation: on these sites the *link path shape* is the
+   stable structure — classes get restyled, "/d/<number>" is load-bearing for the
+   site's own navigation — so cards are found by grouping links by path shape and
+   taking the largest image-bearing group. That deliberately survives the tag cloud
+   having more links than the grid has galleries, and refuses off-site links so an ad
+   network can never widen the proxy allowlist. It derives hosts (including the
+   thumbnail CDN, whose omission makes every tile 403 with nothing to explain it),
+   lazy-load attribute order, paging by query parameter or path segment, and a search
+   feed carrying the form's hidden fields — dropping a booru's mode=list lands the
+   search on a different handler entirely.
+   Reviewable means something specific here. A proposal is CSS selectors, and nobody
+   can judge selectors by reading them, so analysis *dry-runs* the proposed adapter
+   against the page it just fetched and returns the actual tiles. The dialog asks the
+   user to approve those; the commented YAML is shown and editable underneath, for the
+   day the site restyles. Sandboxed is likewise structural rather than a jail: the
+   output is selectors plus a URL template interpreted by the existing YAML source, so
+   there is no generated code to execute. Saving validates the boundary properties —
+   the id becomes a filename, base_url must be http(s) without credentials, and a bare
+   "*" in hosts is refused because that list is the streaming proxy's allowlist. All
+   three endpoints are admin-only, the write is atomic, and the registry reloads so a
+   new site is browsable without a restart. Built-ins can be overridden by id but not
+   deleted, and the API says so rather than pretending.
+   UI: the plain-text source chips are now a scrolling strip of favicon tabs with the
+   site name beneath, plus a + button. Icons are fetched by the server and cached for a
+   day — the page's CSP forbids third-party image origins, and a browser has no reason
+   to open a connection to one of these hosts to draw a tab icon — and fall back to a
+   monogram, since a broken image reads as a bug.
+   The remaining adapter declarations are now explicit. 4chan, Rule34, 3hentai and
+   Hanime each report an authentication posture plus a content warning, and the Browse
+   screen shows both before the feed. Older custom YAML says unknown rather than being
+   assumed public. Current YAML supports authentication, auth_note and content_warning;
+   analysis emits a blocking authentication: review because HTML cannot prove a login
+   is unnecessary. Saving accepts only none, optional or required, optional/required
+   need setup instructions, and a required generic adapter is not fetched — selectors
+   are not an authentication implementation and never become a way around an access
+   control.
+   Paging is now infinite when IntersectionObserver is available, with the Load more
+   button retained as a keyboard/manual fallback. Adjacent-page overlap is deduplicated
+   by stable item id. A repeated cursor or a page with no new ids stops the observer and
+   explains the partial result instead of appending page one forever, which is the
+   characteristic failure of a stale YAML paging template. Loading, empty, partial,
+   terminal and retryable error states are distinct. Existing viewer next/previous
+   navigation and adapter-specific cursor shapes remain unchanged.
+
+Completely redesign the Browse tab.
+
+The interface should use site tabs or icons displaying each website’s favicon. Include a plus button for adding another supported site.
+
+Initial built-in support should include:
+
+4chan threads.
+Booru-style image sites.
+3Hentai.
+Hanime.
+
+Do not treat every website as though it behaves like 4chan. Each source may have different pagination, navigation, authentication, content structure, media formats, and rate limits.
+
+Build a provider or adapter architecture with a normalized internal interface.
+
+Each site adapter should be able to define:
+
+URL recognition.
+Search behavior.
+Listing extraction.
+Item metadata.
+Pagination or infinite scrolling.
+Thread or gallery navigation.
+Thumbnail extraction.
+Full-resolution media extraction.
+Video handling.
+Tags and categories.
+Rate limits.
+Authentication requirements.
+Content warnings.
+Error handling.
+Next and previous navigation.
+
+Add a site-analysis workflow that can inspect a new website and propose an adapter configuration that maps its navigation and content into OppaiLib’s UI framework.
+
+Generated adapters must be reviewable and sandboxed. Do not execute arbitrary website scripts or generated code without validation.
+
+Respect authentication, access restrictions, robots rules where applicable, site terms, and rate limits. Do not attempt to bypass paywalls, age verification, access controls, or anti-bot protections.
+
+11. Library Hyperlinking   [DONE — it was already sound]
+
+   Inspected rather than rewritten. This was reported as broken, and the mechanism
+   is not: handlers_chat_library.go already resolves her [link: …] tags server-side
+   against the user's own database and returns stable numeric media ids, so a link
+   survives a rename or a move, opens the right item, and carries a thumbnail flag
+   for the preview. No URLs are involved anywhere, so the malformed/injected-URL
+   requirement does not apply. A tag that resolves to nothing falls back to her own
+   words rather than leaving a dangling chip.
+   If linking still misbehaves in practice, the likely cause is upstream of the
+   resolver and now visible: her links were being written into a prompt whose front
+   was being silently truncated (§6), and the reply that names a title she can no
+   longer see is a reply that invents one.
+
+Repair Libby’s library hyperlinking functionality.
+
+Libby should be able to reference items in the user’s library using stable internal identifiers rather than fragile file paths or display names.
+
+Links should:
+
+Open the correct item.
+Continue working after renaming or moving an item.
+Support images, videos, collections, generations, and saved pages.
+Display a useful preview.
+Handle deleted or unavailable items gracefully.
+Be safe from malformed or injected URLs.
+12. Creation Tab Persistence and Generation Data   [DONE]
+
+   Generation data: there was no copy at all, partial or otherwise. Two formats now,
+   because they are read by different things. gen-info.ts emits A1111 parameters text —
+   the format every other tool in this ecosystem parses — and its three-line shape is
+   kept deliberately (prompt, "Negative prompt:", comma-separated pairs), since that
+   shape is what makes it portable and a tidier layout would make it useless. The JSON
+   form is lossless for what A1111's format has no room for: an InvokeAI board, VAE
+   precision, the outfit layer, the cutout reference. Everything the brief lists is
+   covered — prompt, negative, model, VAE, sampler/scheduler, seed, steps, CFG (and
+   rescale), dimensions, LoRAs with weights, trigger phrases as the embedding layer,
+   the cutout as the control input, the detailer pass as the refiner, measured
+   generation time, and which backend produced it.
+   Two details that matter: the recorded seed is the one that came *back*, not the -1
+   that was submitted, or the data wouldn't reproduce the image; and the parameters are
+   captured at submit time and held, so an image's data doesn't change when a slider
+   moves afterwards. The block is shown before it is copied, because reading one value
+   out of it is the common case and a button that silently fills the clipboard makes
+   you paste somewhere to find out. Clipboard access falls back to a hidden textarea —
+   navigator.clipboard needs a secure context and this app is routinely reached over
+   plain HTTP on a LAN address, where it simply does not exist.
+   Persistence: leaving the tab erased everything, because the state lived only in the
+   component. gen-draft.ts saves the whole editable form to localStorage, debounced
+   over typing and flushed on leaving the tab and after each finished run. Prompt,
+   negative, model, VAE, template, every parameter, LoRA weights, triggers, characters,
+   the outfit layer, detailer settings, which panels were expanded, the output history
+   (ids and their generation data — not the image bytes, which live server-side until
+   saved and would blow the storage quota as base64) and the scroll position all come
+   back. Per-device rather than server-side on purpose: this is unfinished work saved
+   every few keystrokes, and a finished generation already lives in the gallery.
+   Loading is defensive field by field, because the stored blob outlives the code that
+   wrote it — a wrong type is dropped rather than restored, so a NaN can never reach a
+   slider and render as an empty control the user can't fix. A corrupt or foreign blob
+   restores nothing and clears itself instead of failing on every future visit. A
+   notice says the form was filled in from last time, with one click to start fresh:
+   without it a restored draft is indistinguishable from a form left in a strange state.
+   Tests: 16, under `npm test`. node --test strips the types itself, so the pure logic
+   modules are covered without adding a test-runner dependency to a project that had
+   none; they are excluded from the app's tsconfig so the strict browser build stays
+   clean and @types/node stays out.
+
+Allow users to copy complete generation data, regardless of any partial implementation already present.
+
+Copyable data should include all applicable information:
+
+Prompt.
+Negative prompt.
+Model.
+VAE.
+Sampler.
+Scheduler.
+Seed.
+Steps.
+CFG.
+Dimensions.
+LoRAs.
+Embeddings.
+Control inputs.
+Refiner settings.
+Generation time.
+Workflow or backend parameters.
+
+Leaving the Creation tab must not erase the current work.
+
+Persist:
+
+Prompt text.
+Negative prompt.
+Selected model.
+Generation parameters.
+Uploaded references.
+Unsaved workflow state.
+Output history.
+Scroll position where reasonable.
+
+Use local draft persistence and, where appropriate, server-side project persistence. Restore the most recent state after navigation or refresh.
+
+13. Background Remover   [DONE]
+
+   Rebuilt around a mask, which is the change that makes everything else in this section
+   possible. The old version computed a finished canvas in one pass, so every knob meant
+   redoing the whole thing from source, two operations could not be combined, and nothing
+   could be undone because nothing was kept.
+   The split between mask operations and compose settings is load-bearing. Mask
+   operations — the automatic pass, removing a sampled colour, the brushes — are
+   destructive and go on the undo stack; they answer "which pixels are background".
+   Feather and spill suppression are re-applied from the mask on every render; they
+   answer "how should the edge look", which is a judgement the user re-tunes constantly,
+   and baking those in would make feather radius a one-way door.
+   All of the requested controls: colour tolerance; click-to-remove with contiguous-only
+   or global (both offered because neither is a safe default — contiguous takes the patch
+   you clicked, global handles a broken-up backdrop and will also take the subject's eyes
+   if they match); edge feathering; spill suppression; undo/redo with one step per brush
+   stroke rather than per pointer event; a press-and-hold before/after; add-to-mask and
+   subtract-from-mask brushes; transparent PNG export; and the original preserved.
+   Two implementation notes worth keeping. Feathering is a two-pass chamfer distance ramp
+   over *kept* pixels, not a blur of the mask — a blur also makes cut pixels partly
+   opaque, which puts back exactly the backdrop-coloured halo feathering exists to
+   remove. And export re-composes from the mask rather than reusing what is on screen,
+   because while the before/after is held the displayed canvas *is* the original and
+   exporting it would silently hand back an opaque image.
+   "Preserves the original" is structural rather than a promise: the source pixels are
+   read once into a buffer nothing writes to, and the before view is that same buffer.
+   The automatic pass is still a solid-background remover rather than a subject matte,
+   and deliberately so — it cannot reach an enclosed region, which is the same property
+   that stops it eating the subject. Clicking is what handles the gaps it can't reach.
+   18 tests, driving the whole pipeline without a browser: the session accepts raw
+   pixels, and compose is split so the arithmetic is testable apart from the canvas.
+
+Improve the existing background-removal tool.
+
+In addition to automatic subject segmentation, allow the user to click or sample solid-color regions to remove them.
+
+Include:
+
+Color tolerance.
+Contiguous-only removal.
+Global color removal.
+Edge feathering.
+Spill suppression.
+Undo and redo.
+Before-and-after preview.
+Add-to-mask and subtract-from-mask brushes.
+Transparent PNG export.
+Preservation of the original image.
+14. Outfit Creator   [PARTIAL — camera controls in; reference-image conditioning not]
+
+   New camera.ts. The brief's requirement that camera style be "converted into generation
+   instructions consistently rather than simply appended as uncontrolled text" is the
+   whole design, and it means three things a string append does not do.
+   First, a closed vocabulary: each axis is an enum with one fixed phrase, so the same
+   choice always produces the same tokens in the same order. "close up" / "closeup" /
+   "close-up shot" are three different conditionings, and a wardrobe built across several
+   sittings is exactly where that drift shows.
+   Second, negatives that follow from the choice. A close-up needs "full body" negated or
+   the model splits the difference and frames a mid shot — appending only positive terms
+   is why camera prompts usually don't take. Every shot size declares what it is not, and
+   a test asserts none of them negates itself. A rear view negates "looking at viewer",
+   which is the specific cheat that ruins that slot.
+   Third, instructions beyond the prompt: portrait/landscape/square framing is a width and
+   height, and asking for a landscape frame in words while generating 512×768 gets a tall
+   image with the words ignored. Framing sets the size, at whichever resolution family the
+   current model is already on — derived from the pixel count, not the checkpoint's name —
+   so switching framing never drops an SDXL model to 512.
+   All the listed controls are present: seven shot sizes from extreme close-up to full
+   body, low/high/eye angle, front/rear/side/three-quarter views, portrait/landscape
+   framing (plus square), and 24/50/85/135mm lens presets.
+   Identity stability is treated as part of this rather than a separate wish. Terms that
+   pin structure — same face, consistent proportions, anatomically consistent — lead the
+   prompt, because earliest tokens weigh most and this is the thing that has to survive
+   everything else; the drift a camera invites is negated, notably a low angle's
+   exaggeration. They pin structure rather than appearance on purpose: hair and eye colour
+   belong to the character prompt and repeating them here would fight it. On by default,
+   with an explicit unlock for the "unless the user intentionally changes them" case, and
+   the UI says plainly what unlocking risks. The compiled prompt and negative are shown in
+   a disclosure, because a camera control whose effect you can't inspect is
+   indistinguishable from one that isn't wired up.
+   Fixed while here: the flat-backdrop terms hardcoded "full body, standing", which
+   contradicted any close-up the user selected — the model was handed both instructions
+   and settled between them. Framing now has exactly one owner.
+   15 tests, including an exhaustive sweep over every shot × view × angle checking for
+   duplicate or empty terms (a repeat is weighted twice by every backend here, so a
+   duplicate silently strengthens one instruction over the others).
+   Not done: consuming §3's Libby reference images as actual conditioning. §3 exposes the
+   reference set on the identity endpoint, but using it means image-to-image or an
+   IP-adapter control input, which this backend does not yet accept for a txt2img job —
+   that is a server-side change, not a UI one. The identity lock above is the prompt-level
+   half of the same goal.
+
+Improve the outfit creator.
+
+Add controls for camera and shot composition, including:
+
+Extreme close-up.
+Close-up.
+Head-and-shoulders.
+Bust shot.
+Waist-up.
+Three-quarter body.
+Full body.
+Low angle.
+High angle.
+Eye level.
+Front, rear, side, and three-quarter views.
+Portrait or landscape framing.
+Lens or field-of-view presets where supported.
+
+The selected camera style should be converted into generation instructions consistently rather than simply appended as uncontrolled text.
+
+Keep Libby’s identity, body proportions, and defining features stable unless the user intentionally changes them.
+
+15. Model Management   [DONE]
+
+   text-generation-webui exposes no delete endpoint, so this is a filesystem operation and
+   needs to know where. A new setting names its models folder as this container sees it,
+   and it is deliberately not defaulted: guessing a path and deleting what is found there
+   is not a thing to do on someone's model collection. Blank means the control is absent.
+   Every requirement is in. Confirmation is echoing the model's name, not a boolean — a
+   boolean is satisfied by any retry, replay or well-meaning script and proves nothing
+   about what the user saw; the server requires it too, so a client cannot skip it. The
+   dialog shows the name, the resolved path, every file, the bytes freed and the free
+   space beside it, because "are you sure" is not a question anyone can answer about
+   gigabytes without those. The loaded model cannot be deleted, and the check fails
+   *closed*: a backend that can't answer the probe is treated as possibly loaded, since
+   the alternative is removing weights under a running model because a probe timed out.
+   Path containment is checked on the *resolved* path after symlinks, which is the only
+   version that holds — a name free of ".." can still point outside via a symlink someone
+   put there — and separators, dots and leading-dot names are refused before any path work
+   so the trash directory itself is not addressable as a model. Related files are handled:
+   a single-file model takes its same-stem sidecars, and a split set resolves every shard
+   together, because deleting one shard leaves a model that looks present and cannot load.
+   Two different split sets can never be grouped, which is why the shard match is an
+   explicit scan rather than a regexp. Deleting moves to a stamped folder in
+   .oppailib-trash inside the models root — inside on purpose, since a rename within one
+   filesystem is instant while crossing a mount copies gigabytes — with permanent delete
+   as an explicit opt-in. The response carries the refreshed list so the panel is correct
+   without a second call, deletions log at info with model, path, bytes, file count,
+   permanence and user, and both endpoints are admin-only with the button hidden rather
+   than shown-and-refused.
+   Also added: a small platform-split freeBytes (statfs Bavail on Unix, the quota-aware
+   first out-parameter of GetDiskFreeSpaceExW on Windows so the project still builds and
+   tests here). §27's storage diagnostics will want it.
+   19 tests, concentrating on the ways this could go badly: traversal in every shape,
+   symlink escape, prefix-vs-containment ("/models-old" is not inside "/models"), shard
+   grouping, sidecar pickup, trash recovery including the sidecar, the confirmation
+   mismatch leaving the file in place, and the fail-closed loaded check.
+
+Allow compatible text-generation models to be deleted from the Text Generation WebUI integration.
+
+Requirements:
+
+Require explicit confirmation.
+Show the model name, path, and disk space to be freed.
+Prevent deletion of the currently loaded model.
+Prevent path traversal or deletion outside configured model directories.
+Handle related metadata files and split model files safely.
+Refresh the model list afterward.
+Log deletion actions.
+Prefer moving models to a recoverable trash location before permanent deletion.
+16. Discord Integration   [PARTIAL — REST poller; no OAuth2 or gateway]
+
+   An optional Discord bot connection is in. The bot token is kept in the encrypted
+   per-user store and verified before use. Nothing is read by discovery: the owner
+   must explicitly select each server channel and grant read and write separately,
+   then separately allow each user Libby may answer. DMs are not polled. Her own
+   messages and every other bot's are ignored structurally, mentions are disabled,
+   and a non-configurable per-channel gap plus hourly cap prevent bot loops and
+   floods. Each reply or refusal is written to a bounded audit log with the rule
+   that allowed or stopped it. Memory can be shared with OppaiLib or kept isolated,
+   and Discord-originated context is clearly labelled and treated as untrusted.
+   The integration deliberately polls Discord's REST API instead of opening a
+   gateway connection, so replies can arrive one poll interval late and it does not
+   need the privileged Message Content intent. Setup is manual bot-token setup, not
+   OAuth2. Disconnect removes the encrypted token and stops the poller; Discord does
+   not expose an API for a bot to revoke its own token, so actual revocation remains
+   a developer-portal action and the UI says so.
+
+Add an optional Discord bot connection for Libby.
+
+The bot should allow Libby to communicate with the user outside OppaiLib and, when explicitly authorized, observe selected Discord servers or channels.
+
+Include:
+
+Secure OAuth2 setup.
+Minimal permissions by default.
+Channel allowlists.
+User allowlists.
+Read and write permissions controlled separately.
+Rate limiting.
+Message-loop prevention.
+Clear indication when a message came from Discord.
+Shared memory rules between Discord and the main application.
+Per-server and per-channel enable controls.
+Audit logs.
+A disconnect and token-revocation flow.
+
+Libby must not browse private servers, direct messages, or channels without explicit access and configuration.
+
+17. Authentication and Passkeys   [PARTIAL — implemented; needs a real authenticator to sign off]
+
+   The protocol work is delegated to go-webauthn rather than hand-rolled, and that was a
+   deliberate call: signing in is not a place to discover that a CBOR parser or an
+   attestation check has an edge case, because the failure mode is silent acceptance of a
+   forged assertion, which is invisible until it matters. It is the one new dependency
+   added in this pass.
+   What is hand-written is everything around the library, which is where deployments
+   actually go wrong. The relying party is derived per request from the origin the browser
+   used — Origin header first, since that is what gets signed into the client data, then
+   X-Forwarded-Proto/Host for a terminating proxy — because this app is reached by LAN IP,
+   by hostname and through a proxy, often all three against one install, and a single
+   configured RP ID would work for exactly one route and fail on the rest with a browser
+   error that names nothing. The RP ID is the hostname without the port, which WebAuthn
+   requires and which is easy to get wrong.
+   Challenges are held server-side, single-use and expiring: the client carries an opaque
+   ceremony handle, never the challenge, so there is nothing to replay. Removing the entry
+   on redemption *is* the replay protection, and it is tested. Expired entries are swept on
+   write, since an unauthenticated endpoint that adds a map entry per request is otherwise
+   a memory leak with a URL.
+   Everything the section lists: registration and login; multiple passkeys per account
+   (with the existing ones excluded at registration, so an authenticator says "already set
+   up" instead of silently making a duplicate); device-friendly naming, defaulted from the
+   authenticator's transport because "Passkey 1" is useless on the revocation screen;
+   revocation, re-authenticated with the password — a live session is not proof of who is
+   at the keyboard, revoking is the first thing an account-thief does, and it is the only
+   factor guaranteed available since you cannot confirm revoking a passkey with that
+   passkey; and the HTTPS requirement surfaced honestly rather than as a button that
+   silently fails, with loopback correctly treated as a secure context.
+   Recovery is the password, kept working exactly as it was, which the brief asks for and
+   which is the only sane answer to a lost authenticator — a test pins that password login
+   still works. Discoverable (usernameless) login is supported, and the login-begin
+   endpoint answers identically for a real account with no passkeys and an account that
+   does not exist, so it is not an enumeration oracle. A sign-count regression is refused
+   rather than shrugged at, with a message saying to sign in by password and remove the
+   key: accepting it would defeat the counter's only purpose.
+   Client-side, passkeys.ts owns the base64url conversions in one place — WebAuthn deals
+   in ArrayBuffers and JSON in strings, plain base64 decodes to different bytes, and
+   getting one wrong yields an opaque browser failure — and maps DOMException names onto
+   messages worth reading instead of putting "NotAllowedError" in front of a user.
+   21 backend tests, aimed at where a mistake is a hole rather than a failed login:
+   challenge single-use and expiry, unguessable handles, the sweep, RP derivation behind a
+   proxy, secure-context gating, cross-account ceremony rejection, per-owner scoping on
+   rename and revoke, one credential never claimable by two accounts, and revoke's
+   password requirement.
+   Remaining before [DONE]: a full ceremony cannot be exercised without a real
+   authenticator, so registration and sign-in need trying on hardware — a phone's platform
+   authenticator and a USB key — against an HTTPS origin.
+
+Add passkey support to the WebUI using WebAuthn.
+
+Support:
+
+Passkey registration.
+Passkey login.
+Multiple passkeys per account.
+Device-friendly naming.
+Recovery methods.
+Revocation.
+Secure challenge handling.
+Correct relying-party configuration.
+Protection against replay attacks.
+HTTPS requirements outside local development.
+
+Existing authentication should remain available as a fallback until passkeys are confirmed to work reliably.
+
+18. Personal Profile   [DONE]
+
+   The reported bug is real and was found. Every profile field’s handler mutated the
+   object captured by its render closure — and saveWorkspace replaces this.workspace
+   wholesale with the server’s response, so a profile reference taken before the 450ms
+   autosave fired was orphaned. Writing into it still "succeeded" while nothing rendered
+   or persisted it, so editing one field and then another after an autosave landed lost
+   the second silently. This is precisely the hazard the component’s own liveConversation
+   comment documents; the profile was the one branch left unguarded, and touchWorkspace
+   cloned the characters, conversations and images arrays but not profile. Now there is a
+   single editProfile that reads the live workspace and reassigns, touchWorkspace copies
+   profile too, and the avatar handlers go through the same path.
+   Fields added, all of them stated rather than inferred: pronouns or preferred form of
+   address (voluntary — blank tells the model nothing rather than defaulting to a guess),
+   interests, preferences, content boundaries, communication preferences, and a switch for
+   whether Libby may remember anything about the user.
+   They are separate fields rather than one persona blob because the server uses them
+   differently, and new chat_profile.go makes that ordering explicit. Boundaries go first
+   and are stated as outranking the character card: a card can ask for behaviour the user
+   has ruled out, and a model handed both with no precedence rule splits the difference,
+   which is the worst of the three outcomes. Everything else is phrased as *what the user
+   told you* rather than as fact — the difference matters when it is wrong, since "he told
+   you he likes X" invites correction where "he likes X" invites defence. A form of
+   address is framed as a request, because handed the bare attribute a model will
+   sometimes announce it.
+   Memory consent is enforced twice, deliberately. The [remember: …] directive is withheld
+   from the prompt entirely rather than issued and then ignored — telling her to keep notes
+   and silently dropping them reads to a model as its own output being disregarded and
+   produces a lot of "as I mentioned earlier" — and the tag harvest is gated as well,
+   because a directive is a request to a model and never a guarantee.
+   The stated/inferred split the brief asks for is now true of the model’s view and not
+   just the UI: nothing inferred appears in the profile directive, what Libby worked out
+   stays in the memory store where it is labelled hers and is editable, and the panel says
+   so in as many words above the memory list.
+   9 tests: empty profile emits nothing, boundary ordering and precedence, the "own words"
+   framing, blank address assuming nothing, consent defaulting on and being stated when
+   off, and per-field length caps that cannot crowd each other out.
+
+Fix the personal-profile section so the user’s profile appears correctly.
+
+The profile should support relevant information such as:
+
+Display name.
+Avatar.
+Pronouns or preferred form of address, when voluntarily provided.
+Interests.
+Preferences.
+Content boundaries.
+Communication preferences.
+Information Libby is allowed to remember.
+
+Separate editable profile facts from memories Libby inferred. Clearly label inferred information and allow the user to correct or delete it.
+
+19. Interface and Animation Improvements   [PARTIAL — infrastructure in and applied; not every surface]
+
+   The app already had enter animations. What it had no way to express were the three
+   things that actually separate a considered interface from a merely animated one, and
+   new motion.ts adds each.
+   Exits. A dialog that fades in and then vanishes is worse than one that does neither,
+   because the asymmetry reads as a dropped frame — and Lit removes an element the instant
+   its state changes, so an exit has to be awaited before the removal. playExit does that,
+   and it cannot hang: it resolves immediately under reduced motion and on a short timer if
+   no animation ever fires, because the failure mode of awaiting an animation is a dialog
+   that never closes. Applied to the add-site sheet and the cut-out editor.
+   Collapse without layout thrash. Sections now animate open and shut via
+   grid-template-rows: 0fr → 1fr, which needs no measurement, forces no layout per frame,
+   and reflows nothing below it — animating height would do all three. The body stays in
+   the tree (that is what makes it animate at all) and is marked inert and aria-hidden
+   while shut, so it is not a tab stop or an invisible screen-reader detour. The chevron
+   rotates rather than being swapped for a different glyph, since swapping replaces the
+   element and flickers at the exact moment the section is moving.
+   Cross-fades where they help. Section and settings-tab changes go through a View
+   Transition, which is the one case a cross-fade earns: the whole pane is replaced and
+   without it the swap is a hard cut. Progressive — no support means the plain assignment —
+   and skipped under reduced motion.
+   Message arrival is stamped on the newest row from updated() rather than via a template
+   class, because a template class replays on every re-render: any unrelated state change
+   would re-animate the entire log. It plays once per new id, removes itself on
+   animationend so a long conversation carries no leftover markers, and stays silent on a
+   conversation switch, where singling out one arbitrary row would be wrong.
+   Reduced motion is honoured as a request for *no* motion rather than less: animation and
+   transition are removed outright, and the collapsible is pinned rather than left
+   mid-transition. Every duration is under a fifth of a second and exits are capped, so
+   nothing here delays an interaction; every keyframe moves transform and opacity only, so
+   nothing causes layout shift.
+   Left as it was: the drag-and-drop feedback, which was already correct — the dropzone
+   changes a dashed border's colour, which does not resize the box or shove the layout.
+   Not done: applying the exit helper to the remaining dialogs (character editor, model
+   metadata editor, lightbox), toast enter/exit, loading-state and gallery-navigation
+   polish. The infrastructure is shared, so those are each a few lines rather than new
+   design work.
+
+Improve animations throughout the web application.
+
+Animations should feel responsive and polished without slowing down navigation.
+
+Focus on:
+
+Page and panel transitions.
+Modal opening and closing.
+Message arrival.
+Libby’s typing and emotion changes.
+Loading states.
+Gallery navigation.
+Tab changes.
+Expanded and collapsed sections.
+Toast notifications.
+Drag-and-drop feedback.
+
+Respect the operating system’s reduced-motion preference.
+
+Avoid animations that delay interactions, cause layout shifts, or run continuously without purpose.
+
+20. Sidebar and Together Tab   [DONE]
+
+   Browsing with her had two entrances for one idea: a standalone Together destination in
+   the nav rail, and a drawer available on every other screen. Confirmed with the user
+   which was redundant — the destination — and it is gone, along with its 409-line view.
+   The drawer is the stronger half and it is now the only way in. The screen had to render
+   its own copy of the library grid; the drawer opens over the *real* one, with the real
+   filters and the real selection, so there is nothing to keep in sync. Removing the
+   screen therefore removed a duplicate rather than a feature — the drawer already carried
+   the same state (characters, status, running remarks, mode, mood) minus the fields that
+   only existed to drive its private grid.
+   The drawer previously stood down on both the Chat and Together screens. It now stands
+   down only on Chat, which owns its own conversation, and is available everywhere else —
+   it has to be, being the sole entry point.
+   The things this section says not to break: keyboard and mobile navigation both come off
+   the same NAV_SECTIONS list, so dropping an entry is all that was needed and the bottom
+   bar from §21 follows automatically. No permissions or persisted state referenced the
+   removed section — the drawer's own open/closed flag is separate and untouched.
+   Deep links, history and old routes: the web client has no URL routing at all — no
+   pushState, no hash, no popstate — so navigation is internal state and there was never a
+   /together URL to redirect. The user noted the deployment sits behind a reverse proxy,
+   which is the case worth checking, and it is already covered: the embedded server's SPA
+   fallback serves index.html for any unknown non-asset path, so a bookmarked or proxied
+   /together loads the app rather than 404ing. Nothing was invented to satisfy a
+   requirement that has nothing to act on.
+
+Remove the redundant Together tab because Together is already accessible from the sidebar.
+
+Ensure that removing the tab does not break:
+
+Deep links.
+Browser history.
+Existing saved routes.
+Keyboard navigation.
+Mobile navigation.
+Permissions or state associated with the old page.
+
+Redirect old routes to the corresponding sidebar view.
+
+21. Mobile Bottom Menu   [PARTIAL — implemented; physical device matrix pending]
+
+   The desktop rail now becomes a horizontally scrollable bottom navigation bar at
+   phone widths. Add, Settings and the account remain pinned while destinations can
+   scroll without being clipped. The shell uses 100dvh with a 100vh fallback and
+   safe-area padding on every edge, including the home-indicator inset; headers,
+   content, downloads and bulk actions also avoid notches and the bottom bar.
+   TypeScript and the production build cover the implementation. Remaining before a
+   strict [DONE]: hands-on iOS Safari/PWA and Android Chromium keyboard, rotation and
+   browser-chrome testing on real devices.
+
+Fix the bottom menu being clipped on mobile web browsers.
+
+Account for:
+
+Safe-area insets.
+Mobile browser address bars.
+Dynamic viewport height.
+On-screen keyboards.
+Landscape orientation.
+Devices with notches or rounded corners.
+Installed progressive web app mode.
+
+Use modern viewport units and safe-area environment variables where supported. Test on both iOS Safari and Android Chromium-based browsers.
+
+22. Engineering Expectations   [DONE — as a practice, and it held]
+
+   This section is about how the work is done rather than a feature, so the evidence for
+   it is the rest of this file and the commit history. What is worth stating outright:
+   Architecture was inspected before anything was replaced, and that repeatedly changed
+   the answer. §10's provider architecture already existed with all four required
+   built-ins, so the work became the missing add-a-site workflow rather than a rewrite.
+   §11 was reported broken and turned out to be sound. §19's drag-and-drop feedback was
+   already correct and was left alone. The two genuine bugs found — §9's single-connection
+   database and §18's orphaned profile writes — were found by reading for root causes
+   rather than by adding timeouts or retries over the symptoms.
+   Migrations: schema changes go in schema.sql, which is applied with IF NOT EXISTS on
+   every open, so the new passkeys table and the new media index migrate themselves. No
+   step for the operator. The one behavioural migration — WAL — verifies rather than
+   assumes, and falls back to the old serialization with a log line when the filesystem
+   refuses it.
+   Automated tests for critical behaviour, and pointed at where a mistake is a hole rather
+   than a failed operation: path traversal and symlink escape on model deletion, challenge
+   replay and cross-account ceremonies on passkeys, open-proxy allowlists on saved sources,
+   fail-closed on the loaded-model check. New this pass on the web side too, which
+   previously had none — 49 tests via `node --test`, chosen because it strips the types
+   itself and so adds no dependency to a project whose only two are lit and the Material
+   components.
+   Backward compatibility: every new profile field, draft field and setting is optional and
+   absent-means-previous-behaviour. Memory consent defaults to on precisely because
+   flipping it off on upgrade would look like data loss. Drafts written by an older build
+   restore field by field rather than being migrated or discarded wholesale.
+   Feature flags: none added, deliberately. Every change here is either behind an explicit
+   user action (adding a site, deleting a model, adding a passkey), gated by a
+   configuration value that is blank by default (the model directory), or a fix whose old
+   behaviour nobody wants back. A flag on a bug fix is a way to keep the bug.
+   Documentation: docs/API.md now covers the passkey, diagnostics, source-admin and
+   model-deletion routes, and the one new setting says what it is for and why it has no
+   default.
+   Per-feature summaries — implementation, files, security considerations, tests, known
+   limitations, follow-ups — are recorded in each section's entry above, which is where
+   they will be looked for.
+
+Before implementing changes:
+
+Inspect the existing architecture.
+Identify the relevant frontend, backend, database, model, and integration components.
+Document current behavior and likely root causes.
+Break the work into independently testable milestones.
+Avoid replacing functional systems without a clear benefit.
+Add migrations for persistent data changes.
+Add automated tests for critical behavior.
+Add feature flags for high-risk changes.
+Preserve backward compatibility where practical.
+Document configuration and setup changes.
+
+For each completed feature, provide:
+
+A summary of the implementation.
+Files changed.
+Database or configuration changes.
+Security considerations.
+Tests performed.
+Known limitations.
+Suggested follow-up work.
+
+Prioritize stability, user control, privacy, emotional continuity, and believable behavior over adding superficial personality prompts.
+
+23. Android Video Upload Reliability   [PARTIAL — implemented; device matrix pending]
+
+   The reported bug is real and had two causes, both in the same few lines. Every
+   Android upload path — the picker in the library and the share sheet, which is how a
+   video usually arrives — called copyUriToCache: a full byte-for-byte duplicate of the
+   file into the app's cache directory, so a 12 GB video needed 24 GB free before a byte
+   was sent, on the device least likely to have it. The copy was then sent as one
+   multipart request from a composable's coroutine, so the upload died with the screen:
+   backing out, locking the phone, switching apps. A failure at 94% started again from
+   zero.
+   The fix is a chunked resumable protocol, and the shape of it is that the *server*
+   holds the bookkeeping. New upload_sessions/upload_chunks tables and six endpoints
+   (handlers_uploads.go): open or rejoin a session, PUT one chunk, complete, cancel,
+   list. Opening a session for a file already being uploaded returns the existing one
+   rather than a second — that is the duplicate guard, enforced by a partial unique index
+   so two simultaneous requests cannot both win it. Completing early is not an error: it
+   answers with which chunks are missing and leaves the session open, since the parts
+   already sent are still good. Completing twice answers with the media id, because a
+   retry after a lost response must not read as a failure.
+   Client-side nothing is held whole. The phone opens the content URI once and reads
+   4 MiB at a time, skipping the ranges the server already has — one stream kept open
+   across the chunks rather than reopened and re-skipped per chunk, which on a large file
+   is quadratic. UploadWorker is a foreground service, so the upload owns its own
+   lifetime, and the notification is both what says so and what buys the exemption from
+   background execution limits. The queue is written to disk on every change and holds
+   content URIs rather than copies, with the persistable read permission taken at the
+   picker — without that the URI is a handle to nothing after a restart, and recovery
+   would be a list of rows that cannot upload.
+   Everything the section lists is in: streaming rather than buffering, foreground
+   service, progress notifications with a real percentage, pause and resume, automatic
+   retries (per chunk, with backoff — and a 4xx refusal is not retried, because it will
+   be refused again), recovery after an app restart (anything recorded as mid-flight is
+   requeued at startup, since Android stopped it rather than the user), recovery after
+   network loss (WorkManager's own constraint, not a polling loop), Wi-Fi-only as a real
+   constraint, background uploads, cancellation that also tells the server to reclaim its
+   staged chunks, and errors carrying the server's own words rather than "upload failed".
+   Storage is validated before the first byte on both sides: the phone declines a file
+   whose size no provider will state, and the server refuses with 507 naming the volume
+   and the variable that moves it. Original quality is preserved because nothing here
+   transcodes — there is no compression option to leave off.
+   Two details worth stating because they are easy to get wrong, and both are tested: a
+   chunk that is not exactly the length the session says is refused rather than stored,
+   and the last chunk is short. An off-by-one there corrupts precisely the end of every
+   file, weeks before anyone notices.
+   Remaining before [DONE]: this is device work. It needs real uploads of long videos at
+   several resolutions and codecs, from local storage and from a cloud provider, across a
+   screen lock, an app switch and a deliberate network drop, on hardware.
+
+Fix video uploads in the Android version, particularly failures involving long videos or large files.
+
+Investigate and address:
+
+Android background-process restrictions.
+Request and socket timeouts.
+Application memory limits.
+Large-file buffering.
+Uploads being interrupted when the screen turns off.
+App suspension when switching applications.
+Unstable mobile connections.
+Reverse-proxy and server upload limits.
+Temporary-storage capacity.
+Incorrect content URI handling.
+Android scoped-storage permissions.
+Files selected from cloud-storage providers.
+Upload failures caused by loading the entire video into memory.
+
+Large videos should be uploaded using streaming, chunked, or resumable uploads rather than being held entirely in memory.
+
+The Android application should support:
+
+Long-running foreground upload services when required.
+Upload progress notifications.
+Pause and resume.
+Automatic retries.
+Recovery after an app restart.
+Recovery after temporary network loss.
+Wi-Fi-only upload options.
+Background uploads.
+Upload cancellation.
+Clear and actionable error messages.
+Validation of available local and server storage before starting.
+Preservation of the original video quality unless the user enables compression.
+
+Test with videos of different lengths, resolutions, codecs, file sizes, and storage sources.
+
+24. Upload Manager   [DONE]
+
+   One manager on each client, both reading the same server-side sessions.
+   On the web it lives in the app shell rather than in the library view, which is the
+   whole fix for what was wrong: an upload belonged to the screen that started it, so
+   navigating away took the progress with it and there was no way to tell whether
+   anything was still happening. A docked bar, collapsed by default, because a queue
+   finishing quietly should not occupy the screen.
+   Every field the section asks for is on a row — filename, type, size, destination,
+   progress, speed, estimated time, state, retry count, and the server's actual error —
+   and every action: pause, resume, cancel, retry, remove a finished entry, clear
+   history, open the uploaded item, and reorder what is still queued. The eight states
+   are the brief's own list, including Processing, which is a real state rather than a
+   flourish: the server is encrypting and hashing something that may be gigabytes, and a
+   bar sitting at 100% saying nothing is how a working upload gets cancelled by hand.
+   The speed is a sliding window rather than a lifetime average, and reports nothing
+   until it has two samples spanning real time. The lifetime average is wrong in both
+   directions that matter — it never recovers from a slow start and keeps counting
+   through a pause — and an honest blank beats "4 hours remaining" that becomes "20
+   seconds" a moment later.
+   Persistence across a reload is the half that has to be real rather than cosmetic. The
+   queue is in localStorage, but the *sessions* are on the server, so what is shown after
+   a restart is reconciled against them: an upload that finished while the tab was closed
+   shows as finished with its item, one the server has swept stops claiming it can
+   resume, one started on the phone appears so it can be finished from the desktop, and a
+   half-sent one shows exactly how far it got — the server's byte count winning over the
+   remembered one, which was written before the last chunks landed. A File cannot be
+   serialized, so a live entry says plainly that the server still holds N megabytes and
+   asks for the same file again, rather than offering a Resume button that does nothing.
+   Duplicates are prevented twice: the client skips a file already queued and unfinished,
+   and the server returns the existing session for a repeated fingerprint. Either alone
+   leaves the double-tap case open.
+   Uploads run one at a time, deliberately. The bottleneck on a self-hosted box is one
+   upstream link, so three at once finish no sooner and each takes three times as long to
+   produce the first *finished* file — which is the one you are waiting for. It is also
+   what makes reordering the queue mean anything.
+   24 web tests, aimed at the parts where a mistake is what the user sees: the resume
+   arithmetic and the short last chunk, the rate window and the withheld estimate, which
+   controls each state offers, a restored queue validated field by field so a NaN can
+   never reach a progress bar, and every branch of the reconciliation above.
+
+Add a centralized upload manager for Android and the WebUI.
+
+The upload manager should display:
+
+Filename.
+File type.
+File size.
+Upload destination.
+Current progress.
+Upload speed.
+Estimated remaining time.
+Current status.
+Retry count.
+Any validation or server errors.
+
+Supported actions should include:
+
+Pause.
+Resume.
+Cancel.
+Retry.
+Remove completed entries.
+Clear upload history.
+Open the uploaded item.
+Reorder queued uploads where supported.
+
+Uploads should use explicit states such as:
+
+Queued.
+Preparing.
+Uploading.
+Paused.
+Processing.
+Completed.
+Failed.
+Cancelled.
+
+The manager should persist unfinished uploads across page navigation and application restarts. Do not lose the upload queue when the user leaves the current screen.
+
+Where supported, use resumable chunk uploads with server-side session identifiers and integrity checks. The server should be able to identify which chunks were successfully received instead of restarting the entire upload.
+
+Prevent duplicate uploads caused by retries or repeated button presses.
+
+25. Landscape Video Playback   [PARTIAL — implemented; physical device matrix pending]
+
+   The Up Next strip is suppressed in short landscape web viewports for both local
+   library videos and remote Browse videos, while the underlying queue remains intact.
+   Both Android viewers now make the same orientation decision in Compose: portrait
+   restores the strip, landscape keeps transport controls and the existing auto-hide
+   chrome but never overlays the queue. Rotation also clears the strip's browsing hold
+   so controls can auto-hide normally. Web safe-area insets protect landscape chrome.
+   Production web and Kotlin compilation cover the change. Remaining before [DONE]:
+   playback checks on physical phones/tablets with several aspect ratios and cutouts.
+
+Fix the mobile landscape video player layout.
+
+The “Up Next” or “What’s Next” timeline currently blocks part of the video during landscape playback. Remove this interface from the landscape video-viewing experience.
+
+While a video is playing in landscape mode:
+
+Do not show the “What’s Next” panel.
+Do not overlay the upcoming-content timeline over the video.
+Prioritize unobstructed fullscreen playback.
+Keep standard playback controls accessible.
+Automatically hide controls after a brief period of inactivity.
+Respect notches, camera cutouts, and safe-area insets.
+Prevent browser or application navigation elements from covering controls.
+Restore the normal “Up Next” interface after returning to portrait mode or leaving fullscreen playback.
+
+Ensure that hiding this panel does not stop the next item from being preloaded internally.
+
+Test landscape playback on phones and tablets with different aspect ratios.
+
+26. Hyperlinks Sent to Libby   [PARTIAL — safe open-once previews]
+
+   A URL typed into chat is detected and normalized before use: only HTTP(S), no
+   credentials, fragment and known tracking parameters removed. A link back into
+   OppaiLib resolves to its stable library item and never leaves the server. Remote
+   content is fetched only by the explicit preview path, never merely because the
+   message was sent; the user sees and may remove that preview before Libby receives
+   it. The existing scraper guard vets the concrete destination IP on every request,
+   including redirects and DNS changes, and supplies timeouts, robots handling and
+   a hard response-body cap. The extractor returns a compact title, description and
+   main-text summary rather than a page dump.
+   External text is fenced and labelled untrusted ahead of the content, and syntax
+   that could impersonate Libby's own tags is neutralized before it enters the
+   prompt. Tests cover protocol and credential refusal, tracking cleanup, internal
+   library references, summary caps, tag injection and the rule that chat itself
+   performs no fetch. This pass implements the open-once permission. Remembering or
+   adding a remote page to the library, monitoring it, downloading its media, and
+   browsing related pages remain follow-up work.
+
+Allow users to send hyperlinks directly to Libby through chat.
+
+When a link is submitted, the system should:
+
+Detect and normalize the URL.
+Validate the protocol.
+Display a safe link preview.
+Ask for authentication or permission when required.
+Retrieve content through the appropriate browsing or provider system.
+Extract relevant structured information.
+Give Libby a concise representation of the content.
+Preserve a reference to the original URL.
+
+Depending on the page type, Libby may receive:
+
+Page title.
+Description.
+Main text.
+Author or uploader.
+Publication date.
+Images or thumbnails.
+Video metadata.
+Tags.
+Gallery information.
+Thread posts.
+Relevant navigation options.
+
+Do not insert an entire webpage directly into the model context. Sanitize, summarize, and retrieve only the sections relevant to the conversation.
+
+Link handling must protect against:
+
+Server-side request forgery.
+Local network access.
+Malicious redirects.
+Unsupported protocols.
+Credential leakage.
+Tracking URLs.
+Extremely large downloads.
+Infinite pages.
+Script injection.
+Prompt injection contained inside webpages.
+Unsafe automatic file execution.
+
+Treat instructions found on external webpages as untrusted content. They must not override Libby’s system rules, permissions, identity, or user settings.
+
+The user should be able to choose whether Libby may:
+
+Open the link once.
+Remember the link.
+Add it to the library.
+Monitor supported content.
+Download supported media.
+Browse related pages.
+
+Links to locally stored OppaiLib items should use stable internal library references whenever possible.
+
+27. Unraid Storage and Container Expansion   [PARTIAL — mappings, diagnostics and cleanup in; moving a directory is documented, not automated]
+
+   This is a diagnosis problem before it is a storage one. When a share fills, the
+   failure surfaces as an upload that dies or a generation that errors — never as "the
+   share holding your media is full" — and from inside the container every mapping is
+   just a directory, so there is no way to tell which of them is the one to expand.
+   So GET /api/storage reports the mappings by name: the volume each actually landed on,
+   how full it is, what is on it, whether it exists, whether it is writable — probed by
+   writing a file, because a read-only bind mount is a common Unraid mistake and os.Stat
+   reports one as a perfectly good directory — and, in every warning, the environment
+   variable that moves it. Settings → Storage renders that in plain words, and is not
+   admin-only: "why did my upload fail" is a question the person uploading needs
+   answered.
+   New mappings. /cache is the one that matters, and it is required rather than optional:
+   upload staging holds the whole file until it is stored, so uploading a 12 GB video
+   needs 12 GB there, and unmapped all of it grows inside the Docker image allocation —
+   which is the actual mechanism behind "the Unraid image is too small". It is a VOLUME
+   in the Dockerfile as well, so an operator who ignores the template still does not put
+   it in the image. Scratch (ffmpeg frames, archives being built, the tagger's stills) is
+   redirected by pointing TMPDIR at the cache volume once at startup: every one of those
+   goes through os.CreateTemp(""), so one line moves all of them — including the ones
+   inside packages that have no business knowing about deployment layout, and the ones
+   added next.
+   Four further mappings are optional and blank by default — Libby's memories, character
+   data, chat workspaces and scratch — each splitting one directory out of where it lives
+   now, so the data an operator would least like to lose can have its own share and its
+   own backup schedule. Logs and backups are deliberately *not* invented as mappings:
+   logs go to stdout, which is the container log, and there is no backup feature to give
+   a directory to. Thumbnails likewise have no mapping, because they are blobs in the
+   media store rather than a separate directory — and the panel says so rather than
+   listing a path that does not exist.
+   Cleanup policies are narrow on purpose. Two categories — staged chunks of uploads
+   nobody came back to finish, and scratch older than its window — with both windows as
+   settings, a periodic sweep, and a button for when six hours is not soon enough. Both
+   only ever remove what the application can recreate. Original media, Libby's memories
+   and model files are never touched by a policy; removing one of those stays an explicit
+   act in the screen that owns it, which is what §15 already does for models. The sweep
+   also removes orphaned staging directories — the residue of a crash between creating
+   one and committing its row — and leaves strictly alone anything in that folder that is
+   not one of ours.
+   "Estimated space required for pending operations" is the unfinished uploads' remaining
+   bytes. That is the only such estimate that can be made honestly: a generation's output
+   size is not known until it exists, and inventing one would be worse than silence.
+   Not done, and named rather than glossed: moving a large directory is documented rather
+   than automated. The database stores blob paths relative to /media, so relocating a
+   share breaks no library links or references — but nothing copies the contents for you,
+   and a mapping repointed at an empty share comes up correctly configured and empty. The
+   README says to stop the container and copy first, in as many words. An in-app "move
+   this directory" that streams gigabytes between shares while the app is running is a
+   different piece of work, and doing it badly is how a library gets lost.
+
+Improve the Unraid deployment so OppaiLib can use additional storage when it is required for Libby’s models, memories, generated content, caches, or media processing.
+
+Do not depend on a small, fixed Docker image allocation for growing application data.
+
+Store persistent data in configurable Unraid paths rather than inside the disposable container filesystem.
+
+Provide separate configurable mappings for:
+
+AI models.
+Character data.
+Libby’s persistent memories.
+Uploaded media.
+Generated images and videos.
+Application configuration.
+Databases.
+Thumbnails.
+Temporary processing files.
+Download cache.
+Logs.
+Backups.
+
+Example container mappings may include:
+
+/config
+/models
+/data
+/media
+/cache
+/tmp/oppaillib
+
+The exact host paths must remain configurable through the Unraid template.
+
+Add storage diagnostics that show:
+
+Available space.
+Used space.
+Cache size.
+Model-storage usage.
+Media-library usage.
+Temporary-file usage.
+Database size.
+Estimated space required for pending operations.
+
+When additional space is required, OppaiLib should provide a clear warning and identify which storage mapping needs expansion.
+
+Support moving large data directories without breaking database references or library links.
+
+Add configurable cleanup policies for:
+
+Expired temporary files.
+Failed upload chunks.
+Old thumbnails.
+Replaceable caches.
+Abandoned downloads.
+Unused model files.
+Old logs.
+
+Never automatically delete original user media, Libby’s important memories, or active models solely to free space.
+
+If “making the Unraid image larger” refers to increasing Docker image capacity, document how to expand the Unraid Docker image safely. However, prefer correct volume mappings so large models and media do not consume the Docker image in the first place.
+
+Updated Acceptance Criteria
+
+The related work should not be considered complete until all of the following are verified:
+
+Long Android video uploads can complete without keeping the entire file in memory.
+Interrupted uploads can resume instead of restarting from zero.
+Upload progress remains visible after navigating away from the upload screen.
+Uploads can recover after temporary network loss or application restart.
+Landscape video playback is not obstructed by the “What’s Next” timeline.
+Users can send supported hyperlinks to Libby.
+Libby can discuss retrieved link content without treating webpage instructions as trusted commands.
+Persistent OppaiLib data is stored in configurable Unraid volume mappings.
+The application warns users before storage exhaustion causes uploads, generations, or model operations to fail.
+Expanding or relocating Unraid storage does not erase Libby’s memories, models, library data, or user configuration.

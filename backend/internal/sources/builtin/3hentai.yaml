@@ -1,0 +1,81 @@
+# ── 3hentai (browsable source) ───────────────────────────────────────────────
+# Built into the binary. To repair or extend it without waiting for a release,
+# drop a file with the same id into /config/sources — a user file wins.
+#
+# The selectors key off the gallery *link path* (/d/<id>) rather than class
+# names, because the path is the stable part of a gallery site: classes get
+# restyled, but /d/<id> is load-bearing for the site's own navigation.
+#
+# Note the hrefs are absolute ("https://3hentai.net/d/123"), not root-relative —
+# matching only "/d/..." finds nothing at all, which is what an earlier version
+# of this source did. The `pattern` below matches the id in either form.
+
+id: 3hentai
+name: 3hentai
+base_url: https://3hentai.net
+kind: comic
+authentication: none
+auth_note: Public catalogue; OppaiLib does not attempt to bypass access or age gates.
+content_warning: Explicit adult illustrated galleries.
+
+hosts:
+  - 3hentai.net
+  - "*.3hentai.net"
+  # Covers and page images are served from a separate CDN domain. The streaming
+  # proxy refuses any host not listed here, so omitting it makes every thumbnail
+  # in the grid come back 403.
+  - "*.3hentai.xyz"
+
+feeds:
+  - id: recent
+    label: Recent
+    # Paging on the index is a *path segment*, not a query parameter: "/2" is page
+    # two, while "/?page=2" is silently ignored and serves page one again. Getting
+    # this wrong doesn't error — it just makes infinite scroll re-append page one
+    # forever. ("/1" 301s to "/", which is page one, so the template holds there.)
+    path: "/{page}"
+
+  # The site has no "popular" listing — /popular is a 404, and sort=popular only
+  # takes effect attached to a search term. So popularity lives here, as a sort
+  # on search, which is the only place the site actually implements it.
+  - id: search
+    label: Search
+    path: "/search?q={query}&sort={sort}&page={page}"
+    query: true
+    sorts:
+      - id: recent
+        label: Recent
+      - id: popular
+        label: Popular
+
+listing:
+  # One gallery card. Anything without a thumbnail is skipped, which drops the
+  # site's non-gallery /d/ links without having to enumerate them.
+  item: "a[href*='/d/']"
+  id:
+    attr: href
+    pattern: "/d/(\\d+)"
+  title:
+    selector: ".title"
+    attr: text
+  # Lazy-loaded: the real cover is in data-src and src holds a placeholder.
+  thumb:
+    selector: "img"
+    attr: "data-src|src"
+  page_url: "/d/{id}"
+
+# Reading a gallery.
+#
+# The detail page never names the full-size image — it only carries the page
+# *thumbnails* ("5t.jpg"), and the real page is the same URL with the "t" dropped
+# ("5.jpg"). Left to the generic extractor, reading and (worse) *saving* a comic
+# pulls in the thumbnails: ~74KB of mush per page instead of the ~400KB original.
+#
+# The rewrite doubles as the filter. cover.jpg and thumb.jpg don't match the
+# pattern, so they're dropped rather than imported as if they were pages.
+pages:
+  selector: ".single-thumb img"
+  attr: "data-src|src"
+  rewrite:
+    pattern: '^(.*/)(\d+)t\.(jpg|jpeg|png|webp|gif)$'
+    replace: "${1}${2}.${3}"

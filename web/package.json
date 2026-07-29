@@ -1,0 +1,22 @@
+{
+  "name": "oppailib-web",
+  "version": "0.23.0",
+  "private": true,
+  "type": "module",
+  "description": "OppaiLib Material 3 web UI",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "// test": "node --test strips the types itself, so the pure logic modules are testable without adding a test-runner dependency to a project that had none.",
+    "test": "node --test \"src/**/*.test.ts\"",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@material/web": "^2.3.0",
+    "lit": "^3.2.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2",
+    "vite": "^6.0.5"
+  }
+}

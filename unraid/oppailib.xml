@@ -1,0 +1,71 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>OppaiLib</Name>
+  <Version>0.23.0</Version>
+  <Repository>ghcr.io/errorwave/oppailib:latest</Repository>
+  <Registry>https://github.com/ErrorWave/OppaiLib/pkgs/container/oppailib</Registry>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>bash</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/ErrorWave/OppaiLib/issues</Support>
+  <Project>https://github.com/ErrorWave/OppaiLib</Project>
+  <Overview>OppaiLib — a private, self-hosted, encrypted media library for adult content (videos, GIFs, images, comics, and game entries) with tagging, URL scraping, and fully local AI auto-tagging. Also includes Libby, an in-app chat companion with importable character cards, which talks to an OpenAI-compatible LLM you run yourself. Everything stays on your box: no cloud storage, no cloud AI, no telemetry.</Overview>
+  <Category>MediaApp:Other</Category>
+  <WebUI>http://[IP]:[PORT:8080]/</WebUI>
+  <TemplateURL>https://raw.githubusercontent.com/ErrorWave/OppaiLib/main/unraid/oppailib.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/ErrorWave/OppaiLib/main/web/public/icon.png</Icon>
+  <ExtraParams/>
+  <PostArgs/>
+  <CPUset/>
+  <DateInstalled/>
+  <DonateText/>
+  <DonateLink/>
+  <Description>Self-hosted encrypted NSFW media library. Set a strong master passphrase — it encrypts all stored media and CANNOT be recovered if lost.</Description>
+
+  <Config Name="WebUI Port" Target="8080" Default="8080" Mode="tcp" Description="Web interface / API port" Type="Port" Display="always" Required="true" Mask="false">8080</Config>
+
+  <Config Name="Media (encrypted store)" Target="/media" Default="/mnt/user/appdata/oppailib/media" Mode="rw" Description="Encrypted blob storage" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/oppailib/media</Config>
+  <Config Name="Config" Target="/config" Default="/mnt/user/appdata/oppailib/config" Mode="rw" Description="Keystore and site parsers. The AI model ships inside the image at /opt/oppailib/models and is not stored here." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/oppailib/config</Config>
+  <Config Name="Database" Target="/db" Default="/mnt/user/appdata/oppailib/db" Mode="rw" Description="SQLite metadata database. Keep this on a local pool (an SSD cache share) rather than on an SMB/NFS mount: a network filesystem cannot support WAL mode, and without WAL every database query in the container queues behind every other one. Settings → Diagnostics says which mode it actually came up in." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/oppailib/db</Config>
+  <Config Name="Cache (uploads and scratch)" Target="/cache" Default="/mnt/user/appdata/oppailib/cache" Mode="rw" Description="Upload staging and processing scratch. Regenerable — deleting it while the container is stopped costs unfinished uploads and nothing else — but NOT small: a resumable upload holds the whole file here until it is stored, so uploading a 12 GB video needs 12 GB here. Leave this unmapped and it grows inside the Docker image allocation instead, which is the usual cause of &quot;image is full&quot; on a box that uploads video. Settings → Storage shows what is on it." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/oppailib/cache</Config>
+
+  <!-- Optional splits. Each of these lives inside a mapping above by default, and
+       exists so a share can be moved on its own — Libby's memories onto redundant
+       storage and a backup schedule, scratch onto a fast SSD pool, media onto the
+       array. Leave one blank and it stays where it already is; nothing moves on its
+       own, so relocating means stopping the container and copying the contents
+       across first (see the README). -->
+  <Config Name="Libby's memories (optional)" Target="/libby" Default="" Mode="rw" Description="Optional. Her memory store, bond, mood, outfits and identity references — by default inside /config. Map this and set OPPAI_LIBBY_DIR to /libby to put the data you would least like to lose on its own share. Stop the container and copy /config/libby across before switching, or she starts from nothing." Type="Path" Display="advanced" Required="false" Mask="false"></Config>
+  <Config Name="Character data (optional)" Target="/characters" Default="" Mode="rw" Description="Optional. Imported character cards and their artwork — by default inside /config. Set OPPAI_CHARACTER_DIR to /characters to use it; copy /config/characters across first." Type="Path" Display="advanced" Required="false" Mask="false"></Config>
+  <Config Name="Chat workspaces (optional)" Target="/chat" Default="" Mode="rw" Description="Optional. Conversations, your profile and the images shared into chat — by default inside /config. Set OPPAI_CHAT_DIR to /chat to use it; copy /config/chat across first." Type="Path" Display="advanced" Required="false" Mask="false"></Config>
+  <Config Name="Processing scratch (optional)" Target="/scratch" Default="" Mode="rw" Description="Optional. ffmpeg frames, archives being built, AI tagger stills — by default inside /cache. Set OPPAI_TEMP_DIR to /scratch to put it on a fast pool separate from upload staging. Anything left here is deleted automatically once it is older than the window in Settings → Storage." Type="Path" Display="advanced" Required="false" Mask="false"></Config>
+
+  <Config Name="Libby memory path" Target="OPPAI_LIBBY_DIR" Default="" Mode="" Description="Set to /libby only if you mapped the optional Libby memories path above. Blank keeps her memories inside /config, which is where they already are." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
+  <Config Name="Character data path" Target="OPPAI_CHARACTER_DIR" Default="" Mode="" Description="Set to /characters only if you mapped the optional character path above." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
+  <Config Name="Chat workspace path" Target="OPPAI_CHAT_DIR" Default="" Mode="" Description="Set to /chat only if you mapped the optional chat path above." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
+  <Config Name="Scratch path" Target="OPPAI_TEMP_DIR" Default="" Mode="" Description="Set to /scratch only if you mapped the optional scratch path above. Blank puts scratch inside /cache." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
+
+  <Config Name="Master Passphrase" Target="OPPAI_PASSPHRASE" Default="" Mode="" Description="Encrypts all media. SAVE THIS — losing it means losing your library. Leave blank on first run to have one generated (check the logs)." Type="Variable" Display="always" Required="false" Mask="true"></Config>
+  <Config Name="Admin Username" Target="OPPAI_ADMIN_USER" Default="admin" Mode="" Description="First-run admin account" Type="Variable" Display="always" Required="false" Mask="false">admin</Config>
+  <Config Name="Admin Password" Target="OPPAI_ADMIN_PASSWORD" Default="" Mode="" Description="First-run admin password" Type="Variable" Display="always" Required="false" Mask="true"></Config>
+
+  <Config Name="AI Auto-tagging" Target="OPPAI_AI_ENABLED" Default="true" Mode="" Description="Enable local AI auto-tagging" Type="Variable" Display="advanced" Required="false" Mask="false">true</Config>
+  <Config Name="AI Device" Target="OPPAI_AI_DEVICE" Default="cpu" Mode="" Description="cpu or cuda (cuda needs GPU passthrough and a CUDA build of libonnxruntime; falls back to cpu with a warning)" Type="Variable" Display="advanced" Required="false" Mask="false">cpu</Config>
+  <Config Name="AI Video Frames" Target="OPPAI_AI_VIDEO_FRAMES" Default="5" Mode="" Description="Frames sampled per video/GIF before merging their tags (capped at 32). Each frame costs one ffmpeg decode plus one inference, so raising this makes video tagging slower but more thorough." Type="Variable" Display="advanced" Required="false" Mask="false">5</Config>
+  <Config Name="Scrape Delay (ms)" Target="OPPAI_SCRAPE_DELAY_MS" Default="1500" Mode="" Description="Politeness delay between scraper requests" Type="Variable" Display="advanced" Required="false" Mask="false">1500</Config>
+  <Config Name="Respect robots.txt" Target="OPPAI_SCRAPE_RESPECT_ROBOTS" Default="true" Mode="" Description="Honor robots.txt before fetching. Set to false only for a site you own or are authorized to archive, when Fetch returns 'blocked by robots.txt'." Type="Variable" Display="advanced" Required="false" Mask="false">true</Config>
+
+  <!-- Libby chat. These are startup defaults only: the Settings screen can set all
+       three at runtime, and the API key there is write-only. Exposed here so the
+       container can be pointed at an LLM when it is first created. -->
+  <Config Name="Chat LLM URL" Target="OPPAI_CHAT_URL" Default="" Mode="" Description="OpenAI-compatible endpoint for Libby chat — LM Studio, llama.cpp, Ollama's /v1 bridge, or text-generation-webui. Example: http://192.168.1.10:5000/v1 . Blank disables chat (Libby falls back to built-in local replies). Chat becomes ready once that API reports a loaded model; load models in its own UI." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
+  <Config Name="Chat Model" Target="OPPAI_CHAT_MODEL" Default="" Mode="" Description="Optional fallback model name, for chat servers that require a model field in the request." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
+  <Config Name="Chat API Key" Target="OPPAI_CHAT_API_KEY" Default="" Mode="" Description="Optional. Needed only when your chat server was started with an API key (e.g. text-generation-webui's --api-key)." Type="Variable" Display="advanced" Required="false" Mask="true"></Config>
+  <Config Name="Text-generation models (optional)" Target="/textgen-models" Default="" Mode="rw" Description="Optional, and only needed if you want to DELETE text-generation models from OppaiLib's UI — that backend exposes no delete API, so it has to be a file operation. Point this at the same host folder text-generation-webui loads its models from, then set the matching path (/textgen-models) in Settings → Libby. Leave both blank and the delete controls simply do not appear. Deleting moves a model to a recoverable .oppailib-trash folder inside this directory unless you explicitly ask for a permanent delete, and it will never touch the model that is currently loaded." Type="Path" Display="advanced" Required="false" Mask="false"></Config>
+
+  <Config Name="Image Generation URL" Target="OPPAI_IMAGEGEN_URL" Default="" Mode="" Description="Local image generator for the Create tab: an InvokeAI server (default port 9090) or Automatic1111 / SD.Next (the /sdapi/v1 flavour, default port 7860). Which API it speaks is detected automatically. Blank disables the feature. Also settable at runtime in Settings." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
+
+  <Config Name="Web Idle Timeout (minutes)" Target="OPPAI_WEB_IDLE_MINUTES" Default="60" Mode="" Description="How long a browser session may sit unused before it is signed out. Browser sessions are also signed out whenever the container restarts. The Android app is exempt from both — it stays signed in. Set to 0 to disable the idle timeout." Type="Variable" Display="advanced" Required="false" Mask="false">60</Config>
+  <Config Name="Session Lifetime (hours)" Target="OPPAI_SESSION_TTL_HOURS" Default="720" Mode="" Description="How long a signed-in session stays valid before requiring a fresh sign-in. Applies to the Android app as well as browsers." Type="Variable" Display="advanced" Required="false" Mask="false">720</Config>
+</Container>

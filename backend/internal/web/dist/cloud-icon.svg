@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Cloud">
+  <!-- The incognito tab icon. A plain cloud glyph on the blue every self-hosted
+       file service uses: at 16 pixels in a tab strip it reads as "some cloud drive",
+       which is the whole job. Deliberately drawn here rather than shipping another
+       project's trademarked mark. -->
+  <rect width="512" height="512" rx="96" fill="#0082c9"/>
+  <path fill="#fff" d="M368 396H162c-49 0-90-39-90-88 0-45 34-82 78-87 15-45 58-77 108-77 62 0 113 48 118 109 39 6 68 39 68 78 0 36-30 65-76 65z"/>
+</svg>

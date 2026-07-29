@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "experimentalDecorators": true,
+    "useDefineForClassFields": false,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": false
+  },
+  "include": ["src"],
+  // Tests run under `node --test`, which strips types rather than checking them, and
+  // they use node: builtins this config has no types for. Type-checking them here
+  // would mean adding @types/node to a project whose only dependencies are lit and
+  // the Material components — so the app build stays strict and the tests stay
+  // dependency-free.
+  "exclude": ["src/**/*.test.ts"]
+}

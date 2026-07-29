@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The only thing the app ever shares out: the APK it downloaded to install over
+     itself. Library media is never handed to another app through here. -->
+<paths>
+    <cache-path name="updates" path="updates/" />
+</paths>
