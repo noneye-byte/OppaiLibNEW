@@ -3,9 +3,9 @@
  *
  * A private media library is a thing you may not want to explain. With this on,
  * the sign-in page, the tab's title and icon, the server's response headers and
- * the endpoints a scanner probes all answer as Nextcloud; inside, the mascot is
- * absent and errors are plain notices rather than dialogue. Signing in with real
- * credentials still opens the real library.
+ * the endpoints a scanner probes all answer as Nextcloud. The disguise controls
+ * the public, signed-out surface; signing in with real credentials opens the
+ * library and the complete Libby experience as usual.
  *
  * It is a *server* setting, not a per-device preference like hiding Libby: half
  * of the disguise is the server (headers, decoy endpoints, the served HTML), and
@@ -46,9 +46,6 @@ export function setIncognito(on: boolean): void {
   override = on;
   applyIncognitoIdentity();
   window.dispatchEvent(new CustomEvent("oppai-incognito", { detail: { incognito: on } }));
-  // Views that already listen for the Libby preference get this for free, which
-  // is the point of routing both through one predicate. See libbyHidden().
-  window.dispatchEvent(new CustomEvent("oppai-libby-pref", { detail: { incognito: on } }));
 }
 
 /** The tab's identity under each mode. */

@@ -67,21 +67,6 @@ const NAV_SECTIONS: NavSection[] = [
   { id: "chat", label: "Chat", icon: "chat_bubble" },
 ];
 
-/**
- * Sections that exist only because Libby does. Incognito takes them off the rail.
- *
- * Only the Studio qualifies. It is her wardrobe and nothing else lives there, so
- * removing it costs nothing. Chat deliberately stays: it holds whoever the user
- * has made, and hiding the section to hide one character would take their
- * conversations with it — so Chat drops *her* from its roster instead (see
- * visibleCharacters in chat.ts).
- *
- * Removed from navigation, not from the app: a restored section or a link still
- * resolves, which keeps the disguise a skin rather than a feature switch that
- * could strand work in progress.
- */
-const LIBBY_SECTIONS: readonly Section[] = ["studio"];
-
 // Everything about an item a search query can match: its title, its notes, and
 // its tags — both the tag name and its category, so "character" or "rating"
 // surfaces everything the AI classified that way.
@@ -801,8 +786,8 @@ export class OppaiLibrary extends LitElement {
     window.addEventListener("oppai-downloads", this.onDownloads as EventListener);
     window.addEventListener("oppai-download-complete", this.onDownloadComplete);
     window.addEventListener("oppai-upload-complete", this.onUploadDone);
-    // The disguise can be switched on from Settings without a reload, and the rail
-    // is one of the things it changes: two of its entries exist only for Libby.
+    // The disguise can be switched on from Settings without a reload; repaint the
+    // few shell labels that describe its public identity.
     window.addEventListener("oppai-incognito", this.onIncognito);
   }
   disconnectedCallback() {
@@ -817,10 +802,7 @@ export class OppaiLibrary extends LitElement {
     if (this.uploadSettle) clearTimeout(this.uploadSettle);
   }
 
-  /** Leaving a section the disguise has just removed, so nobody is left standing in
-      the outfit studio while the app claims to have no mascot. */
   private onIncognito = () => {
-    if (isIncognito() && LIBBY_SECTIONS.includes(this.section)) this.selectSection("home");
     this.requestUpdate();
   };
 
@@ -863,9 +845,7 @@ export class OppaiLibrary extends LitElement {
       // Who the picture is *of*, which is a different question from what is in it.
       // Only offered for stills: a video is not a portrait of anyone, and tagging one
       // as her would put her face on something she is not in for most of its length.
-      // …and not at all under the disguise, where naming her on a right-click menu
-      // would be the one place she survived being removed from the product.
-      ...((item.kind === "image" || item.kind === "gif") && !isIncognito()
+      ...((item.kind === "image" || item.kind === "gif")
         ? [{ label: "Is this Libby?", icon: "face_retouching_natural",
              run: () => this.openIdentityMenu(item, event.clientX, event.clientY) }]
         : []),
@@ -1331,9 +1311,8 @@ export class OppaiLibrary extends LitElement {
     else if (isBrowse) headerTitle = "Browse sources";
     else if (isImageGen) headerTitle = "Create";
     else if (isStudio) headerTitle = "Outfit studio";
-    // Named after her because she is who you are usually talking to — except where
-    // the app does not admit to having her, and the section is just Chat.
-    else if (isChat) headerTitle = isIncognito() ? "Chat" : "Chat with Libby";
+    // Named after her because she is who you are usually talking to.
+    else if (isChat) headerTitle = "Chat with Libby";
     else if (isFavorites) headerTitle = "Favorites";
     else if (isHome) headerTitle = "Library";
     else headerTitle = KIND_META[this.section as Kind]?.label ?? "Library";
@@ -1483,7 +1462,7 @@ export class OppaiLibrary extends LitElement {
         </button>
 
         <div class="nav-list">
-          ${NAV_SECTIONS.filter((n) => !isIncognito() || !LIBBY_SECTIONS.includes(n.id)).map((n) => {
+          ${NAV_SECTIONS.map((n) => {
             const active = this.section === n.id && this.selectedId == null;
             return html`
               <button class="nav-item" @click=${() => this.selectSection(n.id)}>

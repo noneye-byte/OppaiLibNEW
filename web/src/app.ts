@@ -360,10 +360,12 @@ export class OppaiApp extends LitElement {
 
   render() {
     // This popup is the app's error surface, so hiding Libby can't hide the message —
-    // it just drops the character: same bubble, no artwork, no name. Incognito goes
-    // one step further and swaps the bubble for an ordinary snackbar, since a pixel
+    // it just drops the character: same bubble, no artwork, no name. On the signed-out
+    // disguise, incognito swaps the bubble for an ordinary snackbar, since a pixel
     // dialogue box is itself a character even when nobody is standing in it.
-    const plainErrors = isIncognito();
+    // The Nextcloud disguise owns the signed-out surface only. Once authenticated,
+    // incognito users get Libby's normal in-app reactions and artwork.
+    const plainErrors = isIncognito() && !this.user;
     const hideLibby = libbyHidden();
     // Prefer the pose the event carried; fall back to inferring one from an error's text.
     const cue = this.mascotEmotion

@@ -18,7 +18,6 @@ import {
 import { applyProgression, getIntensity, setIntensity } from "../libby-meter.js";
 import { libbyHeatDelta, libbyLibraryAnswer, libbyOpener, libbyReact, libbyReply, type LibbyLine } from "../libby-voice.js";
 import { menuDivider, nativeMenuWanted, openMenu, type MenuItem } from "../context-menu.js";
-import { isIncognito } from "../incognito.js";
 import { SHARE_EVENT, takePendingShare } from "../chat-share.js";
 import { libbyMotion } from "../libby-motion.js";
 import { profileUpdates } from "../ui-metrics.js";
@@ -893,20 +892,9 @@ export class OppaiChat extends LitElement {
     return roster.find((character) => character.id === this.characterID) ?? roster[0];
   }
 
-  /**
-   * The friends this screen will admit to having.
-   *
-   * Chat is not Libby's screen — it holds whoever the user has made — so the
-   * disguise takes her out of the roster rather than taking the whole section
-   * away, which would hide conversations that have nothing to do with her. She is
-   * the one built-in character, so this is a single id and not a category.
-   *
-   * Her conversations are unreachable rather than deleted: nothing is removed from
-   * the workspace, and turning incognito off puts her back exactly as she was.
-   */
+  /** The signed-in workspace stays complete while the public login wears its disguise. */
   private get visibleCharacters(): ChatCharacter[] {
-    if (!isIncognito()) return this.workspace.characters;
-    return this.workspace.characters.filter((character) => character.id !== "libby");
+    return this.workspace.characters;
   }
 
   /**

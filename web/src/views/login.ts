@@ -32,6 +32,7 @@ export class OppaiLogin extends LitElement {
   @state() private libbyTone: "success" | "error" = "success";
   @state() private libbyEmotion: LibbyEmotion = loginEmotions[Math.floor(Math.random() * loginEmotions.length)];
   @state() private libbyIntensity = loginIntensity(getIntensity());
+  @state() private cloudPasswordVisible = false;
 
   /** Whether to offer the passkey button. False on a browser without WebAuthn and on a
       plain-HTTP LAN address, where the browser refuses and the button would do nothing
@@ -204,91 +205,212 @@ export class OppaiLogin extends LitElement {
          a class or two would leave the tells that give a skin away — a radius
          that is 28px where it should be 8, a stray elevation shadow. */
       :host(.cloud) {
-        background: #0082c9;
-        background: linear-gradient(40deg, #0082c9 0%, #1cafff 100%);
+        isolation: isolate;
+        padding: clamp(20px, 4vh, 44px) 18px;
+        background: linear-gradient(180deg, #0788c9 0%, #0a8dcc 56%, #25a8e5 100%);
+        color: #222;
+        font-family: "Noto Sans", "Open Sans", Roboto, system-ui, sans-serif;
       }
-      .cloud-card {
-        width: min(300px, 100%);
+      /* Soft, layered cloud banks built from gradients keep the disguise self-contained
+         and responsive while matching the supplied sky reference. */
+      :host(.cloud)::before,
+      :host(.cloud)::after {
+        content: "";
+        position: absolute;
+        z-index: -1;
+        pointer-events: none;
+      }
+      :host(.cloud)::before {
+        left: -8vw;
+        right: -8vw;
+        bottom: -18vh;
+        height: 56vh;
+        opacity: .96;
+        background:
+          radial-gradient(ellipse 15% 38% at 3% 57%, #e7f7ff 0 67%, transparent 69%),
+          radial-gradient(ellipse 17% 46% at 18% 48%, #f6fcff 0 65%, transparent 67%),
+          radial-gradient(ellipse 20% 58% at 33% 58%, #eaf8ff 0 66%, transparent 68%),
+          radial-gradient(ellipse 18% 48% at 49% 50%, #f8fdff 0 66%, transparent 68%),
+          radial-gradient(ellipse 22% 54% at 67% 59%, #e7f6fe 0 66%, transparent 68%),
+          radial-gradient(ellipse 18% 49% at 84% 50%, #f6fcff 0 66%, transparent 68%),
+          radial-gradient(ellipse 16% 40% at 98% 57%, #e9f8ff 0 67%, transparent 69%),
+          linear-gradient(180deg, transparent 0 45%, #e9f8ff 67%, #d6f0fc 100%);
+        filter: drop-shadow(0 -8px 16px rgba(255, 255, 255, .24));
+      }
+      :host(.cloud)::after {
+        left: -10vw;
+        right: -10vw;
+        bottom: 21vh;
+        height: 25vh;
+        opacity: .56;
+        background:
+          radial-gradient(ellipse 16% 48% at 8% 80%, #e8f7ff 0 68%, transparent 70%),
+          radial-gradient(ellipse 13% 44% at 26% 90%, #f6fcff 0 68%, transparent 70%),
+          radial-gradient(ellipse 18% 48% at 78% 91%, #f4fbff 0 68%, transparent 70%),
+          radial-gradient(ellipse 15% 45% at 96% 80%, #e7f7ff 0 68%, transparent 70%);
+        filter: blur(2px);
+      }
+      .cloud-login {
+        width: min(416px, 100%);
+        min-height: calc(100vh - clamp(40px, 8vh, 88px));
+        min-height: calc(100dvh - clamp(40px, 8vh, 88px));
         display: flex;
         flex-direction: column;
-        align-items: stretch;
-        gap: 12px;
-        color: #fff;
-        font-family: "Noto Sans", "Open Sans", Roboto, system-ui, sans-serif;
+        align-items: center;
+        justify-content: center;
+        position: relative;
+        z-index: 1;
       }
       .cloud-mark {
         display: block;
-        width: 128px;
-        margin: 0 auto 4px;
+        width: min(216px, 54vw);
+        height: auto;
+        margin: 0 auto clamp(22px, 4vh, 38px);
+        filter: drop-shadow(0 2px 3px rgba(0, 72, 111, .22));
+      }
+      .cloud-card {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 24px 20px 20px;
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 15px;
+        border-radius: 12px;
+        background: rgba(255, 255, 255, .98);
+        color: #202124;
+        box-shadow: 0 6px 20px rgba(0, 52, 81, .28), 0 1px 3px rgba(0, 0, 0, .22);
+        animation: oppai-scale-in .3s ease-out both;
       }
       .cloud-word {
-        margin: 0 0 18px;
+        margin: 0 0 14px;
         text-align: center;
-        font-size: 26px;
-        font-weight: 300;
-        letter-spacing: 0.4px;
+        font-size: 25px;
+        line-height: 1.25;
+        font-weight: 700;
+        letter-spacing: -.25px;
       }
-      /* Plain inputs, not Material fields: the label sits inside as a
-         placeholder, the corners are gently rounded, and focus is a white ring. */
+      .cloud-field {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        color: #262626;
+        font-size: 16px;
+        line-height: 1.35;
+      }
+      .cloud-input {
+        position: relative;
+      }
       .cloud-card input {
         width: 100%;
         box-sizing: border-box;
-        height: 44px;
-        padding: 0 14px;
-        border: 2px solid rgba(255, 255, 255, 0.45);
-        border-radius: 8px;
-        background: rgba(255, 255, 255, 0.95);
+        height: 46px;
+        padding: 0 13px;
+        border: 2px solid #d7d7d7;
+        border-radius: 11px;
+        background: #fff;
         color: #222;
         font: inherit;
-        font-size: 15px;
+        font-size: 16px;
         outline: none;
+        transition: border-color .15s ease, box-shadow .15s ease;
       }
-      .cloud-card input:focus { border-color: #fff; }
+      .cloud-card input:hover { border-color: #b7b7b7; }
+      .cloud-card input:focus {
+        border-color: #0082c9;
+        box-shadow: 0 0 0 2px rgba(0, 130, 201, .18);
+      }
+      .cloud-input input { padding-right: 46px; }
+      .cloud-password {
+        position: absolute;
+        top: 50%;
+        right: 5px;
+        width: 38px;
+        height: 38px;
+        transform: translateY(-50%);
+        display: grid;
+        place-items: center;
+        border: 0;
+        border-radius: 50%;
+        background: transparent;
+        color: #303030;
+        cursor: pointer;
+      }
+      .cloud-password:hover { background: #f0f0f0; }
+      .cloud-login .material-symbols-rounded {
+        font-family: "Material Symbols Rounded";
+        font-weight: normal;
+        font-style: normal;
+        line-height: 1;
+        letter-spacing: normal;
+        text-transform: none;
+        white-space: nowrap;
+        direction: ltr;
+        font-feature-settings: "liga";
+      }
+      .cloud-password .material-symbols-rounded { font-size: 21px; }
       .cloud-card button.cloud-submit {
-        height: 44px;
-        border: 2px solid rgba(255, 255, 255, 0.7);
-        border-radius: 8px;
-        background: rgba(255, 255, 255, 0.15);
+        height: 54px;
+        margin-top: 5px;
+        border: 0;
+        border-radius: 28px;
+        background: #006fa8;
         color: #fff;
         font: inherit;
-        font-size: 15px;
-        font-weight: 600;
+        font-size: 16px;
+        font-weight: 700;
         cursor: pointer;
         display: flex;
         align-items: center;
         justify-content: center;
-        gap: 8px;
+        gap: 14px;
+        transition: background .15s ease, transform .12s ease, box-shadow .15s ease;
       }
-      .cloud-card button.cloud-submit:hover:not(:disabled) { background: rgba(255, 255, 255, 0.27); }
-      .cloud-card button.cloud-submit:disabled { opacity: 0.7; cursor: default; }
+      .cloud-card button.cloud-submit:hover:not(:disabled) {
+        background: #005f91;
+        box-shadow: 0 3px 9px rgba(0, 79, 121, .28);
+      }
+      .cloud-card button.cloud-submit:active:not(:disabled) { transform: scale(.985); }
+      .cloud-card button.cloud-submit:disabled { opacity: .68; cursor: default; }
+      .cloud-submit .material-symbols-rounded { font-size: 23px; }
       .cloud-link {
-        margin: 4px auto 0;
+        margin: 0 auto;
         border: 0;
         background: none;
-        padding: 4px;
-        color: #fff;
+        padding: 4px 8px;
+        color: #202124;
         font: inherit;
-        font-size: 13px;
-        opacity: 0.85;
+        font-size: 15px;
+        font-weight: 500;
         cursor: pointer;
       }
       .cloud-link:hover { text-decoration: underline; }
-      /* A plain error line, in the shape this kind of page uses: a tinted strip
-         above the form, not a mascot with an opinion about it. */
+      .cloud-link:disabled { opacity: .55; cursor: default; }
       .cloud-err {
-        padding: 9px 12px;
+        padding: 10px 12px;
         border-radius: 8px;
-        background: rgba(0, 0, 0, 0.25);
-        color: #fff;
+        background: #fde7e7;
+        border: 1px solid #e8aaaa;
+        color: #8a1f1f;
         font-size: 13px;
         text-align: center;
       }
       .cloud-foot {
-        margin-top: 22px;
+        margin-top: auto;
+        padding-top: clamp(24px, 6vh, 54px);
         text-align: center;
-        color: rgba(255, 255, 255, 0.8);
-        font-size: 12px;
+        color: #151515;
+        font-size: 15px;
         line-height: 1.6;
+        text-shadow: 0 1px 1px rgba(255, 255, 255, .9);
+      }
+      .cloud-foot strong { font-weight: 700; }
+      @media (max-height: 760px) {
+        .cloud-login { justify-content: flex-start; }
+        .cloud-mark { width: 150px; margin-bottom: 18px; }
+        .cloud-card { padding-top: 19px; gap: 11px; }
+        .cloud-word { margin-bottom: 8px; }
+        .cloud-foot { padding-top: 20px; }
       }
     `,
   ];
@@ -385,37 +507,59 @@ export class OppaiLogin extends LitElement {
    */
   private renderCloudLogin() {
     return html`
-      <form class="cloud-card" @submit=${this.submit} @keydown=${this.onKeydown}>
-        <!-- A cloud drawn from three lobes: the shape this kind of service always
-             uses, drawn here rather than borrowed from anyone's trademark. -->
-        <svg class="cloud-mark" viewBox="0 0 56 40" aria-hidden="true">
-          <circle cx="26" cy="20" r="13" fill="#fff" />
-          <circle cx="42" cy="24" r="9" fill="#fff" />
-          <circle cx="12" cy="25" r="8" fill="#fff" />
-          <rect x="12" y="24" width="30" height="9" fill="#fff" />
+      <div class="cloud-login">
+        <!-- The familiar three-ring cloud mark from the supplied reference. It is
+             vector so it stays crisp on a large monitor and on a phone alike. -->
+        <svg class="cloud-mark" viewBox="0 0 220 90" aria-label="Nextcloud">
+          <g fill="none" stroke="#fff" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="110" cy="45" r="34" stroke-width="17" />
+            <circle cx="42" cy="50" r="20" stroke-width="14" />
+            <circle cx="178" cy="50" r="20" stroke-width="14" />
+            <path d="M62 50h13M145 50h13" stroke-width="14" />
+          </g>
         </svg>
-        <h1 class="cloud-word">Nextcloud</h1>
-        ${this.error ? html`<div class="cloud-err" role="alert">${this.error}</div>` : nothing}
-        <input name="username" type="text" placeholder="Account name" autocomplete="username"
-          autofocus required aria-label="Account name" />
-        <input name="password" type="password" placeholder="Password" autocomplete="current-password"
-          required aria-label="Password" />
-        <button class="cloud-submit" type="submit" ?disabled=${this.busy}>
-          ${this.busy ? "Logging in…" : html`Log in <span aria-hidden="true">→</span>`}
-        </button>
-        ${this.passkeyReady
-          ? html`<button class="cloud-link" type="button" ?disabled=${this.busy} @click=${this.passkeySignIn}>
-              Log in with a device
-            </button>`
-          : nothing}
-        <!-- Present because every such page has one, and its absence is a tell.
-             It says the true thing a self-hosted instance's does say. -->
-        <button class="cloud-link" type="button"
-          @click=${() => (this.error = "Contact your administrator to reset your password.")}>
-          Forgot password?
-        </button>
-        <div class="cloud-foot">Nextcloud – a safe home for all your data</div>
-      </form>
+        <form class="cloud-card" @submit=${this.submit} @keydown=${this.onKeydown}>
+          <h1 class="cloud-word">Log in to Nextcloud</h1>
+          ${this.error ? html`<div class="cloud-err" role="alert">${this.error}</div>` : nothing}
+          <label class="cloud-field">
+            <span>Account name or email</span>
+            <input name="username" type="text" autocomplete="username"
+              autofocus required aria-label="Account name or email" />
+          </label>
+          <label class="cloud-field">
+            <span>Password</span>
+            <span class="cloud-input">
+              <input name="password" type=${this.cloudPasswordVisible ? "text" : "password"}
+                autocomplete="current-password" required aria-label="Password" />
+              <button class="cloud-password" type="button"
+                title=${this.cloudPasswordVisible ? "Hide password" : "Show password"}
+                aria-label=${this.cloudPasswordVisible ? "Hide password" : "Show password"}
+                @click=${() => (this.cloudPasswordVisible = !this.cloudPasswordVisible)}>
+                <span class="material-symbols-rounded" aria-hidden="true"
+                  >${this.cloudPasswordVisible ? "visibility_off" : "visibility"}</span>
+              </button>
+            </span>
+          </label>
+          <button class="cloud-submit" type="submit" ?disabled=${this.busy}>
+            ${this.busy
+              ? "Logging in…"
+              : html`<span class="material-symbols-rounded" aria-hidden="true">arrow_forward</span>
+                  <span>Log in</span>`}
+          </button>
+          <!-- Present because every such page has one, and its absence is a tell.
+               It says the true thing a self-hosted instance's does say. -->
+          <button class="cloud-link" type="button"
+            @click=${() => (this.error = "Contact your administrator to reset your password.")}>
+            Forgot password?
+          </button>
+          ${this.passkeyReady
+            ? html`<button class="cloud-link" type="button" ?disabled=${this.busy} @click=${this.passkeySignIn}>
+                Log in with a device
+              </button>`
+            : nothing}
+        </form>
+        <div class="cloud-foot"><strong>Nextcloud</strong> – a safe home for all your data</div>
+      </div>
     `;
   }
 

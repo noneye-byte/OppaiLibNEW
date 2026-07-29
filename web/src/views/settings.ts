@@ -14,7 +14,7 @@ import {
 } from "../theme.js";
 import { KIND_META, type Kind, type ComicFit, loadComicFit, saveComicFit } from "../media-meta.js";
 import { loadHideLibby, saveHideLibby } from "../libby.js";
-import { isIncognito, setIncognito } from "../incognito.js";
+import { setIncognito } from "../incognito.js";
 import { LIBBY_PROGRESSION_MULTIPLIERS, getProgressionMultiplier, setProgressionMultiplier } from "../libby-meter.js";
 
 
@@ -687,7 +687,7 @@ export class OppaiSettings extends LitElement {
       this.saved = true;
       // The next page load would pick the disguise up from the server anyway. This
       // is so the switch does something visible when you flip it: the tab's title and
-      // icon change under you, and the mascot leaves (or comes back) without a reload.
+      // icon change immediately, and the signed-out disguise is ready for the next logout.
       setIncognito(!!res.settings.incognito);
     } catch (e) {
       this.loadError = (e as Error).message;
@@ -732,11 +732,9 @@ export class OppaiSettings extends LitElement {
 
   render() {
     // Admin-only panels are hidden rather than shown-and-refused: a rail entry that
-    // always 403s is just a dead end. Libby's panel goes the same way under the
-    // disguise — a settings category named after the mascot would reintroduce her on
-    // the one screen someone is most likely to go looking through.
-    const tabs = SETTINGS_TABS.filter((tab) => (!tab.adminOnly || this.canEdit) &&
-      !(tab.id === "libby" && isIncognito()));
+    // always 403s is just a dead end. Incognito only disguises the public login, so
+    // authenticated users keep the complete Libby settings panel.
+    const tabs = SETTINGS_TABS.filter((tab) => !tab.adminOnly || this.canEdit);
     const active = tabs.find((tab) => tab.id === this.tab) ?? tabs[0];
     // Only the server-side panels have anything to save, but an edit made on one and
     // left unsaved has to stay visible after switching away from it.
@@ -962,9 +960,10 @@ export class OppaiSettings extends LitElement {
               The sign-in page becomes a Nextcloud login, the tab is titled
               <strong>Nextcloud</strong> with a cloud icon, and the server answers
               <code>/status.php</code>, the OCS and DAV endpoints and its response
-              headers the way a Nextcloud behind Apache does. Inside, Libby is absent —
-              no mascot, no Chat or Studio — and errors show as plain notices. Your real
-              username and password still sign you in.
+              headers the way a Nextcloud behind Apache does. The public, signed-out
+              surface stays in character. Your real username and password still sign
+              you in; after authentication the full library opens and Libby, Chat,
+              Studio, and normal reactions remain available.
             </div>
           </div>
           <div class="field-control">

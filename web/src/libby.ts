@@ -6,8 +6,6 @@
 // have been spoken by the mascot still appear as plain notices, and Chat keeps
 // working without her portrait.
 
-import { isIncognito } from "./incognito.js";
-
 const HIDE_KEY = "oppai_hide_libby";
 const OUTFIT_KEY = "oppai_libby_outfit";
 
@@ -16,17 +14,14 @@ export function loadHideLibby(): boolean {
 }
 
 /**
- * Whether Libby should be absent from this screen, for any reason.
+ * Whether the user has chosen to hide Libby on this device.
  *
- * Two reasons, one answer. `loadHideLibby` is the user's own preference and means
- * "not right now"; incognito is the disguise and means "there is no mascot in
- * this product". Every view asks this rather than the preference directly, so the
- * disguise cannot be undone by a screen that was written before it existed — the
- * Settings toggle keeps reading the raw preference, because that switch has to go
- * on showing what *it* controls.
+ * Incognito deliberately does not participate here. Its Nextcloud disguise covers
+ * the signed-out surface, but once a real user authenticates they get the complete
+ * OppaiLib experience, including Libby.
  */
 export function libbyHidden(): boolean {
-  return loadHideLibby() || isIncognito();
+  return loadHideLibby();
 }
 
 export function saveHideLibby(hide: boolean): void {
