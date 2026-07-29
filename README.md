@@ -72,49 +72,6 @@ Web UI ──────┼──▶ Go API ──▶ crypto (envelope AES-256-
 
 ---
 
-## Meet Libby
-
-<p align="center">
-  <img src="docs/assets/libby-showcase.png" alt="Libby in calm, warmly happy, and mischievous moods in her library" width="100%" />
-</p>
-
-<p align="center"><em>Calm company, warm recommendations, and just enough mischief.</em></p>
-
-Libby is OppaiLib's mascot and resident librarian — an adult chat companion who
-actually knows your library. She lives beside the collection, not bolted on to it:
-
-- **Library-aware:** ask her what to watch, play, or read and she recommends real
-  items from your shelves. Recommendations include a thumbnail and open the real item
-  in one tap on both web and Android.
-- **Browse together:** open the shared-viewing screen and she reacts to whatever is
-  on-screen — has opinions, points you at things, and **comments on a video as it
-  plays** rather than reading its tags back at you. A compact Libby drawer also keeps
-  her available while you move through the library and viewer.
-- **Helpful, with permission:** she can offer to import a URL, add tags, favorite an
-  item, or generate and file a picture. Her reply only creates an approval card;
-  nothing changes until you press **Allow**, and **Not now** safely declines it.
-- **Remembers you:** Libby can quietly carry meaningful details — your name,
-  preferences, boundaries, and running jokes — into later conversations. Memories are
-  encrypted per user, visible in chat settings, and can be removed one at a time or
-  cleared completely whenever you choose.
-- **More expressive:** she chooses her mood and intensity each reply from twelve
-  emotions — neutral, happy, surprised, thinking, mischievous, shy, smug, sad,
-  annoyed, sleepy, loving, and excited — and the portrait changes with the moment.
-  The gallery above shows the Calm and Warm sprite levels.
-- **Sends pictures of herself** when they fit, recognises a picture of herself when
-  you share one, and can wear custom **outfits** you create in Settings. Each outfit
-  can have cover art and different artwork for every emotion and intensity; missing
-  optional poses gracefully borrow the closest core expression.
-- **Yours to shape:** import SillyTavern V2 / PNG character cards to chat with anyone
-  you like, tune modes and advanced sampler options, set a persona for yourself, and
-  configure the local image-generation model, LoRA, and prompt used for her pictures.
-- **Fully local:** point it at any OpenAI-compatible LLM on your network. No cloud,
-  no telemetry — the same promise as the rest of the app. App-control tags are
-  stripped from replies, and imported characters are never granted Libby's library
-  actions.
-
----
-
 ## Quick start (docker-compose)
 
 ```bash
