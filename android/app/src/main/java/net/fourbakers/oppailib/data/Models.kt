@@ -180,9 +180,21 @@ data class GameSave(
 @Serializable
 data class GameSaveListResponse(val items: List<GameSave> = emptyList())
 
-/** Whether a game ships a browser-playable build, and the file it starts at. */
+/**
+ * Whether a game can be played in the browser, and how.
+ *
+ * [mode] is `local` for an imported HTML5 build the server hosts and sandboxes, or
+ * `embed` for itch.io's own iframe — used only when there is nothing to host, since
+ * itch never offers a browser game's HTML as a download. An embed loads from itch
+ * directly and is not stored in the library.
+ */
 @Serializable
-data class GamePlayInfo(val playable: Boolean = false, val entry: String = "")
+data class GamePlayInfo(
+    val playable: Boolean = false,
+    val mode: String = "local",
+    val entry: String = "",
+    val embedUrl: String = "",
+)
 
 @Serializable
 data class UploadResponse(val id: Long, val sha256: String, val deduped: Boolean)

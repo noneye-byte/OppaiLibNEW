@@ -90,6 +90,12 @@ type Server struct {
 	// moves on the order of minutes, so a short TTL costs nothing in freshness and
 	// turns a revisit into an instant paint. See handleBrowseSource.
 	listCache *resolveCache[*sources.Listing]
+	// An itch.io project page resolved to its browser build's iframe URL. Pressing
+	// Play on a browser-only itch game costs a throttled fetch of the project page,
+	// and the viewer asks on every open, so the answer is kept for a while. Short
+	// enough that a new upload's URL is picked up rather than 404ing in the player.
+	// See handlers_webgame.go.
+	embedCache *resolveCache[string]
 	// Links the user has handed to Libby, previewed. A chat turn reads this and never
 	// fetches, so a message cannot make the server hit an address — the preview
 	// endpoint is the only thing that goes out. See handlers_libby_links.go.
@@ -112,6 +118,10 @@ const (
 	// cover the back-and-forth of actually browsing — open an item, return to the
 	// grid, scroll, open another — without ever showing a listing that feels stale.
 	sourceListingTTL = 2 * time.Minute
+	// An itch project's embed URL changes only when the author uploads a new build.
+	// Ten minutes absorbs the open-close-open of actually playing something without
+	// pinning a URL that has since been replaced.
+	itchEmbedTTL = 10 * time.Minute
 )
 
 func NewServer(cfg *config.Config, database *db.DB, store *storage.Store, sc *scraper.Engine, aiMgr *ai.Manager, set *settings.Store, kek []byte, log *slog.Logger) *Server {
@@ -154,6 +164,7 @@ func NewServer(cfg *config.Config, database *db.DB, store *storage.Store, sc *sc
 		pageCache:    newResolveCache[[]string](sourcePagesTTL),
 		commentCache: newResolveCache[[]sources.Comment](sourceCommentsTTL),
 		listCache:    newResolveCache[*sources.Listing](sourceListingTTL),
+		embedCache:   newResolveCache[string](itchEmbedTTL),
 		linkCache:    newResolveCache[sharedLink](sharedLinkTTL),
 		iconCache:    newResolveCache[favicon](faviconTTL),
 	}

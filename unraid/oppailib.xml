@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <Container version="2">
   <Name>OppaiLib</Name>
-  <Version>0.26.0</Version>
+  <Version>0.26.1</Version>
   <Repository>ghcr.io/noneye-byte/oppailib:latest</Repository>
   <Registry>https://github.com/noneye-byte/OppaiLibNEW/pkgs/container/oppailib</Registry>
   <Network>bridge</Network>

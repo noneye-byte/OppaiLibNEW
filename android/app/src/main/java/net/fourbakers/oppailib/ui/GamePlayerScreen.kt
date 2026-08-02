@@ -28,6 +28,21 @@ import net.fourbakers.oppailib.data.Repository
 import okhttp3.Request
 import java.io.ByteArrayInputStream
 
+/** Hosts itch serves a browser build from. The server validates the embed URL before
+ *  handing it over; this keeps the player pinned to those hosts too, so a redirect
+ *  can't walk the WebView somewhere else. */
+private val itchEmbedHosts = listOf("html-classic.itch.zone", "html.itch.zone", "itch.io")
+
+private fun isItchEmbedUrl(raw: String): Boolean {
+    val host = runCatching { android.net.Uri.parse(raw) }
+        .getOrNull()
+        ?.takeIf { it.scheme == "https" }
+        ?.host
+        ?.lowercase()
+        ?: return false
+    return itchEmbedHosts.any { host == it || host.endsWith(".$it") }
+}
+
 /**
  * Plays an imported HTML5 game build in a WebView.
  *
@@ -53,16 +68,21 @@ import java.io.ByteArrayInputStream
  */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun GamePlayerScreen(repo: Repository, gameId: Long, onClose: () -> Unit) {
+fun GamePlayerScreen(repo: Repository, gameId: Long, embedUrl: String?, onClose: () -> Unit) {
     BackHandler(onBack = onClose)
 
-    val playUrl = remember(gameId) { repo.gamePlayUrl(gameId) }
+    // An itch embed is somebody else's origin, fetched without our token and with no
+    // build of ours behind it, so it is loaded plainly rather than interposed on.
+    // Interception exists purely to attach our bearer token, and there is none to
+    // attach here.
+    val embed = !embedUrl.isNullOrBlank()
+    val playUrl = remember(gameId, embedUrl) { embedUrl?.takeIf { embed } ?: repo.gamePlayUrl(gameId) }
     // Only paths inside this game's own build are ever served. Anything else the page
     // asks for is refused here as well as by the server's CSP.
-    val allowedPrefix = playUrl
+    val allowedPrefix = remember(gameId) { repo.gamePlayUrl(gameId) }
 
     val context = LocalContext.current
-    val webView = remember(gameId) {
+    val webView = remember(gameId, playUrl) {
         WebView(context).apply {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
@@ -77,6 +97,11 @@ fun GamePlayerScreen(repo: Repository, gameId: Long, onClose: () -> Unit) {
                     view: WebView,
                     request: WebResourceRequest,
                 ): WebResourceResponse? {
+                    // itch serves its own build from its own hosts; let the WebView
+                    // fetch it normally. Reissuing those through our client would only
+                    // strip the cookies the embed needs and attach a token itch has no
+                    // use for.
+                    if (embed) return null
                     val url = request.url.toString()
                     if (!url.startsWith(allowedPrefix)) {
                         // Outside the build: hand back an empty 403 rather than letting
@@ -121,11 +146,16 @@ fun GamePlayerScreen(repo: Repository, gameId: Long, onClose: () -> Unit) {
                     }
                 }
 
-                // A build must not be able to navigate the player anywhere else.
+                // A build must not be able to navigate the player anywhere else. An
+                // embed legitimately redirects within itch's own hosts, so it is held
+                // to those rather than to our build path.
                 override fun shouldOverrideUrlLoading(
                     view: WebView,
                     request: WebResourceRequest,
-                ): Boolean = !request.url.toString().startsWith(allowedPrefix)
+                ): Boolean {
+                    val url = request.url.toString()
+                    return if (embed) !isItchEmbedUrl(url) else !url.startsWith(allowedPrefix)
+                }
             }
             loadUrl(playUrl)
         }

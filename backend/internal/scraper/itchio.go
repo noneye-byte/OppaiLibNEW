@@ -102,6 +102,90 @@ func (ItchParser) Parse(doc *goquery.Document, u *url.URL) (*models.ScrapeResult
 	return res, nil
 }
 
+// itchEmbedHosts are the hosts itch serves a browser build's iframe from.
+//
+// The URL comes out of a third-party page, so it is checked against this list before
+// being handed to a client to frame. Without that, a compromised or hostile project
+// page could name any host and we would be laundering it as "the game".
+var itchEmbedHosts = []string{
+	"html-classic.itch.zone",
+	"html.itch.zone",
+	"itch.io",
+}
+
+// ItchEmbedURL returns the URL of the browser build itch plays in its own iframe, or
+// "" when the project has no browser version.
+//
+// This exists because an itch browser game cannot be self-hosted: itch never offers
+// the HTML build as a download, so there is no zip to import and play locally. The
+// page carries the embed as an escaped iframe in a data-iframe attribute — goquery
+// unescapes it on read, so what comes back is markup to pull the src out of:
+//
+//	<div class="game_frame" data-iframe="&lt;iframe src=&quot;https://html-classic.itch.zone/html/14744633/index.html&quot; …">
+//
+// Some projects instead render the iframe directly rather than click-to-play, so both
+// shapes are read.
+func ItchEmbedURL(doc *goquery.Document) string {
+	var found string
+
+	// Click-to-play: the markup is stashed in an attribute until "Run game" is hit.
+	doc.Find(`[data-iframe]`).EachWithBreak(func(_ int, s *goquery.Selection) bool {
+		raw, ok := s.Attr("data-iframe")
+		if !ok {
+			return true
+		}
+		inner, err := goquery.NewDocumentFromReader(strings.NewReader(raw))
+		if err != nil {
+			return true
+		}
+		if src, ok := inner.Find("iframe[src]").First().Attr("src"); ok {
+			if u := validItchEmbed(src); u != "" {
+				found = u
+				return false
+			}
+		}
+		return true
+	})
+	if found != "" {
+		return found
+	}
+
+	// Auto-loading embeds put the iframe straight in the page.
+	doc.Find(`iframe[src]`).EachWithBreak(func(_ int, s *goquery.Selection) bool {
+		src, _ := s.Attr("src")
+		if u := validItchEmbed(src); u != "" {
+			found = u
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+// validItchEmbed normalises an embed candidate and rejects anything not on an itch
+// host. Protocol-relative URLs are common in this markup, so they are resolved to
+// https rather than discarded.
+func validItchEmbed(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if strings.HasPrefix(raw, "//") {
+		raw = "https:" + raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" {
+		return ""
+	}
+	host := strings.ToLower(u.Hostname())
+	for _, allowed := range itchEmbedHosts {
+		if host == allowed || strings.HasSuffix(host, "."+allowed) {
+			return u.String()
+		}
+	}
+	return ""
+}
+
 // itchPlatformIcons maps itch's per-upload platform glyphs onto our canonical
 // names. itch labels Linux uploads with a Tux icon and browser-playable games
 // with a globe, so neither is guessable from the class name alone.

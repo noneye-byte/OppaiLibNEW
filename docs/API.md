@@ -159,22 +159,39 @@ saving the same state twice is normal and collapsing them would be data loss. A
 save id is only ever resolved together with its game, so one game's id cannot read
 another's save. Maximum 100 MB per save.
 
-### Playing an HTML5 build
-
-A game imported as a zip containing an `index.html` — the same contract itch.io
-enforces on a web upload — can be played in place. Nothing is unpacked to disk; the
-zip is read through the store's decrypting random-access view.
+### Playing in the browser
 
 | Method | Path | Notes |
 |--------|------|-------|
-| GET | `/api/media/{id}/play` | → `{playable: true, entry: "index.html"}`, or `404` when the game has no web build |
-| GET | `/api/media/{id}/play/{path...}` | one file out of the build |
+| GET | `/api/media/{id}/play` | how (or whether) this game can be played; `404` when it can't |
+| GET | `/api/media/{id}/play/{path...}` | one file out of a self-hosted build |
 
-A wrapper directory (`MyGame-web/index.html`) is stripped, so paths are relative to
-the build root. Content types come from a fixed allowlist; anything unrecognised is
-served `application/octet-stream`.
+`/play` answers in one of two modes, and a self-hosted build always wins — it's the
+copy you own and it works offline:
 
-**These responses serve untrusted third-party HTML and JavaScript**, so the clients
+```jsonc
+{ "playable": true, "mode": "local", "entry": "index.html" }
+{ "playable": true, "mode": "embed",
+  "embedUrl": "https://html-classic.itch.zone/html/14744633/index.html" }
+```
+
+**`local`** — the game was imported as a zip containing an `index.html`, the same
+contract itch.io enforces on a web upload. Nothing is unpacked to disk; the zip is
+read through the store's decrypting random-access view, and a wrapper directory
+(`MyGame-web/index.html`) is stripped so paths are relative to the build root.
+Content types come from a fixed allowlist; anything unrecognised is served
+`application/octet-stream`.
+
+**`embed`** — the game is a browser-only itch.io project, which **cannot** be
+self-hosted: itch never offers the HTML build as a download, only the project page,
+so there is nothing to import. The server resolves the project page to itch's own
+iframe URL (read from the page's `data-iframe` attribute, validated against itch's
+embed hosts, cached for 10 minutes) and the client frames that directly. Such a game
+is *not* stored in your library and needs a connection to play. This is why the app
+CSP carries `frame-src` for `html-classic.itch.zone`, `html.itch.zone` and `itch.io`
+— framing is all it grants.
+
+**`local` responses serve untrusted third-party HTML and JavaScript**, so the clients
 must frame them correctly:
 
 - The web player uses `sandbox="allow-scripts allow-pointer-lock allow-popups"` and
@@ -187,6 +204,13 @@ must frame them correctly:
 - The Android player intercepts every WebView request and reissues it through the
   authenticated client, because the app authenticates with a bearer token that
   subresource requests would not otherwise carry.
+
+An **`embed`** frame is the opposite case and is treated differently on purpose: it
+is cross-origin, so `allow-same-origin` *is* set. That grants the game its own itch
+origin — letting it use storage, which the sandboxed local player cannot — and never
+ours, since the browser still refuses a cross-origin frame any access to the app.
+Android likewise skips request interception for an embed: interception exists only to
+attach our bearer token, and itch has no use for one.
 
 ## Settings
 

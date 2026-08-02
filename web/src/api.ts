@@ -47,6 +47,19 @@ export interface GameSave {
   createdAt: number;
 }
 
+/** How a game can be played in the browser.
+ *
+ *  `local` is an imported HTML5 build we serve and sandbox ourselves. `embed` is
+ *  itch.io's own iframe, used only when there is no build to serve — itch never
+ *  offers a browser game's HTML as a download, so those cannot be self-hosted. An
+ *  embed loads from itch directly rather than from your library. */
+export interface GamePlayInfo {
+  playable: boolean;
+  mode: "local" | "embed";
+  entry?: string;
+  embedUrl?: string;
+}
+
 // Editable subset of a media item. Omitted fields are left unchanged; tags are
 // add/remove lists.
 export interface MediaPatch {
@@ -1709,8 +1722,7 @@ export const api = {
 
   // HTML5 game builds. playInfo 404s for a game that is only a download, which is
   // how the viewer decides whether to offer a Play button at all.
-  gamePlayInfo: (gameId: number) =>
-    request<{ playable: boolean; entry: string }>(`/api/media/${gameId}/play`),
+  gamePlayInfo: (gameId: number) => request<GamePlayInfo>(`/api/media/${gameId}/play`),
   gamePlayURL: (gameId: number) => `/api/media/${gameId}/play/`,
   // Turn a scrap of (spoken) natural language into a fuller prompt + negative prompt.
   optimizePrompt: (text: string) =>

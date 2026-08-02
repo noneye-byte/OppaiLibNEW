@@ -129,6 +129,7 @@ import coil.request.ImageRequest
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import net.fourbakers.oppailib.data.ComicInfo
+import net.fourbakers.oppailib.data.GamePlayInfo
 import net.fourbakers.oppailib.data.GameSave
 import net.fourbakers.oppailib.data.Media
 import net.fourbakers.oppailib.data.MediaPatch
@@ -338,12 +339,13 @@ private fun GamePage(repo: Repository, media: Media) {
     var savingUpload by remember(media.id) { mutableStateOf(false) }
     // A 404 from the play probe is the normal answer for a download-only game, so it
     // reads as "no Play button" rather than as an error.
-    var canPlay by remember(media.id) { mutableStateOf(false) }
+    var playInfo by remember(media.id) { mutableStateOf<GamePlayInfo?>(null) }
     var playing by remember(media.id) { mutableStateOf(false) }
     LaunchedEffect(media.id) {
         runCatching { repo.api.gameGallery(media.id).items }.onSuccess { userGallery = it }
         runCatching { repo.api.gameSaves(media.id).items }.onSuccess { saves = it }
-        runCatching { repo.api.gamePlayInfo(media.id).playable }.onSuccess { canPlay = it }
+        runCatching { repo.api.gamePlayInfo(media.id) }
+            .onSuccess { playInfo = it.takeIf { info -> info.playable } }
     }
 
     // Backing a save up: pick any file, send it as-is. No type filter — a save is
@@ -393,7 +395,7 @@ private fun GamePage(repo: Repository, media: Media) {
     }
 
     if (playing) {
-        GamePlayerScreen(repo, media.id, onClose = { playing = false })
+        GamePlayerScreen(repo, media.id, playInfo?.embedUrl, onClose = { playing = false })
         return
     }
     val galleryLauncher = rememberSystemPickerLauncher(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
@@ -449,13 +451,23 @@ private fun GamePage(repo: Repository, media: Media) {
             }
         }
 
-        if (canPlay) {
+        playInfo?.let { info ->
             Button(
                 onClick = { playing = true },
                 modifier = Modifier.fillMaxWidth().padding(top = 20.dp),
             ) {
                 Icon(Icons.Filled.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
                 Text("Play in browser", modifier = Modifier.padding(start = 8.dp))
+            }
+            if (info.mode == "embed") {
+                // Worth saying plainly: this one needs a connection and isn't in the
+                // library, unlike everything else on this screen.
+                Text(
+                    "Streams from itch.io — no downloadable build exists, so it isn't stored locally.",
+                    color = Color.White.copy(alpha = 0.6f),
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.align(Alignment.Start).padding(top = 6.dp),
+                )
             }
         }
 

@@ -98,3 +98,76 @@ func TestItchNoPlatformsIsNotAnError(t *testing.T) {
 		t.Fatalf("platforms = %v, want none", got)
 	}
 }
+
+// itchDoc parses raw page markup for the embed tests.
+func itchDoc(t *testing.T, html string) *goquery.Document {
+	t.Helper()
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
+	if err != nil {
+		t.Fatalf("parse html: %v", err)
+	}
+	return doc
+}
+
+// The click-to-play shape, which is what a real itch project page carries. The
+// attribute holds escaped iframe markup; goquery unescapes it on read.
+func TestItchEmbedFromDataIframe(t *testing.T) {
+	doc := itchDoc(t, `<html><body>
+	  <div class="game_frame" data-iframe="&lt;iframe src=&quot;https://html-classic.itch.zone/html/14744633/index.html&quot; id=&quot;game_drop&quot; allow=&quot;autoplay; fullscreen *&quot;&gt;&lt;/iframe&gt;"></div>
+	</body></html>`)
+
+	got := ItchEmbedURL(doc)
+	want := "https://html-classic.itch.zone/html/14744633/index.html"
+	if got != want {
+		t.Fatalf("embed = %q, want %q", got, want)
+	}
+}
+
+// Some projects auto-load the build instead of gating it behind "Run game".
+func TestItchEmbedFromInlineIframe(t *testing.T) {
+	doc := itchDoc(t, `<html><body>
+	  <iframe src="https://html.itch.zone/html/999/index.html"></iframe>
+	</body></html>`)
+	if got := ItchEmbedURL(doc); got != "https://html.itch.zone/html/999/index.html" {
+		t.Fatalf("embed = %q", got)
+	}
+}
+
+// A downloadable-only project must report no embed, so the player keeps saying it
+// has no browser build rather than framing something arbitrary.
+func TestItchEmbedAbsentForDownloadOnlyProject(t *testing.T) {
+	doc := itchDoc(t, `<html><body>
+	  <h1 class="game_title">Windows only</h1>
+	  <iframe src="https://www.youtube.com/embed/abc123"></iframe>
+	</body></html>`)
+	if got := ItchEmbedURL(doc); got != "" {
+		t.Fatalf("embed = %q, want none — that iframe is a trailer, not the game", got)
+	}
+}
+
+// The URL comes out of a third-party page and is handed to a client to frame, so a
+// host outside itch must never survive extraction.
+func TestItchEmbedRejectsForeignHosts(t *testing.T) {
+	for _, src := range []string{
+		"https://evil.example/html/1/index.html",
+		"http://html-classic.itch.zone/html/1/index.html", // downgraded to plaintext
+		"javascript:alert(1)",
+		"data:text/html,<script>alert(1)</script>",
+		"https://html-classic.itch.zone.evil.example/html/1/index.html",
+	} {
+		doc := itchDoc(t, `<html><body><iframe src="`+src+`"></iframe></body></html>`)
+		if got := ItchEmbedURL(doc); got != "" {
+			t.Errorf("accepted %q as an itch embed (got %q)", src, got)
+		}
+	}
+}
+
+// Protocol-relative sources are common in this markup and mean https here.
+func TestItchEmbedResolvesProtocolRelative(t *testing.T) {
+	doc := itchDoc(t, `<html><body>
+	  <iframe src="//html-classic.itch.zone/html/42/index.html"></iframe>
+	</body></html>`)
+	if got := ItchEmbedURL(doc); got != "https://html-classic.itch.zone/html/42/index.html" {
+		t.Fatalf("embed = %q", got)
+	}
+}

@@ -1,6 +1,14 @@
 import { LitElement, html, css, nothing } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
-import { api, mascotSay, type ComicInfo, type GameSave, type Media, type MediaTag } from "../api.js";
+import {
+  api,
+  mascotSay,
+  type ComicInfo,
+  type GamePlayInfo,
+  type GameSave,
+  type Media,
+  type MediaTag,
+} from "../api.js";
 import { libbyReact } from "../libby-voice.js";
 import { iconStyles, motionStyles } from "../theme.js";
 import { profileUpdates } from "../ui-metrics.js";
@@ -54,9 +62,9 @@ export class OppaiViewer extends LitElement {
   @state() private saveUploading = false;
   @state() private saveError = "";
 
-  // HTML5 builds. `canPlay` stays null until the probe answers, so the Play button
+  // HTML5 builds. `play` stays null until the probe answers, so the Play button
   // appears once rather than flickering in for every game and then out again.
-  @state() private canPlay: boolean | null = null;
+  @state() private play: GamePlayInfo | null = null;
   @state() private playing = false;
 
   // Poster picker (videos only). `posterFrames` is empty until the strip is asked
@@ -786,7 +794,7 @@ export class OppaiViewer extends LitElement {
     this.userGallery = [];
     this.saves = [];
     this.saveError = "";
-    this.canPlay = null;
+    this.play = null;
     this.playing = false;
     if (m.kind === "game") {
       void this.loadGameGallery(m.id);
@@ -809,9 +817,9 @@ export class OppaiViewer extends LitElement {
   private async probePlayable(id: number) {
     try {
       const info = await api.gamePlayInfo(id);
-      if (this.media.id === id) this.canPlay = info.playable;
+      if (this.media.id === id) this.play = info.playable ? info : null;
     } catch {
-      if (this.media.id === id) this.canPlay = false;
+      if (this.media.id === id) this.play = null;
     }
   }
 
@@ -1546,7 +1554,7 @@ export class OppaiViewer extends LitElement {
             : html`
                 <div class="sub">${KIND_META.game.label.replace(/s$/, "")}</div>
                 <div class="actions">
-                  ${this.canPlay
+                  ${this.play
                     ? html`<button class="btn-primary" @click=${() => (this.playing = true)}>
                         <span class="material-symbols-rounded fill-icon" style="font-size:20px;">play_arrow</span>
                         Play in browser
@@ -1629,19 +1637,37 @@ export class OppaiViewer extends LitElement {
    *  autosaves to localStorage won't persist between sessions. That is what the save
    *  file backup below is for. */
   private renderPlayer(m: Media) {
+    const info = this.play;
+    if (!info) return nothing;
+    const embed = info.mode === "embed" && info.embedUrl;
     return html`
       <div class="play-stage">
         <button class="play-close" title="Stop playing" @click=${() => (this.playing = false)}>×</button>
-        <iframe
-          src=${api.gamePlayURL(m.id)}
-          title=${m.title}
-          allow="fullscreen; gamepad; autoplay"
-          sandbox="allow-scripts allow-pointer-lock allow-popups"
-        ></iframe>
+        ${embed
+          ? // itch's own build, on itch's origin. `allow-same-origin` is correct here
+            // and not a hole: the frame is cross-origin, so it grants the game its own
+            // itch origin (letting it save), never ours — the browser still refuses it
+            // any access to this page.
+            html`<iframe
+              src=${info.embedUrl}
+              title=${m.title}
+              allow="fullscreen; gamepad; autoplay; cross-origin-isolated"
+              sandbox="allow-scripts allow-same-origin allow-pointer-lock allow-popups"
+              referrerpolicy="no-referrer"
+            ></iframe>`
+          : html`<iframe
+              src=${api.gamePlayURL(m.id)}
+              title=${m.title}
+              allow="fullscreen; gamepad; autoplay"
+              sandbox="allow-scripts allow-pointer-lock allow-popups"
+            ></iframe>`}
       </div>
       <p class="play-note">
-        Running sandboxed, so the game can't reach the rest of your library — which also
-        means it can't save to browser storage. Back its saves up below.
+        ${embed
+          ? html`Streaming from itch.io — this game has no downloadable build, so it
+              isn't stored in your library and needs a connection to play.`
+          : html`Running sandboxed, so the game can't reach the rest of your library —
+              which also means it can't save to browser storage. Back its saves up below.`}
       </p>
     `;
   }

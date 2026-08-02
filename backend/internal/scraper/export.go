@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/PuerkitoBio/goquery"
 	"github.com/youruser/oppailib/internal/obs"
 )
 
@@ -41,6 +42,31 @@ func (e *Engine) MediaHTTPClient() *http.Client {
 // maxDocumentBytes caps a fetched HTML page. A listing is tens of kilobytes; a
 // server that streams forever should not be able to exhaust us.
 const maxDocumentBytes = 8 << 20
+
+// ItchEmbed resolves an itch.io project page to the URL of its browser build, or ""
+// when the project has no browser version.
+//
+// It goes through Fetch, so it inherits the throttle and robots policy — this is a
+// request to someone else's site made because a user pressed Play, and it owes the
+// same politeness as any other.
+func (e *Engine) ItchEmbed(ctx context.Context, pageURL string) (string, error) {
+	u, err := url.Parse(strings.TrimSpace(pageURL))
+	if err != nil {
+		return "", fmt.Errorf("bad url: %w", err)
+	}
+	if !(ItchParser{}).Match(u) {
+		return "", nil
+	}
+	body, err := e.Fetch(ctx, pageURL)
+	if err != nil {
+		return "", err
+	}
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	return ItchEmbedURL(doc), nil
+}
 
 // Fetch returns the HTML body at rawURL, subject to the engine's throttle and
 // robots policy.

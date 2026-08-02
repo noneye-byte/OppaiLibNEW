@@ -18,6 +18,12 @@ import (
 //     URLs; all remote media is already proxied through our origin.
 //   - object-src 'none', base-uri 'self' and frame-ancestors 'none' close the
 //     usual injection side doors (and frame-ancestors backstops X-Frame-Options).
+//   - frame-src is the one directive that reaches off-origin, and only to frame:
+//     'self' for a self-hosted HTML5 game build, plus itch's two embed hosts for a
+//     browser-only itch game, which cannot be self-hosted because itch never offers
+//     its HTML build as a download. Framing is all it grants — these hosts still
+//     cannot be scripted, fetched from, or loaded as anything else, and the frame is
+//     cross-origin so it cannot touch the app. See handlers_webgame.go.
 const contentSecurityPolicy = "default-src 'self'; " +
 	"base-uri 'self'; " +
 	"object-src 'none'; " +
@@ -27,6 +33,7 @@ const contentSecurityPolicy = "default-src 'self'; " +
 	"font-src 'self' https://fonts.gstatic.com data:; " +
 	"img-src 'self' data: blob:; " +
 	"media-src 'self' blob:; " +
+	"frame-src 'self' https://html-classic.itch.zone https://html.itch.zone https://itch.io; " +
 	"connect-src 'self'; " +
 	"manifest-src 'self'"
 

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"io"
@@ -89,19 +90,97 @@ func (s *Server) openGameBuild(row *db.MediaRow) (*webgame.Build, func(), error)
 	return build, func() { ra.Close() }, nil
 }
 
-// handleGamePlayInfo reports whether a game can be played in the browser.
+// handleGamePlayInfo reports whether a game can be played in the browser, and how.
 //
-// The client asks this before offering a Play button. It only reads the archive's
-// central directory, so it stays cheap enough for the viewer to call on open.
+// Two answers are possible, and the order matters — a self-hosted build always wins:
+//
+//	{"playable":true, "mode":"local", "entry":"index.html"}
+//	{"playable":true, "mode":"embed", "embedUrl":"https://html-classic.itch.zone/…"}
+//
+// The embed exists because an itch.io browser game *cannot* be self-hosted. itch
+// never offers the HTML build as a download — only the project page — so nothing is
+// imported to serve, and the local player would forever report "no browser build" for
+// a game that plainly has one. Falling back to itch's own iframe is the only way to
+// play those, at the cost of a direct connection from the user's browser to itch and
+// nothing archived locally.
+//
+// The client asks this before offering a Play button, so the local check is first and
+// cheap: it reads only the archive's central directory.
 func (s *Server) handleGamePlayInfo(w http.ResponseWriter, r *http.Request) {
-	build, cleanup, ok := s.gameBuild(w, r)
-	if !ok {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad id")
 		return
 	}
-	defer cleanup()
-	// A build's contents are fixed once imported, so the answer keeps.
-	w.Header().Set("Cache-Control", "private, max-age=3600")
-	writeJSON(w, http.StatusOK, map[string]any{"playable": true, "entry": build.Entry()})
+	row, err := s.db.GetMedia(r.Context(), id)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeErr(w, http.StatusNotFound, "not found")
+		return
+	} else if err != nil {
+		writeErr(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	if row.Kind != "game" {
+		writeErr(w, http.StatusBadRequest, "not a game")
+		return
+	}
+
+	if build, cleanup, err := s.openGameBuild(row); err == nil {
+		defer cleanup()
+		// A build's contents are fixed once imported, so the answer keeps.
+		w.Header().Set("Cache-Control", "private, max-age=3600")
+		writeJSON(w, http.StatusOK, map[string]any{
+			"playable": true, "mode": "local", "entry": build.Entry(),
+		})
+		return
+	}
+
+	if embed := s.itchEmbedFor(r.Context(), row); embed != "" {
+		// Shorter: itch rebuilds an embed URL when the author uploads a new version,
+		// and a stale one 404s inside the player where it reads as a broken game.
+		w.Header().Set("Cache-Control", "private, max-age=300")
+		writeJSON(w, http.StatusOK, map[string]any{
+			"playable": true, "mode": "embed", "embedUrl": embed,
+		})
+		return
+	}
+
+	writeErr(w, http.StatusNotFound, "this game has no browser build")
+}
+
+// itchEmbedFor resolves a game's browser build on itch, or "" when it has none.
+//
+// Both recorded URLs are tried because they carry different things: source is the
+// page the item was scraped from, while download is where the parser decided the file
+// lives — which for itch is usually the same page, but is an external host when the
+// project links out. Resolution is cached: it costs a throttled fetch of someone
+// else's page, and the viewer asks on every open.
+func (s *Server) itchEmbedFor(ctx context.Context, row *db.MediaRow) string {
+	if s.scraper == nil {
+		return ""
+	}
+	for _, candidate := range []string{
+		s.decrypt(row.SourceEnc, "source"),
+		s.decrypt(row.DownloadEnc, "download"),
+	} {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			continue
+		}
+		embed, err := s.embedCache.get(ctx, candidate, func(ctx context.Context) (string, error) {
+			ctx, cancel := context.WithTimeout(ctx, scrapeTimeout)
+			defer cancel()
+			return s.scraper.ItchEmbed(ctx, candidate)
+		})
+		if err != nil {
+			s.log.Debug("itch embed lookup failed", "media", row.ID, "err", err)
+			continue
+		}
+		if embed != "" {
+			return embed
+		}
+	}
+	return ""
 }
 
 // handleGamePlayAsset streams one file out of the build.

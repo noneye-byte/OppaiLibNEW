@@ -122,6 +122,34 @@ func TestWebGamePlayRejectsNonWebBuild(t *testing.T) {
 	}
 }
 
+// A self-hosted build must always beat the itch embed: it is the copy the user
+// actually owns, and it works without a connection.
+func TestWebGamePlayPrefersLocalBuildOverEmbed(t *testing.T) {
+	s, token := newTestServer(t)
+	h := s.Handler()
+	id := importWebGame(t, h, token, map[string]string{"index.html": "<html>mine</html>"})
+
+	rec := do(t, h, token, http.MethodGet, "/api/media/"+id+"/play", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("play info: %d %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"mode":"local"`) {
+		t.Fatalf("did not prefer the local build: %s", rec.Body.String())
+	}
+}
+
+// A game with no build and no itch page stays unplayable, so the Play button is not
+// offered for something that cannot be played.
+func TestWebGamePlayWithoutBuildOrEmbedIs404(t *testing.T) {
+	s, token := newTestServer(t)
+	h := s.Handler()
+	id := importWebGame(t, h, token, map[string]string{"game.exe": "MZ\x90\x00"})
+
+	if got := do(t, h, token, http.MethodGet, "/api/media/"+id+"/play", ""); got.Code != http.StatusNotFound {
+		t.Fatalf("play = %d %s, want 404", got.Code, got.Body.String())
+	}
+}
+
 func TestWebGamePlayRejectsNonGame(t *testing.T) {
 	s, token := newTestServer(t)
 	h := s.Handler()
