@@ -161,6 +161,39 @@ interface ApiService {
     @DELETE("api/media/{id}/gallery/{media}")
     suspend fun removeGameGallery(@Path("id") gameId: Long, @Path("media") mediaId: Long)
 
+    // ── Game save backup ─────────────────────────────────────────────────
+    // A save is an attachment on a game, not a library item, so it has its own
+    // endpoints rather than appearing in the media list.
+
+    @GET("api/media/{id}/saves")
+    suspend fun gameSaves(@Path("id") gameId: Long): GameSaveListResponse
+
+    @Multipart
+    @POST("api/media/{id}/saves")
+    suspend fun uploadGameSave(
+        @Path("id") gameId: Long,
+        @Part file: MultipartBody.Part,
+        // Several games write every save under the same filename, so the label is
+        // what makes a list of them tellable apart.
+        @Part("label") label: RequestBody? = null,
+    ): GameSave
+
+    @DELETE("api/media/{id}/saves/{save}")
+    suspend fun deleteGameSave(@Path("id") gameId: Long, @Path("save") saveId: Long)
+
+    /** Streams a save's bytes back so it can be written to a user-picked file. */
+    @Streaming
+    @GET("api/media/{id}/saves/{save}")
+    suspend fun downloadGameSave(
+        @Path("id") gameId: Long,
+        @Path("save") saveId: Long,
+    ): ResponseBody
+
+    /** 404s when a game has no browser build, which is how the viewer decides
+     *  whether to offer Play at all. */
+    @GET("api/media/{id}/play")
+    suspend fun gamePlayInfo(@Path("id") gameId: Long): GamePlayInfo
+
     @POST("api/media/{id}/autotag")
     suspend fun autotag(@Path("id") id: Long): AutotagResponse
 

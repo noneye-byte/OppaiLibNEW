@@ -163,6 +163,38 @@ func (d *DB) VideosMissingThumbs(ctx context.Context, limit int) ([]*MediaRow, e
 	return out, rows.Err()
 }
 
+// ImagesMissingThumbs returns id/blob_path/size for still images big enough to be
+// worth a downscaled tile that don't have one yet.
+//
+// The size floor is applied here rather than in the caller so the backfill reads
+// only rows it will actually act on: a library is mostly small images, and pulling
+// all of them back to discard nearly every one would make the startup pass scan far
+// more than it needs to. GIFs are excluded — they serve themselves as thumbnails so
+// the grid keeps them animated.
+func (d *DB) ImagesMissingThumbs(ctx context.Context, limit int, minSize int64) ([]*MediaRow, error) {
+	if limit <= 0 || limit > 1000 {
+		limit = 500
+	}
+	rows, err := d.sql.QueryContext(ctx, `
+		SELECT id, kind, blob_path, size
+		FROM media
+		WHERE kind = 'image' AND size >= ? AND (thumb_path IS NULL OR thumb_path = '')
+		ORDER BY created_at DESC LIMIT ?`, minSize, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*MediaRow
+	for rows.Next() {
+		m := &MediaRow{}
+		if err := rows.Scan(&m.ID, &m.Kind, &m.BlobPath, &m.Size); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
 // MediaMissingAITags returns taggable library items with no persisted AI result.
 // It powers the bounded startup/settings backfill, repairing
 // imports made while tagging was disabled or by an ingest path that failed before

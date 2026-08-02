@@ -113,6 +113,30 @@ CREATE TABLE IF NOT EXISTS game_gallery (
 );
 CREATE INDEX IF NOT EXISTS idx_game_gallery_game ON game_gallery(game_id, position);
 
+-- Save files backed up for a game. Deliberately *not* rows in media: a save is not
+-- something you browse, view, tag, or thumbnail, and putting it there would mean
+-- filtering it out of every library query, grid, and tagging pass forever. It is an
+-- attachment to one game, and it is modelled as one.
+--
+-- The blob lives in the same encrypted store as everything else, and the label is
+-- encrypted for the same reason media titles are: a filename like
+-- "day3_after_maid_route.sav" is exactly as revealing as the game's own title.
+--
+-- sha256 is recorded but NOT unique. Two saves from the same point in a game are
+-- byte-identical surprisingly often, and re-uploading a save you already have is a
+-- normal thing to do — it must create a second, separately-deletable entry rather
+-- than collide the way deduplicated media does.
+CREATE TABLE IF NOT EXISTS game_saves (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    game_id    INTEGER NOT NULL REFERENCES media(id) ON DELETE CASCADE,
+    label_enc  BLOB NOT NULL,
+    blob_path  TEXT NOT NULL,
+    sha256     TEXT NOT NULL,
+    size       INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_game_saves_game ON game_saves(game_id, created_at DESC);
+
 -- Reusable image-generation character references. The original reference and the
 -- derived appearance-only prompt tags are encrypted at rest like media metadata.
 CREATE TABLE IF NOT EXISTS characters (

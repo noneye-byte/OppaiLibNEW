@@ -120,6 +120,74 @@ downloads the file. Only zip containers (`.cbz`, `.zip`) can be opened in-app;
 | GET | `/api/media/{id}/comic` | → `{readable, pages, reason?}`; also refreshes the stored `pageCount` |
 | GET | `/api/media/{id}/page/{n}` | streams page `n` (1-based) as an image |
 
+## Games
+
+Three things hang off a game, all keyed on its media id. All require the item's
+`kind` to be `game`; anything else answers `400`.
+
+### Gallery
+
+| Method | Path | Notes |
+|--------|------|-------|
+| GET | `/api/media/{id}/gallery` | user-uploaded screenshots and clips for the game |
+| POST | `/api/media/{id}/gallery` | multipart `file`; accepts photos, GIFs and videos |
+| DELETE | `/api/media/{id}/gallery/{media}` | detaches one |
+
+### Save files
+
+A save is an *attachment* on a game, not a library item — it never appears in the
+grid, in search, or in tagging. Bytes are stored encrypted like any blob and the
+label is encrypted like a media title.
+
+| Method | Path | Notes |
+|--------|------|-------|
+| GET | `/api/media/{id}/saves` | → `{items: [GameSave]}`, newest first |
+| POST | `/api/media/{id}/saves` | multipart `file`, optional `label` field; → the created `GameSave` |
+| GET | `/api/media/{id}/saves/{save}` | the bytes back, always `application/octet-stream` as an attachment |
+| DELETE | `/api/media/{id}/saves/{save}` | `204`, or `404` if it was never there |
+
+```jsonc
+// GameSave
+{ "id": 12, "gameId": 4, "label": "Day 3 — before the fork",
+  "size": 40960, "sha256": "…", "createdAt": 1754131200 }
+```
+
+Uploads are accepted as opaque bytes: a save is whatever the game writes, so no kind
+recognition runs on it. Unlike media, saves are **not** deduplicated by hash —
+re-uploading identical bytes creates a second, separately deletable entry, because
+saving the same state twice is normal and collapsing them would be data loss. A
+save id is only ever resolved together with its game, so one game's id cannot read
+another's save. Maximum 100 MB per save.
+
+### Playing an HTML5 build
+
+A game imported as a zip containing an `index.html` — the same contract itch.io
+enforces on a web upload — can be played in place. Nothing is unpacked to disk; the
+zip is read through the store's decrypting random-access view.
+
+| Method | Path | Notes |
+|--------|------|-------|
+| GET | `/api/media/{id}/play` | → `{playable: true, entry: "index.html"}`, or `404` when the game has no web build |
+| GET | `/api/media/{id}/play/{path...}` | one file out of the build |
+
+A wrapper directory (`MyGame-web/index.html`) is stripped, so paths are relative to
+the build root. Content types come from a fixed allowlist; anything unrecognised is
+served `application/octet-stream`.
+
+**These responses serve untrusted third-party HTML and JavaScript**, so the clients
+must frame them correctly:
+
+- The web player uses `sandbox="allow-scripts allow-pointer-lock allow-popups"` and
+  deliberately **not** `allow-same-origin` — that combination would cancel the sandbox
+  and hand the game the user's session.
+- The asset responses carry their own CSP, scoped to *this game's own `/play/` path*
+  rather than to the origin, so a build can load its files and cannot reach the rest
+  of the API. They also override the app-wide `X-Frame-Options: DENY` with
+  `SAMEORIGIN` so the player can frame them at all.
+- The Android player intercepts every WebView request and reissues it through the
+  authenticated client, because the app authenticates with a bearer token that
+  subresource requests would not otherwise carry.
+
 ## Settings
 
 | Method | Path | Notes |

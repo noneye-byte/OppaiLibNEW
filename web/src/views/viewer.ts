@@ -1,6 +1,6 @@
 import { LitElement, html, css, nothing } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
-import { api, mascotSay, type ComicInfo, type Media, type MediaTag } from "../api.js";
+import { api, mascotSay, type ComicInfo, type GameSave, type Media, type MediaTag } from "../api.js";
 import { libbyReact } from "../libby-voice.js";
 import { iconStyles, motionStyles } from "../theme.js";
 import { profileUpdates } from "../ui-metrics.js";
@@ -12,6 +12,7 @@ import {
   statFor,
   isTypingTarget,
   formatTimecode,
+  formatBytes,
   loadComicFit,
   saveComicFit,
   loadComicPage,
@@ -47,6 +48,16 @@ export class OppaiViewer extends LitElement {
   @state() private screenshot = "";
   @state() private userGallery: Media[] = [];
   @state() private galleryUploading = false;
+
+  // Save-file backup (games). Loaded alongside the gallery when a game is opened.
+  @state() private saves: GameSave[] = [];
+  @state() private saveUploading = false;
+  @state() private saveError = "";
+
+  // HTML5 builds. `canPlay` stays null until the probe answers, so the Play button
+  // appears once rather than flickering in for every game and then out again.
+  @state() private canPlay: boolean | null = null;
+  @state() private playing = false;
 
   // Poster picker (videos only). `posterFrames` is empty until the strip is asked
   // for — reading it costs a full decrypt of the video server-side, so it is never
@@ -689,6 +700,36 @@ export class OppaiViewer extends LitElement {
       .user-shot video { width:100%; height:100%; object-fit:cover; background:#000; }
       .remove-shot { position:absolute; right:4px; top:4px; border:0; border-radius:50%; color:#fff;
         background:rgba(0,0,0,.7); width:26px; height:26px; cursor:pointer; }
+
+      /* Save files */
+      .saves { margin-top:10px; max-width:640px; display:flex; flex-direction:column; gap:6px; }
+      .save-row {
+        display:flex; align-items:center; gap:10px;
+        padding:8px 10px; border-radius:10px; background:var(--oppai-surface-2);
+      }
+      .save-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .save-meta { color:var(--oppai-text-dim); font-size:12px; white-space:nowrap; }
+      .save-act {
+        border:0; background:none; cursor:pointer; color:var(--oppai-text-dim);
+        display:inline-flex; align-items:center; padding:4px; border-radius:8px;
+      }
+      .save-act:hover { color:var(--oppai-text); background:rgba(255,255,255,.08); }
+      .save-empty { color:var(--oppai-text-dim); font-size:13px; margin-top:8px; }
+      .save-error { color:var(--oppai-danger, #ff6b6b); font-size:13px; margin-top:8px; }
+
+      /* HTML5 game player */
+      .play-stage {
+        position:relative; margin-top:14px; width:100%; max-width:960px;
+        aspect-ratio:16 / 9; border-radius:12px; overflow:hidden;
+        background:#000; border:1px solid var(--oppai-surface-2);
+      }
+      .play-stage iframe { width:100%; height:100%; border:0; display:block; background:#000; }
+      .play-close {
+        position:absolute; right:8px; top:8px; z-index:2;
+        border:0; border-radius:50%; width:32px; height:32px; cursor:pointer;
+        color:#fff; background:rgba(0,0,0,.75);
+      }
+      .play-note { color:var(--oppai-text-dim); font-size:12px; margin-top:6px; max-width:640px; }
     `,
   ];
 
@@ -743,7 +784,64 @@ export class OppaiViewer extends LitElement {
     this.comic = null;
     if (m.kind === "comic") this.loadComic(m.id);
     this.userGallery = [];
-    if (m.kind === "game") void this.loadGameGallery(m.id);
+    this.saves = [];
+    this.saveError = "";
+    this.canPlay = null;
+    this.playing = false;
+    if (m.kind === "game") {
+      void this.loadGameGallery(m.id);
+      void this.loadSaves(m.id);
+      void this.probePlayable(m.id);
+    }
+  }
+
+  private async loadSaves(id: number) {
+    try {
+      const result = await api.gameSaves(id);
+      if (this.media.id === id) this.saves = result.items;
+    } catch {
+      if (this.media.id === id) this.saves = [];
+    }
+  }
+
+  /** A 404 here is the normal answer for a game that is only a download, so it is
+   *  a "no", not an error worth showing. */
+  private async probePlayable(id: number) {
+    try {
+      const info = await api.gamePlayInfo(id);
+      if (this.media.id === id) this.canPlay = info.playable;
+    } catch {
+      if (this.media.id === id) this.canPlay = false;
+    }
+  }
+
+  private async uploadSave(e: Event, gameID: number) {
+    const input = e.target as HTMLInputElement;
+    const files = [...(input.files ?? [])];
+    input.value = "";
+    if (!files.length || this.saveUploading) return;
+    this.saveUploading = true;
+    this.saveError = "";
+    try {
+      for (const file of files) {
+        const created = await api.uploadGameSave(gameID, file);
+        // Newest first, matching the order the server lists them in.
+        this.saves = [created, ...this.saves];
+      }
+    } catch (err) {
+      this.saveError = err instanceof Error ? err.message : "Couldn't upload that save.";
+    } finally {
+      this.saveUploading = false;
+    }
+  }
+
+  private async deleteSave(gameID: number, saveID: number) {
+    try {
+      await api.deleteGameSave(gameID, saveID);
+      this.saves = this.saves.filter((s) => s.id !== saveID);
+    } catch (err) {
+      this.saveError = err instanceof Error ? err.message : "Couldn't delete that save.";
+    }
   }
 
   private async loadGameGallery(id: number) {
@@ -1448,6 +1546,12 @@ export class OppaiViewer extends LitElement {
             : html`
                 <div class="sub">${KIND_META.game.label.replace(/s$/, "")}</div>
                 <div class="actions">
+                  ${this.canPlay
+                    ? html`<button class="btn-primary" @click=${() => (this.playing = true)}>
+                        <span class="material-symbols-rounded fill-icon" style="font-size:20px;">play_arrow</span>
+                        Play in browser
+                      </button>`
+                    : nothing}
                   ${m.download
                     ? html`<a class="btn-primary" href=${m.download} target="_blank" rel="noreferrer">
                         <span class="material-symbols-rounded fill-icon" style="font-size:20px;">open_in_new</span>
@@ -1466,10 +1570,12 @@ export class OppaiViewer extends LitElement {
                     Favorite
                   </button>
                 </div>
+                ${this.playing ? this.renderPlayer(m) : nothing}
                 ${m.notes
                   ? html`<p class="desc">${m.notes}</p>`
                   : html`<p class="desc">A title from your library.</p>`}
                 ${this.renderTags(m)}
+                ${this.renderSaves(m)}
                 ${m.gallery && m.gallery.length
                    ? html`<div class="shots">
                       ${m.gallery.map((u) => html`<button
@@ -1507,6 +1613,66 @@ export class OppaiViewer extends LitElement {
               `}
         </div>
       </div>
+    `;
+  }
+
+  /** The HTML5 player.
+   *
+   *  The `sandbox` attribute is the security boundary, not a nicety. It deliberately
+   *  omits allow-same-origin: without it the build runs in an opaque origin, so its
+   *  scripts get no session cookie, no localStorage, no access to this page, and no
+   *  credentialed reach into the API — which matters because the thing being run is
+   *  a zip someone downloaded off the internet. Do not add allow-same-origin; with
+   *  allow-scripts it cancels the sandbox entirely and hands the library to the game.
+   *
+   *  The trade-off is that storage APIs are unavailable to the game, so a build that
+   *  autosaves to localStorage won't persist between sessions. That is what the save
+   *  file backup below is for. */
+  private renderPlayer(m: Media) {
+    return html`
+      <div class="play-stage">
+        <button class="play-close" title="Stop playing" @click=${() => (this.playing = false)}>×</button>
+        <iframe
+          src=${api.gamePlayURL(m.id)}
+          title=${m.title}
+          allow="fullscreen; gamepad; autoplay"
+          sandbox="allow-scripts allow-pointer-lock allow-popups"
+        ></iframe>
+      </div>
+      <p class="play-note">
+        Running sandboxed, so the game can't reach the rest of your library — which also
+        means it can't save to browser storage. Back its saves up below.
+      </p>
+    `;
+  }
+
+  private renderSaves(m: Media) {
+    return html`
+      <div class="section-label">Save files</div>
+      ${this.saves.length
+        ? html`<div class="saves">
+            ${this.saves.map(
+              (s) => html`<div class="save-row">
+                <span class="save-name" title=${s.label}>${s.label}</span>
+                <span class="save-meta">${formatBytes(s.size)} · ${saveDate(s.createdAt)}</span>
+                <a class="save-act" title="Download this save" href=${api.gameSaveURL(m.id, s.id)} download>
+                  <span class="material-symbols-rounded" style="font-size:20px;">download</span>
+                </a>
+                <button class="save-act" title="Delete this save"
+                  @click=${() => void this.deleteSave(m.id, s.id)}>
+                  <span class="material-symbols-rounded" style="font-size:20px;">delete</span>
+                </button>
+              </div>`,
+            )}
+          </div>`
+        : html`<div class="save-empty">No saves backed up yet.</div>`}
+      ${this.saveError ? html`<div class="save-error">${this.saveError}</div>` : nothing}
+      <label class="btn-outline gallery-upload">
+        <span class="material-symbols-rounded">backup</span>
+        ${this.saveUploading ? "Uploading…" : "Back up a save"}
+        <input type="file" multiple hidden ?disabled=${this.saveUploading}
+          @change=${(e: Event) => void this.uploadSave(e, m.id)} />
+      </label>
     `;
   }
 
@@ -1606,6 +1772,18 @@ export class OppaiViewer extends LitElement {
       ${t.name}
     </button>`;
   }
+}
+
+/** Timestamps arrive as unix seconds. Saves are picked from a list by "which one is
+ *  which", so the date is shown short and local rather than absolute-precise. */
+function saveDate(unixSeconds: number): string {
+  if (!unixSeconds) return "";
+  return new Date(unixSeconds * 1000).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 declare global {

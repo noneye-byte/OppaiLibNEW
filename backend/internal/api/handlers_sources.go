@@ -78,17 +78,29 @@ func (s *Server) handleBrowseSource(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), scrapeTimeout)
 	defer cancel()
 
-	listing, err := src.Browse(ctx, sources.BrowseParams{
+	params := sources.BrowseParams{
 		Feed:   q.Get("feed"),
 		Cursor: q.Get("cursor"),
 		Query:  q.Get("q"),
 		Sort:   q.Get("sort"),
+	}
+	// Every distinct thing the client can ask for has to be part of the key, or one
+	// feed's page would be served for another's. Cursor included: page two of a feed
+	// is a different listing from page one, and pagination is exactly the case where
+	// a user scrolls forward and back over the same pages.
+	key := strings.Join([]string{src.ID(), params.Feed, params.Cursor, params.Query, params.Sort}, "\x00")
+	listing, err := s.listCache.get(ctx, key, func(ctx context.Context) (*sources.Listing, error) {
+		return src.Browse(ctx, params)
 	})
 	if err != nil {
 		s.log.Warn("source browse", "source", src.ID(), "feed", q.Get("feed"), "err", err)
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
 	}
+	// Let the client skip the round trip entirely for the back-button case. Kept
+	// well under the server-side TTL so a refresh still reaches us and can pick up a
+	// newer listing.
+	w.Header().Set("Cache-Control", "private, max-age=30")
 	writeJSON(w, http.StatusOK, listing)
 }
 

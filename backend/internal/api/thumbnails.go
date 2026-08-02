@@ -80,9 +80,85 @@ func (s *Server) processIngestAsync(id int64, blobPath, kind string, size int64,
 	switch kind {
 	case "video":
 		s.generateThumbAsync(id, blobPath, kind, knownDur)
+	case "image":
+		s.generateImageThumbAsync(id, blobPath, size)
 	case "comic":
 		s.indexComicAsync(id, blobPath, size)
 	}
+}
+
+// thumbnailWorthwhileBytes is the size above which a still image earns a generated
+// thumbnail. Below it the original is already tile-sized, and re-encoding it would
+// spend a worker and a second blob to save nothing. Deliberately a size test rather
+// than a dimension test: it needs no probe, and bytes on the wire are the thing
+// actually being optimised.
+const thumbnailWorthwhileBytes = 256 << 10
+
+// generateImageThumbAsync downscales a large still image into a grid tile.
+//
+// Without this, handleThumb falls back to serving an image's own bytes, so a page of
+// twenty 5MB photos transferred 100MB to draw twenty tiles. GIFs are deliberately
+// left out: their fallback animates in the grid, which is the intended behaviour and
+// a static poster would silently remove it.
+func (s *Server) generateImageThumbAsync(id int64, blobPath string, size int64) {
+	if size > 0 && size < thumbnailWorthwhileBytes {
+		return
+	}
+	if !thumbnail.Available() {
+		s.thumbWarn.Do(func() {
+			s.log.Warn("thumbnail: ffmpeg/ffprobe not found on PATH — generated thumbnails disabled")
+		})
+		return
+	}
+	go func() {
+		s.thumbSem <- struct{}{}
+		defer func() { <-s.thumbSem }()
+
+		ctx, cancel := context.WithTimeout(context.Background(), thumbnail.DefaultTimeout)
+		defer cancel()
+		if err := s.generateImageThumb(ctx, id, blobPath); err != nil {
+			s.log.Warn("thumbnail: image downscale failed", "media", id, "err", err)
+		}
+	}()
+}
+
+func (s *Server) generateImageThumb(ctx context.Context, id int64, blobPath string) error {
+	// Same reason as the video path: ffmpeg needs a real file, and the store holds
+	// the bytes encrypted.
+	tmp, err := os.CreateTemp("", "oppai-imgthumb-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+
+	rc, err := s.store.Open(blobPath)
+	if err != nil {
+		tmp.Close()
+		return err
+	}
+	_, copyErr := io.Copy(tmp, rc)
+	rc.Close()
+	if cerr := tmp.Close(); cerr != nil && copyErr == nil {
+		copyErr = cerr
+	}
+	if copyErr != nil {
+		return copyErr
+	}
+
+	jpeg, err := thumbnail.Image(ctx, tmpPath, 640)
+	if err != nil {
+		return err
+	}
+	put, err := s.store.Put(bytes.NewReader(jpeg))
+	if err != nil {
+		return err
+	}
+	if err := s.db.SetThumbPath(ctx, id, put.RelPath); err != nil {
+		return err
+	}
+	s.log.Info("thumbnail: image downscaled", "media", id, "bytes", len(jpeg))
+	return nil
 }
 
 // backfillAutoTags repairs taggable items whose original background job was
@@ -207,5 +283,29 @@ func (s *Server) backfillThumbnails() {
 	s.log.Info("thumbnail: backfilling video posters", "count", len(rows))
 	for _, row := range rows {
 		s.generateThumbAsync(row.ID, row.BlobPath, row.Kind, row.Duration.Float64)
+	}
+}
+
+// backfillImageThumbs downscales large stills that were imported before images had
+// generated thumbnails, so an existing library gets the faster grid without the user
+// re-adding anything. Shares thumbSem with the video backfill, so the two together
+// still can't spawn more than the worker cap.
+func (s *Server) backfillImageThumbs() {
+	if !thumbnail.Available() {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	rows, err := s.db.ImagesMissingThumbs(ctx, 500, thumbnailWorthwhileBytes)
+	cancel()
+	if err != nil {
+		s.log.Warn("thumbnail: image backfill query failed", "err", err)
+		return
+	}
+	if len(rows) == 0 {
+		return
+	}
+	s.log.Info("thumbnail: backfilling image thumbnails", "count", len(rows))
+	for _, row := range rows {
+		s.generateImageThumbAsync(row.ID, row.BlobPath, row.Size)
 	}
 }

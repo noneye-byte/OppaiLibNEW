@@ -50,6 +50,7 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
@@ -93,6 +94,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -127,6 +129,7 @@ import coil.request.ImageRequest
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import net.fourbakers.oppailib.data.ComicInfo
+import net.fourbakers.oppailib.data.GameSave
 import net.fourbakers.oppailib.data.Media
 import net.fourbakers.oppailib.data.MediaPatch
 import net.fourbakers.oppailib.data.Repository
@@ -331,8 +334,67 @@ private fun GamePage(repo: Repository, media: Media) {
     val scope = rememberCoroutineScope()
     var userGallery by remember(media.id) { mutableStateOf<List<Media>>(emptyList()) }
     var uploading by remember(media.id) { mutableStateOf(false) }
+    var saves by remember(media.id) { mutableStateOf<List<GameSave>>(emptyList()) }
+    var savingUpload by remember(media.id) { mutableStateOf(false) }
+    // A 404 from the play probe is the normal answer for a download-only game, so it
+    // reads as "no Play button" rather than as an error.
+    var canPlay by remember(media.id) { mutableStateOf(false) }
+    var playing by remember(media.id) { mutableStateOf(false) }
     LaunchedEffect(media.id) {
         runCatching { repo.api.gameGallery(media.id).items }.onSuccess { userGallery = it }
+        runCatching { repo.api.gameSaves(media.id).items }.onSuccess { saves = it }
+        runCatching { repo.api.gamePlayInfo(media.id).playable }.onSuccess { canPlay = it }
+    }
+
+    // Backing a save up: pick any file, send it as-is. No type filter — a save is
+    // whatever the game wrote, and filtering by MIME would hide most of them.
+    val saveLauncher = rememberSystemPickerLauncher(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.isNullOrEmpty() || savingUpload) return@rememberSystemPickerLauncher
+        savingUpload = true
+        scope.launch {
+            try {
+                for (uri in uris) {
+                    val (file, name) = copyUriToCache(context, uri)
+                    try {
+                        val created = repo.api.uploadGameSave(
+                            media.id,
+                            repo.filePart(file, mimeOf(context, uri)),
+                            repo.titlePart(name),
+                        )
+                        // Newest first, matching the order the server lists them in.
+                        saves = listOf(created) + saves
+                    } finally { file.delete() }
+                }
+            } catch (_: Exception) {
+                // The shared client already surfaced the failure through the mascot.
+            } finally { savingUpload = false }
+        }
+    }
+
+    // Restoring a save means writing it somewhere the user can reach — their game's
+    // folder, or Downloads. A plain link would not work: the app authenticates with a
+    // bearer token the system browser doesn't have, so the bytes come back through the
+    // API and are written into the document the user picks.
+    var pendingDownload by remember(media.id) { mutableStateOf<GameSave?>(null) }
+    val downloadLauncher = rememberSystemPickerLauncher(
+        ActivityResultContracts.CreateDocument("application/octet-stream"),
+    ) { uri ->
+        val save = pendingDownload
+        pendingDownload = null
+        if (uri == null || save == null) return@rememberSystemPickerLauncher
+        scope.launch {
+            runCatching {
+                val body = repo.api.downloadGameSave(media.id, save.id)
+                body.byteStream().use { input ->
+                    context.contentResolver.openOutputStream(uri)?.use { output -> input.copyTo(output) }
+                }
+            }
+        }
+    }
+
+    if (playing) {
+        GamePlayerScreen(repo, media.id, onClose = { playing = false })
+        return
     }
     val galleryLauncher = rememberSystemPickerLauncher(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         if (uris.isNullOrEmpty() || uploading) return@rememberSystemPickerLauncher
@@ -384,6 +446,16 @@ private fun GamePage(repo: Repository, media: Media) {
                 modifier = Modifier.padding(top = 12.dp),
             ) {
                 media.platforms.forEach { AssistChip(onClick = {}, label = { Text(platformLabel(it)) }) }
+            }
+        }
+
+        if (canPlay) {
+            Button(
+                onClick = { playing = true },
+                modifier = Modifier.fillMaxWidth().padding(top = 20.dp),
+            ) {
+                Icon(Icons.Filled.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+                Text("Play in browser", modifier = Modifier.padding(start = 8.dp))
             }
         }
 
@@ -452,9 +524,101 @@ private fun GamePage(repo: Repository, media: Media) {
             modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
         ) { Text(if (uploading) "Uploading…" else "Add photos or videos") }
 
+        Text(
+            "Save files",
+            color = Color.White,
+            style = MaterialTheme.typography.titleSmall,
+            modifier = Modifier.align(Alignment.Start).padding(top = 24.dp, bottom = 8.dp),
+        )
+        if (saves.isEmpty()) {
+            Text(
+                "No saves backed up yet.",
+                color = Color.White.copy(alpha = 0.6f),
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.align(Alignment.Start),
+            )
+        } else {
+            // A Column rather than a LazyColumn: this sits inside a vertically
+            // scrolling parent, and nesting a lazy list in one is a runtime crash.
+            Column(Modifier.fillMaxWidth()) {
+                saves.forEach { save ->
+                    SaveRow(
+                        save = save,
+                        onDownload = {
+                            pendingDownload = save
+                            downloadLauncher.launch(save.label.ifBlank { "save" })
+                        },
+                        onDelete = {
+                            scope.launch {
+                                runCatching { repo.api.deleteGameSave(media.id, save.id) }
+                                    .onSuccess { saves = saves.filterNot { it.id == save.id } }
+                            }
+                        },
+                    )
+                }
+            }
+        }
+        Button(
+            onClick = { saveLauncher.launch(arrayOf("*/*")) },
+            enabled = !savingUpload,
+            modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+        ) { Text(if (savingUpload) "Uploading…" else "Back up a save") }
+
         Spacer(Modifier.height(120.dp)) // clear the chrome's bottom bar
     }
 }
+
+/** One backed-up save: what it is, when it was made, and the two things you can do
+ *  with it. */
+@Composable
+private fun SaveRow(save: GameSave, onDownload: () -> Unit, onDelete: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(vertical = 2.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(Color.White.copy(alpha = 0.06f))
+            .padding(start = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f).padding(vertical = 8.dp)) {
+            Text(
+                save.label.ifBlank { "Save" },
+                color = Color.White,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                "${formatSaveSize(save.size)} · ${formatSaveDate(save.createdAt)}",
+                color = Color.White.copy(alpha = 0.6f),
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        IconButton(onClick = onDownload) {
+            Icon(Icons.Filled.Download, contentDescription = "Download this save", tint = Color.White)
+        }
+        IconButton(onClick = onDelete) {
+            Icon(Icons.Filled.Delete, contentDescription = "Delete this save", tint = Color.White)
+        }
+    }
+}
+
+private fun formatSaveSize(bytes: Long): String = when {
+    bytes >= 1_048_576 -> "%.1f MB".format(bytes / 1_048_576.0)
+    bytes >= 1024 -> "%.0f KB".format(bytes / 1024.0)
+    else -> "$bytes B"
+}
+
+/** Timestamps arrive as unix seconds. Saves are picked from a list by "which one is
+ *  which", so a short local date reads better than a precise one. */
+private fun formatSaveDate(unixSeconds: Long): String =
+    if (unixSeconds <= 0L) {
+        ""
+    } else {
+        java.text.SimpleDateFormat("d MMM, HH:mm", java.util.Locale.getDefault())
+            .format(java.util.Date(unixSeconds * 1000))
+    }
 
 /**
  * Whether this runs on the phone you're holding. Three states, not two: a game

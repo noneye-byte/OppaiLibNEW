@@ -45,6 +45,10 @@ class Repository(private val appContext: Context, val prefs: Prefs) {
     @Volatile lateinit var imageLoader: ImageLoader
         private set
 
+    /** Authenticated client the HTML5 game player fetches build files through. */
+    @Volatile lateinit var gameClient: OkHttpClient
+        private set
+
     init {
         LibbyMeter.setMultiplier(prefs.libbyProgressionMultiplier)
         rebuild()
@@ -70,6 +74,15 @@ class Repository(private val appContext: Context, val prefs: Prefs) {
 
     /** A single comic page, 1-based to match what the reader shows the user. */
     fun pageUrl(id: Long, page: Int): String = "${baseUrl}api/media/$id/page/$page"
+
+    /**
+     * Entry point of a game's browser build, for the WebView to load.
+     *
+     * The build is served sandboxed and scoped to this path — see the server's
+     * handlers_webgame.go for why that matters. The WebView that loads it must be
+     * configured to match (no file access, no universal access from file URLs).
+     */
+    fun gamePlayUrl(id: Long): String = "${baseUrl}api/media/$id/play/"
 
     /**
      * Fetches a remote image through the server. A game's screenshots live on the
@@ -211,8 +224,29 @@ class Repository(private val appContext: Context, val prefs: Prefs) {
             }
             .build()
 
+    /**
+     * A bare authenticated client for the game WebView to fetch a build's files with.
+     *
+     * Deliberately not the shared [okHttp] client: that one reports every non-2xx to
+     * the user through the mascot, and a game engine probing for optional files it
+     * doesn't have (a common startup pattern) would fill the screen with errors for
+     * something entirely normal. It also skips the long read timeouts, which exist for
+     * comic imports and mean nothing to a local asset fetch.
+     */
+    private fun gameOkHttp(): OkHttpClient =
+        OkHttpClient.Builder()
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(60, TimeUnit.SECONDS)
+            .addInterceptor { chain ->
+                val req = chain.request().newBuilder()
+                prefs.token?.let { req.header("Authorization", "Bearer $it") }
+                chain.proceed(req.build())
+            }
+            .build()
+
     private fun rebuild() {
         val client = okHttp()
+        gameClient = gameOkHttp()
         val contentType = "application/json".toMediaTypeOrNull()!!
         api = Retrofit.Builder()
             .baseUrl(baseUrl)

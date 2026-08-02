@@ -36,6 +36,17 @@ export interface Media {
   updatedAt: number;
 }
 
+/** One backed-up save file belonging to a game. Not a library item — a save is an
+ *  attachment on a game, so it never appears in the grid or in search. */
+export interface GameSave {
+  id: number;
+  gameId: number;
+  label: string;
+  size: number;
+  sha256: string;
+  createdAt: number;
+}
+
 // Editable subset of a media item. Omitted fields are left unchanged; tags are
 // add/remove lists.
 export interface MediaPatch {
@@ -1680,6 +1691,27 @@ export const api = {
   },
   removeGameGallery: (gameId: number, mediaId: number) =>
     request<void>(`/api/media/${gameId}/gallery/${mediaId}`, { method: "DELETE" }),
+
+  // Save-file backup for a game.
+  gameSaves: (gameId: number) => request<{ items: GameSave[] }>(`/api/media/${gameId}/saves`),
+  uploadGameSave: (gameId: number, file: File, label?: string) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    // Several games write every save under the same filename, so an explicit label
+    // is what makes a list of them distinguishable.
+    if (label?.trim()) fd.append("label", label.trim());
+    return request<GameSave>(`/api/media/${gameId}/saves`, { method: "POST", body: fd });
+  },
+  deleteGameSave: (gameId: number, saveId: number) =>
+    request<void>(`/api/media/${gameId}/saves/${saveId}`, { method: "DELETE" }),
+  // A plain link: the response is an attachment, and auth rides the session cookie.
+  gameSaveURL: (gameId: number, saveId: number) => `/api/media/${gameId}/saves/${saveId}`,
+
+  // HTML5 game builds. playInfo 404s for a game that is only a download, which is
+  // how the viewer decides whether to offer a Play button at all.
+  gamePlayInfo: (gameId: number) =>
+    request<{ playable: boolean; entry: string }>(`/api/media/${gameId}/play`),
+  gamePlayURL: (gameId: number) => `/api/media/${gameId}/play/`,
   // Turn a scrap of (spoken) natural language into a fuller prompt + negative prompt.
   optimizePrompt: (text: string) =>
     request<{ prompt: string; negativePrompt: string }>("/api/imagegen/prompt", {

@@ -84,6 +84,12 @@ type Server struct {
 	// a double-tap. See resolveCache.
 	pageCache    *resolveCache[[]string]
 	commentCache *resolveCache[[]sources.Comment]
+	// One page of a feed. This is the tab's first paint: opening Browse, switching
+	// source, or coming back from a comic all ask for the same listing, and each ask
+	// was a fresh throttled fetch and parse of someone else's index page. A feed
+	// moves on the order of minutes, so a short TTL costs nothing in freshness and
+	// turns a revisit into an instant paint. See handleBrowseSource.
+	listCache *resolveCache[*sources.Listing]
 	// Links the user has handed to Libby, previewed. A chat turn reads this and never
 	// fetches, so a message cannot make the server hit an address — the preview
 	// endpoint is the only thing that goes out. See handlers_libby_links.go.
@@ -102,6 +108,10 @@ type Server struct {
 const (
 	sourcePagesTTL    = 10 * time.Minute
 	sourceCommentsTTL = 30 * time.Second
+	// A feed's front page turns over in minutes, not seconds. Two is long enough to
+	// cover the back-and-forth of actually browsing — open an item, return to the
+	// grid, scroll, open another — without ever showing a listing that feels stale.
+	sourceListingTTL = 2 * time.Minute
 )
 
 func NewServer(cfg *config.Config, database *db.DB, store *storage.Store, sc *scraper.Engine, aiMgr *ai.Manager, set *settings.Store, kek []byte, log *slog.Logger) *Server {
@@ -143,6 +153,7 @@ func NewServer(cfg *config.Config, database *db.DB, store *storage.Store, sc *sc
 
 		pageCache:    newResolveCache[[]string](sourcePagesTTL),
 		commentCache: newResolveCache[[]sources.Comment](sourceCommentsTTL),
+		listCache:    newResolveCache[*sources.Listing](sourceListingTTL),
 		linkCache:    newResolveCache[sharedLink](sharedLinkTTL),
 		iconCache:    newResolveCache[favicon](faviconTTL),
 	}
@@ -169,6 +180,7 @@ func dirOr(configured, fallback string) string {
 func (s *Server) StartBackgroundJobs() {
 	go s.backfillAutoTags()
 	go s.backfillThumbnails()
+	go s.backfillImageThumbs()
 	go s.backfillComics()
 	// Only actually starts anything when a Discord connection is configured and on.
 	// See discord_relay.go.
@@ -423,6 +435,19 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/media/{id}/gallery", s.requireAuth(s.handleListGameGallery))
 	mux.HandleFunc("POST /api/media/{id}/gallery", s.requireAuth(s.handleUploadGameGallery))
 	mux.HandleFunc("DELETE /api/media/{id}/gallery/{media}", s.requireAuth(s.handleRemoveGameGallery))
+
+	// Save-file backup for a game. Sits alongside the gallery because it is the same
+	// idea — an attachment on a game — and shares its game-id resolution.
+	// See handlers_game_saves.go.
+	mux.HandleFunc("GET /api/media/{id}/saves", s.requireAuth(s.handleListGameSaves))
+	mux.HandleFunc("POST /api/media/{id}/saves", s.requireAuth(s.handleUploadGameSave))
+	mux.HandleFunc("GET /api/media/{id}/saves/{save}", s.requireAuth(s.handleDownloadGameSave))
+	mux.HandleFunc("DELETE /api/media/{id}/saves/{save}", s.requireAuth(s.handleDeleteGameSave))
+
+	// Playing an imported HTML5 game build in place. See handlers_webgame.go for why
+	// serving a game's own scripts from this origin is safe.
+	mux.HandleFunc("GET /api/media/{id}/play", s.requireAuth(s.handleGamePlayInfo))
+	mux.HandleFunc("GET /api/media/{id}/play/{path...}", s.requireAuth(s.handleGamePlayAsset))
 
 	// Chat workspaces are encrypted per user and shared by the WebUI and Android app.
 	// Character images are scanned locally before being made available to a character.

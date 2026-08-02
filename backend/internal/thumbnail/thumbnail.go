@@ -139,6 +139,19 @@ func FrameAt(ctx context.Context, path string, at float64, maxWidth int) ([]byte
 	return out.Bytes(), nil
 }
 
+// Image renders a downscaled JPEG copy of a still image, for use as a grid tile.
+//
+// ffmpeg reads a still as a one-frame stream, so this is FrameAt at offset zero —
+// no separate image library needed for something the existing dependency already
+// does. A grid that had been serving 4000px originals as thumbnails is the single
+// biggest cost in painting a library page.
+func Image(ctx context.Context, path string, maxWidth int) ([]byte, error) {
+	if maxWidth <= 0 {
+		maxWidth = 640
+	}
+	return FrameAt(ctx, path, 0, maxWidth)
+}
+
 // DefaultTimeout bounds a single probe+frame job so a pathological file can't
 // wedge a worker forever.
 const DefaultTimeout = 90 * time.Second

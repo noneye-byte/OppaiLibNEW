@@ -120,6 +120,14 @@ func New(opts Options) *Engine {
 		ExpectContinueTimeout: 1 * time.Second,
 		MaxIdleConns:          64,
 		IdleConnTimeout:       90 * time.Second,
+		// Go's default is 2 idle connections per host, which is wrong for the shape of
+		// traffic this transport actually carries. A browse grid is tens of thumbnails
+		// from one CDN, arriving together: with two pooled connections the rest paid a
+		// fresh TCP + TLS handshake each, and were then closed rather than kept, so the
+		// next screenful paid it all again. Pooling them makes a grid reuse warm
+		// connections. This is not extra concurrency — how many requests may be in
+		// flight per host is still bounded by the fetch semaphore and the throttle.
+		MaxIdleConnsPerHost: 16,
 	}
 	client := &http.Client{
 		Timeout:   30 * time.Second,

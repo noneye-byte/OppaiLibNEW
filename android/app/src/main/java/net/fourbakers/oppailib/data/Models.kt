@@ -161,6 +161,29 @@ data class LoginResponse(val token: String, val user: User)
 @Serializable
 data class MediaListResponse(val items: List<Media> = emptyList())
 
+/**
+ * One backed-up save file for a game.
+ *
+ * Not a [Media]: a save is an attachment on a game, so it never appears in the
+ * library grid, in search, or in tagging. [createdAt] is unix seconds.
+ */
+@Serializable
+data class GameSave(
+    val id: Long,
+    val gameId: Long,
+    val label: String = "",
+    val size: Long = 0,
+    val sha256: String = "",
+    val createdAt: Long = 0,
+)
+
+@Serializable
+data class GameSaveListResponse(val items: List<GameSave> = emptyList())
+
+/** Whether a game ships a browser-playable build, and the file it starts at. */
+@Serializable
+data class GamePlayInfo(val playable: Boolean = false, val entry: String = "")
+
 @Serializable
 data class UploadResponse(val id: Long, val sha256: String, val deduped: Boolean)
 
