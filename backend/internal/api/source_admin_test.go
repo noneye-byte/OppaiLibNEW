@@ -77,13 +77,12 @@ func TestAddSiteFromAnalysis(t *testing.T) {
 		t.Errorf("thumb = %q, took the lazy-load placeholder", an.Preview[0].ThumbURL)
 	}
 
-	// 2. Review its access declaration, then save it. Analysis cannot infer that a
-	// fetched public page means the whole site needs no authentication.
-	if !strings.Contains(an.YAML, "authentication: review") {
-		t.Fatalf("proposal did not require an access review:\n%s", an.YAML)
+	// 2. A successfully fetched listing saves directly as a public source; adding a
+	// site must not stop to demand credentials or an NSFW acknowledgement.
+	if !strings.Contains(an.YAML, "authentication: none") || strings.Contains(an.YAML, "content_warning:") {
+		t.Fatalf("proposal was not immediately usable as a public source:\n%s", an.YAML)
 	}
-	reviewed := strings.Replace(an.YAML, "authentication: review", "authentication: none", 1)
-	body, _ := json.Marshal(map[string]string{"yaml": reviewed})
+	body, _ := json.Marshal(map[string]string{"yaml": an.YAML})
 	rec = do(t, h, token, "POST", "/api/sources", string(body))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("save: got %d, body %s", rec.Code, rec.Body)
@@ -113,7 +112,7 @@ func TestAddSiteFromAnalysis(t *testing.T) {
 	if !found.UserAdded {
 		t.Error("a source added from the UI must be marked userAdded, or it can't be removed again")
 	}
-	if found.Authentication != "none" || found.ContentWarning == "" {
+	if found.Authentication != "none" || found.ContentWarning != "" {
 		t.Errorf("source access policy was not preserved: %+v", found)
 	}
 
@@ -161,7 +160,7 @@ func TestDeleteBuiltInSourceIsRefused(t *testing.T) {
 	}
 }
 
-func TestBuiltInSourcesDeclareAccessAndContentPolicies(t *testing.T) {
+func TestBuiltInSourcesDeclareAccessWithoutNSFWWarnings(t *testing.T) {
 	s, token := newTestServer(t)
 	rec := do(t, s.Handler(), token, "GET", "/api/sources", "")
 	if rec.Code != http.StatusOK {
@@ -184,8 +183,8 @@ func TestBuiltInSourcesDeclareAccessAndContentPolicies(t *testing.T) {
 			t.Errorf("built-in %q is missing", id)
 			continue
 		}
-		if found.Authentication != auth || found.ContentWarning == "" {
-			t.Errorf("%s policy = %+v, want auth %q and a content warning", id, found, auth)
+		if found.Authentication != auth || found.ContentWarning != "" {
+			t.Errorf("%s policy = %+v, want auth %q and no NSFW warning", id, found, auth)
 		}
 	}
 }

@@ -109,10 +109,9 @@ func (s *Server) handleAnalyzeSource(w http.ResponseWriter, r *http.Request) {
 		resp.Existing = existing.Name()
 	}
 
-	// Dry run: build the proposed source and browse its default feed. This costs one
-	// more fetch of a page we were just given, which is worth it — the alternative is
-	// asking the user to approve selectors they cannot evaluate.
-	if items, err := s.dryRunSpec(ctx, proposal.Spec); err != nil {
+	// Dry run the proposed selectors against the document already fetched. Reusing it
+	// keeps the preview honest without paying for the same page (and throttle) twice.
+	if items, err := s.dryRunSpec(proposal.Spec, doc); err != nil {
 		resp.PreviewError = err.Error()
 	} else {
 		resp.Preview = items
@@ -120,29 +119,22 @@ func (s *Server) handleAnalyzeSource(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// dryRunSpec builds a throwaway source from spec and returns the first page of its
-// default feed.
-func (s *Server) dryRunSpec(ctx context.Context, spec sources.SourceSpec) ([]sources.Item, error) {
-	src := sources.NewYAMLSource(spec, scraperFetcher{e: s.scraper})
-	feeds := src.Feeds()
-	if len(feeds) == 0 {
+// dryRunSpec applies a throwaway source spec to the fetched listing document.
+func (s *Server) dryRunSpec(spec sources.SourceSpec, doc *goquery.Document) ([]sources.Item, error) {
+	if len(spec.Feeds) == 0 {
 		return nil, fmt.Errorf("the proposal has no feeds to try")
 	}
-	// Never the search feed: browsing it without a term is an error by design.
-	feed := feeds[0]
-	for _, f := range feeds {
-		if !f.Query {
-			feed = f
+	hasBrowsableFeed := false
+	for _, feed := range spec.Feeds {
+		if !feed.Query {
+			hasBrowsableFeed = true
 			break
 		}
 	}
-	if feed.Query {
+	if !hasBrowsableFeed {
 		return nil, fmt.Errorf("the only proposed feed needs a search term, so it can't be previewed")
 	}
-	listing, err := src.Browse(ctx, sources.BrowseParams{Feed: feed.ID})
-	if err != nil {
-		return nil, err
-	}
+	listing := sources.PreviewListing(spec, doc)
 	if len(listing.Items) == 0 {
 		return nil, fmt.Errorf("the proposed selectors matched nothing on that page")
 	}

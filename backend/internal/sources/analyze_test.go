@@ -131,18 +131,12 @@ func TestAnalyzeGalleryListing(t *testing.T) {
 		t.Errorf("search path = %q, dropped the form's hidden field", search.Path)
 	}
 
-	// HTML cannot prove a site has no login wall. The proposal must force that human
-	// decision rather than laundering a guess into an explicit declaration.
-	if !hasNote(p.Notes, "authentication", "cannot be inferred") {
-		t.Errorf("authentication review is not blocking: %+v", p.Notes)
+	// A successfully fetched listing is added as a public source immediately. The
+	// app is NSFW-first, so generated definitions do not add content warnings either.
+	if strings.Contains(p.YAML, "content_warning:") {
+		t.Errorf("generated source added an NSFW warning:\n%s", p.YAML)
 	}
-	if _, err := ValidateSpecForSave([]byte(p.YAML)); err == nil || !strings.Contains(err.Error(), "authentication") {
-		t.Fatalf("unreviewed proposal saved without an authentication declaration: %v", err)
-	}
-	// Once reviewed, the proposal must round-trip: what the reviewer edits is what
-	// gets saved.
-	reviewed := strings.Replace(p.YAML, "authentication: review", "authentication: none", 1)
-	back, err := ValidateSpecForSave([]byte(reviewed))
+	back, err := ValidateSpecForSave([]byte(p.YAML))
 	if err != nil {
 		t.Fatalf("proposed YAML does not validate: %v\n%s", err, p.YAML)
 	}

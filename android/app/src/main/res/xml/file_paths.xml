@@ -3,4 +3,6 @@
      itself. Library media is never handed to another app through here. -->
 <paths>
     <cache-path name="updates" path="updates/" />
+    <external-files-path name="downloads" path="Download/" />
+    <files-path name="internal_downloads" path="downloads/" />
 </paths>

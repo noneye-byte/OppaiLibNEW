@@ -377,6 +377,11 @@ private fun rememberRemoteComicReader(repo: Repository, sourceId: String, item: 
 @Composable
 private fun RemoteComicPages(repo: Repository, comic: RemoteComicReader, onToggleChrome: () -> Unit) {
     val loaded = comic.pages
+    LaunchedEffect(loaded, comic.pager.settledPage) {
+        val pages = loaded ?: return@LaunchedEffect
+        val from = comic.pager.settledPage + 1
+        repo.prefetchImages(pages.drop(from).take(4).map(repo::sourceStreamUrl))
+    }
     when {
         comic.error != null -> Box(Modifier.fillMaxSize(), Alignment.Center) {
             Text(comic.error ?: "", color = Color.White)

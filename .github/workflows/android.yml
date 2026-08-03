@@ -19,6 +19,8 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Java
         uses: actions/setup-java@v4
@@ -39,12 +41,45 @@ jobs:
           test -n "$version"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
-      - name: Build debug APK
+      # Required repository secrets:
+      # ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD,
+      # ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD. The keystore must be created once
+      # and retained forever; changing it makes Android updates impossible.
+      - name: Restore release signing key
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          test -n "$KEYSTORE_BASE64" || { echo "ANDROID_KEYSTORE_BASE64 is required for published APKs" >&2; exit 1; }
+          test -n "$KEYSTORE_PASSWORD" || { echo "ANDROID_KEYSTORE_PASSWORD is required for published APKs" >&2; exit 1; }
+          test -n "$KEY_ALIAS" || { echo "ANDROID_KEY_ALIAS is required for published APKs" >&2; exit 1; }
+          test -n "$KEY_PASSWORD" || { echo "ANDROID_KEY_PASSWORD is required for published APKs" >&2; exit 1; }
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/oppailib-release.jks"
+          test -s "$RUNNER_TEMP/oppailib-release.jks"
+
+      - name: Build signed release APK
         working-directory: android
-        run: gradle --no-daemon :app:assembleDebug
+        env:
+          ANDROID_KEYSTORE_FILE: ${{ runner.temp }}/oppailib-release.jks
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_VERSION_NAME: ${{ steps.version.outputs.version }}
+        shell: bash
+        run: |
+          export ANDROID_VERSION_CODE=$((1000000 + $(git rev-list --count HEAD)))
+          gradle --no-daemon :app:assembleRelease
 
       - name: Stage APK
-        run: cp android/app/build/outputs/apk/debug/app-debug.apk oppailib.apk
+        shell: bash
+        run: |
+          cp android/app/build/outputs/apk/release/app-release.apk oppailib.apk
+          apksigner="$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -1)"
+          test -x "$apksigner"
+          "$apksigner" verify --verbose --print-certs oppailib.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4

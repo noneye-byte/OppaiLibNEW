@@ -5,6 +5,8 @@ import android.content.Context
 import net.fourbakers.oppailib.data.Prefs
 import net.fourbakers.oppailib.data.Repository
 import net.fourbakers.oppailib.work.Notifications
+import net.fourbakers.oppailib.work.DownloadQueue
+import net.fourbakers.oppailib.work.DownloadWorker
 import net.fourbakers.oppailib.work.UploadQueue
 import net.fourbakers.oppailib.work.UploadWorker
 
@@ -26,11 +28,14 @@ class OppaiApp : Application() {
         // started by WorkManager into a process with no Activity in it at all.
         val prefs = repository.prefs
         UploadQueue.attach(prefs)
+        DownloadQueue.attach(prefs)
         // Anything recorded as mid-flight belonged to a worker that no longer exists,
         // because the process was killed. It goes back to queued rather than paused:
         // the user did not stop it, and it picks up from the chunks the server has.
         UploadQueue.requeueInterrupted()
+        DownloadQueue.requeueInterrupted()
         if (prefs.token != null && UploadQueue.hasPending()) UploadWorker.start(this)
+        if (DownloadQueue.hasPending()) DownloadWorker.start(this)
     }
 
     companion object {

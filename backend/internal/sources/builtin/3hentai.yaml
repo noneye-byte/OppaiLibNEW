@@ -16,7 +16,6 @@ base_url: https://3hentai.net
 kind: comic
 authentication: none
 auth_note: Public catalogue; OppaiLib does not attempt to bypass access or age gates.
-content_warning: Explicit adult illustrated galleries.
 
 hosts:
   - 3hentai.net

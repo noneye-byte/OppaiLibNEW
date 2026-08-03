@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import java.util.concurrent.TimeUnit
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.Cache
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.RequestBody.Companion.asRequestBody
@@ -38,6 +39,7 @@ class Repository(private val appContext: Context, val prefs: Prefs) {
     val errors = _errors.asSharedFlow()
     private val _libraryChanges = MutableSharedFlow<Unit>(extraBufferCapacity = 4)
     val libraryChanges = _libraryChanges.asSharedFlow()
+    private val httpCache = Cache(File(appContext.cacheDir, "http"), 64L * 1024 * 1024)
 
     @Volatile private var baseUrl: String = normalize(prefs.serverUrl ?: "http://10.0.2.2:8080/")
     @Volatile lateinit var api: ApiService
@@ -194,6 +196,11 @@ class Repository(private val appContext: Context, val prefs: Prefs) {
 
     private fun okHttp(): OkHttpClient =
         OkHttpClient.Builder()
+            // Source definitions/listings and remote page bytes all carry explicit
+            // private cache headers. Mihon keeps source/page data locally; giving the
+            // API client a real disk cache does the same for repeated Browse opens
+            // instead of paying the server round trip again.
+            .cache(httpCache)
             // OkHttp's default read timeout is 10 seconds, which is fine for every call
             // the app makes except the one that matters most: saving a comic from a
             // remote source. That downloads dozens of pages with a politeness delay
@@ -223,6 +230,24 @@ class Repository(private val appContext: Context, val prefs: Prefs) {
                 }
             }
             .build()
+
+    /** Warms the next remote comic pages into Coil's encoded-data cache. Mihon's
+     * reader keeps four pages ahead; matching that window removes the every-few-page
+     * stall without pulling an entire large gallery at once. */
+    suspend fun prefetchImages(urls: List<String>) {
+        for (url in urls.take(PAGE_PREFETCH)) {
+            runCatching {
+                imageLoader.execute(
+                    coil.request.ImageRequest.Builder(appContext)
+                        .data(url)
+                        .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
+                        .diskCachePolicy(coil.request.CachePolicy.ENABLED)
+                        .networkCachePolicy(coil.request.CachePolicy.ENABLED)
+                        .build(),
+                )
+            }
+        }
+    }
 
     /**
      * A bare authenticated client for the game WebView to fetch a build's files with.
@@ -283,6 +308,7 @@ class Repository(private val appContext: Context, val prefs: Prefs) {
         /** The server's own ceiling: it quietly falls back to 50 for anything larger. */
         private const val PAGE_SIZE = 200
         private const val MAX_ITEMS = 2000
+        private const val PAGE_PREFETCH = 4
 
         private fun normalize(url: String): String {
             var u = url.trim()

@@ -51,7 +51,6 @@ func (*Rule34) AccessPolicy() AccessPolicy {
 	return AccessPolicy{
 		Authentication: "optional",
 		AuthNote:       "Public browsing works without credentials; a Rule34 user ID and API key enable the authenticated API.",
-		ContentWarning: "Explicit user-tagged adult images and videos.",
 	}
 }
 func (*Rule34) Hosts() []string {

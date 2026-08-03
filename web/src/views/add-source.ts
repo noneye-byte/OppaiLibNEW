@@ -270,9 +270,9 @@ export class OppaiAddSource extends LitElement {
     `;
   }
 
-  /** A blocking note means the proposal can't work as it stands. Saving is disabled
-      until the user edits the YAML, which clears the block — at that point they have
-      taken responsibility for it, which is the right place for that decision. */
+  /** A structural extraction failure means the generated adapter cannot work as-is.
+      Editing the definition clears the block so an advanced user can supply the
+      missing selector without another fetch. */
   private get blocked(): boolean {
     if (!this.proposal) return true;
     if (this.yaml !== this.proposal.yaml) return false;

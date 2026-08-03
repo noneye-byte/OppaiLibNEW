@@ -3,6 +3,7 @@ package net.fourbakers.oppailib.data
 import okhttp3.MultipartBody
 import okhttp3.RequestBody
 import okhttp3.ResponseBody
+import retrofit2.Response
 import retrofit2.http.Body
 import retrofit2.http.DELETE
 import retrofit2.http.GET
@@ -74,6 +75,14 @@ interface ApiService {
     @Streaming
     @GET("api/media/{id}/stream")
     suspend fun streamMedia(@Path("id") id: Long): ResponseBody
+
+    /** Range-capable form used by the persistent download worker. */
+    @Streaming
+    @GET("api/media/{id}/stream")
+    suspend fun streamMediaRange(
+        @Path("id") id: Long,
+        @Header("Range") range: String? = null,
+    ): Response<ResponseBody>
 
     /** The representative still used when a non-image item is shared into chat. */
     @Streaming

@@ -482,7 +482,6 @@ fun BrowseScreen(repo: Repository, openAt: PinnedFeed? = null, onBack: () -> Uni
                     )
                 }
                 source?.let { src ->
-                    SourceAccessNotices(src)
                     ChipRow(
                         options = src.feeds.map { it.id to it.label },
                         selected = boardFeed,
@@ -621,56 +620,6 @@ fun BrowseScreen(repo: Repository, openAt: PinnedFeed? = null, onBack: () -> Uni
                 }
             }
         }
-    }
-}
-
-/** Adapter-declared access and content notices, shown before any remote feed. */
-@Composable
-private fun SourceAccessNotices(source: RemoteSource) {
-    val authText = when (source.authentication) {
-        "required" -> "Authentication is required. OppaiLib will not bypass the site's access controls."
-        "optional" -> "Authentication is optional."
-        "unknown" -> "This older adapter did not declare its authentication requirements."
-        else -> ""
-    }
-    if (authText.isNotEmpty() || !source.authNote.isNullOrBlank()) {
-        Notice(
-            icon = if (source.authentication == "none") Icons.Filled.Public else Icons.Filled.Lock,
-            text = listOf(authText, source.authNote.orEmpty()).filter { it.isNotBlank() }.joinToString(" "),
-            warning = source.authentication == "required" || source.authentication == "unknown",
-        )
-    }
-    source.contentWarning?.takeIf { it.isNotBlank() }?.let {
-        Notice(Icons.Filled.Warning, "Content notice. $it", warning = true)
-    }
-}
-
-@Composable
-private fun Notice(icon: ImageVector, text: String, warning: Boolean) {
-    Row(
-        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .background(
-                if (warning) MaterialTheme.colorScheme.errorContainer
-                else MaterialTheme.colorScheme.surfaceVariant,
-            )
-            .padding(12.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalAlignment = Alignment.Top,
-    ) {
-        Icon(
-            icon,
-            contentDescription = null,
-            tint = if (warning) MaterialTheme.colorScheme.onErrorContainer
-                else MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Text(
-            text,
-            style = MaterialTheme.typography.bodySmall,
-            color = if (warning) MaterialTheme.colorScheme.onErrorContainer
-                else MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.weight(1f),
-        )
     }
 }
 

@@ -90,13 +90,11 @@ func Analyze(doc *goquery.Document, pageURL *url.URL) (*Proposal, error) {
 		Name:      proposeName(doc, host),
 		BaseURL:   pageURL.Scheme + "://" + pageURL.Host,
 		FirstPage: 1,
-		// HTML cannot prove that a login is unnecessary (the fetched page may be a
-		// public teaser), so analysis refuses to guess. Saving requires the reviewer
-		// to replace this with none, optional, or required.
-		Authentication: "review",
-		ContentWarning: "Review this site's content and access policy before enabling it.",
+		// A URL the server just fetched successfully is immediately usable as a public
+		// source. Generic adapters do not collect site credentials; sites that really
+		// need a session belong in a purpose-built adapter that owns that flow.
+		Authentication: "none",
 	}
-	blocking("authentication", "Authentication requirements cannot be inferred safely. Change authentication: review to none, optional, or required before saving; do not use a generated adapter to bypass access controls.")
 
 	// Hosts. The page's own host, plus wherever the thumbnails come from — a CDN on
 	// a different domain is the norm, and omitting it makes every tile in the grid
@@ -158,7 +156,14 @@ func Analyze(doc *goquery.Document, pageURL *url.URL) (*Proposal, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Proposal{Spec: spec, YAML: string(out), Notes: notes}, nil
+	// Parse the generated form once so its regular expressions are compiled for the
+	// in-memory preview too. Previously the dry run accidentally used raw patterns
+	// and therefore treated a whole href as the item id.
+	compiled, err := ParseSpec(out)
+	if err != nil {
+		return nil, err
+	}
+	return &Proposal{Spec: *compiled, YAML: string(out), Notes: notes}, nil
 }
 
 // cardShape is what findCards concluded about a page's repeating items.

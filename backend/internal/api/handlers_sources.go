@@ -65,6 +65,9 @@ func (s *Server) handleListSources(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, info)
 	}
+	// Definitions change only when an admin explicitly adds or removes one. Reopening
+	// Browse should not serialize this local metadata request in front of the feed.
+	w.Header().Set("Cache-Control", "private, max-age=300")
 	writeJSON(w, http.StatusOK, map[string]any{"sources": out})
 }
 

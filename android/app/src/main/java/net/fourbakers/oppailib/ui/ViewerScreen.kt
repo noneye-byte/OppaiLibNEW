@@ -137,6 +137,8 @@ import net.fourbakers.oppailib.data.Repository
 import net.fourbakers.oppailib.util.copyUriToCache
 import net.fourbakers.oppailib.util.mimeOf
 import net.fourbakers.oppailib.data.VideoFit
+import net.fourbakers.oppailib.work.DownloadQueue
+import net.fourbakers.oppailib.work.DownloadWorker
 import java.net.URI
 
 /**
@@ -865,6 +867,13 @@ private fun ComicPages(
     var zoomed by remember(comic.media.id) { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
+    LaunchedEffect(comic.media.id, comic.pages.settledPage, comic.pageCount) {
+        val from = comic.pages.settledPage + 1
+        repo.prefetchImages(
+            (from until minOf(from + 4, comic.pageCount)).map { repo.pageUrl(comic.media.id, it + 1) },
+        )
+    }
+
     fun turn(delta: Int) {
         val target = (comic.pages.currentPage + delta).coerceIn(0, comic.pageCount - 1)
         if (target != comic.pages.currentPage) scope.launch { comic.pages.animateScrollToPage(target) }
@@ -1344,6 +1353,19 @@ private fun Chrome(
                     Icon(Icons.Filled.MoreVert, "More", tint = Color.White)
                 }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    DropdownMenuItem(
+                        text = { Text("Download to device") },
+                        leadingIcon = { Icon(Icons.Filled.Download, contentDescription = null) },
+                        onClick = {
+                            menu = false
+                            if (DownloadQueue.enqueue(media)) {
+                                DownloadWorker.start(context)
+                                Toast.makeText(context, "Added to Downloads", Toast.LENGTH_SHORT).show()
+                            } else {
+                                Toast.makeText(context, "Already in Downloads", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                    )
                     DropdownMenuItem(
                         text = { Text("Edit details") },
                         leadingIcon = { Icon(Icons.Filled.Edit, contentDescription = null) },

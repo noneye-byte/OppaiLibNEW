@@ -207,6 +207,21 @@ func (s *YAMLSource) Browse(ctx context.Context, p BrowseParams) (*Listing, erro
 	if err != nil {
 		return nil, fmt.Errorf("parse %s listing: %w", s.spec.ID, err)
 	}
+	return s.listingFromDocument(doc, page), nil
+}
+
+// PreviewListing applies a proposed adapter to the document analysis already
+// fetched. Add-site used to download the exact same listing twice; reusing the parsed
+// page removes that redundant request and its configured per-host delay.
+func PreviewListing(spec SourceSpec, doc *goquery.Document) *Listing {
+	page := spec.FirstPage
+	if page == 0 {
+		page = 1
+	}
+	return (&YAMLSource{spec: spec}).listingFromDocument(doc, page)
+}
+
+func (s *YAMLSource) listingFromDocument(doc *goquery.Document, page int) *Listing {
 
 	l := s.spec.Listing
 	out := &Listing{}
@@ -249,7 +264,7 @@ func (s *YAMLSource) Browse(ctx context.Context, p BrowseParams) (*Listing, erro
 	if len(out.Items) > 0 {
 		out.Cursor = strconv.Itoa(page + 1)
 	}
-	return out, nil
+	return out
 }
 
 // Pages resolves a gallery's page images from its detail page.

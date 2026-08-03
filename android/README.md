@@ -12,6 +12,7 @@ Requires Android 6.0 (API 23) or newer.
 - Browse, search, sort, favorite, bulk-edit, and manage the library in a Material 3 grid
 - View images, GIFs, comics, games, and streaming video, with metadata and poster editing
 - Upload through a persistent resumable queue that survives navigation and process restarts
+- Download unencrypted device copies through a persistent, resumable foreground queue
 - Import by pasting a URL → preview scraped media → import selected assets
 - Browse configured remote sources, discussions, and paged feeds without importing first
 - Chat with Libby and custom character cards, including library/photo sharing and video calls
@@ -20,7 +21,7 @@ Requires Android 6.0 (API 23) or newer.
 - Admin server diagnostics, storage information, and in-app APK updates
 - Optional biometric lock (`BiometricPrompt`)
 
-Roadmap: encrypted offline download cache and panic/decoy mode.
+Roadmap: encrypted offline reading cache and panic/decoy mode.
 
 ## Get an APK
 
@@ -30,17 +31,19 @@ Roadmap: encrypted offline download cache and panic/decoy mode.
 APK on GitHub's runners. This is the easy path — nothing to install locally.
 
 - **Any push to `main`, or a manual run** (Actions → *Build Android APK* → *Run
-  workflow*) produces a **debug APK**, downloadable from the run's *Artifacts*.
-  It installs on any phone with no setup.
-- **Pushing a tag `vX.Y.Z`** produces a **signed release APK** and attaches it to
-  the GitHub Release, so you can download it straight onto the phone.
+  workflow*) produces the same **persistently signed release APK** used by the
+  Docker image, downloadable from the run's *Artifacts*.
 
-Release signing needs a keystore you create once; the workflow header documents
-the four secrets to add. Tagged releases and Docker images stop with an actionable
+Release signing needs a keystore you create once; the workflow documents the four
+secrets to add. APK and Docker builds stop with an actionable
 error when that key is missing; silently shipping a runner's throwaway debug key
 would make the next in-app update impossible.
 
-> **Debug and release APKs cannot replace each other.** They carry different
+Published builds also derive `versionCode` from the full Git history, so every new
+commit is a higher Android version while both APK workflows assign the same code to
+the same commit.
+
+> **Existing debug and release APKs cannot replace each other.** They carry different
 > signatures, and Android refuses an in-place update across a signature change.
 > Debug keys also differ between hosted runners. Use debug APKs only for testing;
 > uninstall once when moving to the persistently signed server/release build, then

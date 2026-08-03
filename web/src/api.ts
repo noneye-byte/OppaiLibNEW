@@ -1618,7 +1618,10 @@ export const api = {
   apkInfo: () => request<APKInfo>("/api/apk/info"),
 
   // ── remote sources ─────────────────────────────────────────────────────
-  sources: () => request<{ sources: RemoteSource[] }>("/api/sources"),
+  sources: (fresh = false) => request<{ sources: RemoteSource[] }>(
+    "/api/sources",
+    fresh ? { cache: "reload" } : undefined,
+  ),
 
   /** The site's own favicon, fetched by the server.
    *

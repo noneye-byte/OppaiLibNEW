@@ -34,7 +34,6 @@ func (*Hanime) AccessPolicy() AccessPolicy {
 	return AccessPolicy{
 		Authentication: "none",
 		AuthNote:       "Uses Hanime's public guest catalogue and guest playback URLs.",
-		ContentWarning: "Explicit adult animated videos.",
 	}
 }
 func (*Hanime) Hosts() []string {

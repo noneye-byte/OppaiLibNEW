@@ -811,9 +811,9 @@ export class OppaiBrowse extends LitElement {
     return this.sourceId === "4chan";
   }
 
-  private async loadSources() {
+  private async loadSources(fresh = false) {
     try {
-      const { sources } = await api.sources();
+      const { sources } = await api.sources(fresh);
       this.sources = sources;
       // Keep the selection across a reload where possible: this runs again after a
       // site is added or removed, and snapping back to the first source every time
@@ -957,33 +957,6 @@ export class OppaiBrowse extends LitElement {
     `;
   }
 
-  private renderAccessNotices() {
-    const source = this.source;
-    if (!source) return nothing;
-    const auth = source.authentication ?? "unknown";
-    const authText = auth === "required"
-      ? "Authentication is required. OppaiLib will not bypass the site's access controls."
-      : auth === "optional"
-        ? "Authentication is optional."
-        : auth === "unknown"
-          ? "This older adapter did not declare its authentication requirements."
-          : "";
-    return html`
-      ${authText || source.authNote
-        ? html`<div class="source-notice ${auth === "required" || auth === "unknown" ? "auth" : ""}">
-            <span class="material-symbols-rounded" aria-hidden="true">${auth === "none" ? "public" : "lock"}</span>
-            <span><strong>${authText}</strong>${source.authNote ? html` ${source.authNote}` : nothing}</span>
-          </div>`
-        : nothing}
-      ${source.contentWarning
-        ? html`<div class="source-notice warning">
-            <span class="material-symbols-rounded" aria-hidden="true">warning</span>
-            <span><strong>Content notice.</strong> ${source.contentWarning}</span>
-          </div>`
-        : nothing}
-    `;
-  }
-
   /** The current source, if it is one that was added from the UI and so can be
       removed again. A built-in is overridden rather than deleted. */
   private get removableSource(): RemoteSource | undefined {
@@ -1001,7 +974,7 @@ export class OppaiBrowse extends LitElement {
   private onSiteAdded = async (e: Event) => {
     const added = (e as CustomEvent<{ id: string; name: string }>).detail;
     this.addingSite = false;
-    await this.loadSources();
+    await this.loadSources(true);
     if (added?.id) this.pickSource(added.id);
     this.toast = `${added?.name ?? "Site"} added.`;
   };
@@ -1015,7 +988,7 @@ export class OppaiBrowse extends LitElement {
       // The removed source may have been shadowing a built-in of the same id, which
       // comes back on reload — so re-read the list rather than splicing it out here.
       this.sourceId = "";
-      await this.loadSources();
+      await this.loadSources(true);
     } catch (err) {
       this.error = (err as Error).message;
     }
@@ -1114,7 +1087,8 @@ export class OppaiBrowse extends LitElement {
       // another; don't shove its pages into whatever is on screen now.
       if (this.active?.id !== item.id) return;
       this.pages = pages;
-      this.warmPages(0);
+      // Rendering requests page zero at normal priority; warm the four after it.
+      this.warmPages(1);
     } catch (e) {
       if (this.active?.id !== item.id) return;
       this.error = e instanceof Error ? e.message : "Couldn't open that comic";
@@ -1564,7 +1538,6 @@ export class OppaiBrowse extends LitElement {
             </div>
 
             ${this.renderSiteTabs()}
-            ${this.renderAccessNotices()}
 
             ${this.isFourChan
               ? html`<div class="thread-tools">
@@ -1692,7 +1665,9 @@ export class OppaiBrowse extends LitElement {
 }
 
 /** How many pages ahead of the one on screen to warm. See `warmPages`. */
-const PAGE_LOOKAHEAD = 3;
+// Mihon's HTTP reader preloads four pages after the current one. Match that window
+// so ordinary page turns come out of the browser cache.
+const PAGE_LOOKAHEAD = 4;
 
 /** "12 Mar, 21:04" — enough to place a post in the thread without the year. */
 function formatPostTime(unix: number): string {

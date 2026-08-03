@@ -1,6 +1,6 @@
 {
   "name": "oppailib-web",
-  "version": "0.26.1",
+  "version": "0.26.2",
   "private": true,
   "type": "module",
   "description": "OppaiLib Material 3 web UI",

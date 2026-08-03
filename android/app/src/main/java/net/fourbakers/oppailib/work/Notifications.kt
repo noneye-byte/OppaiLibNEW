@@ -103,6 +103,26 @@ object Notifications {
         complete(context, title, text)
     }
 
+    fun downloadProgress(context: Context, name: String, percent: Int, remaining: Int): Notification =
+        base(context)
+            .setContentTitle(if (remaining > 1) "Downloading $remaining files" else "Downloading")
+            .setContentText(name)
+            .setSubText("$percent%")
+            .setOngoing(true)
+            .setProgress(100, percent.coerceIn(0, 100), false)
+            .build()
+
+    fun downloadsFinished(context: Context, downloaded: Int, failed: Int) {
+        val title = when {
+            failed == 0 && downloaded == 1 -> "Download finished"
+            failed == 0 -> "$downloaded downloads finished"
+            downloaded == 0 && failed == 1 -> "Download failed"
+            downloaded == 0 -> "$failed downloads failed"
+            else -> "$downloaded downloaded, $failed failed"
+        }
+        complete(context, title, if (failed > 0) "Open Downloads to retry." else "Tap to open OppaiLib.")
+    }
+
     private fun base(context: Context): NotificationCompat.Builder {
         val open = PendingIntent.getActivity(
             context,

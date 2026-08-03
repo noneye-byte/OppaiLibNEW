@@ -189,6 +189,11 @@ class Prefs(context: Context) {
         // process ending, and apply() is allowed to still be in flight when it does.
         set(v) { sp.edit().putString(KEY_UPLOAD_QUEUE, v).commit() }
 
+    /** Persistent foreground-download queue; see DownloadQueue. */
+    var downloadQueue: String?
+        get() = sp.getString(KEY_DOWNLOAD_QUEUE, null)
+        set(v) { sp.edit().putString(KEY_DOWNLOAD_QUEUE, v).commit() }
+
     /**
      * Whether uploads wait for an unmetered connection.
      *
@@ -217,6 +222,7 @@ class Prefs(context: Context) {
         private const val KEY_LIBBY_OUTFIT = "libby_outfit"
         private const val KEY_LIBBY_PROGRESSION = "libby_progression_multiplier"
         private const val KEY_UPLOAD_QUEUE = "upload_queue"
+        private const val KEY_DOWNLOAD_QUEUE = "download_queue"
         private const val KEY_UPLOAD_WIFI_ONLY = "upload_wifi_only"
         private const val KEY_REAUTH_USER = "reauth_username"
         private const val KEY_REAUTH_PASSWORD = "reauth_password"

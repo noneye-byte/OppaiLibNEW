@@ -8,9 +8,10 @@ Dockerfile `COPY docker/apk/ /app/apk/` needs it to exist, and keeping it in the
 repo means a plain `docker build` works with no Android toolchain — you just get an
 image with no APK, and the download card says so.
 
-CI fills it in: the `apk` job in `.github/workflows/docker-publish.yml` builds the
-app and drops `oppailib.apk` here before the image build, so the client shipped by a
-given image is the one built from that same commit.
+CI fills it in: the `apk` job in `.github/workflows/docker-publish.yml` builds a
+release APK with the repository's persistent signing key and drops `oppailib.apk`
+here before the image build, so the client shipped by a given image is the one built
+from that same commit and can update the prior image's app in place.
 
 To bake in your own build instead — a release APK signed with *your* keystore, which
 can update an installed app in place where an unsigned one can't:

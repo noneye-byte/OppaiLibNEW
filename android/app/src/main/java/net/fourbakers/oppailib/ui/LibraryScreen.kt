@@ -117,6 +117,8 @@ import net.fourbakers.oppailib.data.PinnedFeed
 import net.fourbakers.oppailib.data.Repository
 import net.fourbakers.oppailib.data.SortMode
 import net.fourbakers.oppailib.work.ImportWorker
+import net.fourbakers.oppailib.work.DownloadQueue
+import net.fourbakers.oppailib.work.DownloadWorker
 import net.fourbakers.oppailib.work.UploadQueue
 import net.fourbakers.oppailib.work.UploadWorker
 
@@ -193,7 +195,7 @@ fun LibraryScreen(repo: Repository, onLogout: () -> Unit) {
     var chatShare by remember { mutableStateOf<Media?>(null) }
     var holdMedia by remember { mutableStateOf<Media?>(null) }
     var confirmExport by remember { mutableStateOf<Media?>(null) }
-    var exporting by remember { mutableStateOf<Media?>(null) }
+    var showDownloads by remember { mutableStateOf(false) }
     var showImageGen by remember { mutableStateOf(false) }
     var showUploads by remember { mutableStateOf(false) }
     // Which pinned feed to open the browser on; null means the browser's own default.
@@ -214,29 +216,6 @@ fun LibraryScreen(repo: Repository, onLogout: () -> Unit) {
     val drawer = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
-
-    val exportLauncher = rememberSystemPickerLauncher(
-        ActivityResultContracts.CreateDocument("*/*"),
-    ) { uri ->
-        val media = exporting
-        exporting = null
-        if (uri == null || media == null) return@rememberSystemPickerLauncher
-        scope.launch {
-            runCatching {
-                withContext(Dispatchers.IO) {
-                    repo.api.streamMedia(media.id).use { body ->
-                        context.contentResolver.openOutputStream(uri, "w")!!.use { output ->
-                            body.byteStream().use { input -> input.copyTo(output) }
-                        }
-                    }
-                }
-            }.onSuccess {
-                Toast.makeText(context, "Saved ${exportName(media)} to this device", Toast.LENGTH_LONG).show()
-            }.onFailure {
-                Toast.makeText(context, it.message ?: "Couldn't save the file", Toast.LENGTH_LONG).show()
-            }
-        }
-    }
 
     fun refresh() {
         loading = true
@@ -411,6 +390,11 @@ fun LibraryScreen(repo: Repository, onLogout: () -> Unit) {
         return
     }
 
+    if (showDownloads) {
+        DownloadsScreen(onBack = { showDownloads = false })
+        return
+    }
+
     if (showBrowse) {
         // Coming back from a browse may have saved new items, so reload rather than
         // showing a library that's silently missing what was just added. Pins may have
@@ -510,9 +494,13 @@ fun LibraryScreen(repo: Repository, onLogout: () -> Unit) {
             confirmButton = {
                 TextButton(onClick = {
                     confirmExport = null
-                    exporting = target
-                    exportLauncher.launch(exportName(target))
-                }) { Text("Save unencrypted copy") }
+                    if (DownloadQueue.enqueue(target)) {
+                        DownloadWorker.start(context)
+                        showDownloads = true
+                    } else {
+                        Toast.makeText(context, "Already in Downloads", Toast.LENGTH_SHORT).show()
+                    }
+                }) { Text("Download") }
             },
             dismissButton = { TextButton(onClick = { confirmExport = null }) { Text("Cancel") } },
         )
@@ -657,6 +645,17 @@ fun LibraryScreen(repo: Repository, onLogout: () -> Unit) {
                         scope.launch { drawer.close() }
                         browsePin = null
                         showBrowse = true
+                    },
+                    modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding),
+                )
+                NavigationDrawerItem(
+                    icon = { Icon(Icons.Filled.Download, contentDescription = null) },
+                    label = { Text("Downloads") },
+                    selected = false,
+                    onClick = { scope.launch { drawer.close() }; showDownloads = true },
+                    badge = {
+                        val active = DownloadQueue.items.collectAsState().value.count { it.live }
+                        if (active > 0) Badge { Text("$active") }
                     },
                     modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding),
                 )

@@ -62,7 +62,6 @@ func (f *FourChan) Name() string { return "4chan" }
 func (f *FourChan) AccessPolicy() AccessPolicy {
 	return AccessPolicy{
 		Authentication: "none",
-		ContentWarning: "User-posted, unmoderated material varies by board; several listed boards contain explicit adult content.",
 	}
 }
 func (f *FourChan) Feeds() []Feed { return fourChanBoards }
