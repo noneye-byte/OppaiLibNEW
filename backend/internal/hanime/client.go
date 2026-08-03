@@ -30,6 +30,7 @@ const (
 	defaultCSRFURL   = "https://ct.hanime.tv/csrf-token"
 	defaultAuthURL   = "https://auth.hanime.tv/api/v11/handshake"
 	guestCacheTTL    = 15 * time.Minute
+	downloadCacheTTL = 10 * time.Minute
 	maxIndexBytes    = 32 << 20
 )
 
@@ -77,7 +78,12 @@ type Client struct {
 	mu          sync.Mutex
 	index       []Video
 	indexAt     time.Time
-	downloadURL map[string]string
+	downloadURL map[string]cachedDownload
+}
+
+type cachedDownload struct {
+	url string
+	at  time.Time
 }
 
 func New(base *http.Client, opts Options) *Client {
@@ -105,7 +111,7 @@ func New(base *http.Client, opts Options) *Client {
 	}
 	return &Client{
 		http: &hc, origin: origin, searchURL: searchURL, csrfURL: csrfURL, authURL: authURL,
-		downloadURL: make(map[string]string),
+		downloadURL: make(map[string]cachedDownload),
 	}
 }
 
@@ -163,9 +169,9 @@ func (c *Client) Find(ctx context.Context, userAgent, slug string) (*Video, erro
 // DownloadURL returns the best guest-accessible MP4 (normally 720p).
 func (c *Client) DownloadURL(ctx context.Context, userAgent string, video Video) (string, error) {
 	c.mu.Lock()
-	if cached := c.downloadURL[video.Slug]; cached != "" {
+	if cached := c.downloadURL[video.Slug]; cached.url != "" && time.Since(cached.at) < downloadCacheTTL {
 		c.mu.Unlock()
-		return cached, nil
+		return cached.url, nil
 	}
 	c.mu.Unlock()
 
@@ -214,7 +220,7 @@ func (c *Client) DownloadURL(ctx context.Context, userAgent string, video Video)
 	}
 	bestURL = directPixeldrainURL(bestURL)
 	c.mu.Lock()
-	c.downloadURL[video.Slug] = bestURL
+	c.downloadURL[video.Slug] = cachedDownload{url: bestURL, at: time.Now()}
 	c.mu.Unlock()
 	return bestURL, nil
 }

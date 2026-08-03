@@ -25,6 +25,7 @@ import androidx.compose.material.icons.automirrored.filled.Comment
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -52,6 +53,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MimeTypes
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
@@ -108,7 +111,7 @@ fun RemoteViewerScreen(
     val saving = remember { mutableStateMapOf<String, Boolean>() }
     val saved = remember { mutableStateMapOf<String, Boolean>() }
 
-    val player = rememberRemotePlayer(repo, settled)
+    val player = rememberRemotePlayer(repo, sourceId, settled)
     // Hoisted like the player, and for the same reason: its page scrubber lives in the
     // chrome, which is drawn over the feed and so can't reach into a page's own state.
     val comic = rememberRemoteComicReader(repo, sourceId, settled)
@@ -415,6 +418,7 @@ private fun RemoteComicPages(repo: Repository, comic: RemoteComicReader, onToggl
 
 @Composable
 private fun ZoomableRemoteImage(repo: Repository, url: String, contentDescription: String?, onTap: () -> Unit) {
+    var loading by remember(url) { mutableStateOf(true) }
     Box(
         Modifier.fillMaxSize().pointerInput(url) { detectTapGestures { onTap() } },
         Alignment.Center,
@@ -425,8 +429,12 @@ private fun ZoomableRemoteImage(repo: Repository, url: String, contentDescriptio
             imageLoader = repo.imageLoader,
             contentDescription = contentDescription,
             contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+            onLoading = { loading = true },
+            onSuccess = { loading = false },
+            onError = { loading = false },
             modifier = Modifier.fillMaxSize(),
         )
+        if (loading) CircularProgressIndicator(color = Color.White)
     }
 }
 
@@ -436,22 +444,32 @@ private fun ZoomableRemoteImage(repo: Repository, url: String, contentDescriptio
  */
 @androidx.annotation.OptIn(UnstableApi::class)
 @Composable
-private fun rememberRemotePlayer(repo: Repository, item: SourceItem?): ExoPlayer? {
+private fun rememberRemotePlayer(repo: Repository, sourceId: String, item: SourceItem?): ExoPlayer? {
     val context = LocalContext.current
     val prefs = repo.prefs
     val url = item?.takeIf { it.kind == "video" }?.mediaUrl?.takeIf { it.isNotEmpty() }
 
-    val player = remember(url) {
+    val player = remember(sourceId, url) {
         if (url == null) return@remember null
         // The stream goes through our own server, so it needs our bearer token — the
         // origin never sees the phone.
         val http = DefaultHttpDataSource.Factory().apply {
             prefs.token?.let { setDefaultRequestProperties(mapOf("Authorization" to "Bearer $it")) }
+            // Resolving a stable Hanime page URL and opening its remote MP4 can take
+            // longer than Media3's short defaults on a mobile connection.
+            setConnectTimeoutMs(15_000)
+            setReadTimeoutMs(120_000)
         }
+        val mediaItem = MediaItem.Builder()
+            .setUri(repo.sourceStreamUrl(url))
+            // The proxy URL has no extension. Hanime guarantees a guest MP4, so tell
+            // Media3 what it is instead of asking it to infer a container from /stream.
+            .apply { if (sourceId == "hanime") setMimeType(MimeTypes.VIDEO_MP4) }
+            .build()
         ExoPlayer.Builder(context)
             .setMediaSourceFactory(DefaultMediaSourceFactory(http))
             .build().apply {
-                setMediaItem(MediaItem.fromUri(repo.sourceStreamUrl(url)))
+                setMediaItem(mediaItem)
                 repeatMode = if (prefs.videoLoop) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
                 volume = if (prefs.videoMuted) 0f else 1f
                 prepare()
@@ -468,6 +486,25 @@ private fun rememberRemotePlayer(repo: Repository, item: SourceItem?): ExoPlayer
 @androidx.annotation.OptIn(UnstableApi::class)
 @Composable
 private fun RemoteVideo(player: ExoPlayer, onToggleChrome: () -> Unit) {
+    var loading by remember(player) {
+        mutableStateOf(player.playbackState == Player.STATE_IDLE || player.playbackState == Player.STATE_BUFFERING)
+    }
+    var failed by remember(player) { mutableStateOf(false) }
+    DisposableEffect(player) {
+        val listener = object : Player.Listener {
+            override fun onPlaybackStateChanged(state: Int) {
+                loading = state == Player.STATE_IDLE || state == Player.STATE_BUFFERING
+                if (state == Player.STATE_READY) failed = false
+            }
+
+            override fun onPlayerError(error: PlaybackException) {
+                loading = false
+                failed = true
+            }
+        }
+        player.addListener(listener)
+        onDispose { player.removeListener(listener) }
+    }
     Box(Modifier.fillMaxSize().pointerInput(player) { detectTapGestures { onToggleChrome() } }) {
         AndroidView(
             factory = { ctx ->
@@ -482,5 +519,20 @@ private fun RemoteVideo(player: ExoPlayer, onToggleChrome: () -> Unit) {
             },
             modifier = Modifier.fillMaxSize(),
         )
+        when {
+            failed -> Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("Couldn't load this video", color = Color.White)
+                Button(
+                    onClick = {
+                        failed = false
+                        loading = true
+                        player.prepare()
+                        player.play()
+                    },
+                    modifier = Modifier.padding(top = 12.dp),
+                ) { Text("Retry") }
+            }
+            loading -> CircularProgressIndicator(color = Color.White, modifier = Modifier.align(Alignment.Center))
+        }
     }
 }

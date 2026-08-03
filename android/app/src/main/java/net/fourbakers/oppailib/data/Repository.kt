@@ -13,6 +13,7 @@ import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.Cache
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
+import okhttp3.Request
 import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
@@ -218,12 +219,17 @@ class Repository(private val appContext: Context, val prefs: Prefs) {
                 prefs.token?.let { req.header("Authorization", "Bearer $it") }
                 try {
                     val response = chain.proceed(req.build())
-                    if (!response.isSuccessful && !response.request.url.encodedPath.endsWith("/api/auth/login")) {
+                    if (!response.isSuccessful && shouldReportFailure(response.request, response.code)) {
                         _errors.tryEmit(MascotSay("The server returned ${response.code}. Please try again."))
                     }
                     response
                 } catch (e: Exception) {
-                    if (!chain.request().url.encodedPath.endsWith("/api/auth/login")) {
+                    // Compose/Coil cancels work whenever a tile leaves the screen or a
+                    // newer browse request replaces it. That is lifecycle bookkeeping,
+                    // not a failed operation, and OkHttp spells it "Canceled". Passive
+                    // media also owns its loading/error UI, so don't turn either case
+                    // into a global mascot warning.
+                    if (!chain.call().isCanceled() && shouldReportFailure(chain.request())) {
                         _errors.tryEmit(MascotSay(e.message ?: "Couldn't reach the server."))
                     }
                     throw e
@@ -309,6 +315,20 @@ class Repository(private val appContext: Context, val prefs: Prefs) {
         private const val PAGE_SIZE = 200
         private const val MAX_ITEMS = 2000
         private const val PAGE_PREFETCH = 4
+
+        /** Requests whose failure is represented by the content that asked for them.
+         * A missing thumbnail or a source item pruned upstream should leave a blank
+         * tile/player, not announce a technical 404 over an otherwise usable screen. */
+        internal fun shouldReportFailure(request: Request, statusCode: Int? = null): Boolean {
+            val path = request.url.encodedPath
+            if (path.endsWith("/api/auth/login")) return false
+            // A 404 can be an expected probe (optional game build, optional Libby art,
+            // pruned source item). Retrofit still delivers it to the screen that made
+            // the request, which can show a contextual message when it matters; the
+            // global reporter has too little context and should stay quiet.
+            if (statusCode == 404) return false
+            return path != "/api/sources/stream"
+        }
 
         private fun normalize(url: String): String {
             var u = url.trim()
