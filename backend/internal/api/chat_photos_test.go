@@ -137,10 +137,10 @@ func TestSheKnowsWhatSheIsWearing(t *testing.T) {
 	libby := defaultLibbyCard()
 
 	calm := s.wardrobeDirective(libby, 1, "")
-	if !strings.Contains(calm, "tank top") || !strings.Contains(calm, "sweatpants") {
+	if !strings.Contains(calm, "tank top") || !strings.Contains(calm, "shorts") {
 		t.Fatalf("tier 1 wardrobe = %q", calm)
 	}
-	if peak := s.wardrobeDirective(libby, 5, ""); !strings.Contains(peak, "nothing at all") {
+	if peak := s.wardrobeDirective(libby, 5, ""); !strings.Contains(peak, "bare") {
 		t.Fatalf("tier 5 wardrobe = %q", peak)
 	}
 	// Every tier the artwork has must describe something; a gap here is a tier where
@@ -177,7 +177,7 @@ func TestAWornOutfitReplacesTheTierWardrobe(t *testing.T) {
 	if !strings.Contains(worn, "Nurse") {
 		t.Fatalf("worn outfit not named: %q", worn)
 	}
-	if strings.Contains(worn, "sweatpants") {
+	if strings.Contains(worn, "sweat shorts") {
 		t.Fatalf("worn outfit still described the default wardrobe: %q", worn)
 	}
 	// An outfit that has been deleted since it was selected falls back to the

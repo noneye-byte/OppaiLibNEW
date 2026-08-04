@@ -66,19 +66,20 @@ export function libbyEmotionSrc(emotion: string): string {
   return `/api/libby/outfits/${encodeURIComponent(outfit)}/emotions/${encodeURIComponent(mood)}`;
 }
 
-const DEFAULT_ART: Record<number, Record<string, string>> = {
-  1: { neutral: "/Libby_New/Calm/neutral.png", happy: "/Libby_New/Calm/happy.png", mischievous: "/Libby_New/Calm/Mischievous.png", surprised: "/Libby_New/Calm/suprised.png", thinking: "/Libby_New/Calm/Thinking.png" },
-  2: { neutral: "/Libby_New/Warm/warm neutral.png", happy: "/Libby_New/Warm/warm happy.png", mischievous: "/Libby_New/Warm/warm Mischievous.png", surprised: "/Libby_New/Warm/warm suprised.png", thinking: "/Libby_New/Warm/warm thinking.png" },
-  3: { neutral: "/Libby_New/flirty/Flirty Neutral.png", happy: "/Libby_New/flirty/Flirty Happy.png", mischievous: "/Libby_New/flirty/Flirty Mis.png", surprised: "/Libby_New/flirty/Flirty Suprised.png", thinking: "/Libby_New/flirty/Flirty Thinking.png" },
-  4: { neutral: "/Libby_New/heated/heated Neutral.png", happy: "/Libby_New/heated/heated Happy.png", mischievous: "/Libby_New/heated/heated mis.png", surprised: "/Libby_New/heated/heated suprised.png", thinking: "/Libby_New/heated/heated thinking.png" },
-  5: { neutral: "/Libby_New/Peak/Peak Neutral.png", happy: "/Libby_New/Peak/Peak Happy.png", mischievous: "/Libby_New/Peak/Peak Mis.png", surprised: "/Libby_New/Peak/Peak Suprise.png", thinking: "/Libby_New/Peak/Peak Thinking.png" },
-};
+/** The bundled wardrobe's horniness tiers, in the file names, indexed by intensity 1..5. */
+const DEFAULT_TIERS = ["calm", "warm", "flirty", "heated", "peak"] as const;
 
-/** The bundled wardrobe has every *drawn* pose at every intensity tier; a finer mood
-    borrows the pose it is closest to. See DRAWN_POSE. */
+/**
+ * The bundled wardrobe: every emotion drawn at every intensity tier, so nothing
+ * here needs a fallback and no mood has to borrow another's face.
+ *
+ * The art is a full export from the outfit generator rather than hand-named files —
+ * see /Libby_Default/outfit-manifest.json, which is what the set was exported with
+ * and describes the loadout it draws.
+ */
 export function defaultLibbyArt(emotion: string, intensity = 1): string {
-  const pose = DRAWN_POSE[normalizeEmotion(emotion)];
-  return DEFAULT_ART[normalizeIntensity(intensity)][pose] ?? DEFAULT_ART[1].neutral;
+  const tier = DEFAULT_TIERS[normalizeIntensity(intensity) - 1];
+  return `/Libby_Default/default-libby-${tier}-${normalizeEmotion(emotion)}.png`;
 }
 
 /**
@@ -88,11 +89,9 @@ export function defaultLibbyArt(emotion: string, intensity = 1): string {
  * have. The sign-in page and the pop-up she speaks through are ambient: they
  * appear over whatever you were doing, unasked, on a screen that may well have
  * someone else in the room. So the heated (4) and peak (5) artwork never shows
- * there, whatever the meter says in Chat.
- *
- * It also happens to be what keeps her portrait framed. The clothed tiers are all
- * tall, narrow, standing poses; the top two include wide seated ones drawn to a
- * different crop, and a portrait window sized for one is wrong for the other.
+ * there, whatever the meter says in Chat. The bundled art keeps her dressed right
+ * up to heated and only undresses at peak, but the rule is about where a picture
+ * appears rather than about how much of it is bare, so the cap stays where it is.
  */
 export const AMBIENT_MAX_INTENSITY = 3;
 
@@ -101,13 +100,12 @@ export function ambientIntensity(value?: number): number {
 }
 
 /**
- * Everything Libby can feel.
+ * Everything Libby can feel. The bundled wardrobe draws every one of them at every
+ * horniness tier, so each mood has a face of its own: she can look shy rather than
+ * merely surprised, and an outfit can draw that shyness too.
  *
- * The first five are *drawn*: the bundled wardrobe has one image of each at every
- * horniness tier. The rest are finer moods with no art of their own — each renders as
- * the drawn pose it is closest to (DRAWN_POSE below) until an outfit supplies a
- * picture for it, which is the whole point of them: the character can say she feels
- * shy rather than merely surprised, and a wardrobe can draw that shyness.
+ * The first five lead deliberately — they are the moods every outfit should cover,
+ * and the outfit editor lays its slots out in this order.
  *
  * Kept in step with the server's libbyEmotions (handlers_libby.go), which decides
  * which slots an outfit may store art in and which moods a reply may declare.
@@ -119,11 +117,16 @@ export const LIBBY_EMOTIONS = [
 
 export type LibbyEmotion = (typeof LIBBY_EMOTIONS)[number];
 
-/** The five the bundled art actually draws. An outfit slot grid puts these first. */
-export const DRAWN_EMOTIONS = LIBBY_EMOTIONS.slice(0, 5) as readonly LibbyEmotion[];
-
-/** Which bundled pose stands in for each emotion. Mirrors libbyDrawnPose server-side. */
-const DRAWN_POSE: Record<LibbyEmotion, string> = {
+/**
+ * Which emotion each one is closest to, for *outfits* only.
+ *
+ * The bundled art needs no such table any more, but a user's outfit may well cover
+ * only the first few moods. Falling from its "shy" to its own "surprised" keeps her
+ * in the costume the user chose, which beats dropping straight to the default art.
+ *
+ * Mirrors libbyNearestPose server-side and nearestPose in LibbyPortrait.kt.
+ */
+const NEAREST_POSE: Record<LibbyEmotion, string> = {
   neutral: "neutral", happy: "happy", mischievous: "mischievous",
   surprised: "surprised", thinking: "thinking",
   shy: "surprised", smug: "mischievous", sad: "thinking", annoyed: "thinking",
@@ -177,17 +180,17 @@ export function libbyAssetCandidates(emotion?: string, intensity?: number, outfi
     // where level = intensity-1). Try the tier for this intensity and every calmer
     // one down to the baseline, so a tier the user never drew shows a cooler pose.
     //
-    // The fine emotion is tried first and the drawn pose it borrows second, so an
-    // outfit that has "surprised" but not "shy" shows *its own* surprised art rather
-    // than dropping to the bundled wardrobe. Skipping that step would mean adding a
+    // The exact emotion is tried first and its nearest kin second, so an outfit that
+    // has "surprised" but not "shy" shows *its own* surprised art rather than
+    // dropping to the bundled wardrobe. Skipping that step would mean adding a
     // finer emotion silently undressed every existing outfit whenever she felt it.
-    for (const slot of [...new Set([mood, DRAWN_POSE[mood]])]) {
+    for (const slot of [...new Set([mood, NEAREST_POSE[mood]])]) {
       const outfitBase = `/api/libby/outfits/${encodeURIComponent(outfit)}/emotions/${encodeURIComponent(slot)}`;
       for (let tier = level - 1; tier >= 1; tier--) paths.push(`${outfitBase}?level=${tier}`);
       paths.push(outfitBase); // level 0, the suffix-free baseline
     }
   }
-  // The bundled wardrobe is complete — every drawn pose at every tier — so the last
+  // The bundled wardrobe is complete — every emotion at every tier — so the last
   // two entries are the end of the chain. There is deliberately no third fallback:
   // the pre-pixel mascot art it used to land on is gone, and a chain that ends on a
   // file which is not in the build is a broken image, not a safety net.

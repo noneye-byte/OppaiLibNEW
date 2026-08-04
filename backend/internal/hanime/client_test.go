@@ -37,9 +37,20 @@ func TestCurrentWebSignatureFormula(t *testing.T) {
 }
 
 func TestDirectPixeldrainURL(t *testing.T) {
-	got := directPixeldrainURL("https://pixeldrain.com/d/ATF3Kqhs")
-	if got != "https://pixeldrain.com/api/filesystem/ATF3Kqhs" {
-		t.Fatalf("direct URL = %q", got)
+	for _, tc := range []struct{ raw, want string }{
+		{"https://pixeldrain.com/d/ATF3Kqhs", "https://pixeldrain.com/api/filesystem/ATF3Kqhs"},
+		// The single-file shape, which a good share of the catalogue uses. Left
+		// alone it streamed pixeldrain's HTML viewer page into the player.
+		{"https://pixeldrain.com/u/GKNWRtfK", "https://pixeldrain.com/api/file/GKNWRtfK"},
+		{"https://pixeldrain.net/u/GKNWRtfK?embed", "https://pixeldrain.com/api/file/GKNWRtfK"},
+		// Shapes with no known file endpoint are passed through rather than guessed at.
+		{"https://pixeldrain.com/l/abc123", "https://pixeldrain.com/l/abc123"},
+		{"https://pixeldrain.com/u/", "https://pixeldrain.com/u/"},
+		{"https://cdn.example.com/u/GKNWRtfK.mp4", "https://cdn.example.com/u/GKNWRtfK.mp4"},
+	} {
+		if got := directPixeldrainURL(tc.raw); got != tc.want {
+			t.Errorf("directPixeldrainURL(%q) = %q, want %q", tc.raw, got, tc.want)
+		}
 	}
 }
 

@@ -1,0 +1,535 @@
+{
+  "outfit": "Default Libby",
+  "loadout": {
+    "head": {
+      "color": "",
+      "item": ""
+    },
+    "top": {
+      "color": "Black",
+      "item": "Tank Top"
+    },
+    "bottoms": {
+      "color": "orange",
+      "item": "sweat shorts"
+    },
+    "shoes": {
+      "color": "",
+      "item": ""
+    },
+    "panties": {
+      "color": "Black",
+      "item": "panties"
+    },
+    "bra": {
+      "color": "Orange",
+      "item": "Bra"
+    },
+    "hand1": {
+      "color": "",
+      "item": ""
+    },
+    "hand2": {
+      "color": "",
+      "item": ""
+    },
+    "extra1": {
+      "color": "",
+      "item": ""
+    },
+    "extra2": {
+      "color": "",
+      "item": ""
+    }
+  },
+  "expected": 60,
+  "exported": 60,
+  "generationBackground": "white",
+  "colorsLocked": true,
+  "underwearColor": "black",
+  "pubicHair": false,
+  "backgroundRemoved": true,
+  "cutoutReviewed": true,
+  "images": [
+    {
+      "file": "default-libby-calm-neutral.png",
+      "emotion": "neutral",
+      "emotionLabel": "Neutral",
+      "tier": 0,
+      "tierLabel": "Calm",
+      "index": 0
+    },
+    {
+      "file": "default-libby-calm-happy.png",
+      "emotion": "happy",
+      "emotionLabel": "Happy",
+      "tier": 0,
+      "tierLabel": "Calm",
+      "index": 1
+    },
+    {
+      "file": "default-libby-calm-mischievous.png",
+      "emotion": "mischievous",
+      "emotionLabel": "Mischievous",
+      "tier": 0,
+      "tierLabel": "Calm",
+      "index": 2
+    },
+    {
+      "file": "default-libby-calm-surprised.png",
+      "emotion": "surprised",
+      "emotionLabel": "Surprised",
+      "tier": 0,
+      "tierLabel": "Calm",
+      "index": 3
+    },
+    {
+      "file": "default-libby-calm-thinking.png",
+      "emotion": "thinking",
+      "emotionLabel": "Thinking",
+      "tier": 0,
+      "tierLabel": "Calm",
+      "index": 4
+    },
+    {
+      "file": "default-libby-calm-shy.png",
+      "emotion": "shy",
+      "emotionLabel": "Shy",
+      "tier": 0,
+      "tierLabel": "Calm",
+      "index": 5
+    },
+    {
+      "file": "default-libby-calm-smug.png",
+      "emotion": "smug",
+      "emotionLabel": "Smug",
+      "tier": 0,
+      "tierLabel": "Calm",
+      "index": 6
+    },
+    {
+      "file": "default-libby-calm-sad.png",
+      "emotion": "sad",
+      "emotionLabel": "Sad",
+      "tier": 0,
+      "tierLabel": "Calm",
+      "index": 7
+    },
+    {
+      "file": "default-libby-calm-annoyed.png",
+      "emotion": "annoyed",
+      "emotionLabel": "Annoyed",
+      "tier": 0,
+      "tierLabel": "Calm",
+      "index": 8
+    },
+    {
+      "file": "default-libby-calm-sleepy.png",
+      "emotion": "sleepy",
+      "emotionLabel": "Sleepy",
+      "tier": 0,
+      "tierLabel": "Calm",
+      "index": 9
+    },
+    {
+      "file": "default-libby-calm-loving.png",
+      "emotion": "loving",
+      "emotionLabel": "Loving",
+      "tier": 0,
+      "tierLabel": "Calm",
+      "index": 10
+    },
+    {
+      "file": "default-libby-calm-excited.png",
+      "emotion": "excited",
+      "emotionLabel": "Excited",
+      "tier": 0,
+      "tierLabel": "Calm",
+      "index": 11
+    },
+    {
+      "file": "default-libby-warm-neutral.png",
+      "emotion": "neutral",
+      "emotionLabel": "Neutral",
+      "tier": 1,
+      "tierLabel": "Warm",
+      "index": 12
+    },
+    {
+      "file": "default-libby-warm-happy.png",
+      "emotion": "happy",
+      "emotionLabel": "Happy",
+      "tier": 1,
+      "tierLabel": "Warm",
+      "index": 13
+    },
+    {
+      "file": "default-libby-warm-mischievous.png",
+      "emotion": "mischievous",
+      "emotionLabel": "Mischievous",
+      "tier": 1,
+      "tierLabel": "Warm",
+      "index": 14
+    },
+    {
+      "file": "default-libby-warm-surprised.png",
+      "emotion": "surprised",
+      "emotionLabel": "Surprised",
+      "tier": 1,
+      "tierLabel": "Warm",
+      "index": 15
+    },
+    {
+      "file": "default-libby-warm-thinking.png",
+      "emotion": "thinking",
+      "emotionLabel": "Thinking",
+      "tier": 1,
+      "tierLabel": "Warm",
+      "index": 16
+    },
+    {
+      "file": "default-libby-warm-shy.png",
+      "emotion": "shy",
+      "emotionLabel": "Shy",
+      "tier": 1,
+      "tierLabel": "Warm",
+      "index": 17
+    },
+    {
+      "file": "default-libby-warm-smug.png",
+      "emotion": "smug",
+      "emotionLabel": "Smug",
+      "tier": 1,
+      "tierLabel": "Warm",
+      "index": 18
+    },
+    {
+      "file": "default-libby-warm-sad.png",
+      "emotion": "sad",
+      "emotionLabel": "Sad",
+      "tier": 1,
+      "tierLabel": "Warm",
+      "index": 19
+    },
+    {
+      "file": "default-libby-warm-annoyed.png",
+      "emotion": "annoyed",
+      "emotionLabel": "Annoyed",
+      "tier": 1,
+      "tierLabel": "Warm",
+      "index": 20
+    },
+    {
+      "file": "default-libby-warm-sleepy.png",
+      "emotion": "sleepy",
+      "emotionLabel": "Sleepy",
+      "tier": 1,
+      "tierLabel": "Warm",
+      "index": 21
+    },
+    {
+      "file": "default-libby-warm-loving.png",
+      "emotion": "loving",
+      "emotionLabel": "Loving",
+      "tier": 1,
+      "tierLabel": "Warm",
+      "index": 22
+    },
+    {
+      "file": "default-libby-warm-excited.png",
+      "emotion": "excited",
+      "emotionLabel": "Excited",
+      "tier": 1,
+      "tierLabel": "Warm",
+      "index": 23
+    },
+    {
+      "file": "default-libby-flirty-neutral.png",
+      "emotion": "neutral",
+      "emotionLabel": "Neutral",
+      "tier": 2,
+      "tierLabel": "Flirty",
+      "index": 24
+    },
+    {
+      "file": "default-libby-flirty-happy.png",
+      "emotion": "happy",
+      "emotionLabel": "Happy",
+      "tier": 2,
+      "tierLabel": "Flirty",
+      "index": 25
+    },
+    {
+      "file": "default-libby-flirty-mischievous.png",
+      "emotion": "mischievous",
+      "emotionLabel": "Mischievous",
+      "tier": 2,
+      "tierLabel": "Flirty",
+      "index": 26
+    },
+    {
+      "file": "default-libby-flirty-surprised.png",
+      "emotion": "surprised",
+      "emotionLabel": "Surprised",
+      "tier": 2,
+      "tierLabel": "Flirty",
+      "index": 27
+    },
+    {
+      "file": "default-libby-flirty-thinking.png",
+      "emotion": "thinking",
+      "emotionLabel": "Thinking",
+      "tier": 2,
+      "tierLabel": "Flirty",
+      "index": 28
+    },
+    {
+      "file": "default-libby-flirty-shy.png",
+      "emotion": "shy",
+      "emotionLabel": "Shy",
+      "tier": 2,
+      "tierLabel": "Flirty",
+      "index": 29
+    },
+    {
+      "file": "default-libby-flirty-smug.png",
+      "emotion": "smug",
+      "emotionLabel": "Smug",
+      "tier": 2,
+      "tierLabel": "Flirty",
+      "index": 30
+    },
+    {
+      "file": "default-libby-flirty-sad.png",
+      "emotion": "sad",
+      "emotionLabel": "Sad",
+      "tier": 2,
+      "tierLabel": "Flirty",
+      "index": 31
+    },
+    {
+      "file": "default-libby-flirty-annoyed.png",
+      "emotion": "annoyed",
+      "emotionLabel": "Annoyed",
+      "tier": 2,
+      "tierLabel": "Flirty",
+      "index": 32
+    },
+    {
+      "file": "default-libby-flirty-sleepy.png",
+      "emotion": "sleepy",
+      "emotionLabel": "Sleepy",
+      "tier": 2,
+      "tierLabel": "Flirty",
+      "index": 33
+    },
+    {
+      "file": "default-libby-flirty-loving.png",
+      "emotion": "loving",
+      "emotionLabel": "Loving",
+      "tier": 2,
+      "tierLabel": "Flirty",
+      "index": 34
+    },
+    {
+      "file": "default-libby-flirty-excited.png",
+      "emotion": "excited",
+      "emotionLabel": "Excited",
+      "tier": 2,
+      "tierLabel": "Flirty",
+      "index": 35
+    },
+    {
+      "file": "default-libby-heated-neutral.png",
+      "emotion": "neutral",
+      "emotionLabel": "Neutral",
+      "tier": 3,
+      "tierLabel": "Heated",
+      "index": 36
+    },
+    {
+      "file": "default-libby-heated-happy.png",
+      "emotion": "happy",
+      "emotionLabel": "Happy",
+      "tier": 3,
+      "tierLabel": "Heated",
+      "index": 37
+    },
+    {
+      "file": "default-libby-heated-mischievous.png",
+      "emotion": "mischievous",
+      "emotionLabel": "Mischievous",
+      "tier": 3,
+      "tierLabel": "Heated",
+      "index": 38
+    },
+    {
+      "file": "default-libby-heated-surprised.png",
+      "emotion": "surprised",
+      "emotionLabel": "Surprised",
+      "tier": 3,
+      "tierLabel": "Heated",
+      "index": 39
+    },
+    {
+      "file": "default-libby-heated-thinking.png",
+      "emotion": "thinking",
+      "emotionLabel": "Thinking",
+      "tier": 3,
+      "tierLabel": "Heated",
+      "index": 40
+    },
+    {
+      "file": "default-libby-heated-shy.png",
+      "emotion": "shy",
+      "emotionLabel": "Shy",
+      "tier": 3,
+      "tierLabel": "Heated",
+      "index": 41
+    },
+    {
+      "file": "default-libby-heated-smug.png",
+      "emotion": "smug",
+      "emotionLabel": "Smug",
+      "tier": 3,
+      "tierLabel": "Heated",
+      "index": 42
+    },
+    {
+      "file": "default-libby-heated-sad.png",
+      "emotion": "sad",
+      "emotionLabel": "Sad",
+      "tier": 3,
+      "tierLabel": "Heated",
+      "index": 43
+    },
+    {
+      "file": "default-libby-heated-annoyed.png",
+      "emotion": "annoyed",
+      "emotionLabel": "Annoyed",
+      "tier": 3,
+      "tierLabel": "Heated",
+      "index": 44
+    },
+    {
+      "file": "default-libby-heated-sleepy.png",
+      "emotion": "sleepy",
+      "emotionLabel": "Sleepy",
+      "tier": 3,
+      "tierLabel": "Heated",
+      "index": 45
+    },
+    {
+      "file": "default-libby-heated-loving.png",
+      "emotion": "loving",
+      "emotionLabel": "Loving",
+      "tier": 3,
+      "tierLabel": "Heated",
+      "index": 46
+    },
+    {
+      "file": "default-libby-heated-excited.png",
+      "emotion": "excited",
+      "emotionLabel": "Excited",
+      "tier": 3,
+      "tierLabel": "Heated",
+      "index": 47
+    },
+    {
+      "file": "default-libby-peak-neutral.png",
+      "emotion": "neutral",
+      "emotionLabel": "Neutral",
+      "tier": 4,
+      "tierLabel": "Peak",
+      "index": 48
+    },
+    {
+      "file": "default-libby-peak-happy.png",
+      "emotion": "happy",
+      "emotionLabel": "Happy",
+      "tier": 4,
+      "tierLabel": "Peak",
+      "index": 49
+    },
+    {
+      "file": "default-libby-peak-mischievous.png",
+      "emotion": "mischievous",
+      "emotionLabel": "Mischievous",
+      "tier": 4,
+      "tierLabel": "Peak",
+      "index": 50
+    },
+    {
+      "file": "default-libby-peak-surprised.png",
+      "emotion": "surprised",
+      "emotionLabel": "Surprised",
+      "tier": 4,
+      "tierLabel": "Peak",
+      "index": 51
+    },
+    {
+      "file": "default-libby-peak-thinking.png",
+      "emotion": "thinking",
+      "emotionLabel": "Thinking",
+      "tier": 4,
+      "tierLabel": "Peak",
+      "index": 52
+    },
+    {
+      "file": "default-libby-peak-shy.png",
+      "emotion": "shy",
+      "emotionLabel": "Shy",
+      "tier": 4,
+      "tierLabel": "Peak",
+      "index": 53
+    },
+    {
+      "file": "default-libby-peak-smug.png",
+      "emotion": "smug",
+      "emotionLabel": "Smug",
+      "tier": 4,
+      "tierLabel": "Peak",
+      "index": 54
+    },
+    {
+      "file": "default-libby-peak-sad.png",
+      "emotion": "sad",
+      "emotionLabel": "Sad",
+      "tier": 4,
+      "tierLabel": "Peak",
+      "index": 55
+    },
+    {
+      "file": "default-libby-peak-annoyed.png",
+      "emotion": "annoyed",
+      "emotionLabel": "Annoyed",
+      "tier": 4,
+      "tierLabel": "Peak",
+      "index": 56
+    },
+    {
+      "file": "default-libby-peak-sleepy.png",
+      "emotion": "sleepy",
+      "emotionLabel": "Sleepy",
+      "tier": 4,
+      "tierLabel": "Peak",
+      "index": 57
+    },
+    {
+      "file": "default-libby-peak-loving.png",
+      "emotion": "loving",
+      "emotionLabel": "Loving",
+      "tier": 4,
+      "tierLabel": "Peak",
+      "index": 58
+    },
+    {
+      "file": "default-libby-peak-excited.png",
+      "emotion": "excited",
+      "emotionLabel": "Excited",
+      "tier": 4,
+      "tierLabel": "Peak",
+      "index": 59
+    }
+  ]
+}

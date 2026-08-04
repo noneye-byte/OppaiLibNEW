@@ -144,11 +144,11 @@ var moodTag = regexp.MustCompile(`(?is)\n*[ \t]*[*_~>\x60]*\[\s*mood\s*[:=-]?\s*
 // drawn. Matching is per word against the whole label, so "happy & excited" and
 // "playfully smug" both land somewhere sensible instead of being discarded.
 //
-// The targets are the full vocabulary, not just the five bundled poses: a label that
-// means "shy" now resolves to shy, and it is the *client* that decides shy has no art
-// of its own and borrows the surprised pose (libbyDrawnPose). Resolving it to
-// "surprised" here instead would throw the distinction away before an outfit that does
-// draw shyness ever got the chance to use it.
+// The targets are the full vocabulary: a label that means "shy" resolves to shy, and
+// it is the *client* that decides what to show if the worn outfit never drew shyness
+// (libbyNearestPose). Resolving it to "surprised" here instead would throw the
+// distinction away before the bundled art — or an outfit that does draw shyness —
+// ever got the chance to use it.
 var moodSynonyms = map[string]string{
 	"neutral": "neutral", "calm": "neutral", "relaxed": "neutral", "content": "neutral",
 	"composed": "neutral", "steady": "neutral", "quiet": "neutral", "casual": "neutral",
@@ -497,22 +497,22 @@ func selfPortraitMatch(photoTags []string, appearance string) []string {
 
 // libbyWardrobe is what she has on at each intensity tier, 1 to 5.
 //
-// This mirrors the bundled artwork exactly — Calm, Warm, flirty, heated, Peak in
-// web/public/Libby_New — and that is the whole point of it existing. The sprite
-// beside the conversation undresses as the meter climbs, and a character who talks
-// about her hoodie while the picture of her shows otherwise breaks the illusion
-// harder than having no description at all. If the art is redrawn, this changes
-// with it.
+// This mirrors the bundled artwork exactly — the calm, warm, flirty, heated and peak
+// tiers in web/public/Libby_Default — and that is the whole point of it existing. The
+// sprite beside the conversation comes undone as the meter climbs, and a character
+// who talks about her hoodie while the picture of her shows otherwise breaks the
+// illusion harder than having no description at all. If the art is redrawn, this
+// changes with it.
 //
 // Kept out of the Appearance card field deliberately: appearance is the constant
 // likeness and is matched against shared photos, whereas this moves every few
 // messages.
 var libbyWardrobe = map[int]string{
-	1: "a black tank top and loose orange sweatpants with a white drawstring, and your glasses",
-	2: "the same black tank top and orange sweatpants, sitting a little closer than you were, warm in the face",
-	3: "just your black bra above the orange sweatpants — the tank top came off a while ago — and your glasses",
-	4: "nothing above the waist, with the orange underwear pushed down off your hips, and your glasses still on",
-	5: "nothing at all but your glasses",
+	1: "a black tank top and orange sweat shorts with white trim and a drawstring, over a black-and-orange bra and panties, and your glasses",
+	2: "the same tank top and orange shorts, sitting a little closer than you were, warm in the face, one bra strap showing at your shoulder",
+	3: "still the tank top and shorts, flushed now, not bothering to fix the strap that keeps slipping",
+	4: "the tank top pulled crooked off one shoulder with the orange bra showing under it, the shorts still on, and your glasses fogging a little",
+	5: "the tank top dragged down under your bare chest and the shorts pushed down past your black panties, and your glasses still on",
 }
 
 // wardrobeDirective tells the character what she currently has on.

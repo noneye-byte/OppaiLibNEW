@@ -28,11 +28,11 @@ fun LibbyPortrait(
     val outfit = repo.prefs.libbyOutfit
     val chain = buildList {
         if (outfit.isNotEmpty()) {
-            // The fine emotion first, then the drawn pose it borrows, so an outfit that
-            // has "surprised" but not "shy" shows *its own* surprised art rather than
+            // The exact emotion first, then its nearest kin, so an outfit that has
+            // "surprised" but not "shy" shows *its own* surprised art rather than
             // dropping to the bundled wardrobe. Without that step, adding a finer
             // emotion would silently undress every existing outfit whenever she felt it.
-            for (slot in listOf(emotion, drawnPose(emotion)).distinct()) {
+            for (slot in listOf(emotion, nearestPose(emotion)).distinct()) {
                 for (level in tier downTo 1) add(repo.libbyEmotionUrl(outfit, slot, level))
                 add(repo.libbyEmotionUrl(outfit, slot, 0))
             }
@@ -45,18 +45,23 @@ fun LibbyPortrait(
 /**
  * Everything Libby can feel, in the order the outfit editor lays its slots out.
  *
- * The first five are drawn by the bundled wardrobe; the rest are finer moods with no
- * art of their own, each borrowing a drawn pose (drawnPose) until an outfit supplies
- * one. Kept in step with the server's libbyEmotions and the web client's
- * LIBBY_EMOTIONS.
+ * The bundled wardrobe draws every one of them at every tier; the first five lead
+ * because they are the moods every outfit should cover. Kept in step with the
+ * server's libbyEmotions and the web client's LIBBY_EMOTIONS.
  */
 val libbyEmotions = listOf(
     "neutral", "happy", "surprised", "thinking", "mischievous",
     "shy", "smug", "sad", "annoyed", "sleepy", "loving", "excited",
 )
 
-/** Which bundled pose stands in for each emotion. Mirrors libbyDrawnPose server-side. */
-fun drawnPose(emotion: String): String = when (emotion.lowercase()) {
+/**
+ * Which emotion each one is closest to, for *outfits* only — the bundled art covers
+ * them all. An outfit that drew "surprised" but not "shy" should show its own
+ * surprised art rather than dropping out of the costume the user chose.
+ *
+ * Mirrors libbyNearestPose server-side and NEAREST_POSE in the web client.
+ */
+fun nearestPose(emotion: String): String = when (emotion.lowercase()) {
     "happy", "mischievous", "surprised", "thinking", "neutral" -> emotion.lowercase()
     "shy" -> "surprised"
     "smug" -> "mischievous"
@@ -68,23 +73,17 @@ fun drawnPose(emotion: String): String = when (emotion.lowercase()) {
     else -> "neutral"
 }
 
-/** The bundled default art (an android_asset filename) for an emotion, used when no
-    worn outfit covers it. Mirrors the web client's defaultLibbyArt(). */
+/** The bundled wardrobe's tier names, as they appear in the file names, for tiers 1..5. */
+private val mascotTiers = listOf("calm", "warm", "flirty", "heated", "peak")
+
+/**
+ * The bundled default art (an android_asset filename) for an emotion, used when no
+ * worn outfit covers it. The assets come straight from web/public (see the app's
+ * gradle sourceSets), so this mirrors the web client's defaultLibbyArt().
+ */
 fun mascotAsset(emotion: String, tier: Int = 1): String {
-    val mood = drawnPose(emotion)
-    return when (tier.coerceIn(1, 5)) {
-        1 -> when (mood) {
-            "happy" -> "Libby_New/Calm/happy.png"
-            "mischievous" -> "Libby_New/Calm/Mischievous.png"
-            "surprised" -> "Libby_New/Calm/suprised.png"
-            "thinking" -> "Libby_New/Calm/Thinking.png"
-            else -> "Libby_New/Calm/neutral.png"
-        }
-        2 -> "Libby_New/Warm/warm ${when (mood) { "mischievous" -> "Mischievous"; "surprised" -> "suprised"; else -> mood }}.png"
-        3 -> "Libby_New/flirty/Flirty ${when (mood) { "mischievous" -> "Mis"; "surprised" -> "Suprised"; else -> mood.replaceFirstChar(Char::uppercase) }}.png"
-        4 -> "Libby_New/heated/heated ${when (mood) { "mischievous" -> "mis"; "neutral" -> "Neutral"; "happy" -> "Happy"; "surprised" -> "suprised"; else -> mood }}.png"
-        else -> "Libby_New/Peak/Peak ${when (mood) { "mischievous" -> "Mis"; "surprised" -> "Suprise"; else -> mood.replaceFirstChar(Char::uppercase) }}.png"
-    }
+    val mood = emotion.lowercase().let { if (it in libbyEmotions) it else nearestPose(it) }
+    return "Libby_Default/default-libby-${mascotTiers[tier.coerceIn(1, 5) - 1]}-$mood.png"
 }
 
 /** Renders the first model, falling through to the next on load error. */

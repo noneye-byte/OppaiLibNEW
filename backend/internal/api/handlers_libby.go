@@ -26,29 +26,25 @@ import (
 
 // libbyEmotions is the emotion vocabulary an outfit can supply art for.
 //
-// The first five are the *drawn* poses: the bundled wardrobe has one of each at every
-// horniness tier, and they are what a client falls back to. The rest are finer moods
-// added later — the bundled art does not distinguish them, so a client renders each
-// one as the drawn pose it is closest to (see libbyDrawnPose, and the clients' own
-// copies of the same table). What they buy is expressiveness at both ends: the
-// character can say it feels shy rather than merely surprised, and an outfit can draw
-// that shyness as its own picture instead of reusing the surprised one.
+// The bundled wardrobe draws all of them at every horniness tier, so each is a face
+// in its own right: the character can say it feels shy rather than merely surprised,
+// and an outfit can draw that shyness as its own picture.
 //
-// Order matters: it is the order the outfit editor lays its slots out in, drawn poses
-// first so the five that every outfit should cover come before the optional extras.
+// Order matters: it is the order the outfit editor lays its slots out in, with the
+// five that every outfit should cover ahead of the optional extras.
 var libbyEmotions = []string{
 	"neutral", "happy", "surprised", "thinking", "mischievous",
 	"shy", "smug", "sad", "annoyed", "sleepy", "loving", "excited",
 }
 
-// libbyDrawnPose maps every emotion onto one of the five poses the bundled wardrobe
-// actually has art for. The drawn five map to themselves.
+// libbyNearestPose maps every emotion onto the one it is closest to, for outfits that
+// cover only some of them. The first five map to themselves.
 //
-// This is the same table the web client (EMOTION_FALLBACK in libby.ts) and the phone
-// (mascotAsset in LibbyPortrait.kt) hold. It lives here too because the server decides
+// This is the same table the web client (NEAREST_POSE in libby.ts) and the phone
+// (nearestPose in LibbyPortrait.kt) hold. It lives here too because the server decides
 // what a mood tag is allowed to mean, and a mood with no route to a picture is a mood
 // that shows as a stuck face.
-var libbyDrawnPose = map[string]string{
+var libbyNearestPose = map[string]string{
 	"neutral": "neutral", "happy": "happy", "surprised": "surprised",
 	"thinking": "thinking", "mischievous": "mischievous",
 

@@ -362,6 +362,14 @@ func decryptEnvelope(token string) ([]byte, error) {
 
 func rawB64(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
 
+// directPixeldrainURL rewrites a pixeldrain share link to the API endpoint that
+// serves the file's bytes, since the share link itself is an HTML viewer page and
+// a <video> element pointed at HTML simply does not play.
+//
+// Hanime hands out both of pixeldrain's share shapes, and they are separate id
+// namespaces rather than aliases: /u/<id> is a single uploaded file and /d/<id> is
+// a filesystem share. Asking the wrong endpoint for an id gets a 404, so each one
+// keeps its own mapping.
 func directPixeldrainURL(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil {
@@ -372,11 +380,20 @@ func directPixeldrainURL(raw string) string {
 		return raw
 	}
 	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
-	if len(parts) == 2 && parts[0] == "d" && parts[1] != "" {
-		u.Scheme, u.Host = "https", "pixeldrain.com"
-		u.Path = path.Join("/api/filesystem", parts[1])
-		u.RawQuery, u.Fragment = "", ""
-		return u.String()
+	if len(parts) != 2 || parts[1] == "" {
+		return raw
 	}
-	return raw
+	var endpoint string
+	switch parts[0] {
+	case "d":
+		endpoint = "/api/filesystem"
+	case "u":
+		endpoint = "/api/file"
+	default:
+		return raw
+	}
+	u.Scheme, u.Host = "https", "pixeldrain.com"
+	u.Path = path.Join(endpoint, parts[1])
+	u.RawQuery, u.Fragment = "", ""
+	return u.String()
 }
