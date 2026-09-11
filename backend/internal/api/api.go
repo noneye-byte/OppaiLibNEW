@@ -109,6 +109,11 @@ type Server struct {
 	// The Discord poll loop, when the connection is on. nil when it is not; replaced
 	// wholesale whenever the settings change. See discord_relay.go.
 	discord *discordRuntime
+
+	// Every title and tag in the library, decrypted once and kept in memory so Libby
+	// can name something from any depth of the collection rather than only from the
+	// newest rows. Built lazily on her first lookup. See chat_library_index.go.
+	library *libraryIndex
 }
 
 const (
@@ -167,6 +172,8 @@ func NewServer(cfg *config.Config, database *db.DB, store *storage.Store, sc *sc
 		embedCache:   newResolveCache[string](itchEmbedTTL),
 		linkCache:    newResolveCache[sharedLink](sharedLinkTTL),
 		iconCache:    newResolveCache[favicon](faviconTTL),
+
+		library: newLibraryIndex(),
 	}
 	// A picture that has just been tagged is the moment to ask whether it is one of
 	// Libby. Registered here rather than inside the tagger because who Libby is, and

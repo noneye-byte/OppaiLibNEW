@@ -80,6 +80,22 @@ type chatRequest struct {
 	// observation is not a reply at all. Optional — the server classifies the turn itself
 	// when this is absent, and ignores a value it has no preset for. See classifyChatTask.
 	Task string `json:"task,omitempty"`
+	// RecentMoods are the emotions her last replies in this conversation displayed,
+	// oldest first. The same bookkeeping as RecentImageIDs and needed for the same
+	// reason: the server holds no per-conversation state, so how long she has been
+	// wearing one face has to arrive with the turn. Without it a stuck expression is
+	// indistinguishable from a fresh one. See chat_mood.go.
+	RecentMoods []string `json:"recentMoods,omitempty"`
+	// Activity is the MISC state she is currently in — typing, curled up reading, or
+	// something a good deal less idle. Client-owned like the mood run and for the same
+	// reason: the state persists across turns and the server holds nothing between
+	// them, so a state set three replies ago has to arrive with this one or it lasts
+	// exactly one message. See libby_activities.go.
+	Activity string `json:"activity,omitempty"`
+	// Call says the user has her on the call screen rather than in the message log.
+	// Client-owned, because opening a call is a thing that happens on a device and the
+	// server never hears about it otherwise. See chat_call.go.
+	Call bool `json:"call,omitempty"`
 	// Options is a future-proof pass-through for text-generation-webui's full
 	// ChatCompletionRequest surface (samplers, presets, character fields,
 	// templates, grammar, thinking controls, stop strings, and new additions).
@@ -714,6 +730,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	} else if in.Intensity > 5 {
 		in.Intensity = 5
 	}
+	// The MISC state she arrives in, held to the same floor entering it had to clear.
+	// Gating on the way in as well as the way out is what makes a scene that has cooled
+	// off let go of the state it was in, rather than carrying it into the next hour.
+	// See libby_activities.go.
+	in.Activity = allowedActivity(in.Activity, in.Intensity)
 	// Checked here rather than beside the per-message validation further down, because
 	// prompt building below reads the latest message (feelingsPromptBlock), and a request
 	// with no messages at all would index off the end of the slice before ever reaching
@@ -784,7 +805,12 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	if weight <= 0 {
 		weight = 1
 	}
-	modePrompt += fmt.Sprintf("\nTreat the character-card prompt strength as %.2f. Your current displayed emotion is %s at intensity %d of 5; let that subtly color your wording without announcing the setting.", weight, emotion, in.Intensity)
+	// Where she *was*, not where she is. The wording matters: told this is her current
+	// emotion and to let it colour the reply, a model reproduces it, which is half of why
+	// her expression used to sit still for an entire evening. It is continuity — she does
+	// not restart from neutral every turn — and the movement directive in the tail is what
+	// says it is a starting point rather than an instruction. See chat_mood.go.
+	modePrompt += fmt.Sprintf("\nTreat the character-card prompt strength as %.2f. You came into this turn looking %s at intensity %d of 5; that is where the last one left you, not a setting to hold. Carry it in, then feel what you actually feel now, and never announce either.", weight, emotion, in.Intensity)
 	modePrompt += s.wardrobeDirective(character, in.Intensity, in.Outfit)
 	// Kinks are the field most likely to be recited. Left unqualified a model reads a
 	// list of turn-ons as a topic list and works through it; what is wanted is a
@@ -855,6 +881,10 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// something up and saying "look at this", so any character they chose to do it
 	// with gets to see it. It is scoped to that screen, not to the whole collection.
 	viewing := s.viewingDirective(r.Context(), in.Viewing, in.Mode, in.Intensity, character.ID == "libby")
+	// Being on camera is the same kind of fact as browsing together and is handled the
+	// same way: core, present only when it is true, and the frame the whole reply is
+	// written inside. See chat_call.go.
+	modePrompt += callPromptBlock(in.Call)
 	// Part of the core, not a shed-able section: when the user has opened something and asked
 	// her to look at it with them, this *is* the turn's subject. A reply told to react to what
 	// is on screen, with the screen removed to save tokens, is worse than no reply — and on a
@@ -906,6 +936,16 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		// not tidying. Without it she simply never thinks aloud, which costs a feature.
 		// See chat_thoughts.go.
 		add("that she can think without speaking", rankThoughts, "\n\n"+thoughtDirective)
+		// What she is doing, as opposed to what she is feeling. Libby-only: the MISC art
+		// slots are hers, and telling an imported character it has a wardrobe of states it
+		// has no pictures for would be describing somebody else's body to them.
+		//
+		// Shed-able, and the third piece of protocol to be so, for the reason the thought
+		// directive is: at full heat the vocabulary is two dozen states with a description
+		// each, and putting that in the core would push her past a small window outright.
+		// Without it she simply stops changing states, which costs a feature rather than
+		// the character. See libby_activities.go.
+		add("what she is doing", rankActivity, "\n\n"+activityDirective(in.Intensity))
 		// Learning is Libby's alone, like the library snapshot and actions: she is the
 		// one who lives here, so she is the one who remembers the person she lives with.
 		tail.WriteString("\n\n" + memoryDirective)
@@ -923,6 +963,18 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		tail.WriteString(feelingsPromptBlock(latestUser))
 	}
 	tail.WriteString("\n\n" + moodDirective)
+	// How a feeling moves over a conversation, and whether this one has stopped moving.
+	// Beside the tag rather than with the rest of her temperament in chat_feelings.go,
+	// because it is about the tag: it decides what she writes into it. Everyone gets it —
+	// an imported card's expression gets stuck for exactly the same reasons hers did, and
+	// unlike a temperament this asserts nothing about who the character is.
+	// See chat_mood.go.
+	tail.WriteString(moodPromptBlock(in.RecentMoods, emotion))
+	// That she *is* in a state carries on being true whether or not the vocabulary for
+	// changing it survived the budget, and it is one sentence. See libby_activities.go.
+	if character.ID == "libby" {
+		tail.WriteString(activityStateDirective(in.Activity))
+	}
 	// Last, so it is the final word on every tag described above it.
 	tail.WriteString("\n\n" + silenceDirective)
 	if len(in.PhotoTags) > 0 {
@@ -1033,6 +1085,14 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// What the character says it feels wins over what keywords suggest it feels: the
 	// heuristic only exists for models that drop the tag.
 	reply, declared, declaredLevel, selfDeclared := splitMood(reply)
+	// What she is doing, read off the end the same way. Tried before the photo retry
+	// below because all three tags are anchored to the end and models emit them in
+	// whatever order they please — whichever is outermost is simply parsed first.
+	// See libby_activities.go.
+	declaredActivity, activityDeclared := "", false
+	if character.ID == "libby" {
+		reply, declaredActivity, activityDeclared = splitActivity(reply)
+	}
 	if !photoAsked {
 		reply, photoRequest, photoAsked = splitPhotoRequest(reply)
 	}
@@ -1052,6 +1112,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 	if !photoAsked {
 		photoRequest, photoAsked = findLoosePhotoRequest(reply)
+	}
+	if character.ID == "libby" && !activityDeclared {
+		declaredActivity, activityDeclared = findLooseActivity(reply)
 	}
 	// An endearment she settled on, read before scrubbing deletes the tag. Persisted into
 	// her bond below, once the turn's final mood and intensity are known.
@@ -1122,11 +1185,28 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			in.Intensity = declaredLevel
 		}
 	} else {
-		emotion = inferChatEmotion(in.Messages[len(in.Messages)-1].Content, reply, emotion)
+		emotion = inferChatEmotion(in.Messages[len(in.Messages)-1].Content, reply, emotion, moodRunLength(in.RecentMoods, emotion))
 		if (in.Mode == "playful" || in.Mode == "bold" || in.Mode == "roleplay" || in.Mode == "horny") &&
 			strings.Contains(strings.ToLower(in.Messages[len(in.Messages)-1].Content), "flirt") && in.Intensity < 5 {
 			in.Intensity++
 		}
+	}
+	// The state she is in leaving this turn. Settled here rather than where the tag was
+	// read because the gate is on the turn's *final* intensity, which a declared mood
+	// level may have just moved. An unstated state carries over; a stated one that the
+	// heat does not support quietly does not take.
+	activity := in.Activity
+	if activityDeclared {
+		switch {
+		case declaredActivity == "":
+			// [doing: none]. A deliberate stop, and the only thing that empties the state.
+			activity = ""
+		case allowedActivity(declaredActivity, in.Intensity) != "":
+			activity = declaredActivity
+		}
+		// The remaining case is a state the heat does not support. It is refused rather
+		// than obeyed — but refusing a *change* must not also undo what she was already
+		// doing, or a model reaching too far would leave her standing in a blank room.
 	}
 	// Where this turn left off, so the next conversation can open to it rather than cold.
 	// Written now that the turn's final mood and intensity are settled; Libby's alone, and
@@ -1234,8 +1314,13 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		"message":   reply,
 		"emotion":   emotion,
 		"intensity": in.Intensity,
-		"imageId":   imageID,
-		"links":     links,
+		// What she is doing, which persists until she changes it: the client stores it
+		// on the conversation and sends it back with the next turn. Empty means nothing
+		// in particular, which is also what a refused state resolves to.
+		// See libby_activities.go.
+		"activity": activity,
+		"imageId":  imageID,
+		"links":    links,
 		// Library items she put in front of them: something she decided to show, or a
 		// picture of her that lives in the library rather than in her chat gallery. Drawn
 		// as the picture itself where the kind allows and as an openable card otherwise.
@@ -1269,24 +1354,6 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		// happen invisibly. See chat_budget.go.
 		"context": budget,
 	})
-}
-
-func inferChatEmotion(user, reply, current string) string {
-	text := strings.ToLower(user + " " + reply)
-	switch {
-	case strings.Contains(text, "?") || strings.Contains(text, "wonder") || strings.Contains(text, "think"):
-		return "thinking"
-	case strings.Contains(text, "!") || strings.Contains(text, "wow") || strings.Contains(text, "oh my"):
-		return "surprised"
-	case strings.Contains(text, "tease") || strings.Contains(text, "flirt") || strings.Contains(text, "sexy") || strings.Contains(text, "kiss"):
-		return "mischievous"
-	case strings.Contains(text, "thank") || strings.Contains(text, "glad") || strings.Contains(text, "happy") || strings.Contains(text, "love"):
-		return "happy"
-	case supportedLibbyEmotions[current]:
-		return current
-	default:
-		return "neutral"
-	}
 }
 
 func truncateChatError(body []byte) string {

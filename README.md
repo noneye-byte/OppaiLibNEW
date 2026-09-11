@@ -38,10 +38,13 @@ container on Unraid, with a companion Android app.
 - **Libby, your library's companion:** a built-in adult AI chat character who knows
   your collection — she can recommend and open items, react to what's on your screen
   while you **browse together**, comment on a video as you watch it, send pictures of
-  herself, and shift expression and mood as you talk. She can also offer to import a
-  URL, tag or favorite an item, or generate a picture; every proposed action is shown
-  on a card and waits for you to press **Allow**. Custom character cards (SillyTavern
-  V2 / PNG) and custom outfits are supported. Talks to any local OpenAI-compatible
+  herself, and shift expression and mood as you talk. She names things from anywhere in
+  the collection, not just the last few imports. Put her on **video** and she knows she
+  is on camera; she also puts herself into **Misc states** — typing, curled up reading,
+  and a good deal less idle — which an outfit can draw its own art for. She can offer to
+  import a URL, tag or favorite an item, or generate a picture; every proposed action is
+  shown on a card and waits for you to press **Allow**. Custom character cards
+  (SillyTavern V2 / PNG) and custom outfits are supported. Talks to any local OpenAI-compatible
   LLM you point it at; nothing leaves the box. Works on web and Android.
 - **Local image generation:** optional bridge to a self-hosted image generator
   (auto-detects InvokeAI), with a Civitai model browser, character prompts, and a

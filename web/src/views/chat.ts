@@ -12,7 +12,7 @@ import { iconStyles, motionStyles } from "../theme.js";
 import { formatBytes } from "../media-meta.js";
 import { markArrival } from "../motion.js";
 import {
-  AMBIENT_MAX_INTENSITY, applyImageFallback, libbyAssetCandidates, libbyHidden, loadLibbyOutfit,
+  activityLabel, AMBIENT_MAX_INTENSITY, applyImageFallback, libbyAssetCandidates, libbyHidden, loadLibbyOutfit,
   EMOTION_LABELS, LIBBY_EMOTIONS, normalizeEmotion, normalizeIntensity, type LibbyEmotion,
 } from "../libby.js";
 import { applyProgression, getIntensity, setIntensity } from "../libby-meter.js";
@@ -22,7 +22,7 @@ import { SHARE_EVENT, takePendingShare } from "../chat-share.js";
 import { libbyMotion } from "../libby-motion.js";
 import { profileUpdates } from "../ui-metrics.js";
 import {
-  ActionApprovals, actionCardStyles, attachmentStyles, linkChipStyles, recentlyAttached, recentlySent,
+  ActionApprovals, actionCardStyles, attachmentStyles, linkChipStyles, recentlyAttached, recentMoods, recentlySent,
   renderActionCards, renderAttachments, renderLinkChips, requestOpenMedia,
 } from "../chat-links.js";
 
@@ -577,6 +577,11 @@ export class OppaiChat extends LitElement {
     .stage-art.empty-art { place-items:center; gap:8px; align-content:center; padding:16px; text-align:center;
       color:var(--muted); font-size:12px; }
     .stage-art.empty-art .material-symbols-rounded { font-size:44px; opacity:.5; }
+    /* The MISC state under the portrait. It earns its place even when the worn
+       wardrobe has no picture for the state: the art then falls back to her expression,
+       and this is the only thing on screen saying what she is actually doing. */
+    .stage-doing { margin:0 auto; padding:3px 11px; border-radius:999px; background:var(--input);
+      font-size:11px; font-weight:650; letter-spacing:.02em; opacity:.85; }
     .stage-meter { display:flex; gap:4px; justify-content:center; padding:8px 0 12px; }
     .stage-meter .pip { width:20px; height:4px; border-radius:2px; background:var(--input); transition:background .28s ease; }
     .stage-meter .pip.on { background:var(--accent); }
@@ -744,6 +749,10 @@ export class OppaiChat extends LitElement {
     .call-mood { margin-left:auto; display:flex; align-items:center; gap:7px; padding:5px 11px; border-radius:999px;
       background:rgba(0,0,0,.42); font-size:12px; font-weight:650; text-transform:capitalize; }
     .call-mood .material-symbols-rounded { font-size:16px; }
+    /* What she is doing, beside what she is feeling. Set apart by a rule rather than a
+       second pill: the two belong to one reading of her, and stacking chips in a call
+       header is how a video call starts looking like a dashboard. */
+    .call-doing { padding-left:7px; border-left:1px solid rgba(255,255,255,.22); opacity:.85; font-weight:600; }
     .call-pips { display:inline-flex; gap:3px; }
     .call-pips i { width:5px; height:5px; border-radius:50%; background:rgba(255,255,255,.32); }
     .call-pips i.on { background:var(--accent); }
@@ -1581,6 +1590,16 @@ export class OppaiChat extends LitElement {
         conversationId: conversation.id,
         photoTags, photoImageId: photoImageID, recentImageIds: recentlySent(conversation.messages),
         recentMediaIds: recentlyAttached(conversation.messages),
+        // How long she has been wearing one expression. The server has no memory
+        // between turns, so a mood stuck for a dozen replies is indistinguishable
+        // from a fresh one unless the log says otherwise.
+        recentMoods: recentMoods(conversation.messages),
+        // What she is already doing. The server keeps nothing between turns, so a
+        // state set three replies ago only survives because this says so.
+        activity: conversation.activity || undefined,
+        // That they have her on screen rather than in a transcript. Opening a call is
+        // a thing that happens on this device and the server never hears about it.
+        call: this.callOpen || undefined,
         outfit: character.id === "libby" ? loadLibbyOutfit() : "",
         // The address only. What she is told about the page is the server's own
         // summary of what it already fetched for the preview — a turn never causes a
@@ -1603,6 +1622,10 @@ export class OppaiChat extends LitElement {
       const live = this.liveConversation(conversationID);
       if (!live) return false;
       live.emotion = normalizeEmotion(result.emotion ?? live.emotion);
+      // An older server sends no activity field at all, which has to read as "leave it
+      // alone" rather than "she stopped" — the empty string is a real answer here, and
+      // means she is doing nothing in particular.
+      if (result.activity !== undefined) live.activity = result.activity;
       const requested = normalizeIntensity(result.intensity ?? live.intensity);
       if (result.declared) {
         // The character named this mood, so it lands where it asked. Running it
@@ -1625,6 +1648,9 @@ export class OppaiChat extends LitElement {
       // and action cards ride the last bubble. Whatever the model already spent counts
       // as time she was "writing" on that first bubble, so a slow model never pays twice.
       return await this.typeAndPushBubbles(conversationID, splitIntoBubbles(result.message), Date.now() - startedAt, {
+        // On the last bubble, so one reply contributes one mood to the run the next
+        // turn reports. See recentMoods.
+        mood: live.emotion,
         imageId: result.imageId || undefined,
         links: result.links?.length ? result.links : undefined,
         attachments: result.attachments?.length ? result.attachments : undefined,
@@ -1906,8 +1932,8 @@ export class OppaiChat extends LitElement {
    * So this is the emotion-reactive wardrobe or nothing: today only Libby has one,
    * which is why other characters currently have no stage art and cannot be called.
    */
-  private spriteFor(character: ChatCharacter, emotion: LibbyEmotion, intensity: number): string[] {
-    return character.id === "libby" ? libbyAssetCandidates(emotion, intensity, loadLibbyOutfit()) : [];
+  private spriteFor(character: ChatCharacter, emotion: LibbyEmotion, intensity: number, activity?: string): string[] {
+    return character.id === "libby" ? libbyAssetCandidates(emotion, intensity, loadLibbyOutfit(), activity) : [];
   }
 
   // --- Video call -----------------------------------------------------------
@@ -1938,7 +1964,8 @@ export class OppaiChat extends LitElement {
   private renderCall(character: ChatCharacter, conversation: ChatConversation) {
     if (!this.callOpen) return nothing;
     const emotion = normalizeEmotion(conversation.emotion), intensity = normalizeIntensity(conversation.intensity);
-    const assets = this.spriteFor(character, emotion, intensity);
+    const activity = conversation.activity ?? "";
+    const assets = this.spriteFor(character, emotion, intensity, activity);
     const spoken = [...conversation.messages].reverse().find((message) => message.role === "assistant");
     const clock = `${Math.floor(this.callSeconds / 60)}:${String(this.callSeconds % 60).padStart(2, "0")}`;
     return html`<div class="call" role="dialog" aria-modal="true" aria-label=${`Video call with ${character.name}`}>
@@ -1946,7 +1973,7 @@ export class OppaiChat extends LitElement {
         <!-- Keyed on the pose: a mood change replaces the element instead of
              mutating src, so the fade-in replays and the fallback chain restarts
              from the top for the new emotion's art. -->
-        <span class="call-hold libby-breathe">${keyed(`${emotion}-${intensity}-${this.spoken}`, html`<img
+        <span class="call-hold libby-breathe">${keyed(`${emotion}-${intensity}-${activity}-${this.spoken}`, html`<img
           class="call-sprite" src=${assets[0]} data-fallback-index="0"
           alt=${`${character.name} looking ${emotion}`}
           @error=${(event:Event) => applyImageFallback(event.target as HTMLImageElement, assets)} />`)}</span>
@@ -1954,6 +1981,7 @@ export class OppaiChat extends LitElement {
           <span class="call-who"><strong>${character.name}</strong><span>${this.busy ? "Speaking…" : clock}</span></span>
           <span class="call-mood" title=${`Feeling ${emotion}, intensity ${intensity} of 5`}>
             <span class="material-symbols-rounded">mood</span>${emotion}
+            ${activity ? html`<span class="call-doing" title=${`She is ${activity}`}>${activityLabel(activity)}</span>` : nothing}
             <span class="call-pips">${[1,2,3,4,5].map((step) => html`<i class=${step <= intensity ? "on" : ""}></i>`)}</span>
           </span>
         </div>
@@ -1973,7 +2001,8 @@ export class OppaiChat extends LitElement {
     const hidden = character.id === "libby" && libbyHidden();
     if (hidden) return nothing;
     const emotion = normalizeEmotion(conversation.emotion), intensity = normalizeIntensity(conversation.intensity);
-    const assets = this.spriteFor(character, emotion, intensity);
+    const activity = conversation.activity ?? "";
+    const assets = this.spriteFor(character, emotion, intensity, activity);
     // Nothing to stand on the stage: a character with no art gets no column at all
     // rather than an empty one. Their picture is set from the character card.
     if (!assets.length) return nothing;
@@ -1985,11 +2014,12 @@ export class OppaiChat extends LitElement {
              rocks into every new line rather than only when her mood changes — and
              so a mood change still replaces the element, restarting the artwork
              fallback chain for the new pose. -->
-        <span class="sprite-hold libby-breathe">${keyed(`${emotion}-${intensity}-${this.spoken}`, html`<img
+        <span class="sprite-hold libby-breathe">${keyed(`${emotion}-${intensity}-${activity}-${this.spoken}`, html`<img
           class="sprite ${this.busy ? "" : "libby-speak"}" src=${assets[0]} data-fallback-index="0"
-          alt=${`${character.name} looking ${emotion}`}
+          alt=${activity ? `${character.name} ${activity}, looking ${emotion}` : `${character.name} looking ${emotion}`}
           @error=${(event:Event) => applyImageFallback(event.target as HTMLImageElement, assets)} />`)}</span>
       </div>
+      ${activity ? html`<div class="stage-doing" role="status">${activityLabel(activity)}</div>` : nothing}
       ${character.id === "libby" ? html`<div class="stage-meter" title=${`Intensity ${intensity} of 5`} aria-label=${`Intensity ${intensity} of 5`}>
         ${[1,2,3,4,5].map((step) => html`<span class="pip ${step <= intensity ? "on" : ""}"></span>`)}
       </div>` : nothing}

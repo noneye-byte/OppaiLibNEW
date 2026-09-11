@@ -42,6 +42,24 @@ export function recentlyAttached(messages: StoredChatMessage[], limit = 12): num
   return ids.slice(-limit);
 }
 
+/**
+ * The emotions her recent replies wore, oldest first.
+ *
+ * One entry per reply, not per bubble: a long answer is pushed as several messages
+ * and only the last of them carries the mood, which is exactly the granularity the
+ * server wants — it is counting replies she has looked the same for.
+ *
+ * Short by design. The server only cares whether the last few match, and a run
+ * longer than this is already as stuck as a run can usefully be described.
+ */
+export function recentMoods(messages: StoredChatMessage[], limit = 8): string[] {
+  const moods: string[] = [];
+  for (const message of messages) {
+    if (message.role === "assistant" && message.mood) moods.push(message.mood);
+  }
+  return moods.slice(-limit);
+}
+
 /** Asks the app shell to open a library item. Chat lives inside Library, which
     knows how to route it; nothing below here needs to know that. */
 export const OPEN_MEDIA_EVENT = "oppai-open-media";

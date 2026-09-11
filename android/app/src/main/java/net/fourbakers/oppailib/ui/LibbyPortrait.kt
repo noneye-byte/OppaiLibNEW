@@ -24,9 +24,26 @@ fun LibbyPortrait(
     /** Bundled default art (an android_asset filename) for when no outfit covers this. */
     fallbackAsset: String,
     modifier: Modifier = Modifier,
+    /**
+     * The MISC state she is in — what she is *doing* rather than what she is feeling.
+     * Blank for none, which is the ordinary case.
+     *
+     * Outfit art only, and that is not a gap to fill later: the bundled wardrobe draws
+     * twelve expressions and no activities, so there is nothing within it to fall back
+     * to. The chain simply continues into the emotion art below, which is why declaring
+     * a state never costs the user a broken sprite.
+     */
+    activity: String = "",
 ) {
     val outfit = repo.prefs.libbyOutfit
     val chain = buildList {
+        if (outfit.isNotEmpty() && activity.isNotEmpty()) {
+            // What she is doing outranks what she is feeling where there is art for it:
+            // a picture of her at a keyboard says more about the moment than a picture
+            // of her looking pleased, and the state is the rarer, deliberate thing.
+            for (level in tier downTo 1) add(repo.libbyEmotionUrl(outfit, activity, level))
+            add(repo.libbyEmotionUrl(outfit, activity, 0))
+        }
         if (outfit.isNotEmpty()) {
             // The exact emotion first, then its nearest kin, so an outfit that has
             // "surprised" but not "shy" shows *its own* surprised art rather than

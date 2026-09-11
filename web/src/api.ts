@@ -394,6 +394,18 @@ export interface ChatTurn {
       an idle nudge is an autonomous message however it is worded. Drives the
       server's sampler choice; omit it and the server classifies the turn itself. */
   task?: string;
+  /** The emotions her recent replies displayed, oldest first. The same bookkeeping
+      as recentImageIds: the server keeps no per-conversation state, so how long she
+      has been wearing one expression has to arrive with the turn. */
+  recentMoods?: string[];
+  /** Whether the user has her on the call screen rather than in the message log.
+      A call changes what they are doing — watching her rather than reading her — and
+      the server has no other way to know it was opened. */
+  call?: boolean;
+  /** The MISC state she is currently in. Sent back each turn because the server keeps
+      nothing between them: without it a state she set three replies ago would have
+      lasted exactly one message. */
+  activity?: string;
 }
 
 /**
@@ -430,6 +442,11 @@ export interface ChatResponse {
       A stated mood is applied as-is; an inferred one drifts by the session
       multiplier. Absent from older servers, which is treated as inferred. */
   declared?: boolean;
+  /** The MISC state she is in leaving this turn — typing, reading, or something a
+      good deal less idle. It persists until she changes it, so the client stores it
+      on the conversation and sends it back with the next turn. Empty means nothing in
+      particular. Absent from older servers, which is treated as unchanged. */
+  activity?: string;
   /** How this turn was sampled. The server classifies what the turn is for and
       picks bounded settings to match, so the client no longer ships a fixed set;
       these come back so the advanced panel can show what was actually used and
@@ -651,6 +668,15 @@ export interface StoredChatMessage extends ChatMessage {
       is given — a thought fed back in as an assistant line is a thought that was
       said after all, and it teaches the model to keep writing them inline. */
   thought?: LibbyThought["kind"];
+  /** The emotion this reply was wearing, on the last bubble of it.
+   *
+   * Not for drawing anything — the portrait reads the conversation's current mood.
+   * It is here so the next turn can tell the server how long she has been wearing
+   * one face, which the server cannot work out for itself: it holds no state between
+   * requests, so a mood stuck for a dozen replies looks exactly like a fresh one.
+   * Absent on every message written before this existed, which reads as "unknown"
+   * rather than as a run. See recentMoods. */
+  mood?: string;
 }
 
 export interface ChatConversation {
@@ -660,6 +686,10 @@ export interface ChatConversation {
   mode: string;
   emotion: string;
   intensity: number;
+  /** The MISC state she is in — what she is doing, as opposed to what she is feeling.
+      Held on the conversation rather than on a message because it is a state: it
+      persists across turns until she changes it. Empty means nothing in particular. */
+  activity?: string;
   progress?: number;
   options?: ChatOptions;
   messages: StoredChatMessage[];
@@ -1254,6 +1284,24 @@ export interface LibbyBond {
   updatedAt: number;
 }
 
+/**
+ * One MISC state Libby can be in, as the server defines it.
+ *
+ * The vocabulary is served rather than compiled in (it rides along with the wardrobe
+ * list) so adding a state is a server edit alone — no client release, and no second
+ * copy of the table to drift. `minIntensity` is the heat it takes before she may enter
+ * it, which the editor shows so it is obvious why a slot exists.
+ */
+export interface LibbyActivityDef {
+  id: string;
+  label: string;
+  /** "idle" for the everyday states, "intimate" for the rest. */
+  group: string;
+  /** What she is doing, in her own terms. Doubles as the hint under a slot. */
+  says: string;
+  minIntensity: number;
+}
+
 export interface LibbyOutfit {
   id: string;
   name: string;
@@ -1261,6 +1309,11 @@ export interface LibbyOutfit {
   emotions: string[];
   /** For each emotion, which horniness tiers (0..4) have art. */
   emotionLevels?: Record<string, number[]>;
+  /** The same, for the MISC state slots — what she is doing rather than what she is
+      feeling. Its own field rather than folded into emotionLevels so a client that
+      renders every key as an expression does not sprout two dozen mystery moods.
+      Absent from older servers. */
+  activityLevels?: Record<string, number[]>;
   /** Whether the cover endpoint will return a picture — an explicit cover, or any
       slot art to fall back on. Absent from older servers, which is treated as false. */
   hasThumb?: boolean;
@@ -2076,7 +2129,7 @@ export const api = {
       }),
     }),
 
-  libbyOutfits: () => request<{ outfits: LibbyOutfit[] }>("/api/libby/outfits"),
+  libbyOutfits: () => request<{ outfits: LibbyOutfit[]; activities?: LibbyActivityDef[] }>("/api/libby/outfits"),
   saveLibbyOutfit: (body: { id?: string; name: string }) =>
     request<LibbyOutfit>("/api/libby/outfits", { method: "POST", body: JSON.stringify(body) }),
   deleteLibbyOutfit: (id: string) =>

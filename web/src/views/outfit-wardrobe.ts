@@ -1,6 +1,6 @@
 import { LitElement, css, html, nothing } from "lit";
 import { customElement, state } from "lit/decorators.js";
-import { api, mascotSay, type LibbyOutfit } from "../api.js";
+import { api, mascotSay, type LibbyActivityDef, type LibbyOutfit } from "../api.js";
 import { iconStyles } from "../theme.js";
 import { defaultLibbyArt, loadLibbyOutfit, saveLibbyOutfit } from "../libby.js";
 import { libbyReact } from "../libby-voice.js";
@@ -78,6 +78,17 @@ interface OutfitDraft {
 @customElement("oppai-outfit-wardrobe")
 export class OppaiOutfitWardrobe extends LitElement {
   @state() private outfits: LibbyOutfit[] = [];
+  /**
+   * The MISC states an outfit may also be drawn in — what she is doing rather than
+   * what she is feeling.
+   *
+   * Served with the wardrobe list rather than declared here, unlike LIBBY_EMOTION_SLOTS
+   * above. The emotions are load-bearing in this client — the portrait, the fallback
+   * table, the labels — so they are worth keeping in sync by hand. These are slots and
+   * nothing else, so the server owning the vocabulary means a new state needs no client
+   * release. An older server sends none, and the section simply does not appear.
+   */
+  @state() private activities: LibbyActivityDef[] = [];
   @state() private wornOutfit = loadLibbyOutfit();
   @state() private outfitDraft: OutfitDraft | null = null;
   @state() private outfitBusy = false;
@@ -322,6 +333,17 @@ export class OppaiOutfitWardrobe extends LitElement {
         font-size: 11px;
         color: var(--oppai-text-muted);
       }
+      /* The heading over the MISC grid. A heading rather than a second panel: these
+         squares upload through the same endpoint and save with the same button, so
+         framing them as a separate thing would be lying about how they work. */
+      .slot-group {
+        margin: 22px 0 4px;
+        font-size: 13px;
+        font-weight: 650;
+        letter-spacing: 0.02em;
+        text-transform: uppercase;
+        color: var(--oppai-text-muted);
+      }
       .outfit-actions {
         display: flex;
         gap: 8px;
@@ -349,6 +371,7 @@ export class OppaiOutfitWardrobe extends LitElement {
     try {
       const res = await api.libbyOutfits();
       this.outfits = res.outfits;
+      this.activities = res.activities ?? [];
       this.outfitError = "";
       // A worn outfit that has been deleted (possibly from another device) must not
       // leave the browser asking for art that is never coming.
@@ -365,8 +388,9 @@ export class OppaiOutfitWardrobe extends LitElement {
     return html`
       <div class="wardrobe-intro">
         An outfit swaps Libby's artwork: one sprite per expression, per heat tier —
-        ${TOTAL_SLOTS} in all for a complete wardrobe. Anything left empty falls back to
-        the calmer art, and then to the bundled default. Which outfit she wears is
+        ${TOTAL_SLOTS} in all for a complete wardrobe, plus the optional Misc states she
+        can put herself into. Anything left empty falls back to the calmer art, then to
+        her expression, then to the bundled default. Which outfit she wears is
         per-device.
       </div>
       ${this.outfitError ? html`<div class="wardrobe-error" role="alert">${this.outfitError}</div>` : nothing}
@@ -423,7 +447,57 @@ export class OppaiOutfitWardrobe extends LitElement {
     } else {
       for (const emotion of o.emotions) existing.push(slotKey(emotion, 0));
     }
+    // The MISC states share the emotion slots' storage and their "slot:level" keys, so
+    // from here down the editor treats the two identically — one staging map, one save
+    // loop, one upload endpoint.
+    for (const [activity, levels] of Object.entries(o.activityLevels ?? {})) {
+      for (const level of levels) existing.push(slotKey(activity, level));
+    }
     this.outfitDraft = { id: o.id, name: o.name, existing, staged: {}, level: 0, hasCover: o.hasThumb !== false };
+  }
+
+  /**
+   * One droppable square: an expression or a MISC state, at the tier currently open.
+   *
+   * Shared by both grids deliberately. The two vocabularies mean different things to
+   * Libby but nothing at all to the editor — the same staging map, the same key, the
+   * same upload endpoint — and a second copy of this markup would be the place the two
+   * quietly stopped behaving the same way.
+   */
+  private renderSlot(d: OutfitDraft, id: string, label: string, hint: string) {
+    const key = slotKey(id, d.level);
+    const staged = d.staged[key];
+    const existing = !staged && d.id && d.existing.includes(key) ? api.libbyEmotionURL(d.id, id, d.level) : "";
+    return html`
+      <label
+        class="slot"
+        @dragover=${(e: DragEvent) => { e.preventDefault(); (e.currentTarget as HTMLElement).classList.add("dragover"); }}
+        @dragleave=${(e: DragEvent) => (e.currentTarget as HTMLElement).classList.remove("dragover")}
+        @drop=${(e: DragEvent) => {
+          e.preventDefault();
+          (e.currentTarget as HTMLElement).classList.remove("dragover");
+          this.stageEmotion(id, e.dataTransfer?.files?.[0]);
+        }}
+      >
+        ${staged
+          ? html`<img src=${staged} alt=${label} />`
+          : existing
+            ? html`<img src=${existing} alt=${label} />`
+            : html`<div class="drop-hint">Drop an image here<br />or click to browse</div>`}
+        <div class="slot-label">${label}</div>
+        <div class="slot-hint">${hint}</div>
+        <input
+          type="file"
+          accept="image/*"
+          style="display:none;"
+          @change=${(e: Event) => {
+            const input = e.target as HTMLInputElement;
+            this.stageEmotion(id, input.files?.[0]);
+            input.value = "";
+          }}
+        />
+      </label>
+    `;
   }
 
   /**
@@ -654,52 +728,23 @@ export class OppaiOutfitWardrobe extends LitElement {
           </p>
           ${this.renderCoverPicker(d)}
           <div class="slots">
-            ${LIBBY_EMOTION_SLOTS.map((em) => {
-              const key = slotKey(em.id, d.level);
-              const staged = d.staged[key];
-              const existing = !staged && d.id && d.existing.includes(key)
-                ? api.libbyEmotionURL(d.id, em.id, d.level)
-                : "";
-              return html`
-                <label
-                  class="slot"
-                  @dragover=${(e: DragEvent) => {
-                    e.preventDefault();
-                    (e.currentTarget as HTMLElement).classList.add("dragover");
-                  }}
-                  @dragleave=${(e: DragEvent) =>
-                    (e.currentTarget as HTMLElement).classList.remove("dragover")}
-                  @drop=${(e: DragEvent) => {
-                    e.preventDefault();
-                    (e.currentTarget as HTMLElement).classList.remove("dragover");
-                    this.stageEmotion(em.id, e.dataTransfer?.files?.[0]);
-                  }}
-                >
-                  ${staged
-                    ? html`<img src=${staged} alt=${em.label} />`
-                    : existing
-                      ? html`<img src=${existing} alt=${em.label} />`
-                      : html`<div class="drop-hint">Drop an image here<br />or click to browse</div>`}
-                  <div class="slot-label">${em.label}</div>
-                  <div class="slot-hint">
-                    ${em.hint}${em.borrows
-                      ? html`<br /><span style="opacity:.75;">Optional — borrows ${em.borrows}</span>`
-                      : nothing}
-                  </div>
-                  <input
-                    type="file"
-                    accept="image/*"
-                    style="display:none;"
-                    @change=${(e: Event) => {
-                      const input = e.target as HTMLInputElement;
-                      this.stageEmotion(em.id, input.files?.[0]);
-                      input.value = "";
-                    }}
-                  />
-                </label>
-              `;
-            })}
+            ${LIBBY_EMOTION_SLOTS.map((em) => this.renderSlot(d, em.id, em.label,
+              em.borrows ? `${em.hint} · Optional, borrows ${em.borrows}` : em.hint))}
           </div>
+          ${this.activities.length ? html`
+            <h4 class="slot-group">Misc — what she is doing</h4>
+            <p class="tier-note">
+              Optional, and separate from her expressions: these are the states she can
+              put herself into — at her keyboard, curled up reading, or a good deal less
+              idle. She chooses one to fit the scene, and a state you have not drawn
+              simply falls back to her expression, so there is no wrong number to leave
+              empty. The intimate ones only become available to her as the heat climbs.
+            </p>
+            <div class="slots">
+              ${this.activities.map((activity) => this.renderSlot(d, activity.id, activity.label,
+                activity.minIntensity > 1 ? `${activity.says} · from tier ${LIBBY_TIERS[activity.minIntensity - 1]}` : activity.says))}
+            </div>
+          ` : nothing}
           <div class="outfit-actions">
             ${d.id
               ? html`<button class="outfit-btn danger" ?disabled=${this.outfitBusy} @click=${() => this.deleteOutfit()}>

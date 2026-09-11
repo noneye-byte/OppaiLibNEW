@@ -91,8 +91,8 @@ type libbyOutfit struct {
 	Name string `json:"name"`
 }
 
-// libbyOutfitView is what lists return: the record plus which emotions have art,
-// so clients can render slots without probing image URLs per outfit.
+// libbyOutfitView is what lists return: the record plus which slots have art, so
+// clients can render them without probing image URLs per outfit.
 //
 // Emotions keeps the level-0 poses that have art (backward compatible with older
 // clients). EmotionLevels is the full picture: for each emotion, which tiers 0..4
@@ -101,6 +101,12 @@ type libbyOutfitView struct {
 	libbyOutfit
 	Emotions      []string         `json:"emotions"`
 	EmotionLevels map[string][]int `json:"emotionLevels"`
+	// ActivityLevels is the same map for the MISC states — what she is doing rather
+	// than what she is feeling. Kept as its own field rather than folded into
+	// EmotionLevels so an older client, which would render every key it is given as an
+	// emotion slot, does not grow twenty-four mystery expressions. See
+	// libby_activities.go.
+	ActivityLevels map[string][]int `json:"activityLevels"`
 	// HasThumb says whether GET .../thumb will return a picture, so a card grid knows
 	// whether to draw art or a placeholder without a request per outfit that 404s.
 	HasThumb bool `json:"hasThumb"`
@@ -146,15 +152,23 @@ func (s *Server) readLibbyOutfit(id string) (*libbyOutfit, error) {
 }
 
 func (s *Server) libbyOutfitView(o *libbyOutfit) libbyOutfitView {
-	v := libbyOutfitView{libbyOutfit: *o, Emotions: []string{}, EmotionLevels: map[string][]int{}}
-	for _, e := range libbyEmotions {
+	v := libbyOutfitView{
+		libbyOutfit: *o, Emotions: []string{},
+		EmotionLevels: map[string][]int{}, ActivityLevels: map[string][]int{},
+	}
+	for _, slot := range libbySlots {
 		for level := 0; level <= maxLibbyLevel; level++ {
-			if _, err := os.Stat(s.libbyEmotionPath(o.ID, e, level)); err == nil {
-				v.EmotionLevels[e] = append(v.EmotionLevels[e], level)
-				v.Slots++
-				if level == 0 {
-					v.Emotions = append(v.Emotions, e)
-				}
+			if _, err := os.Stat(s.libbyEmotionPath(o.ID, slot, level)); err != nil {
+				continue
+			}
+			v.Slots++
+			if libbyActivityValid(slot) {
+				v.ActivityLevels[slot] = append(v.ActivityLevels[slot], level)
+				continue
+			}
+			v.EmotionLevels[slot] = append(v.EmotionLevels[slot], level)
+			if level == 0 {
+				v.Emotions = append(v.Emotions, slot)
 			}
 		}
 	}
@@ -186,7 +200,7 @@ func (s *Server) libbyOutfitCover(id string) ([]byte, bool) {
 			return data, true
 		}
 	}
-	for _, e := range libbyEmotions {
+	for _, e := range libbySlots {
 		for level := 0; level <= maxLibbyLevel; level++ {
 			blob, err := os.ReadFile(s.libbyEmotionPath(id, e, level))
 			if err != nil {
@@ -200,7 +214,7 @@ func (s *Server) libbyOutfitCover(id string) ([]byte, bool) {
 	// Nothing finished yet, but a wardrobe being generated into is not a blank card:
 	// the first square rendered for it is a truer picture of what it is than a
 	// placeholder, and it is the picture the user is in the middle of making.
-	for _, e := range libbyEmotions {
+	for _, e := range libbySlots {
 		for level := 0; level <= maxLibbyLevel; level++ {
 			if sq, err := s.readLibbyWIP(id, e, level); err == nil && len(sq.Image) > 0 {
 				return sq.Image, true
@@ -282,7 +296,7 @@ func (s *Server) handleDeleteLibbyOutfitThumb(w http.ResponseWriter, r *http.Req
 func (s *Server) handleListLibbyOutfits(w http.ResponseWriter, r *http.Request) {
 	entries, err := os.ReadDir(s.libbyDir)
 	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"outfits": []libbyOutfitView{}})
+		writeJSON(w, http.StatusOK, map[string]any{"outfits": []libbyOutfitView{}, "activities": libbyActivities})
 		return
 	}
 	out := []libbyOutfitView{}
@@ -301,7 +315,12 @@ func (s *Server) handleListLibbyOutfits(w http.ResponseWriter, r *http.Request) 
 	sort.Slice(out, func(i, j int) bool {
 		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
 	})
-	writeJSON(w, http.StatusOK, map[string]any{"outfits": out})
+	// The MISC vocabulary travels with the list rather than living in a second endpoint
+	// or being copied into each client. It is what an editor needs to lay out the slots
+	// — the label, which half it belongs to, and the heat it takes — and every screen
+	// that draws those slots is already asking for this list. Adding a state here is
+	// then the only edit: no client release, no third copy of the table to forget.
+	writeJSON(w, http.StatusOK, map[string]any{"outfits": out, "activities": libbyActivities})
 }
 
 type saveLibbyOutfitReq struct {
@@ -355,7 +374,7 @@ func (s *Server) handleDeleteLibbyOutfit(w http.ResponseWriter, r *http.Request)
 		writeErr(w, http.StatusNotFound, "no such outfit")
 		return
 	}
-	for _, e := range libbyEmotions {
+	for _, e := range libbySlots {
 		for level := 0; level <= maxLibbyLevel; level++ {
 			_ = os.Remove(s.libbyEmotionPath(id, e, level))
 		}
@@ -373,8 +392,8 @@ type setLibbyEmotionReq struct {
 
 func (s *Server) handleSetLibbyEmotion(w http.ResponseWriter, r *http.Request) {
 	id, emotion := r.PathValue("id"), r.PathValue("emotion")
-	if !charIDPattern.MatchString(id) || !libbyEmotionValid(emotion) {
-		writeErr(w, http.StatusBadRequest, "bad outfit id or emotion")
+	if !charIDPattern.MatchString(id) || !libbySlotValid(emotion) {
+		writeErr(w, http.StatusBadRequest, "bad outfit id or slot")
 		return
 	}
 	if _, err := s.readLibbyOutfit(id); err != nil {
@@ -409,8 +428,8 @@ func (s *Server) handleSetLibbyEmotion(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleGetLibbyEmotion(w http.ResponseWriter, r *http.Request) {
 	id, emotion := r.PathValue("id"), r.PathValue("emotion")
-	if !charIDPattern.MatchString(id) || !libbyEmotionValid(emotion) {
-		writeErr(w, http.StatusBadRequest, "bad outfit id or emotion")
+	if !charIDPattern.MatchString(id) || !libbySlotValid(emotion) {
+		writeErr(w, http.StatusBadRequest, "bad outfit id or slot")
 		return
 	}
 	blob, err := os.ReadFile(s.libbyEmotionPath(id, emotion, libbyLevelParam(r)))
@@ -431,8 +450,8 @@ func (s *Server) handleGetLibbyEmotion(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDeleteLibbyEmotion(w http.ResponseWriter, r *http.Request) {
 	id, emotion := r.PathValue("id"), r.PathValue("emotion")
-	if !charIDPattern.MatchString(id) || !libbyEmotionValid(emotion) {
-		writeErr(w, http.StatusBadRequest, "bad outfit id or emotion")
+	if !charIDPattern.MatchString(id) || !libbySlotValid(emotion) {
+		writeErr(w, http.StatusBadRequest, "bad outfit id or slot")
 		return
 	}
 	if err := os.Remove(s.libbyEmotionPath(id, emotion, libbyLevelParam(r))); err != nil {

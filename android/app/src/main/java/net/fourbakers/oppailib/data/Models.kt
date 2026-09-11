@@ -300,6 +300,29 @@ data class ChatRequest(
      */
     val recentMediaIds: List<Long> = emptyList(),
     /**
+     * The emotions her recent replies displayed, oldest first.
+     *
+     * The same bookkeeping as [recentImageIds] and needed for the same reason: the
+     * server keeps no per-conversation state, so a mood she has worn for a dozen
+     * replies is indistinguishable from one she just arrived at. It uses this to ask
+     * her, in the prompt, whether the face is still true.
+     */
+    val recentMoods: List<String> = emptyList(),
+    /**
+     * Whether the user has her on the call screen rather than in the message log.
+     *
+     * A call is not a skin on the chat window — they are watching her instead of
+     * reading her, and there is no camera pointed back at them. The server has no
+     * other way to know one was opened.
+     */
+    val call: Boolean = false,
+    /**
+     * The MISC state she is currently in — what she is doing rather than what she is
+     * feeling. Sent back each turn because the server keeps nothing between them:
+     * without it a state she set three replies ago would last exactly one message.
+     */
+    val activity: String = "",
+    /**
      * The id of the outfit Libby is wearing on this device, empty for her bundled
      * artwork. Which outfit is worn is a per-device choice the server does not
      * store, so it has to be told — otherwise she describes the default sprite
@@ -400,6 +423,10 @@ data class ChatResponse(
     val message: String = "",
     val emotion: String = "neutral",
     val intensity: Int = 1,
+    /** The MISC state she is in leaving this turn, blank for nothing in particular.
+        It persists until she changes it, so the client stores it on the conversation
+        and sends it back with the next turn. */
+    val activity: String = "",
     val imageId: String = "",
     /** Library items this reply points at. The titles are already substituted into
         the prose server-side, so a client that does not draw chips still reads right. */
@@ -503,6 +530,11 @@ data class StoredChatMessage(
         because dropping it would turn a private thought back into a message
         addressed to the user on the next round-trip. */
     val thought: String = "",
+    /** The emotion this reply was wearing. Not drawn from here — the conversation
+        holds the current mood — but read back on the next turn as the run of
+        expressions the server is told about, and carried through this client so a
+        workspace round-trip does not erase what the web UI recorded. */
+    val mood: String = "",
 )
 
 @Serializable
@@ -513,6 +545,11 @@ data class ChatConversation(
     val mode: String = "sweet",
     val emotion: String = "neutral",
     val intensity: Int = 1,
+    /** The MISC state she is in. On the conversation rather than on a message because
+        it is a state: it persists across turns until she changes it. Carried through
+        this client even where nothing here draws it, because the workspace round-trips
+        between the web UI and the phone and a field dropped here is a field erased. */
+    val activity: String = "",
     val progress: Double = intensity.toDouble(),
     val options: JsonObject = JsonObject(emptyMap()),
     val messages: List<StoredChatMessage> = emptyList(),

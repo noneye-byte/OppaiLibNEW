@@ -157,12 +157,31 @@ func TestLibbyLoadoutsDoNotLeakIntoOutfits(t *testing.T) {
 		t.Fatalf("create loadout: %d %s", rec.Code, rec.Body)
 	}
 
+	// Decoded rather than counted in the raw JSON: the wardrobe list also carries the
+	// MISC state vocabulary, whose entries have ids of their own, and a substring count
+	// would be measuring that instead of the thing this test is about.
 	rec := do(t, h, token, "GET", "/api/libby/outfits", "")
-	if strings.Contains(rec.Body.String(), "Recipe") || strings.Count(rec.Body.String(), `"id":`) != 1 {
+	var outfits struct {
+		Outfits []struct {
+			ID, Name string
+		} `json:"outfits"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &outfits); err != nil {
+		t.Fatalf("decode wardrobes: %v", err)
+	}
+	if len(outfits.Outfits) != 1 || outfits.Outfits[0].Name != "Wardrobe" {
 		t.Fatalf("wardrobe list picked up a loadout: %s", rec.Body)
 	}
 	rec = do(t, h, token, "GET", "/api/libby/loadouts", "")
-	if strings.Contains(rec.Body.String(), "Wardrobe") || strings.Count(rec.Body.String(), `"id":`) != 1 {
+	var loadouts struct {
+		Loadouts []struct {
+			ID, Name string
+		} `json:"loadouts"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &loadouts); err != nil {
+		t.Fatalf("decode loadouts: %v", err)
+	}
+	if len(loadouts.Loadouts) != 1 || loadouts.Loadouts[0].Name != "Recipe" {
 		t.Fatalf("loadout list picked up a wardrobe: %s", rec.Body)
 	}
 }

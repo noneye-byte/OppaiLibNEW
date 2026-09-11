@@ -24,9 +24,6 @@ const (
 	// maxLinksPerReply bounds what one message may point at. A reply that links six
 	// things is a search results page, not a recommendation.
 	maxLinksPerReply = 3
-	// linkCandidates bounds the rows a name lookup will decrypt and rank. Titles are
-	// ciphertext, so a title match cannot use an index — somebody has to open them.
-	linkCandidates = 240
 	// minLinkMatchScore is the confidence a *link* needs. Two points is one title word,
 	// or two independent tag words. One incidental tag hit is noise, and pointing the
 	// user at the wrong thing mid-sentence is worse than not pointing at anything.
@@ -96,62 +93,22 @@ type libraryCandidate struct {
 	link  libbyLink
 	title string
 	tags  []string
+	// at is the row's created_at, which the index uses to decide what survives when a
+	// very common word matches more of the collection than one turn can rank.
+	at int64
 }
 
 // libraryCandidates gathers the rows worth ranking for a set of queries.
 //
-// Two sources, because the library has two kinds of searchable text and they live
-// at opposite ends of the trust model. Tags are plaintext and indexed, so a tag
-// word can find something a thousand rows deep. Titles are encrypted, so they can
-// only be found by decrypting a bounded run of the newest rows — which is fine,
-// since the thing a character brings up by name is overwhelmingly something the
-// user added recently.
+// This used to be the whole of the lookup: decrypt the newest couple of hundred rows,
+// union in whatever the plaintext tag table could find, rank those. It worked, and it
+// meant the collection she could name things out of was the end of the collection —
+// a title from last spring was not in the running, so she described it vaguely or
+// invented one. The decryption is now done once and kept (chat_library_index.go), so
+// what comes back here is drawn from every row in the library rather than a window
+// onto the newest.
 func (s *Server) libraryCandidates(ctx context.Context, words []string) []libraryCandidate {
-	briefs, err := s.db.RecentBriefs(ctx, linkCandidates)
-	if err != nil {
-		s.log.Warn("library link: recent rows", "err", err)
-	}
-	seen := make(map[int64]bool, len(briefs))
-	for _, brief := range briefs {
-		seen[brief.ID] = true
-	}
-	if tagged, err := s.db.BriefsByTagWords(ctx, words, linkCandidates); err != nil {
-		s.log.Warn("library link: tag lookup", "err", err)
-	} else {
-		for _, brief := range tagged {
-			if !seen[brief.ID] {
-				seen[brief.ID] = true
-				briefs = append(briefs, brief)
-			}
-		}
-	}
-	if len(briefs) == 0 {
-		return nil
-	}
-	ids := make([]int64, 0, len(briefs))
-	for _, brief := range briefs {
-		ids = append(ids, brief.ID)
-	}
-	tagsByID, err := s.db.TagsForMediaBatch(ctx, ids)
-	if err != nil {
-		s.log.Warn("library link: tags", "err", err)
-	}
-	out := make([]libraryCandidate, 0, len(briefs))
-	for _, brief := range briefs {
-		title := s.decrypt(brief.TitleEnc, "title")
-		if title == "" {
-			title = "Untitled"
-		}
-		candidate := libraryCandidate{
-			link:  libbyLink{ID: brief.ID, Title: title, Kind: brief.Kind, HasThumb: brief.HasThumb},
-			title: strings.ToLower(title),
-		}
-		for _, tag := range tagsByID[brief.ID] {
-			candidate.tags = append(candidate.tags, strings.ToLower(tag.Name))
-		}
-		out = append(out, candidate)
-	}
-	return out
+	return s.lookupLibrary(ctx, words)
 }
 
 // bestLibraryMatch scores one query against the candidate set.

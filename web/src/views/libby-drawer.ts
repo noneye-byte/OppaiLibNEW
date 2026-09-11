@@ -364,6 +364,12 @@ export class OppaiLibbyDrawer extends LitElement {
         mode: this.mode, messages: history, emotion: this.emotion, intensity: this.intensity,
         characterId: character.id, viewing: this.viewing(),
         outfit: character.id === "libby" ? loadLibbyOutfit() : "",
+        // Each remark already remembers the pose she wore for it, so the run of
+        // identical expressions the server looks for is free to read off. Browsing
+        // together is where a stuck face is most obvious — item after item, the same
+        // small reaction.
+        recentMoods: this.remarks.filter((remark) => remark.role === "assistant" && remark.emotion)
+          .slice(-8).map((remark) => remark.emotion as string),
       });
       const requested = normalizeIntensity(result.intensity ?? this.intensity);
       if (result.declared) this.applyMood(normalizeEmotion(result.emotion), requested, requested);

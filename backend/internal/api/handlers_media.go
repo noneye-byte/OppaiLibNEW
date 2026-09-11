@@ -246,6 +246,10 @@ func (s *Server) updateMediaByID(r *http.Request, id int64, p mediaPatchReq) err
 			}
 		}
 	}
+	// A retitle or a re-tag changes what this row can be found by without changing how
+	// many rows there are, which is the one kind of edit Libby's library index cannot
+	// see for itself. See chat_library_index.go.
+	s.touchLibraryIndex()
 	return nil
 }
 
@@ -267,6 +271,8 @@ func (s *Server) deleteMediaByID(r *http.Request, id int64) error {
 			_ = s.store.Delete(thumb)
 		}
 	}
+	// So she stops offering something that is no longer there.
+	s.touchLibraryIndex()
 	return nil
 }
 

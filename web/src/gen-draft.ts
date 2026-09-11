@@ -105,6 +105,11 @@ export interface GenDraft {
   outfitText?: string;
   outfitGear?: OutfitGear;
   outfitFace?: number;
+  /** The MISC state being rendered, or "" for an ordinary expression square. A slot
+      name (see OUTFIT_ACTIVITIES), validated against the table on restore rather than
+      trusted, so a draft from a build with a state this one lacks does not come back
+      as a square with no pose. */
+  outfitMisc?: string;
   outfitTier?: number;
   outfitBackground?: "black" | "white";
   outfitUnderwearColor?: string;
@@ -198,7 +203,7 @@ export function loadDraft(): GenDraft | null {
   };
 
   (["prompt", "negative", "checkpoint", "vae", "templateId", "scheduler", "board",
-    "outfitText", "outfitUnderwearColor", "outfitPubicHairColor",
+    "outfitText", "outfitMisc", "outfitUnderwearColor", "outfitPubicHairColor",
     "outfitLoadoutId", "outfitWardrobeId",
     "detailerModel", "detailerPrompt", "detailerNegative"] as const).forEach(str);
   (["width", "height", "steps", "cfg", "cfgRescale", "clipSkip", "count", "seed",

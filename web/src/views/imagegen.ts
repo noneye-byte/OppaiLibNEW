@@ -173,6 +173,47 @@ const OUTFIT_FACES: { id: LibbyEmotion; label: string; face: string; pose: strin
   { id: "excited", label: "Excited", face: "excited thrilled expression, sparkling wide eyes, eager open smile", pose: "hands held eagerly near her hips, lively forward-leaning stance" },
 ];
 
+/**
+ * The MISC states, as poses: what she is doing rather than what she is feeling.
+ *
+ * The ids mirror the server's vocabulary exactly (libby_activities.go), because the id
+ * *is* the wardrobe slot the finished square is filed into. Adding one here without
+ * adding it there produces a square the upload endpoint refuses.
+ *
+ * Unlike OUTFIT_FACES these are not part of the sixty-square board, and deliberately
+ * so. A complete wardrobe is still twelve expressions across five tiers; these are
+ * extras somebody generates because they want that particular state, one at a time. So
+ * each carries a `face` of its own rather than borrowing the expression picker's — a
+ * pose this specific reads wrong with an unrelated expression stapled to it.
+ */
+const OUTFIT_ACTIVITIES: { id: string; label: string; face: string; pose: string }[] = [
+  { id: "typing", label: "Typing", face: "focused expression, eyes on a screen, faint smile", pose: "sitting at a desk, both hands on a keyboard, leaning slightly toward the monitor" },
+  { id: "reading", label: "Reading", face: "absorbed expression, eyes lowered to the page", pose: "curled up holding an open book, one leg tucked under her" },
+  { id: "gaming", label: "Gaming", face: "intent expression, eyes wide on the screen, tongue at the corner of her mouth", pose: "sitting cross-legged holding a game controller in both hands" },
+  { id: "lounging", label: "Lounging", face: "relaxed expression, eyes half closed, easy smile", pose: "sprawled back across a sofa, arms loose, one knee raised" },
+  { id: "drinking", label: "Drinking", face: "contented expression, eyes closed over the rim", pose: "holding a steaming mug in both hands near her chest" },
+  { id: "eating", label: "Eating", face: "cheeks slightly full, pleased expression", pose: "holding food up to her mouth mid-bite, other hand cupped beneath it" },
+  { id: "stretching", label: "Stretching", face: "eyes shut, mouth open in a small yawn", pose: "arms stretched overhead, back arched, rising onto her toes" },
+  { id: "napping", label: "Napping", face: "sleeping, eyes closed, lips parted, peaceful", pose: "curled on her side asleep, hands tucked under her cheek" },
+  { id: "dancing", label: "Dancing", face: "eyes closed, delighted open smile", pose: "mid-step with hips turned, one arm raised loosely, hair in motion" },
+  { id: "tidying", label: "Tidying", face: "mildly absorbed expression, glancing at what she is holding", pose: "reaching to shelve something, weight on one foot" },
+  { id: "drawing", label: "Drawing", face: "concentrating, brow faintly furrowed, tongue between her teeth", pose: "hunched over a sketchbook, pencil in hand, other arm steadying the page" },
+  { id: "waving", label: "Waving", face: "bright welcoming smile, eyes on the viewer", pose: "one arm raised waving at the viewer, weight on one hip" },
+
+  { id: "undressing", label: "Undressing", face: "half-lidded eyes, small knowing smile, watching the viewer", pose: "peeling clothing off one shoulder, other hand at her waistband" },
+  { id: "teasing", label: "Teasing", face: "smirking, heavy-lidded eyes locked on the viewer", pose: "posing for the viewer, back arched, hands framing her hips" },
+  { id: "touching", label: "Touching herself", face: "flushed, lips parted, eyes on the viewer", pose: "one hand pressed between her thighs over her clothes, other hand at her chest" },
+  { id: "rubbing", label: "Rubbing", face: "deep blush, mouth open, eyes unfocused", pose: "reclining with one hand rubbing between her spread thighs" },
+  { id: "fingering", label: "Fingering", face: "flushed, head tipped back, brow drawn, panting", pose: "lying back with her fingers inside herself, knees fallen open" },
+  { id: "spread", label: "Spread", face: "flushed, watching the viewer, mouth open", pose: "lying back holding herself open with both hands, legs spread wide" },
+  { id: "vibrator", label: "Vibrator", face: "eyes squeezed shut, mouth open, deep blush", pose: "holding a vibrator against herself, thighs tensed together" },
+  { id: "dildo", label: "Dildo", face: "flushed, half-lidded, biting her lip", pose: "using a dildo on herself, one hand braced behind her" },
+  { id: "riding", label: "Riding", face: "flushed, head thrown back, mouth open", pose: "straddling and riding a toy, hands braced on her thighs, back arched" },
+  { id: "grinding", label: "Grinding", face: "flushed, eyes shut, teeth in her lip", pose: "straddling a pillow, hips rolling forward, hands gripping it" },
+  { id: "climax", label: "Climax", face: "eyes rolled up, mouth wide open, whole face flushed", pose: "body arched taut mid-orgasm, toes curled, hands fisted" },
+  { id: "afterglow", label: "Afterglow", face: "dazed exhausted smile, heavy-lidded eyes, deep blush", pose: "collapsed limp on her back, limbs loose, chest heaving" },
+];
+
 /** Heat still owns the emotional performance. Clothing exposure is rolled separately
  * from tier-weighted tables, so the upper rows do not all become the same nude pose. */
 const OUTFIT_TIERS: { label: string; mood: string }[] = [
@@ -238,6 +279,17 @@ export class OppaiImageGen extends LitElement {
   @state() private outfitText = "";
   @state() private outfitGear: OutfitGear = { ...DEFAULT_OUTFIT_GEAR };
   @state() private outfitFace = 0;
+  /**
+   * The MISC state being rendered, or "" for an ordinary expression square.
+   *
+   * A separate dial rather than more entries in the pose picker, because the pose
+   * picker indexes the sixty-square board: making it longer would renumber the board
+   * and turn "a complete wardrobe" into a hundred and eighty squares nobody asked for.
+   * When this is set it overrides the pose and redirects the finished square into the
+   * MISC slot of the same name — everything downstream (the work-in-progress store, the
+   * review, the filing) is already generic on the slot name. See OUTFIT_ACTIVITIES.
+   */
+  @state() private outfitMisc = "";
   @state() private outfitTier = 0;
   @state() private outfitBackground: "black" | "white" = "white";
   @state() private outfitUnderwearColor = "black";
@@ -2167,7 +2219,7 @@ export class OppaiImageGen extends LitElement {
     "width", "height", "steps", "cfg", "cfgRescale", "clipSkip",
     "seamlessX", "seamlessY", "vaePrecision", "cpuNoise", "count", "seed", "board",
     "selectedLoras", "selectedTriggers", "selectedChars",
-    "outfitOn", "outfitText", "outfitGear", "outfitFace", "outfitTier", "outfitBackground",
+    "outfitOn", "outfitText", "outfitGear", "outfitFace", "outfitMisc", "outfitTier", "outfitBackground",
     "outfitLockColors", "outfitLoadoutId", "outfitWardrobeId",
     "outfitUnderwearColor", "outfitPubicHair", "outfitPubicHairColor", "camera",
     "detailerEnabled", "detailerModel", "detailerPrompt", "detailerNegative",
@@ -2262,6 +2314,7 @@ export class OppaiImageGen extends LitElement {
       outfitText: this.outfitText,
       outfitGear: this.outfitGear,
       outfitFace: this.outfitFace,
+      outfitMisc: this.outfitMisc,
       outfitTier: this.outfitTier,
       outfitBackground: this.outfitBackground,
       outfitUnderwearColor: this.outfitUnderwearColor,
@@ -2328,6 +2381,11 @@ export class OppaiImageGen extends LitElement {
     // plain description per slot, and that is still every garment the user typed.
     if (d.outfitGear !== undefined) this.outfitGear = normalizeOutfitGear(d.outfitGear);
     if (d.outfitFace !== undefined) this.outfitFace = Math.max(0, Math.min(OUTFIT_FACES.length - 1, Math.round(d.outfitFace)));
+    // Checked against the table rather than trusted: a draft saved by a build that had
+    // a state this one does not would otherwise render a square with no pose at all.
+    if (d.outfitMisc !== undefined) {
+      this.outfitMisc = OUTFIT_ACTIVITIES.some((item) => item.id === d.outfitMisc) ? d.outfitMisc : "";
+    }
     if (d.outfitTier !== undefined) this.outfitTier = Math.max(0, Math.min(OUTFIT_TIERS.length - 1, Math.round(d.outfitTier)));
     if (d.outfitBackground !== undefined) this.outfitBackground = d.outfitBackground;
     if (d.outfitUnderwearColor !== undefined) this.outfitUnderwearColor = d.outfitUnderwearColor;
@@ -2580,11 +2638,15 @@ export class OppaiImageGen extends LitElement {
           : `${this.outfitPubicHairColor.trim() || "dark brown"} pubic hair visible`
         : "clean-shaven pubic area, no pubic hair"
       : "";
+    // A MISC state replaces both halves of the expression: these poses carry their own
+    // face because "collapsed limp on her back" with a cheerful smile stapled on is not
+    // the picture anybody asked for.
+    const misc = OUTFIT_ACTIVITIES.find((item) => item.id === this.outfitMisc);
     const parts = [
       "solo, one person, single subject",
       outfitShotPrompt(this.camera.shot),
-      face.face,
-      face.pose,
+      misc ? misc.face : face.face,
+      misc ? misc.pose : face.pose,
       tier.mood,
       ...this.equippedOutfitTerms(),
       this.outfitExposurePrompt(exposure),
@@ -2596,7 +2658,9 @@ export class OppaiImageGen extends LitElement {
       prompt: parts.filter(Boolean).join(", "),
       negative: [
         "multiple people, two people, group, crowd, 2girls, 2boys, extra person, duplicate person",
-        "arms raised, hands above head, arms behind head, hands in hair, both hands near face",
+        // The arms rule keeps the board's twelve portraits consistent, and fights most
+        // of the MISC poses outright — half of them are defined by where her hands are.
+        misc ? "" : "arms raised, hands above head, arms behind head, hands in hair, both hands near face",
         "detailed background, scenery, gradient background, patterned background, background shadows",
         this.outfitBackground === "black" ? "white background" : "black background",
         !this.outfitPubicHair ? "pubic hair" : "",
@@ -2663,14 +2727,19 @@ export class OppaiImageGen extends LitElement {
 
   // ── generate / save ─────────────────────────────────────────────────────────
   private outfitSlot(tier = this.outfitTier, face = this.outfitFace) {
-    const expression = OUTFIT_FACES[face];
     const heat = OUTFIT_TIERS[tier];
+    // A MISC square is filed by its state name and is deliberately left out of the
+    // board's numbering: index is what orders the sixty-square grid, and a state has no
+    // place in it. The filename still differs by id, so its previews never collide with
+    // an expression's.
+    const misc = OUTFIT_ACTIVITIES.find((item) => item.id === this.outfitMisc);
+    const expression = misc ?? OUTFIT_FACES[face];
     const slot: DraftOutfitSlot = {
       emotion: expression.id,
       emotionLabel: expression.label,
       tier,
       tierLabel: heat.label,
-      index: face + tier * OUTFIT_FACES.length,
+      index: misc ? -1 : face + tier * OUTFIT_FACES.length,
     };
     return {
       slot,
@@ -4388,11 +4457,25 @@ export class OppaiImageGen extends LitElement {
       </div>` : nothing}
       <div>
         <label class="field">Expression</label>
-        <select class="num" .value=${String(this.outfitFace)} ?disabled=${this.outfitBatchRunning}
+        <select class="num" .value=${String(this.outfitFace)} ?disabled=${this.outfitBatchRunning || !!this.outfitMisc}
           @change=${(e: Event) => (this.outfitFace = Number((e.target as HTMLSelectElement).value))}>
           ${OUTFIT_FACES.map((item, index) => html`<option value=${index}>${item.label}</option>`)}
         </select>
       </div>
+      <div>
+        <label class="field">Misc state</label>
+        <select class="num" .value=${this.outfitMisc} ?disabled=${this.outfitBatchRunning}
+          @change=${(e: Event) => (this.outfitMisc = (e.target as HTMLSelectElement).value)}>
+          <option value="">Off — render an expression</option>
+          ${OUTFIT_ACTIVITIES.map((item) => html`<option value=${item.id}>${item.label}</option>`)}
+        </select>
+      </div>
+      ${this.outfitMisc ? html`<div class="sec-note">
+        This square is filed into the wardrobe's Misc slot rather than an expression, and
+        the pose brings its own face — the expression picker is off while it is set. Misc
+        states are extras: they are not part of the ${OUTFIT_FACES.length * OUTFIT_TIERS.length}-square
+        board, and the batch below still renders expressions only. Turn this off to go back to it.
+      </div>` : nothing}
       <div>
         <label class="field">Heat tier</label>
         <select class="num" .value=${String(this.outfitTier)} ?disabled=${this.outfitBatchRunning}

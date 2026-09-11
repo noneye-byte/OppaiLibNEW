@@ -170,11 +170,50 @@ export function normalizeIntensity(value?: number): number {
   return Math.max(1, Math.min(5, Math.round(Number(value) || 1)));
 }
 
+/**
+ * The MISC state slot, when she is doing something rather than only feeling something.
+ *
+ * Deliberately not a union type here. The vocabulary lives on the server
+ * (libby_activities.go) and travels with the wardrobe list, so a state added there is
+ * usable without a client release; a hardcoded union would make every new state a
+ * compile error in three places. What this side needs is only the slot name, which is
+ * a path segment.
+ */
+export type LibbyActivity = string;
+
+/**
+ * A MISC state as a person reads it.
+ *
+ * The server sends a proper label with the vocabulary, and the wardrobe editor uses
+ * that. This is for the places that have the slot name and nothing else — the portrait
+ * caption, the call header — where fetching the whole vocabulary to title-case one
+ * word would be a request per screen for no gain.
+ */
+export function activityLabel(activity: string): string {
+  const word = activity.trim();
+  return word ? word.charAt(0).toUpperCase() + word.slice(1) : "";
+}
+
 /** Outfit uploads may be GIF or PNG; the server preserves their media type. */
-export function libbyAssetCandidates(emotion?: string, intensity?: number, outfit = loadLibbyOutfit()): string[] {
+export function libbyAssetCandidates(
+  emotion?: string, intensity?: number, outfit = loadLibbyOutfit(), activity?: LibbyActivity,
+): string[] {
   const mood = normalizeEmotion(emotion);
   const level = normalizeIntensity(intensity);
   const paths: string[] = [];
+  // What she is *doing* outranks what she is feeling, when there is art for it: a
+  // picture of her typing says more about the moment than a picture of her looking
+  // pleased, and the state is the rarer, more deliberate thing to have set.
+  //
+  // Outfit art only, and that is not a limitation to fix later — the bundled wardrobe
+  // draws twelve expressions and no activities, so there is nothing to fall back to
+  // within it. The chain simply continues into the emotion art below, which is why
+  // declaring a state never costs the user a broken sprite.
+  if (activity && outfit && outfit !== "default") {
+    const base = `/api/libby/outfits/${encodeURIComponent(outfit)}/emotions/${encodeURIComponent(activity)}`;
+    for (let tier = level - 1; tier >= 1; tier--) paths.push(`${base}?level=${tier}`);
+    paths.push(base);
+  }
   if (outfit && outfit !== "default") {
     // Outfits can carry a separate image per horniness tier (server levels 0..4,
     // where level = intensity-1). Try the tier for this intensity and every calmer

@@ -176,6 +176,7 @@ const (
 	rankLibrarySnapshot = 10 // the shelves, the shortlists, the recent additions
 	rankPhotoCatalogue  = 20 // which selfies she could send
 	rankThoughts        = 25 // that she may think something instead of saying it
+	rankActivity        = 27 // the MISC states she can put herself into
 	rankWantsList       = 30 // her own standing desires
 	rankRecaps          = 35 // the other conversations she has had with them
 	rankBond            = 40 // the gap, carried mood, closeness

@@ -268,6 +268,9 @@ func (s *Server) recognizeLibbyMedia(id int64) {
 		s.log.Debug("libby identity: auto tag", "media", id, "err", err)
 		return
 	}
+	// The tag is searchable text, so the index she looks things up in is now behind.
+	// See chat_library_index.go.
+	s.touchLibraryIndex()
 	s.log.Info("libby identity: recognised", "media", id)
 }
 
@@ -432,6 +435,7 @@ func (s *Server) handleMarkLibbyIdentity(w http.ResponseWriter, r *http.Request)
 		}
 		identity.Rejected = append(identity.Rejected, in.MediaID)
 	}
+	s.touchLibraryIndex()
 	if err := s.writeLibbyIdentity(identity); err != nil {
 		writeErr(w, http.StatusInternalServerError, "couldn't save that decision")
 		return
@@ -485,6 +489,9 @@ func (s *Server) handleScanLibbyIdentity(w http.ResponseWriter, r *http.Request)
 			continue
 		}
 		found++
+	}
+	if found > 0 {
+		s.touchLibraryIndex()
 	}
 	s.log.Info("libby identity: swept the library", "checked", len(ids), "tagged", found)
 	writeJSON(w, http.StatusOK, map[string]any{"checked": len(ids), "tagged": found})

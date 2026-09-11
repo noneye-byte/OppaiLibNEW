@@ -546,6 +546,13 @@ fun ChatScreen(
                         photoImageId = photo?.id.orEmpty(),
                         recentImageIds = seenPictures,
                         recentMediaIds = seenItems,
+                        // How long she has looked the same. One entry per reply, since
+                        // only a spoken message records a mood.
+                        recentMoods = pending.messages.mapNotNull { it.mood.ifBlank { null } }.takeLast(8),
+                        // That they have her full-screen and are watching her answer.
+                        call = callOpen,
+                        // What she is already doing. A state, not a per-message value.
+                        activity = pending.activity,
                         // What she has on: the worn outfit is a per-device pref, so the
                         // server cannot know it unless this says so.
                         outfit = if (char.id == "libby") repo.prefs.libbyOutfit else "",
@@ -584,8 +591,16 @@ fun ChatScreen(
                         chatID(), "assistant", reply.message, System.currentTimeMillis(),
                         imageId = reply.imageId, links = reply.links,
                         attachments = reply.attachments, actions = reply.actions,
+                        // What she looked like saying it, for the run the next turn reports.
+                        mood = reply.emotion,
                     ))
-                    val done = pending.copy(emotion = reply.emotion, intensity = level, progress = progress, messages = pending.messages + thoughtLines + spoken, updatedAt = System.currentTimeMillis())
+                    val done = pending.copy(
+                        emotion = reply.emotion, intensity = level, progress = progress,
+                        // Blank is a real answer here — it means she is doing nothing in
+                        // particular — so this is assigned rather than merged.
+                        activity = reply.activity,
+                        messages = pending.messages + thoughtLines + spoken, updatedAt = System.currentTimeMillis(),
+                    )
                     val latest = workspace ?: ws; save(latest.copy(conversations = latest.conversations.map { if (it.id == done.id) done else it }))
                 }.onFailure { error ->
                     status = runCatching { repo.api.chatStatus() }.getOrNull() ?: status
@@ -897,6 +912,10 @@ private fun LibbyVideoCall(
 ) {
     val emotion = conversation.emotion.ifBlank { "neutral" }
     val tier = conversation.intensity.coerceIn(1, LibbyMeter.MAX)
+    // What she is doing, when she has put herself into one of the MISC states. The
+    // portrait shows it where the worn wardrobe has art for it; the header says it
+    // either way, which is what makes the state visible on the bundled artwork.
+    val activity = conversation.activity
     val caption = conversation.messages.lastOrNull { it.role == "assistant" }?.content
     val clock = "%d:%02d".format(seconds / 60, seconds % 60)
 
@@ -916,6 +935,7 @@ private fun LibbyVideoCall(
                 tier = tier,
                 fallbackAsset = mascotAsset(emotion, tier),
                 modifier = Modifier.fillMaxSize().padding(top = 56.dp),
+                activity = activity,
             )
             Row(
                 Modifier.align(Alignment.TopCenter).fillMaxWidth().background(Color(0x66000000)).padding(horizontal = 18.dp, vertical = 12.dp),
@@ -926,7 +946,11 @@ private fun LibbyVideoCall(
                     Text(if (busy) "Speaking…" else clock, color = Color.White.copy(alpha = .78f), fontSize = 12.sp)
                 }
                 Column(horizontalAlignment = Alignment.End) {
-                    Text(emotion.replaceFirstChar(Char::uppercase), color = Color.White, fontSize = 12.sp)
+                    Text(
+                        if (activity.isEmpty()) emotion.replaceFirstChar(Char::uppercase)
+                        else "${emotion.replaceFirstChar(Char::uppercase)} · ${activity.replaceFirstChar(Char::uppercase)}",
+                        color = Color.White, fontSize = 12.sp,
+                    )
                     Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
                         repeat(LibbyMeter.MAX) { index ->
                             Box(

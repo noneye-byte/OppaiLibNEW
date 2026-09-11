@@ -77,7 +77,7 @@ func (s *Server) readLibbyWIP(id, emotion string, level int) (*libbyWIPSquare, e
 // removeLibbyWIP drops every square of one outfit. Called when the outfit is deleted,
 // which is the only thing that removes work in progress wholesale.
 func (s *Server) removeLibbyWIP(id string) {
-	for _, e := range libbyEmotions {
+	for _, e := range libbySlots {
 		for level := 0; level <= maxLibbyLevel; level++ {
 			_ = os.Remove(s.libbyWIPPath(id, e, level))
 		}
@@ -88,7 +88,7 @@ func (s *Server) removeLibbyWIP(id string) {
 // finished — the number a wardrobe card can show to mean "there is work here".
 func (s *Server) countLibbyWIP(id string) int {
 	n := 0
-	for _, e := range libbyEmotions {
+	for _, e := range libbySlots {
 		for level := 0; level <= maxLibbyLevel; level++ {
 			if _, err := os.Stat(s.libbyWIPPath(id, e, level)); err == nil {
 				n++
@@ -112,7 +112,7 @@ func (s *Server) handleListLibbyOutfitWIP(w http.ResponseWriter, r *http.Request
 		return
 	}
 	out := []libbyWIPSquare{}
-	for _, e := range libbyEmotions {
+	for _, e := range libbySlots {
 		for level := 0; level <= maxLibbyLevel; level++ {
 			sq, err := s.readLibbyWIP(id, e, level)
 			if err != nil {
@@ -145,8 +145,8 @@ type putLibbyWIPReq struct {
 // review state of the take it replaced.
 func (s *Server) handlePutLibbyOutfitWIP(w http.ResponseWriter, r *http.Request) {
 	id, emotion := r.PathValue("id"), r.PathValue("emotion")
-	if !charIDPattern.MatchString(id) || !libbyEmotionValid(emotion) {
-		writeErr(w, http.StatusBadRequest, "bad outfit id or emotion")
+	if !charIDPattern.MatchString(id) || !libbySlotValid(emotion) {
+		writeErr(w, http.StatusBadRequest, "bad outfit id or slot")
 		return
 	}
 	if _, err := s.readLibbyOutfit(id); err != nil {
@@ -199,8 +199,8 @@ func (s *Server) handlePutLibbyOutfitWIP(w http.ResponseWriter, r *http.Request)
 
 func (s *Server) handleGetLibbyOutfitWIPImage(w http.ResponseWriter, r *http.Request) {
 	id, emotion := r.PathValue("id"), r.PathValue("emotion")
-	if !charIDPattern.MatchString(id) || !libbyEmotionValid(emotion) {
-		writeErr(w, http.StatusBadRequest, "bad outfit id or emotion")
+	if !charIDPattern.MatchString(id) || !libbySlotValid(emotion) {
+		writeErr(w, http.StatusBadRequest, "bad outfit id or slot")
 		return
 	}
 	sq, err := s.readLibbyWIP(id, emotion, libbyLevelParam(r))
@@ -221,8 +221,8 @@ func (s *Server) handleGetLibbyOutfitWIPImage(w http.ResponseWriter, r *http.Req
 // caller asked for already holds.
 func (s *Server) handleDeleteLibbyOutfitWIP(w http.ResponseWriter, r *http.Request) {
 	id, emotion := r.PathValue("id"), r.PathValue("emotion")
-	if !charIDPattern.MatchString(id) || !libbyEmotionValid(emotion) {
-		writeErr(w, http.StatusBadRequest, "bad outfit id or emotion")
+	if !charIDPattern.MatchString(id) || !libbySlotValid(emotion) {
+		writeErr(w, http.StatusBadRequest, "bad outfit id or slot")
 		return
 	}
 	_ = os.Remove(s.libbyWIPPath(id, emotion, libbyLevelParam(r)))
