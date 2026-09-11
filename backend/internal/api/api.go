@@ -423,6 +423,13 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("GET /api/libby/bond", s.requireAuth(s.handleGetLibbyBond))
 	mux.HandleFunc("DELETE /api/libby/bond", s.requireAuth(s.handleResetLibbyBond))
+	// Backgrounds: the places she can be on the call screen, added and tagged by the
+	// user and chosen by her with a tag. See libby_backgrounds.go.
+	mux.HandleFunc("GET /api/libby/backgrounds", s.requireAuth(s.handleListLibbyBackgrounds))
+	mux.HandleFunc("POST /api/libby/backgrounds", s.requireAuth(s.handleSaveLibbyBackground))
+	mux.HandleFunc("DELETE /api/libby/backgrounds/{id}", s.requireAuth(s.handleDeleteLibbyBackground))
+	mux.HandleFunc("GET /api/libby/backgrounds/{id}/image", s.requireAuth(s.handleGetLibbyBackgroundImage))
+	mux.HandleFunc("PUT /api/libby/backgrounds/{id}/image", s.requireAuth(s.handleSetLibbyBackgroundImage))
 	mux.HandleFunc("GET /api/libby/outfits", s.requireAuth(s.handleListLibbyOutfits))
 	mux.HandleFunc("POST /api/libby/outfits", s.requireAuth(s.handleSaveLibbyOutfit))
 	mux.HandleFunc("DELETE /api/libby/outfits/{id}", s.requireAuth(s.handleDeleteLibbyOutfit))

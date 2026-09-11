@@ -213,6 +213,7 @@ fun SettingsScreen(repo: Repository, onBack: () -> Unit, onLogout: () -> Unit) {
                 }
             }
             LibbyOutfitsSection(repo)
+            LibbyBackgroundsSection(repo)
 
             SectionHeader("Library")
             StatsBlock(stats)

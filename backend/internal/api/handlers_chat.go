@@ -26,6 +26,12 @@ const (
 type chatMessage struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
+	// ID is the client's id for this message, so a reply can point at it. Optional:
+	// the model never sees it, and an older client sends none. See chat_replies.go.
+	ID string `json:"id,omitempty"`
+	// ReplyTo is the earlier message this one answers, when the user quoted one. The
+	// history folds it in as a quote; the latest message's is also framed directly.
+	ReplyTo *chatReplyRef `json:"replyTo,omitempty"`
 }
 
 type chatRequest struct {
@@ -96,6 +102,14 @@ type chatRequest struct {
 	// Client-owned, because opening a call is a thing that happens on a device and the
 	// server never hears about it otherwise. See chat_call.go.
 	Call bool `json:"call,omitempty"`
+	// Background is the id of the place she is currently in, on the call screen.
+	// Client-owned like Activity and for the same reason: it persists across turns and
+	// the server holds nothing between them. See libby_backgrounds.go.
+	Background string `json:"background,omitempty"`
+	// SharedMediaIDs are the library items the user attached to their latest message —
+	// by reference, unlike a shared photo, so a video or a game can be shown to her
+	// without a copy. See chat_shared.go.
+	SharedMediaIDs []int64 `json:"sharedMediaIds,omitempty"`
 	// Options is a future-proof pass-through for text-generation-webui's full
 	// ChatCompletionRequest surface (samplers, presets, character fields,
 	// templates, grammar, thinking controls, stop strings, and new additions).
@@ -145,7 +159,9 @@ var modeStyles = map[string]string{
 // stored, so it never reaches the log; a model that ignores the instruction simply
 // falls back to inferChatEmotion, which is why this is additive rather than relied on.
 var moodDirective = "End with [mood: <feeling> <1-5>] on its own line; feeling is one of " +
-	strings.Join(libbyEmotions, ", ") + ". Choose it yourself from what you truly feel, move it as far as the moment earns, and never mention the tag."
+	strings.Join(libbyEmotions, ", ") + ". The number is how keyed up and turned on you are, 1 calm to 5 at the edge. " +
+	"Move it whenever something earns it: up when they flirt, praise you or the scene heats, down when it cools or turns practical, by two or more for a real moment. " +
+	"Choose both yourself, and never mention the tag."
 
 // silenceDirective forbids narrating the plumbing.
 //
@@ -359,12 +375,11 @@ func photoCatalogue(ws chatWorkspace, characterID string, sent map[string]bool, 
 	if example == "" {
 		example = "lingerie, bed"
 	}
-	out := "Pictures of yourself — selfies — you can send in this chat. These are pictures of you, not items in the library to recommend. Each line is one picture, described by its tags:\n" +
+	out := "Selfies you can send — pictures of you, not library items to recommend. One per line, by its tags:\n" +
 		strings.Join(lines, "\n") +
-		"\nTo send one, end your reply with [send: <tags>], naming tags from the picture you want — for example [send: " + example + "]. " +
-		"A selfie is a deliberate thing a person does now and then, not a reflex: most replies have no picture at all. " +
-		"Send one only when you would actually stop and take or pull up a photo for them — never to decorate a reply, never more than one per reply, and not in every reply. " +
-		"Never describe, promise, or refer to a picture you have not actually sent."
+		"\nTo send one, end your reply with [send: <tags>] naming tags from the picture you mean — for example [send: " + example + "]. " +
+		"A selfie is a deliberate thing now and then, never decoration: most replies have none, and never more than one. " +
+		"Send one when they ask to see you, or when you would genuinely stop and take one for them. Never describe, promise or refer to a picture you have not actually sent."
 	if repeats {
 		out += "\nPictures marked [already sent] are ones you have shown in this conversation. " +
 			"Do not send those again unless the user asks you for that picture specifically — pick a different one, or send nothing."
@@ -900,6 +915,34 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			modePrompt += sharedLinkDirective(link)
 		}
 	}
+	// Library items they attached to this message are the turn's subject in the way a
+	// link or an opened item is, and are core for the same reason. See chat_shared.go.
+	if len(in.SharedMediaIDs) > 0 {
+		modePrompt += s.sharedItemsDirective(r.Context(), in.SharedMediaIDs, character.ID == "libby")
+	}
+	// Which earlier message their latest one answers, when they quoted one. Core: a
+	// reply that answers the wrong message is worse than no reply. See chat_replies.go.
+	modePrompt += userReplyDirective(in.Messages[len(in.Messages)-1].ReplyTo)
+	// Where she is, and where she could be — the backgrounds the user has added for the
+	// call screen. Only Libby has a place to be; only read when there is something to
+	// choose from. See libby_backgrounds.go.
+	var backgrounds []libbyBackgroundView
+	if character.ID == "libby" {
+		backgrounds = s.listLibbyBackgrounds()
+		if in.Background != "" {
+			known := false
+			for _, bg := range backgrounds {
+				if bg.ID == in.Background {
+					known = true
+					break
+				}
+			}
+			// A background deleted since the client last saw it is no background at all.
+			if !known {
+				in.Background = ""
+			}
+		}
+	}
 	// Linking is offered only where there is something to link *to*. A character told
 	// nothing about the collection would write tags for titles that do not exist, and
 	// they would be silently stripped back out — which reads as her losing her train
@@ -946,6 +989,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		// Without it she simply stops changing states, which costs a feature rather than
 		// the character. See libby_activities.go.
 		add("what she is doing", rankActivity, "\n\n"+activityDirective(in.Intensity))
+		// Where she is. Shed-able like the activity vocabulary and for the same reason:
+		// it is a list, and without it she simply stays put. See libby_backgrounds.go.
+		add("where she is", rankActivity, "\n\n"+backgroundDirective(backgrounds, in.Background))
 		// Learning is Libby's alone, like the library snapshot and actions: she is the
 		// one who lives here, so she is the one who remembers the person she lives with.
 		tail.WriteString("\n\n" + memoryDirective)
@@ -962,6 +1008,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		// See chat_feelings.go.
 		tail.WriteString(feelingsPromptBlock(latestUser))
 	}
+	// Replying to a particular earlier message. Everyone gets it — an imported card has
+	// threads to pick up too, and it asserts nothing about who the character is.
+	tail.WriteString("\n\n" + replyDirective)
 	tail.WriteString("\n\n" + moodDirective)
 	// How a feeling moves over a conversation, and whether this one has stopped moving.
 	// Beside the tag rather than with the rest of her temperament in chat_feelings.go,
@@ -988,7 +1037,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, "chat messages must have a valid role and content")
 			return
 		}
-		history = append(history, m)
+		// What the model reads is the text with any quoted reply folded in; the id and
+		// the reference are ours, and stay out of the payload. See chat_replies.go.
+		history = append(history, chatMessage{Role: m.Role, Content: quotedHistoryContent(m)})
 	}
 
 	probeCtx, probeCancel := context.WithTimeout(r.Context(), 5*time.Second)
@@ -1149,6 +1200,15 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// Where she moved to, whether she rang them or hung up, and which earlier message she
+	// is answering — all read before scrubbing deletes the tags. Resolved below.
+	sceneLabel, sceneDeclared := "", false
+	callRequested, callEnded := false, false
+	if character.ID == "libby" {
+		sceneLabel, sceneDeclared = findSceneTag(reply)
+		callRequested, callEnded = findCallTags(reply)
+	}
+	replyQuote, replyAsked := findReplyTag(reply)
 	// What she asked to hand over, read before scrubbing deletes those tags as well.
 	// Resolved further down, once the prose is clean: an attachment stands beside the
 	// message rather than in a sentence, so unlike a link it has nothing to substitute.
@@ -1207,6 +1267,25 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		// The remaining case is a state the heat does not support. It is refused rather
 		// than obeyed — but refusing a *change* must not also undo what she was already
 		// doing, or a model reaching too far would leave her standing in a blank room.
+	}
+	// Where she is leaving this turn. Same rules as the activity: unstated carries over,
+	// a stated place that exists takes, one that matches nothing is ignored, and "none"
+	// is the only thing that clears it.
+	background := in.Background
+	if sceneDeclared {
+		if id, ok := resolveBackground(sceneLabel, backgrounds); ok {
+			background = id
+		}
+	}
+	// A ring only means something off a call, and a hang-up only on one. Both are
+	// reported to the client, which draws the popup or ends the call; nothing here
+	// changes what she said.
+	callRequest := callRequested && !in.Call
+	callEnd := callEnded && in.Call
+	// The earlier message she is answering, if she quoted one that exists.
+	var replyTo *chatReplyRef
+	if replyAsked {
+		replyTo = resolveReplyTarget(replyQuote, in.Messages)
 	}
 	// Where this turn left off, so the next conversation can open to it rather than cold.
 	// Written now that the turn's final mood and intensity are settled; Libby's alone, and
@@ -1319,8 +1398,18 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		// in particular, which is also what a refused state resolves to.
 		// See libby_activities.go.
 		"activity": activity,
-		"imageId":  imageID,
-		"links":    links,
+		// Where she is, which persists the same way. Empty means nowhere in particular
+		// — the plain call screen. See libby_backgrounds.go.
+		"background": background,
+		// She rang them: the client shows an incoming-call popup and only their answer
+		// opens the call. And she hung up: the client ends the open call. See chat_call.go.
+		"callRequest": callRequest,
+		"callEnd":     callEnd,
+		// The earlier message this reply answers, drawn as a quote above it. Null when
+		// it answers the latest one, which is the ordinary case. See chat_replies.go.
+		"replyTo": replyTo,
+		"imageId": imageID,
+		"links":   links,
 		// Library items she put in front of them: something she decided to show, or a
 		// picture of her that lives in the library rather than in her chat gallery. Drawn
 		// as the picture itself where the kind allows and as an openable card otherwise.

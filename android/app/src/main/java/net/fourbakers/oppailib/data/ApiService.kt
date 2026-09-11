@@ -378,6 +378,21 @@ interface ApiService {
     @GET("api/libby/outfits")
     suspend fun libbyOutfits(): LibbyOutfitsResponse
 
+    // ── Libby backgrounds ────────────────────────────────────────────────
+    // The rooms she can be in on a call. Same storage scheme as the outfits.
+
+    @GET("api/libby/backgrounds")
+    suspend fun libbyBackgrounds(): LibbyBackgroundsResponse
+
+    @POST("api/libby/backgrounds")
+    suspend fun saveLibbyBackground(@Body body: LibbyBackgroundSaveRequest): LibbyBackground
+
+    @DELETE("api/libby/backgrounds/{id}")
+    suspend fun deleteLibbyBackground(@Path("id") id: String)
+
+    @PUT("api/libby/backgrounds/{id}/image")
+    suspend fun setLibbyBackgroundImage(@Path("id") id: String, @Body body: LibbyEmotionRequest)
+
     @POST("api/libby/outfits")
     suspend fun saveLibbyOutfit(@Body body: LibbyOutfitSaveRequest): LibbyOutfit
 

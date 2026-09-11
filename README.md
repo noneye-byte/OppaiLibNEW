@@ -39,13 +39,19 @@ container on Unraid, with a companion Android app.
   your collection — she can recommend and open items, react to what's on your screen
   while you **browse together**, comment on a video as you watch it, send pictures of
   herself, and shift expression and mood as you talk. She names things from anywhere in
-  the collection, not just the last few imports. Put her on **video** and she knows she
-  is on camera; she also puts herself into **Misc states** — typing, curled up reading,
-  and a good deal less idle — which an outfit can draw its own art for. She can offer to
-  import a URL, tag or favorite an item, or generate a picture; every proposed action is
-  shown on a card and waits for you to press **Allow**. Custom character cards
-  (SillyTavern V2 / PNG) and custom outfits are supported. Talks to any local OpenAI-compatible
-  LLM you point it at; nothing leaves the box. Works on web and Android.
+  the collection, not just the last few imports. Put her on **video** — or let her
+  **ring you** with an incoming-call popup — and she knows she is on camera, in a
+  **background** you added and tagged that she picks herself as the scene moves. She
+  puts herself into **Misc states** — curled up reading, dozing, and a good deal less
+  idle — which an outfit can draw its own art for, and her outfit's *typing* art shows
+  with a speech bubble while she writes. Both of you can **reply to a particular
+  message** as a quoted reply, you can **attach library items** — videos, games,
+  comics — for her to look at, and ask her to **retry** a reply with a note on what
+  should change. She can offer to import a URL, tag or favorite an item, or generate a
+  picture; every proposed action is shown on a card and waits for you to press
+  **Allow**. Custom character cards (SillyTavern V2 / PNG) and custom outfits are
+  supported. Talks to any local OpenAI-compatible LLM you point it at; nothing leaves
+  the box. Works on web and Android.
 - **Local image generation:** optional bridge to a self-hosted image generator
   (auto-detects InvokeAI), with a Civitai model browser, character prompts, and a
   one-tap path from a generated image into the library.

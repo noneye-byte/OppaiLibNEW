@@ -789,9 +789,11 @@ export class OppaiLibrary extends LitElement {
     // The disguise can be switched on from Settings without a reload; repaint the
     // few shell labels that describe its public identity.
     window.addEventListener("oppai-incognito", this.onIncognito);
+    window.addEventListener("popstate", this.onPopState);
   }
   disconnectedCallback() {
     super.disconnectedCallback();
+    window.removeEventListener("popstate", this.onPopState);
     this.removeEventListener("contextmenu", this.onContextMenu);
     this.removeEventListener(OPEN_MEDIA_EVENT, this.onOpenMedia);
     window.removeEventListener("keydown", this.onKey);
@@ -1061,11 +1063,37 @@ export class OppaiLibrary extends LitElement {
   private openItem(id: number, list?: Media[]) {
     if (list && list.length) this.viewerList = list.map((m) => m.id);
     else if (!this.viewerList.includes(id)) this.viewerList = [id];
+    // Opening the viewer is a place you can go back from. One history entry per
+    // viewer session, however many items are paged through inside it, so the back
+    // button — or the phone's back gesture — closes the viewer and lands where you
+    // opened it: the chat, with the conversation still there, rather than leaving
+    // the app. See onPopState and willUpdate.
+    if (!this.viewerPushed) {
+      try { history.pushState({ oppaiViewer: true }, ""); this.viewerPushed = true; } catch { /* file: URLs, sandboxed frames */ }
+    }
     this.selectedId = id;
   }
   private closeItem = () => {
     this.selectedId = null;
   };
+  /** Whether the open viewer put an entry on the history stack. */
+  private viewerPushed = false;
+  /** Back closes the viewer. The flag is cleared first so willUpdate does not pop
+      the entry the browser has just popped. */
+  private onPopState = () => {
+    if (!this.viewerPushed) return;
+    this.viewerPushed = false;
+    if (this.selectedId != null) this.selectedId = null;
+  };
+  protected willUpdate(changed: Map<PropertyKey, unknown>) {
+    // Every other way of closing the viewer — its own close button, a search, a
+    // section change — retires the history entry too, so back never has a dead
+    // press to spend on an entry the viewer left behind.
+    if (changed.has("selectedId") && this.selectedId == null && this.viewerPushed) {
+      this.viewerPushed = false;
+      try { history.back(); } catch { /* nothing to go back to */ }
+    }
+  }
   private onSearchInput(e: Event) {
     this.search = (e.target as HTMLInputElement).value;
     this.selectedId = null;
@@ -1294,7 +1322,11 @@ export class OppaiLibrary extends LitElement {
     const isBrowse = !isViewer && this.section === "browse" && !hasSearch;
     const isImageGen = !isViewer && this.section === "imagegen" && !hasSearch;
     const isStudio = !isViewer && this.section === "studio" && !hasSearch;
-    const isChat = !isViewer && this.section === "chat" && !hasSearch;
+    // Chat stays mounted underneath the viewer rather than being torn down: a link
+    // opened from a conversation must come back to that conversation, scrolled where
+    // it was, with a reply still generating if one was. It is hidden, not removed.
+    const chatMounted = this.section === "chat" && !hasSearch;
+    const isChat = !isViewer && chatMounted;
     const isFavorites = !isViewer && this.section === "favorites" && !hasSearch;
     const isHome = !isViewer && this.section === "home" && !hasSearch && !isFavorites;
     const isSearch = !isViewer && hasSearch;
@@ -1348,7 +1380,7 @@ export class OppaiLibrary extends LitElement {
             ? keyed("studio", html`<oppai-imagegen studio @imported=${() => this.refresh()}
                 @open-chat=${() => this.selectSection("chat")}></oppai-imagegen>`)
             : nothing}
-          ${isChat ? html`<oppai-chat .user=${this.user}></oppai-chat>` : nothing}
+          ${chatMounted ? html`<oppai-chat .user=${this.user} style=${isViewer ? "display:none" : ""}></oppai-chat>` : nothing}
           ${isGrid || isFavorites || isSearch
             ? this.renderGrid(isGrid, isFavorites, isSearch)
             : nothing}

@@ -67,7 +67,7 @@ func TestChatTellsHerSheIsOnCamera(t *testing.T) {
 	}
 	// She should still know the screen exists, so being seen is something she can ask
 	// for rather than only something that happens to her.
-	if !strings.Contains(prompt, "They can put you on video") {
+	if !strings.Contains(prompt, "You can video call them") {
 		t.Fatalf("she does not know the call screen exists: %s", prompt)
 	}
 }

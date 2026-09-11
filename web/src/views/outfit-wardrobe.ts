@@ -1,6 +1,6 @@
 import { LitElement, css, html, nothing } from "lit";
 import { customElement, state } from "lit/decorators.js";
-import { api, mascotSay, type LibbyActivityDef, type LibbyOutfit } from "../api.js";
+import { api, mascotSay, type LibbyActivityDef, type LibbyBackground, type LibbyOutfit } from "../api.js";
 import { iconStyles } from "../theme.js";
 import { defaultLibbyArt, loadLibbyOutfit, saveLibbyOutfit } from "../libby.js";
 import { libbyReact } from "../libby-voice.js";
@@ -89,6 +89,11 @@ export class OppaiOutfitWardrobe extends LitElement {
    * release. An older server sends none, and the section simply does not appear.
    */
   @state() private activities: LibbyActivityDef[] = [];
+  /** The places she can be on a call, managed below the wardrobes. */
+  @state() private backgrounds: LibbyBackground[] = [];
+  @state() private backgroundDraft: { id?: string; name: string; tags: string; image?: string; hasImage?: boolean } | null = null;
+  @state() private backgroundBusy = false;
+  @state() private backgroundVersion = 0;
   @state() private wornOutfit = loadLibbyOutfit();
   @state() private outfitDraft: OutfitDraft | null = null;
   @state() private outfitBusy = false;
@@ -104,6 +109,31 @@ export class OppaiOutfitWardrobe extends LitElement {
       line-height: 1.45;
     }
     .wardrobe-error { color: var(--oppai-error, #f2b8b5); font-size: 13px; margin-bottom: 8px; }
+    /* The rooms, as cards like the outfits — wider, because they are rooms. */
+    .scene-head { display: flex; align-items: baseline; gap: 10px; margin: 26px 0 4px; }
+    .scene-head h3 { margin: 0; font-size: 16px; }
+    .scene-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 12px; margin-top: 10px; }
+    .scene-card { position: relative; display: flex; flex-direction: column; border: 1px solid var(--oppai-border); border-radius: 14px; overflow: hidden;
+      background: var(--oppai-surface-2, rgba(255, 255, 255, 0.03)); text-align: left; cursor: pointer; padding: 0; font: inherit; color: inherit;
+      transition: border-color 0.12s, transform 0.12s; }
+    .scene-card:hover { transform: translateY(-2px); border-color: var(--oppai-border-strong); }
+    .scene-card .cover, .scene-card .cover-empty { aspect-ratio: 16 / 10; width: 100%; object-fit: cover; display: block; background: var(--oppai-surface); }
+    .scene-card .cover-empty { display: grid; place-items: center; color: var(--oppai-text-muted); font-size: 13px; text-align: center; }
+    .scene-card .card-body { padding: 8px 10px 10px; display: grid; gap: 2px; }
+    .scene-card .card-name { font-weight: 600; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .scene-card .card-meta { font-size: 12px; color: var(--oppai-text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .scene-editor { margin-top: 12px; padding: 14px; border: 1px solid var(--oppai-border); border-radius: 14px; display: grid; gap: 10px;
+      grid-template-columns: 220px minmax(0, 1fr); align-items: start; }
+    .scene-editor .drop { aspect-ratio: 16 / 10; border: 1px dashed var(--oppai-border-strong); border-radius: 10px; display: grid; place-items: center;
+      overflow: hidden; cursor: pointer; color: var(--oppai-text-muted); font-size: 12px; text-align: center; padding: 8px; background: var(--oppai-surface); }
+    .scene-editor .drop img { width: 100%; height: 100%; object-fit: cover; grid-area: 1 / 1; }
+    .scene-editor .drop.dragover { border-color: var(--oppai-accent); }
+    .scene-fields { display: grid; gap: 8px; }
+    .scene-fields label { display: grid; gap: 3px; font-size: 12px; color: var(--oppai-text-muted); }
+    .scene-fields input { font: inherit; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--oppai-border-strong); background: var(--oppai-surface); color: inherit; }
+    .scene-actions { display: flex; gap: 8px; flex-wrap: wrap; grid-column: 1 / -1; }
+    .outfit-btn.danger { color: var(--oppai-error, #f2b8b5); border-color: var(--oppai-error, #f2b8b5); }
+    @media (max-width: 640px) { .scene-editor { grid-template-columns: 1fr; } }
       .outfit-row {
         display: flex;
         align-items: center;
@@ -367,7 +397,13 @@ export class OppaiOutfitWardrobe extends LitElement {
     await this.loadOutfits();
   }
 
+  private async loadBackgrounds() {
+    try { this.backgrounds = (await api.libbyBackgrounds()).backgrounds; }
+    catch { /* An older server has none; the section simply shows nothing to pick. */ }
+  }
+
   private async loadOutfits() {
+    void this.loadBackgrounds();
     try {
       const res = await api.libbyOutfits();
       this.outfits = res.outfits;
@@ -428,7 +464,93 @@ export class OppaiOutfitWardrobe extends LitElement {
         </button>
       </div>
       ${this.outfitDraft ? this.renderOutfitEditor(this.outfitDraft) : nothing}
+      ${this.renderBackgrounds()}
     `;
+  }
+
+  // ── backgrounds ─────────────────────────────────────────────────────────
+  // Where she is on a video call. Each is a picture plus a name and a few tags —
+  // "bedroom, night, lamp" — and the tags are what let her pick one herself when
+  // the scene moves. Stored beside the outfits, chosen per conversation.
+
+  private renderBackgrounds() {
+    const d = this.backgroundDraft;
+    return html`
+      <div class="scene-head"><h3>Backgrounds</h3><span class="wardrobe-intro" style="margin:0">Rooms for the video call. Tag them so she can choose where she is.</span></div>
+      <div class="scene-cards">
+        ${this.backgrounds.map((bg) => html`<button class="scene-card" title="Edit ${bg.name}" @click=${() => this.openBackgroundEditor(bg)}>
+          ${bg.hasImage
+            ? html`<img class="cover" src=${api.libbyBackgroundURL(bg.id, this.backgroundVersion)} alt=${bg.name} loading="lazy" />`
+            : html`<div class="cover-empty">No picture yet</div>`}
+          <div class="card-body"><div class="card-name">${bg.name}</div><div class="card-meta">${bg.tags.length ? bg.tags.join(", ") : "No tags — she can only pick it by name"}</div></div>
+        </button>`)}
+        <button class="scene-card" title="Add a background" @click=${() => (this.backgroundDraft = { name: "", tags: "" })}>
+          <div class="cover-empty"><span><span class="material-symbols-rounded" style="font-size:26px; display:block;">add</span>New background</span></div>
+          <div class="card-body"><div class="card-name">New background</div><div class="card-meta">A room, a bed, a balcony…</div></div>
+        </button>
+      </div>
+      ${d ? html`<div class="scene-editor">
+        <label class="drop"
+          @dragover=${(e: DragEvent) => { e.preventDefault(); (e.currentTarget as HTMLElement).classList.add("dragover"); }}
+          @dragleave=${(e: DragEvent) => (e.currentTarget as HTMLElement).classList.remove("dragover")}
+          @drop=${(e: DragEvent) => { e.preventDefault(); (e.currentTarget as HTMLElement).classList.remove("dragover"); this.stageBackground(e.dataTransfer?.files?.[0]); }}>
+          ${d.image ? html`<img src=${d.image} alt="" />`
+            : d.id && d.hasImage ? html`<img src=${api.libbyBackgroundURL(d.id, this.backgroundVersion)} alt="" />`
+            : html`<span>Drop a picture here<br />or click to browse<br /><small>Landscape works best</small></span>`}
+          <input type="file" accept="image/*" style="display:none;" @change=${(e: Event) => { const input = e.target as HTMLInputElement; this.stageBackground(input.files?.[0]); input.value = ""; }} />
+        </label>
+        <div class="scene-fields">
+          <label>Name<input .value=${d.name} placeholder="Bedroom" maxlength="60" @input=${(e: Event) => (this.backgroundDraft = { ...d, name: (e.target as HTMLInputElement).value })} /></label>
+          <label>Tags — what it is, comma separated<input .value=${d.tags} placeholder="bedroom, night, lamp, cosy" @input=${(e: Event) => (this.backgroundDraft = { ...d, tags: (e.target as HTMLInputElement).value })} /></label>
+          <span class="wardrobe-intro" style="margin:0">She reads the name and the tags when deciding where to be: "going to bed" finds a room tagged bed, "somewhere darker" one tagged night.</span>
+        </div>
+        <div class="scene-actions">
+          <button class="outfit-btn on" ?disabled=${this.backgroundBusy || !d.name.trim()} @click=${() => void this.saveBackground()}>${d.id ? "Save" : "Add background"}</button>
+          <button class="outfit-btn" ?disabled=${this.backgroundBusy} @click=${() => (this.backgroundDraft = null)}>Cancel</button>
+          ${d.id ? html`<button class="outfit-btn danger" ?disabled=${this.backgroundBusy} @click=${() => void this.deleteBackground()}>Delete</button>` : nothing}
+        </div>
+      </div>` : nothing}
+    `;
+  }
+
+  private openBackgroundEditor(bg: LibbyBackground) {
+    this.backgroundDraft = { id: bg.id, name: bg.name, tags: bg.tags.join(", "), hasImage: bg.hasImage };
+  }
+
+  private stageBackground(file: File | undefined) {
+    if (!file || !this.backgroundDraft) return;
+    const reader = new FileReader();
+    reader.onload = () => { if (this.backgroundDraft) this.backgroundDraft = { ...this.backgroundDraft, image: String(reader.result) }; };
+    reader.readAsDataURL(file);
+  }
+
+  private async saveBackground() {
+    const d = this.backgroundDraft;
+    if (!d || !d.name.trim()) return;
+    this.backgroundBusy = true;
+    try {
+      const saved = await api.saveLibbyBackground({ id: d.id, name: d.name.trim(), tags: d.tags.split(",").map((t) => t.trim()).filter(Boolean) });
+      if (d.image) await api.setLibbyBackgroundImage(saved.id, d.image);
+      this.backgroundVersion++;
+      this.backgroundDraft = null;
+      await this.loadBackgrounds();
+      if (!d.image && !d.hasImage) mascotSay("Saved — add a picture and she can go there.", "success");
+    } catch (e) {
+      mascotSay((e as Error).message || "Couldn't save that background.", "error");
+    } finally { this.backgroundBusy = false; }
+  }
+
+  private async deleteBackground() {
+    const d = this.backgroundDraft;
+    if (!d?.id || !confirm(`Delete "${d.name}"?`)) return;
+    this.backgroundBusy = true;
+    try {
+      await api.deleteLibbyBackground(d.id);
+      this.backgroundDraft = null;
+      await this.loadBackgrounds();
+    } catch (e) {
+      mascotSay((e as Error).message || "Couldn't delete that background.", "error");
+    } finally { this.backgroundBusy = false; }
   }
 
   private wearOutfit(id: string) {
@@ -735,14 +857,16 @@ export class OppaiOutfitWardrobe extends LitElement {
             <h4 class="slot-group">Misc — what she is doing</h4>
             <p class="tier-note">
               Optional, and separate from her expressions: these are the states she can
-              put herself into — at her keyboard, curled up reading, or a good deal less
-              idle. She chooses one to fit the scene, and a state you have not drawn
-              simply falls back to her expression, so there is no wrong number to leave
-              empty. The intimate ones only become available to her as the heat climbs.
+              put herself into — curled up reading, dozing, or a good deal less idle. She
+              chooses one to fit the scene, and a state you have not drawn simply falls
+              back to her expression, so there is no wrong number to leave empty. The
+              intimate ones only become available to her as the heat climbs. Typing is
+              the exception: the app shows it while she is writing you a reply.
             </p>
             <div class="slots">
-              ${this.activities.map((activity) => this.renderSlot(d, activity.id, activity.label,
-                activity.minIntensity > 1 ? `${activity.says} · from tier ${LIBBY_TIERS[activity.minIntensity - 1]}` : activity.says))}
+              ${this.activities.map((activity) => this.renderSlot(d, activity.id, activity.auto ? `${activity.label} — while she writes` : activity.label,
+                activity.auto ? "Shown with a speech bubble while a reply is on its way; she never picks it herself"
+                  : activity.minIntensity > 1 ? `${activity.says} · from tier ${LIBBY_TIERS[activity.minIntensity - 1]}` : activity.says))}
             </div>
           ` : nothing}
           <div class="outfit-actions">

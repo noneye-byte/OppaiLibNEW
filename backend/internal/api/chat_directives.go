@@ -32,7 +32,7 @@ import (
 // Bounded to one line and 300 characters: most tags are short, but a [remember: …] note
 // can run to a full sentence, and the bound has to clear the longest of them. Still
 // short enough that an unbounded match cannot swallow real writing between two brackets.
-var strayTag = regexp.MustCompile(`(?i)[*_~` + "`" + `]{0,2}\[\s*(?:` +
+var strayTag = regexp.MustCompile(`(?i)[*_~` + "`" + `]{0,2}\[\s*(?:(?:` +
 	`mood|emotion|feeling|expression|face|pose|intensity|horniness|heat|meter` +
 	`|send|sends|sending|show|shows|showing|attach|attaches|attaching` +
 	`|photo|photos|pic|pics|picture|pictures|image|images|selfie|selfies` +
@@ -42,7 +42,17 @@ var strayTag = regexp.MustCompile(`(?i)[*_~` + "`" + `]{0,2}\[\s*(?:` +
 	// The MISC state tag, deleted after findLooseActivity has read it: she is doing
 	// the thing, not announcing it. See libby_activities.go.
 	`|doing|does|activity|activities|action|state` +
-	`)\b[^\]\n]{0,300}\]` + "[*_~`]{0,2}")
+	// Where she is, read before deletion. See libby_backgrounds.go.
+	`|scene|background|place|setting|location|room` +
+	`)\b[^\]\n]{0,300}` +
+	// Ringing and hanging up (chat_call.go), and replying to an earlier message
+	// (chat_replies.go). These verbs are ordinary words too — "[rings the bell]",
+	// "[answering the door]" — so unlike the nouns above they are only a tag when bare
+	// or followed by a delimiter, which is the shape the parsers accept.
+	`|(?:call|videocall|video\s+call|facetime|ring|rings|ringing|hangup|hang\s+up|end\s+call)\s*(?:[:=-][^\]\n]{0,60})?` +
+	// No hyphen among the delimiters here: "[re-reads the note]" is prose.
+	`|(?:replying|reply|quoting|quote|answering|re)\b(?:\s+to\b|\s*[:=])[^\]\n]{0,300}` +
+	`)\]` + "[*_~`]{0,2}")
 
 // strayThoughtTag deletes the thought tags after findThoughtTags has read them into
 // their own bubbles. A thought left in the prose has been said to the user, which is

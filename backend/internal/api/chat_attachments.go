@@ -87,11 +87,12 @@ var attachTag = regexp.MustCompile(`(?i)\[\s*attach(?:es|ing|ment)?\s*[:=-]?\s*(
 // budget sheds, so on a busy turn she does not know what anything is called; the resolver
 // matches loosely and falls back to the user's own words, and a model told to write only
 // exact titles answers "show me the beach one" with an apology instead of the video.
-const attachDirective = "Write [attach: <library title, or how they described it>] to put one of their own library items in front of them; it arrives as something they can open and play. " +
-	"When they ask you to show, send, play or put something on, that is this — agree in your own words and attach it in the same reply, never promise to and then not. " +
-	"Their description is a good enough query; write what they called it rather than declining because you are unsure of the exact title. " +
-	"It is a different act from [link: <title>], which only makes a name tappable mid-sentence — attach when you mean \"here, watch this\", link when you are merely mentioning it. " +
-	"At most one per reply, never something already attached in this conversation, and never anything you have not actually decided to show them."
+const attachDirective = "Three different acts, and choosing the right one matters. [send: <tags>] is a selfie: a picture of you, for when they want to see you. " +
+	"[attach: <library title, or how they described it>] puts one of their own library items in front of them, openable and playable — a video, gif, picture, comic or game. " +
+	"That is what \"show me\", \"put on\", \"play\", \"send me the …\" and a recommendation you actually mean call for: agree in your own words and attach it in the same reply, never promise and then not; their description is a good enough query. " +
+	"[link: <real title>] only makes a name tappable mid-sentence, for merely mentioning something. " +
+	"They ask to see you → send. They ask for something to watch, play or read → attach. You are just talking about it → link. " +
+	"At most one send or attach per reply, nothing already shown in this conversation, and never something you have not actually decided to show them."
 
 // findAttachRequests reads every attach request out of a reply, in order, capped.
 //

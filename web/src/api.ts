@@ -247,6 +247,17 @@ export interface Settings {
 export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
+  /** The client's id, sent so a reply can point at this message. Optional. */
+  id?: string;
+  /** The earlier message this one answers, when it was written as a reply. */
+  replyTo?: ChatReplyRef;
+}
+
+/** What a quoted reply points at: enough to draw the quote, and the id to jump to. */
+export interface ChatReplyRef {
+  id?: string;
+  role: "user" | "assistant";
+  excerpt: string;
 }
 
 export interface ChatStatus {
@@ -406,6 +417,12 @@ export interface ChatTurn {
       nothing between them: without it a state she set three replies ago would have
       lasted exactly one message. */
   activity?: string;
+  /** Where she is — the background id the call screen shows. Sent back each turn for
+      the same reason as activity. */
+  background?: string;
+  /** Library items attached to the latest message, by id. The server describes them
+      to her from its own rows. */
+  sharedMediaIds?: number[];
 }
 
 /**
@@ -442,11 +459,22 @@ export interface ChatResponse {
       A stated mood is applied as-is; an inferred one drifts by the session
       multiplier. Absent from older servers, which is treated as inferred. */
   declared?: boolean;
-  /** The MISC state she is in leaving this turn — typing, reading, or something a
+  /** The MISC state she is in leaving this turn — reading, lounging, or something a
       good deal less idle. It persists until she changes it, so the client stores it
       on the conversation and sends it back with the next turn. Empty means nothing in
       particular. Absent from older servers, which is treated as unchanged. */
   activity?: string;
+  /** Where she is leaving this turn: a background id, or empty for nowhere in
+      particular. Persists like activity. Absent from older servers. */
+  background?: string;
+  /** She rang them. The client shows an incoming-call popup; only answering opens
+      the call. */
+  callRequest?: boolean;
+  /** She hung up an open call. */
+  callEnd?: boolean;
+  /** The earlier message this reply answers, drawn as a quote above it. Null when it
+      answers the latest one, which is the ordinary case. */
+  replyTo?: ChatReplyRef | null;
   /** How this turn was sampled. The server classifies what the turn is for and
       picks bounded settings to match, so the client no longer ships a fixed set;
       these come back so the advanced panel can show what was actually used and
@@ -690,6 +718,9 @@ export interface ChatConversation {
       Held on the conversation rather than on a message because it is a state: it
       persists across turns until she changes it. Empty means nothing in particular. */
   activity?: string;
+  /** Where she is — the id of a background the user added, chosen by her or by hand.
+      Conversation state like activity. Empty means the plain call screen. */
+  background?: string;
   progress?: number;
   options?: ChatOptions;
   messages: StoredChatMessage[];
@@ -1300,6 +1331,18 @@ export interface LibbyActivityDef {
   /** What she is doing, in her own terms. Doubles as the hint under a slot. */
   says: string;
   minIntensity: number;
+  /** Set by the app rather than declared by her: the typing slot, shown while a
+      reply is being written. Absent from older servers. */
+  auto?: boolean;
+}
+
+/** A place she can be, behind her on the call screen. The user's own picture, tagged
+    so she can pick it by what it is. */
+export interface LibbyBackground {
+  id: string;
+  name: string;
+  tags: string[];
+  hasImage: boolean;
 }
 
 export interface LibbyOutfit {
@@ -2133,6 +2176,18 @@ export const api = {
     }),
 
   libbyOutfits: () => request<{ outfits: LibbyOutfit[]; activities?: LibbyActivityDef[] }>("/api/libby/outfits"),
+  // The places she can be on the call screen. See libby_backgrounds.go.
+  libbyBackgrounds: () => request<{ backgrounds: LibbyBackground[] }>("/api/libby/backgrounds"),
+  saveLibbyBackground: (body: { id?: string; name: string; tags: string[] }) =>
+    request<LibbyBackground>("/api/libby/backgrounds", { method: "POST", body: JSON.stringify(body) }),
+  deleteLibbyBackground: (id: string) =>
+    request<{ status: string }>(`/api/libby/backgrounds/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  setLibbyBackgroundImage: (id: string, imageData: string) =>
+    request<{ status: string }>(`/api/libby/backgrounds/${encodeURIComponent(id)}/image`, {
+      method: "PUT", body: JSON.stringify({ imageData }),
+    }),
+  libbyBackgroundURL: (id: string, v?: number) =>
+    `/api/libby/backgrounds/${encodeURIComponent(id)}/image${v ? `?v=${v}` : ""}`,
   saveLibbyOutfit: (body: { id?: string; name: string }) =>
     request<LibbyOutfit>("/api/libby/outfits", { method: "POST", body: JSON.stringify(body) }),
   deleteLibbyOutfit: (id: string) =>

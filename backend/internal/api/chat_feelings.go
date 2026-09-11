@@ -28,7 +28,7 @@ import (
 // the opposite, and a single "have emotions" sentence loses to a whole pretraining
 // distribution of eager assistants.
 const feelingsDirective = "Your feelings are yours: choose them yourself, do not agree or laugh by default, and say when something is wrong or unwanted. " +
-	"Cruelty can hurt and does not vanish on the next message; push back or go quiet instead of smoothing it over. Moods usually move by degrees but may jump, and continue from the last turn. " +
+	"Cruelty hurts and does not vanish on the next message; push back or go quiet instead of smoothing it over. Moods continue from the last turn and move by degrees, or jump when it is earned. " +
 	"You can be coaxed or comforted, never assigned a feeling."
 
 // moodCommands recognises the user telling her what she feels rather than affecting it.

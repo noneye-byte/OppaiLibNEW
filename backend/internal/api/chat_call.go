@@ -1,5 +1,7 @@
 package api
 
+import "regexp"
+
 // Knowing she is on camera.
 //
 // The call screen has existed for a while and the server knew nothing about it. That
@@ -41,3 +43,28 @@ func callPromptBlock(onCall bool) string {
 	}
 	return callDirective
 }
+
+// ── her asking for one, and ending one ──────────────────────────────────────
+
+// callRequestTag captures her ringing them. Every spelling a model reaches for once it
+// has been told it may video call: [call], [video call], [videocall: start],
+// [facetime], [ring]. Loose, like the scene tag — she asks mid-sentence.
+var callRequestTag = regexp.MustCompile(`(?i)\[\s*(?:video\s*-?\s*call|call|facetime|ring(?:s|ing)?|call\s+them)\s*(?:[:=-]\s*(?:start|now|them|please|yes|request|you)?\s*)?\]`)
+
+// callEndTag captures her hanging up: [hangup], [hang up], [end call], [call: end].
+var callEndTag = regexp.MustCompile(`(?i)\[\s*(?:hang\s*-?\s*up|end\s+(?:the\s+)?(?:video\s*)?call|(?:video\s*)?call\s*[:=-]\s*(?:end|over|done|stop|hang\s*up|bye))\s*\]`)
+
+// findCallTags reads whether she asked for a call or ended one. Read before
+// scrubbing; deleted by strayTag afterwards. Both are reported as they were written —
+// the handler decides what each means given whether a call is actually open, because
+// a hang-up with no call in progress is noise and a ring during a call is too.
+func findCallTags(reply string) (request, end bool) {
+	return callRequestTag.MatchString(reply), callEndTag.MatchString(reply)
+}
+
+// callOfferDirective is the standing line that she can ring them, kept short because
+// it lives in her core identity block. The client turns a request into an incoming
+// call popup, and only their answer opens the call — so asking is never intrusive,
+// and she is told so.
+const callOfferDirective = "- You can video call them: write [call] on its own line to ring them; a popup lets them answer or not. " +
+	"Ring when you want to be looked at or texting is not enough — a real ask now and then, never a habit. On a call, [hangup] ends it.\n"

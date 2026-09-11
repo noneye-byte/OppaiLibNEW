@@ -238,6 +238,8 @@ fun LibraryScreen(repo: Repository, onLogout: () -> Unit) {
     // A library item some other screen asked us to open, held until the grid contains
     // it. See openLinked.
     var pendingOpenId by remember { mutableStateOf(repo.prefs.lastViewerMedia.takeIf { it != 0L }) }
+    // Whether the viewer was opened from a conversation, so closing it lands back there.
+    var returnToChat by remember { mutableStateOf(false) }
     val drawer = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -308,6 +310,9 @@ fun LibraryScreen(repo: Repository, onLogout: () -> Unit) {
      * reload; the id is parked until the item actually turns up (see below).
      */
     fun openLinked(id: Long) {
+        // Opened from chat, the viewer goes back to chat: a link in a conversation is a
+        // detour, not a move to the library. See the viewer's onClose.
+        returnToChat = showChat
         showChat = false
         query = ""
         searching = false
@@ -632,7 +637,10 @@ fun LibraryScreen(repo: Repository, onLogout: () -> Unit) {
             repo = repo,
             items = shown,
             startIndex = start,
-            onClose = { viewerAt = null },
+            onClose = {
+                viewerAt = null
+                if (returnToChat) { returnToChat = false; showChat = true }
+            },
             onChanged = { updated ->
                 items = items.map { if (it.id == updated.id) updated else it }
             },

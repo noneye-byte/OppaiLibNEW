@@ -18,7 +18,10 @@ func TestSplitActivity(t *testing.T) {
 		want     string
 		declared bool
 	}{
-		{"as specified", "still here.\n[doing: typing]", "still here.", "typing", true},
+		{"as specified", "still here.\n[doing: reading]", "still here.", "reading", true},
+		// Typing is the app's to show while a reply is being written, never hers to
+		// declare: a model writing it means "I am here", which is nothing in particular.
+		{"typing clears", "still here.\n[doing: typing]", "still here.", "", true},
 		{"a synonym, title case", "one sec\n[Doing: Masturbating]", "one sec", "fingering", true},
 		{"markdown wrapped", "hi\n*[doing: reading]*", "hi", "reading", true},
 		{"cleared", "ok, done.\n[doing: none]", "ok, done.", "", true},
@@ -35,7 +38,7 @@ func TestSplitActivity(t *testing.T) {
 	}
 	// A reply that is nothing but a tag is not a reply, and must come back untouched so
 	// the caller's own "she said nothing" check reports the real problem.
-	if text, _, declared := splitActivity("[doing: typing]"); declared || text != "[doing: typing]" {
+	if text, _, declared := splitActivity("[doing: reading]"); declared || text != "[doing: reading]" {
 		t.Fatalf("a bare tag was treated as a reply: %q, %v", text, declared)
 	}
 }
@@ -50,8 +53,13 @@ func TestActivityHeatGate(t *testing.T) {
 	if got := allowedActivity("vibrator", 4); got != "vibrator" {
 		t.Fatalf("an intimate state was refused at its own floor: %q", got)
 	}
-	if got := allowedActivity("typing", 1); got != "typing" {
+	if got := allowedActivity("reading", 1); got != "reading" {
 		t.Fatalf("an idle state was gated: %q", got)
+	}
+	// The typing slot is set by the client while she composes and is never a state she
+	// can put herself into, whatever the heat.
+	if got := allowedActivity("typing", 5); got != "" {
+		t.Fatalf("the app-driven typing slot was accepted as a declared state: %q", got)
 	}
 	if got := allowedActivity("not-a-state", 5); got != "" {
 		t.Fatalf("an invented state resolved: %q", got)
@@ -63,8 +71,11 @@ func TestActivityHeatGate(t *testing.T) {
 // reads to her as the tag not working.
 func TestActivityDirectiveTracksHeat(t *testing.T) {
 	calm := activityDirective(1)
-	if !strings.Contains(calm, "typing") {
+	if !strings.Contains(calm, "reading") {
 		t.Fatalf("the idle states are missing at heat 1: %s", calm)
+	}
+	if strings.Contains(calm, "typing") {
+		t.Fatalf("the app-driven typing slot was offered as a state to declare: %s", calm)
 	}
 	for _, state := range []string{"vibrator", "fingering", "climax"} {
 		if strings.Contains(calm, state) {
@@ -72,7 +83,7 @@ func TestActivityDirectiveTracksHeat(t *testing.T) {
 		}
 	}
 	hot := activityDirective(5)
-	for _, state := range []string{"typing", "rubbing", "fingering", "vibrator", "dildo", "spread", "climax"} {
+	for _, state := range []string{"reading", "rubbing", "fingering", "vibrator", "dildo", "spread", "climax"} {
 		if !strings.Contains(hot, state) {
 			t.Fatalf("%q is missing at heat 5: %s", state, hot)
 		}
@@ -81,11 +92,11 @@ func TestActivityDirectiveTracksHeat(t *testing.T) {
 	// rather than a reaction to one message. It is a separate block from the vocabulary
 	// above on purpose: the vocabulary is budgeted and this is not, so being in a state
 	// stays true even on a window too small to explain how to leave one.
-	state := activityStateDirective("typing")
-	if !strings.Contains(state, "Right now you are at a keyboard") {
+	state := activityStateDirective("reading")
+	if !strings.Contains(state, "Right now you are reading something") {
 		t.Fatalf("the current state was not carried into the turn: %s", state)
 	}
-	if activityStateDirective("") != "" || activityStateDirective("not-a-state") != "" {
+	if activityStateDirective("") != "" || activityStateDirective("not-a-state") != "" || activityStateDirective("typing") != "" {
 		t.Fatal("a state that does not exist was asserted anyway")
 	}
 }
@@ -127,7 +138,7 @@ func TestChatReturnsTheStateSheDeclared(t *testing.T) {
 			_, _ = w.Write([]byte(`{"model_name":"test-local"}`))
 			return
 		}
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"one sec, finishing a thought.\n[doing: typing]\n[mood: happy 2]"}}]}`))
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"one sec, finishing a thought.\n[doing: reading]\n[mood: happy 2]"}}]}`))
 	}))
 	defer llm.Close()
 
@@ -148,8 +159,8 @@ func TestChatReturnsTheStateSheDeclared(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if out.Activity != "typing" {
-		t.Fatalf("activity = %q, want typing", out.Activity)
+	if out.Activity != "reading" {
+		t.Fatalf("activity = %q, want reading", out.Activity)
 	}
 	if strings.Contains(out.Message, "doing") || strings.Contains(out.Message, "[") {
 		t.Fatalf("the tag reached the prose: %q", out.Message)
@@ -174,7 +185,7 @@ func TestChatRefusesAnUngatedStateAndKeepsTheOldOne(t *testing.T) {
 	s.settings.Set(cur)
 
 	rec := do(t, s.Handler(), token, http.MethodPost, "/api/chat",
-		`{"mode":"sweet","characterId":"libby","intensity":1,"activity":"typing","messages":[{"role":"user","content":"morning"}]}`)
+		`{"mode":"sweet","characterId":"libby","intensity":1,"activity":"reading","messages":[{"role":"user","content":"morning"}]}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("chat: %d %s", rec.Code, rec.Body)
 	}
@@ -185,7 +196,7 @@ func TestChatRefusesAnUngatedStateAndKeepsTheOldOne(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if out.Activity != "typing" {
+	if out.Activity != "reading" {
 		t.Fatalf("activity = %q, want the state she was already in", out.Activity)
 	}
 	if strings.Contains(out.Message, "[") {

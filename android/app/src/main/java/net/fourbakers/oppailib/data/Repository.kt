@@ -143,6 +143,13 @@ class Repository(private val appContext: Context, val prefs: Prefs) {
         return if (level > 0) "$base?level=$level" else base
     }
 
+    /** A background's picture, for the call screen. `v` busts Coil's cache after the
+        picture is replaced, for the reason the outfit cover takes one. */
+    fun libbyBackgroundUrl(id: String, v: Int = 0): String {
+        val base = "${baseUrl}api/libby/backgrounds/${URLEncoder.encode(id, "UTF-8")}/image"
+        return if (v > 0) "$base?v=$v" else base
+    }
+
     /** An outfit's card art. `v` busts Coil's cache after a cover changes — the URL is
         otherwise stable, and a card still showing the old picture is indistinguishable
         from a save that did not work. */

@@ -6,7 +6,7 @@ import {
   type ChatModelInspection, type ChatModels, type ChatOptions, type ChatProfile, type ChatSampling, type ChatStatus, type ChatWorkspace,
   type LibbyAutoDecision, type LibbyAutoSettings, type LibbyAutoState, type LibbyBond, type LibbyContext,
   type DiscordPlace, type DiscordState, type LibbyIdentity, type LibbyMemory, type LibbyThought, type LibbyWant, type SharedLink,
-  type StoredChatMessage, type User,
+  type StoredChatMessage, type User, type ChatReplyRef, type LibbyAttachment, type LibbyBackground, type Media,
 } from "../api.js";
 import { iconStyles, motionStyles } from "../theme.js";
 import { formatBytes } from "../media-meta.js";
@@ -19,10 +19,11 @@ import { applyProgression, getIntensity, setIntensity } from "../libby-meter.js"
 import { libbyHeatDelta, libbyLibraryAnswer, libbyOpener, libbyReact, libbyReply, type LibbyLine } from "../libby-voice.js";
 import { menuDivider, nativeMenuWanted, openMenu, type MenuItem } from "../context-menu.js";
 import { SHARE_EVENT, takePendingShare } from "../chat-share.js";
+import { excerptOf } from "../chat-replies.js";
 import { libbyMotion } from "../libby-motion.js";
 import { profileUpdates } from "../ui-metrics.js";
 import {
-  ActionApprovals, actionCardStyles, attachmentStyles, linkChipStyles, recentlyAttached, recentMoods, recentlySent,
+  ActionApprovals, actionCardStyles, attachmentStyles, KIND_ICONS, linkChipStyles, recentlyAttached, recentMoods, recentlySent,
   renderActionCards, renderAttachments, renderLinkChips, requestOpenMedia,
 } from "../chat-links.js";
 
@@ -85,6 +86,9 @@ function findLinkInText(text: string): string {
   const found = /(?:https?:\/\/|www\.)[^\s<>"'`]{2,}/i.exec(text)?.[0] ?? "";
   return found.replace(/[.,;:!?)\]}'"]+$/, "");
 }
+
+/** How long an incoming call rings before it counts as missed. */
+const RING_MS = 40_000;
 
 const MAX_BUBBLES = 3;
 function splitIntoBubbles(text: string): string[] {
@@ -412,6 +416,22 @@ export class OppaiChat extends LitElement {
   /** The full-screen sprite view. Text chat keeps running underneath it. */
   @state() private callOpen = false;
   @state() private callSeconds = 0;
+  /** She rang: the popup is up until it is answered, declined, or rings out. */
+  @state() private incomingCall = false;
+  private ringTimer = 0;
+  /** The places she can be, for the call screen and its picker. Loaded when a call
+      opens; refreshed when the picker is opened, since backgrounds are edited in the
+      studio and this view has no other way to hear about it. */
+  @state() private backgrounds: LibbyBackground[] = [];
+  @state() private scenePickerOpen = false;
+  @state() private callCaptions = true;
+  /** The message the next thing you send is a reply to. */
+  @state() private replyTarget: StoredChatMessage | null = null;
+  /** Library items attached to the composer, sent with the next message. */
+  @state() private pendingItems: LibbyAttachment[] = [];
+  /** The library picker: its search box and what it found. */
+  @state() private picker: { query: string; items: Media[]; loading: boolean } | null = null;
+  private pickerSeq = 0;
   @query(".log") private log?: HTMLElement;
   @query(".composer textarea") private composer?: HTMLTextAreaElement;
   private callTimer = 0;
@@ -555,6 +575,17 @@ export class OppaiChat extends LitElement {
     .msg.mine .text code { background:rgba(0,0,0,.18); color:inherit; }
     .meta { display:flex; justify-content:flex-end; align-items:center; gap:5px; margin-top:2px; font-size:10px; opacity:.6; line-height:1; }
     .sent-image { display:block; max-width:min(420px,100%); max-height:420px; border-radius:12px; margin-top:6px; object-fit:contain; background:var(--input); }
+    /* A quoted reply: the earlier line sits above the new one on a bar, the way every
+       messenger draws it. Clickable, because the point of a quote is to find what it
+       quotes. In your own bubble the accent is the bubble, so the bar goes white. */
+    .quote { display:grid; gap:1px; margin:0 0 6px; padding:5px 9px; border-left:3px solid var(--accent); border-radius:6px;
+      background:color-mix(in srgb,var(--md-sys-color-on-surface) 7%,transparent); font-size:12.5px; cursor:pointer; text-align:left; border-top:0; border-right:0; border-bottom:0; color:inherit; width:100%; }
+    .quote strong { font-size:11px; color:var(--accent); }
+    .quote span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; opacity:.85; }
+    .msg.mine .quote { border-left-color:rgba(255,255,255,.75); background:rgba(0,0,0,.16); }
+    .msg.mine .quote strong { color:rgba(255,255,255,.9); }
+    .msg.flash .bubble { animation:chat-flash 1.2s ease both; }
+    @keyframes chat-flash { 0%,100% { box-shadow:0 0 0 0 transparent; } 25% { box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 70%,transparent); } }
     /* Hover actions sit just above the bubble, on the side away from the edge. */
     .msg-actions { opacity:0; position:absolute; top:-14px; right:6px; z-index:1; display:flex; border:1px solid var(--line); border-radius:8px;
       overflow:hidden; background:var(--main); box-shadow:0 2px 8px rgba(0,0,0,.18); transition:opacity .12s ease; }
@@ -616,6 +647,33 @@ export class OppaiChat extends LitElement {
        the link goes is visible rather than hidden behind whatever it called itself. */
     .link-preview .link-icon { width:44px; flex:0 0 44px; text-align:center; color:var(--muted); }
     .link-preview .link-host { color:var(--muted); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    /* What the next message answers, and what it carries. Both sit above the box the
+       way a messenger stacks them, each with its own close. */
+    .reply-preview { border-left:3px solid var(--accent); }
+    .reply-preview .link-icon { color:var(--accent); }
+    .items-preview { display:flex; flex-wrap:wrap; gap:6px; margin:0 0 8px; }
+    .item-chip { display:flex; align-items:center; gap:6px; padding:4px 6px 4px 4px; border:1px solid var(--line); border-radius:10px; background:var(--side); font-size:12px; max-width:100%; }
+    .item-chip img,.item-chip .chip-icon { width:28px; height:28px; border-radius:6px; object-fit:cover; flex:0 0 28px; display:grid; place-items:center; background:var(--input); color:var(--muted); }
+    .item-chip .chip-icon .material-symbols-rounded { font-size:18px; }
+    .item-chip strong { font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:180px; }
+    .item-chip button { border:0; background:transparent; color:var(--muted); cursor:pointer; display:grid; padding:2px; border-radius:50%; }
+    .item-chip button:hover { color:inherit; background:var(--hover); }
+    /* The library picker: a sheet over the log, search on top, a grid of what matched. */
+    .picker { position:absolute; inset:0; z-index:55; display:grid; place-items:center; background:rgba(0,0,0,.45); animation:chat-fade .15s ease both; }
+    .picker-card { width:min(720px,94%); max-height:min(80%,640px); display:flex; flex-direction:column; border-radius:18px; background:var(--main); box-shadow:0 20px 60px rgba(0,0,0,.4); overflow:hidden; }
+    .picker-head { display:flex; align-items:center; gap:8px; padding:12px 12px 8px 16px; }
+    .picker-head input { flex:1; min-width:0; border:0; outline:0; border-radius:999px; padding:9px 14px; background:var(--input); color:inherit; }
+    .picker-grid { flex:1; min-height:0; overflow:auto; display:grid; grid-template-columns:repeat(auto-fill,minmax(120px,1fr)); gap:8px; padding:6px 16px 16px; }
+    .picker-tile { position:relative; border:2px solid transparent; border-radius:12px; overflow:hidden; background:var(--input); cursor:pointer; aspect-ratio:1; display:grid; padding:0; color:inherit; }
+    .picker-tile img { width:100%; height:100%; object-fit:cover; grid-area:1/1; }
+    .picker-tile .tile-kind { grid-area:1/1; place-self:center; color:var(--muted); font-size:34px; }
+    .picker-tile .tile-name { grid-area:1/1; align-self:end; padding:18px 7px 6px; font-size:11px; text-align:left; color:#fff; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+      background:linear-gradient(to top,rgba(0,0,0,.75),transparent); }
+    .picker-tile.on { border-color:var(--accent); }
+    .picker-tile.on::after { content:"check"; font-family:"Material Symbols Rounded"; position:absolute; top:6px; right:6px; width:22px; height:22px; border-radius:50%; background:var(--accent); color:var(--on-accent); display:grid; place-items:center; font-size:16px; }
+    .picker-foot { display:flex; align-items:center; gap:8px; padding:10px 16px; border-top:1px solid var(--line); color:var(--muted); font-size:12px; }
+    .picker-foot .autobar-btn { margin-left:auto; }
+    .picker-empty { grid-column:1/-1; padding:30px; text-align:center; color:var(--muted); font-size:13px; }
 
     /* ── autopilot ───────────────────────────────────────────────────────── */
     .autobar { display:flex; align-items:center; gap:9px; padding:8px 16px; font-size:12px;
@@ -648,6 +706,12 @@ export class OppaiChat extends LitElement {
     /* The MISC state under the portrait. It earns its place even when the worn
        wardrobe has no picture for the state: the art then falls back to her expression,
        and this is the only thing on screen saying what she is actually doing. */
+    /* Her typing, shown on her rather than only in the log: the outfit's typing art
+       (when it has one) and a speech bubble of dots up by her head, with a tail. */
+    .stage-art { position:relative; }
+    .stage-bubble { position:absolute; top:10%; right:8%; padding:9px 12px; border-radius:16px; border-bottom-left-radius:4px; background:var(--bubble);
+      box-shadow:0 3px 10px rgba(0,0,0,.22); animation:chat-rise .2s var(--oppai-ease-standard,cubic-bezier(.2,0,0,1)) both; z-index:2; }
+    .stage-bubble::after { content:""; position:absolute; left:-6px; bottom:6px; border:7px solid transparent; border-right-color:var(--bubble); border-left:0; }
     .stage-doing { margin:0 auto; padding:3px 11px; border-radius:999px; background:var(--input);
       font-size:11px; font-weight:650; letter-spacing:.02em; opacity:.85; }
     .stage-meter { display:flex; gap:4px; justify-content:center; padding:8px 0 12px; }
@@ -793,49 +857,95 @@ export class OppaiChat extends LitElement {
       .nav-cat,.nav-sep,.nav-row.close{display:none}
       .nav-row{flex:0 0 auto;padding:7px 12px;border-radius:999px}
       .pfp-row{grid-template-columns:64px minmax(0,1fr)}.pfp{width:64px;height:64px}
-      .call-caption{max-width:100%}.call-top{flex-direction:column;align-items:flex-start;gap:6px}
+      .call-caption{max-width:100%}
     }
-    /* Video call. Covers the whole client rather than sitting in the portrait
-       column: the point is to look at the character, so the chrome gets out of
-       the way and the sprite is given the full height. */
-    .call { position:absolute; inset:0; z-index:60; display:flex; flex-direction:column; background:var(--md-sys-color-scrim,#000);
-      animation:chat-rise .18s var(--oppai-ease-standard,cubic-bezier(.2,0,0,1)) both; }
-    .call-stage { position:relative; flex:1 1 0; min-height:0; display:grid; place-items:end center; overflow:hidden;
-      background:radial-gradient(120% 90% at 50% 12%,color-mix(in srgb,var(--accent) 26%,transparent),transparent 68%),var(--rail); }
+    /* She is ringing you. A notification, not a screen: it floats over whatever you
+       were doing, rings for a while, and either you pick up or it stops. */
+    .incoming { position:absolute; top:14px; left:50%; transform:translateX(-50%); z-index:70; display:flex; align-items:center; gap:12px;
+      padding:10px 12px 10px 10px; border-radius:20px; background:var(--side); border:1px solid var(--line); box-shadow:0 14px 40px rgba(0,0,0,.35);
+      animation:chat-rise .25s var(--oppai-ease-standard,cubic-bezier(.2,0,0,1)) both; max-width:calc(100% - 28px); }
+    .incoming .avatar { width:46px; height:46px; flex:0 0 46px; border-radius:50%; overflow:hidden; display:grid; place-items:center; animation:call-ring 1.3s ease-out infinite; }
+    @keyframes call-ring { 0% { box-shadow:0 0 0 0 color-mix(in srgb,var(--accent) 60%,transparent); } 100% { box-shadow:0 0 0 14px transparent; } }
+    .incoming-copy { display:grid; gap:1px; min-width:0; }
+    .incoming-copy strong { font-size:14px; }
+    .incoming-copy span { font-size:12px; color:var(--muted); }
+    .incoming-btn { width:42px; height:42px; flex:0 0 42px; border:0; border-radius:50%; display:grid; place-items:center; cursor:pointer; color:#fff; }
+    .incoming-btn.yes { background:#2fb35a; animation:call-nudge 1.3s ease-in-out infinite; }
+    .incoming-btn.no { background:var(--md-sys-color-error); color:var(--md-sys-color-on-error,#fff); }
+    @keyframes call-nudge { 0%,100% { transform:rotate(0); } 15% { transform:rotate(-12deg); } 30% { transform:rotate(10deg); } 45% { transform:rotate(0); } }
+
+    /* ── video call ──────────────────────────────────────────────────────── */
+    /* Covers the whole client. The room she is in fills the frame, she stands in it,
+       and everything else — who, how long, how she feels, what was said — is laid
+       over it in the thinnest chrome that still reads. */
+    .call { position:absolute; inset:0; z-index:60; display:grid; grid-template-rows:minmax(0,1fr) auto; background:#000; color:#fff;
+      animation:chat-fade .2s ease both; }
+    .call-scene { position:relative; min-height:0; overflow:hidden; isolation:isolate; }
+    .call-bg { position:absolute; inset:-2%; background-size:cover; background-position:center; transform:scale(1.02);
+      transition:background-image .4s ease, filter .4s ease; }
+    .call-bg.plain { background:radial-gradient(120% 90% at 50% 12%,color-mix(in srgb,var(--accent) 30%,transparent),transparent 68%),
+      linear-gradient(180deg,#1a1620,#0b0a0d); }
+    .call-bg.blurred { filter:blur(14px) saturate(1.1) brightness(.85); }
+    .call-veil { position:absolute; inset:0; background:linear-gradient(to bottom,rgba(0,0,0,.55),transparent 22%,transparent 62%,rgba(0,0,0,.6)); pointer-events:none; }
     /* Same two-layer arrangement as the stage: the hold breathes, the sprite reacts. */
-    .call-hold { grid-area:1/1; display:grid; place-items:end center; width:100%; height:100%; transform-origin:50% 100%; }
-    .call-sprite { max-height:100%; max-width:100%; object-fit:contain; object-position:bottom center;
-      transform-origin:50% 100%;
-      animation:call-pose .32s var(--oppai-ease-standard,cubic-bezier(.2,0,0,1)) both; }
+    .call-hold { position:absolute; inset:0; display:grid; place-items:end center; transform-origin:50% 100%; padding-top:52px; }
+    .call-sprite { max-height:100%; max-width:min(100%,720px); object-fit:contain; object-position:bottom center; transform-origin:50% 100%;
+      filter:drop-shadow(0 14px 26px rgba(0,0,0,.5)); animation:call-pose .32s var(--oppai-ease-standard,cubic-bezier(.2,0,0,1)) both; }
     @keyframes call-pose { from { opacity:0; transform:translateY(10px) scale(.99); } }
-    .call-top { position:absolute; top:0; left:0; right:0; display:flex; align-items:center; gap:12px; padding:14px 18px;
-      background:linear-gradient(to bottom,rgba(0,0,0,.55),transparent); color:#fff; }
-    .call-who { display:grid; }.call-who strong { font-size:16px; }.call-who span { font-size:12px; opacity:.8; }
-    .call-mood { margin-left:auto; display:flex; align-items:center; gap:7px; padding:5px 11px; border-radius:999px;
-      background:rgba(0,0,0,.42); font-size:12px; font-weight:650; text-transform:capitalize; }
+    .call-top { position:absolute; top:0; left:0; right:0; z-index:2; display:flex; align-items:center; gap:10px; padding:12px 14px; }
+    .call-who { display:flex; align-items:center; gap:10px; padding:6px 12px 6px 6px; border-radius:999px; background:rgba(0,0,0,.42); backdrop-filter:blur(8px); }
+    .call-who .avatar { width:32px; height:32px; flex:0 0 32px; border-radius:50%; overflow:hidden; display:grid; place-items:center; font-size:12px; }
+    .call-who strong { font-size:14px; display:block; line-height:1.15; }
+    .call-who span { font-size:11px; opacity:.8; display:flex; align-items:center; gap:5px; }
+    .call-live { width:7px; height:7px; border-radius:50%; background:#f04747; animation:call-blink 1.6s ease-in-out infinite; }
+    @keyframes call-blink { 50% { opacity:.25; } }
+    .call-mood { margin-left:auto; display:flex; align-items:center; gap:7px; padding:6px 11px; border-radius:999px;
+      background:rgba(0,0,0,.42); backdrop-filter:blur(8px); font-size:12px; font-weight:650; text-transform:capitalize; }
     .call-mood .material-symbols-rounded { font-size:16px; }
-    /* What she is doing, beside what she is feeling. Set apart by a rule rather than a
-       second pill: the two belong to one reading of her, and stacking chips in a call
-       header is how a video call starts looking like a dashboard. */
     .call-doing { padding-left:7px; border-left:1px solid rgba(255,255,255,.22); opacity:.85; font-weight:600; }
     .call-pips { display:inline-flex; gap:3px; }
     .call-pips i { width:5px; height:5px; border-radius:50%; background:rgba(255,255,255,.32); }
     .call-pips i.on { background:var(--accent); }
-    .call-caption { position:absolute; bottom:16px; max-width:min(680px,88%); margin:0; padding:11px 15px; border-radius:12px;
-      background:rgba(0,0,0,.58); color:#fff; font-size:14px; line-height:1.45; white-space:pre-wrap; backdrop-filter:blur(3px); }
-    /* The caption sits on a dark plate rather than the theme surface, so the
-       formatting colours are re-stated here against it. */
+    .call-place { font-size:11px; opacity:.85; font-weight:500; text-transform:none; padding-left:7px; border-left:1px solid rgba(255,255,255,.22); }
+    /* Subtitles: the last few lines, hers and yours, newest at the bottom and
+       brightest, older ones dimmer above it. Yours are tinted so a glance tells who
+       said what without a name on each. */
+    .call-captions { position:absolute; left:0; right:0; bottom:12px; z-index:2; display:grid; gap:6px; justify-items:center; padding:0 14px; pointer-events:none; }
+    .call-caption { max-width:min(680px,92%); margin:0; padding:9px 14px; border-radius:14px; background:rgba(0,0,0,.56); backdrop-filter:blur(6px);
+      font-size:15px; line-height:1.4; white-space:pre-wrap; overflow-wrap:anywhere; animation:chat-rise .25s var(--oppai-ease-standard,cubic-bezier(.2,0,0,1)) both; }
+    .call-caption.older { opacity:.62; font-size:13px; }
+    .call-caption.mine { background:color-mix(in srgb,var(--accent) 62%,rgba(0,0,0,.6)); }
     .call-caption .speech { color:color-mix(in srgb,var(--accent) 70%,#fff); }
+    .call-caption.mine .speech { color:#fff; }
     .call-caption .action { color:rgba(255,255,255,.82); }
-    .call-bar { flex:0 0 auto; display:flex; align-items:center; gap:9px; padding:12px 16px; background:var(--rail); }
-    .call-input { flex:1; min-width:0; border:0; border-radius:999px; padding:11px 16px; background:var(--input);
-      color:var(--md-sys-color-on-surface); }
+    .call-caption.typing { padding:11px 16px; }
+    .call-caption.typing .dots i { background:rgba(255,255,255,.8); }
+    /* The scene picker: a tray over the bar with the rooms she can be in, plus the plain
+       stage, plus letting her choose. */
+    .call-tray { position:absolute; right:12px; bottom:76px; z-index:3; width:min(420px,calc(100% - 24px)); padding:12px; border-radius:16px; background:rgba(14,14,18,.94); backdrop-filter:blur(10px);
+      box-shadow:0 14px 40px rgba(0,0,0,.5); animation:chat-rise .18s var(--oppai-ease-standard,cubic-bezier(.2,0,0,1)) both; }
+    .call-tray h4 { margin:0 0 8px; font-size:12px; font-weight:650; color:rgba(255,255,255,.7); text-transform:uppercase; letter-spacing:.06em; }
+    .call-scenes { display:grid; grid-template-columns:repeat(auto-fill,minmax(96px,1fr)); gap:8px; max-height:240px; overflow:auto; }
+    .call-scene-btn { position:relative; aspect-ratio:16/10; border:2px solid transparent; border-radius:10px; overflow:hidden; background:#26242c; padding:0; cursor:pointer; color:#fff; display:grid; }
+    .call-scene-btn img { width:100%; height:100%; object-fit:cover; grid-area:1/1; }
+    .call-scene-btn .scene-name { grid-area:1/1; align-self:end; padding:14px 6px 5px; font-size:11px; text-align:left; background:linear-gradient(to top,rgba(0,0,0,.8),transparent); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .call-scene-btn .scene-icon { grid-area:1/1; place-self:center; font-size:26px; opacity:.7; }
+    .call-scene-btn.on { border-color:var(--accent); }
+    .call-tray p { margin:8px 0 0; font-size:12px; color:rgba(255,255,255,.6); }
+    .call-tray p a { color:var(--accent); cursor:pointer; }
+    .call-bar { display:flex; align-items:center; gap:8px; padding:10px 14px; background:#0c0c10; }
+    .call-input { flex:1; min-width:0; border:0; border-radius:999px; padding:11px 16px; background:rgba(255,255,255,.1); color:#fff; }
+    .call-input::placeholder { color:rgba(255,255,255,.5); }
     .call-input:focus { outline:2px solid var(--accent); outline-offset:-2px; }
-    .call-btn { width:44px; height:44px; flex:0 0 44px; border:0; border-radius:50%; background:var(--input); color:inherit;
-      display:grid; place-items:center; cursor:pointer; }
-    .call-btn:hover:not(:disabled) { background:var(--hover); }
+    .call-btn { width:44px; height:44px; flex:0 0 44px; border:0; border-radius:50%; background:rgba(255,255,255,.1); color:#fff;
+      display:grid; place-items:center; cursor:pointer; transition:background .12s ease; }
+    .call-btn:hover:not(:disabled) { background:rgba(255,255,255,.2); }
+    .call-btn.on { background:color-mix(in srgb,var(--accent) 80%,#000); }
     .call-btn:disabled { opacity:.45; cursor:default; }
-    .call-btn.end { background:var(--md-sys-color-error); color:var(--md-sys-color-on-error,#fff); }
+    .call-btn.send { background:var(--accent); color:var(--on-accent); }
+    .call-btn.end { background:#e5484d; color:#fff; }
+    .call-note { position:absolute; top:64px; left:50%; transform:translateX(-50%); z-index:3; padding:6px 12px; border-radius:999px; background:rgba(0,0,0,.6); font-size:12px; animation:chat-rise .2s ease both; }
+    @media (max-width:640px) { .call-mood .call-place,.call-mood .call-doing { display:none; } .call-btn.captions { display:none; } }
     @media (prefers-reduced-motion:reduce) { .call,.call-sprite { animation:none; } }
   `];
 
@@ -850,6 +960,7 @@ export class OppaiChat extends LitElement {
   }
 
   disconnectedCallback() {
+    window.clearTimeout(this.ringTimer);
     super.disconnectedCallback();
     window.clearTimeout(this.saveTimer); window.clearTimeout(this.idleTimer); window.clearTimeout(this.noticeTimer);
     window.clearTimeout(this.autoTimer); window.clearInterval(this.callTimer);
@@ -1301,7 +1412,7 @@ export class OppaiChat extends LitElement {
     if (this.status?.enabled) {
       // A model is loaded: ask for one unprompted turn, exactly as autopilot does —
       // just once, not a run.
-      const sent = await this.generateReply(conversation.id, "", true);
+      const sent = await this.generateReply(conversation.id, "", { continuation:true });
       if (sent) void this.recordLibbySpoke("idle", "the conversation went quiet after her message");
       return;
     }
@@ -1429,20 +1540,29 @@ export class OppaiChat extends LitElement {
   private dropLink() { this.pendingLink = null; this.pendingLinkURL = ""; }
 
   private async send() {
-    const photo = this.pendingPhoto, conversation = this.activeConversation;
-    // A photo is a message on its own, so an empty box is only empty without one.
-    const content = this.draft.trim() || (photo ? `*shares a photo with you*` : "");
+    const photo = this.pendingPhoto, items = this.pendingItems, conversation = this.activeConversation;
+    // A photo or an attached item is a message on its own, so an empty box is only
+    // empty without one.
+    const content = this.draft.trim()
+      || (photo ? `*shares a photo with you*` : "")
+      || (items.length ? `*shares ${items.length === 1 ? items[0].title : `${items.length} things`} from the library*` : "");
     if (!content || !conversation || this.busy) return;
     // Everything after an await must go through liveConversation(id): this object
     // is replaced by the autosave that fires 450ms from now.
     const conversationID = conversation.id;
-    const userMessage: StoredChatMessage = { id:newID(), role:"user", content, at:Date.now(), imageId:photo?.imageId };
+    const reply = this.replyTarget;
+    const userMessage: StoredChatMessage = {
+      id:newID(), role:"user", content, at:Date.now(), imageId:photo?.imageId,
+      attachments: items.length ? items : undefined,
+      replyTo: reply ? { id:reply.id, role:reply.role, excerpt:excerptOf(reply.content) } : undefined,
+    };
     conversation.messages.push(userMessage); conversation.updatedAt = Date.now();
     if (conversation.title === "New conversation") conversation.title = content.slice(0, 42);
     // Read before the box is cleared, and only when the preview is for the link that
     // is actually in the message being sent.
     const link = this.pendingLink && !this.pendingLink.failed && this.pendingLinkURL ? this.pendingLinkURL : "";
-    this.draft = ""; this.pendingPhoto = null; this.dropLink(); this.notice = ""; this.touchWorkspace(); this.armIdle(); void this.scrollToEnd();
+    this.draft = ""; this.pendingPhoto = null; this.pendingItems = []; this.replyTarget = null; this.dropLink(); this.notice = "";
+    this.touchWorkspace(); this.armIdle(); void this.scrollToEnd();
     // Speaking re-arms the autopilot's budget: it exists to fill your silence, so a
     // run that stopped after its last turn should start again once you rejoin.
     this.autoTurns = AUTO_MAX_TURNS;
@@ -1453,9 +1573,77 @@ export class OppaiChat extends LitElement {
     if (conversation.characterId === "libby") {
       void api.libbyAutoAnswered().catch(() => { /* Best-effort; an old server has no endpoint. */ });
     }
-    await this.generateReply(conversationID, content, false, photo?.tags ?? [], photo?.imageId ?? "", link);
+    await this.generateReply(conversationID, content, {
+      photoTags: photo?.tags ?? [], photoImageID: photo?.imageId ?? "", link,
+      sharedMediaIds: items.map((item) => item.id),
+    });
     this.scheduleAuto();
   }
+
+  // --- Replying to a particular message ------------------------------------
+
+  /** Marks what the next message answers. The composer shows the quote until it is
+      sent or dismissed. */
+  private replyTo(message: StoredChatMessage) {
+    if (message.thought) return;
+    this.replyTarget = message;
+    this.focusComposer();
+  }
+
+  /** Scrolls to and flashes the message a quote points at, if it is still here. */
+  private jumpTo(ref?: ChatReplyRef) {
+    if (!ref?.id) return;
+    const row = this.renderRoot.querySelector<HTMLElement>(`[data-message-id="${ref.id}"]`);
+    if (!row) { this.say("That message isn't in this conversation any more."); return; }
+    row.scrollIntoView({ block:"center", behavior:"smooth" });
+    row.classList.remove("flash"); void row.offsetWidth; row.classList.add("flash");
+  }
+
+  // --- Attaching library items ---------------------------------------------
+  // A video, a game, a comic: things that cannot be copied into her gallery as a
+  // picture and do not need to be. They travel by reference, the way her own
+  // attachments do, and the server tells her what they are.
+
+  private openPicker() {
+    this.picker = { query:"", items:[], loading:true };
+    void this.searchLibrary("");
+    window.setTimeout(() => this.renderRoot.querySelector<HTMLInputElement>(".picker-head input")?.focus(), 30);
+  }
+
+  private closePicker() { this.picker = null; this.focusComposer(); }
+
+  /** Lists the library, newest first, filtered by title on the client. The list
+      endpoint is the same one the grid uses; a few hundred titles is a cheap search. */
+  private async searchLibrary(query: string) {
+    if (!this.picker) return;
+    const seq = ++this.pickerSeq;
+    this.picker = { ...this.picker, query, loading:true };
+    try {
+      const { items } = await api.listMedia("", 400, 0);
+      if (seq !== this.pickerSeq || !this.picker) return;
+      const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+      const hits = items.filter((item) => {
+        if (!words.length) return true;
+        const hay = `${item.title} ${item.kind} ${(item.tags ?? []).map((tag) => tag.name).join(" ")}`.toLowerCase();
+        return words.every((word) => hay.includes(word));
+      });
+      this.picker = { query, items:hits.slice(0, 120), loading:false };
+    } catch (error) {
+      if (seq !== this.pickerSeq || !this.picker) return;
+      this.picker = { ...this.picker, loading:false };
+      this.say((error as Error).message, true);
+    }
+  }
+
+  private toggleItem(item: Media) {
+    const picked = this.pendingItems.some((it) => it.id === item.id);
+    if (picked) this.pendingItems = this.pendingItems.filter((it) => it.id !== item.id);
+    else if (this.pendingItems.length < 6) {
+      this.pendingItems = [...this.pendingItems, { id:item.id, title:item.title || `Item ${item.id}`, kind:item.kind, hasThumb:item.hasThumb === true }];
+    } else this.say("Six at a time is plenty.");
+  }
+
+  private removeItem(id: number) { this.pendingItems = this.pendingItems.filter((it) => it.id !== id); }
 
   /**
    * Uploads a picture for the composer and holds it until the message is sent.
@@ -1558,14 +1746,14 @@ export class OppaiChat extends LitElement {
    * because the debounced autosave keeps swapping the object out from under us.
    */
   private async typeAndPushBubbles(
-    conversationID: string, chunks: string[], spentMs: number, extra: Partial<StoredChatMessage> = {},
+    conversationID: string, chunks: string[], spentMs: number, extra: Partial<StoredChatMessage> = {}, first: Partial<StoredChatMessage> = {},
   ): Promise<boolean> {
     for (let i = 0; i < chunks.length; i++) {
       await this.typeLikeAPerson(chunks[i], i === 0 ? spentMs : 0);
       const live = this.liveConversation(conversationID);
       if (!live) return false;
       const last = i === chunks.length - 1;
-      live.messages.push({ id:newID(), role:"assistant", content:chunks[i], at:Date.now(), ...(last ? extra : {}) });
+      live.messages.push({ id:newID(), role:"assistant", content:chunks[i], at:Date.now(), ...(i === 0 ? first : {}), ...(last ? extra : {}) });
       live.updatedAt = Date.now(); this.touchWorkspace(); void this.scrollToEnd();
     }
     return true;
@@ -1601,7 +1789,13 @@ export class OppaiChat extends LitElement {
    * Libby's offline voice writes from. `continuation` asks for an unprompted turn —
    * the character speaks again with no new user message to answer.
    */
-  private async generateReply(conversationID: string, seed: string, continuation = false, photoTags: string[] = [], photoImageID = "", link = ""): Promise<boolean> {
+  private async generateReply(conversationID: string, seed: string, options: {
+    continuation?: boolean; photoTags?: string[]; photoImageID?: string; link?: string; sharedMediaIds?: number[];
+    /** A one-off steer for this turn — "shorter", "don't change the subject" — sent
+        as a bracketed note on the history and never stored. See regenerate. */
+    nudge?: string;
+  } = {}): Promise<boolean> {
+    const { continuation = false, photoTags = [], photoImageID = "", link = "", sharedMediaIds = [], nudge = "" } = options;
     const conversation = this.liveConversation(conversationID);
     const character = conversation && this.liveCharacter(conversation.characterId);
     if (!conversation || !character || this.busy) return false;
@@ -1642,10 +1836,11 @@ export class OppaiChat extends LitElement {
       // her memory, which is the right place for it.
       const history: ChatMessage[] = conversation.messages
         .filter((message) => !message.thought)
-        .map(({ role, content:text }) => ({ role, content:text }));
+        .map(({ id, role, content:text, replyTo }) => ({ id, role, content:text, replyTo }));
       // A nudge, not a message: it steers this one request and is never stored, so
       // the log stays a record of what was actually said.
       if (continuation) history.push({ role:"user", content:"(Continue the scene on your own. Speak or act again without waiting for a reply, and do not answer for me.)" });
+      else if (nudge) history.push({ role:"user", content:`(Try that reply again. ${nudge} Do not mention this note.)` });
       const startedAt = Date.now();
       this.typingPhase = "typing";
       const result = await api.chat({
@@ -1659,9 +1854,12 @@ export class OppaiChat extends LitElement {
         // between turns, so a mood stuck for a dozen replies is indistinguishable
         // from a fresh one unless the log says otherwise.
         recentMoods: recentMoods(conversation.messages),
-        // What she is already doing. The server keeps nothing between turns, so a
-        // state set three replies ago only survives because this says so.
+        // What she is already doing, and where. The server keeps nothing between
+        // turns, so a state set three replies ago only survives because this says so.
         activity: conversation.activity || undefined,
+        background: conversation.background || undefined,
+        // Library items attached to this message, by id.
+        sharedMediaIds: sharedMediaIds.length ? sharedMediaIds : undefined,
         // That they have her on screen rather than in a transcript. Opening a call is
         // a thing that happens on this device and the server never hears about it.
         call: this.callOpen || undefined,
@@ -1691,6 +1889,7 @@ export class OppaiChat extends LitElement {
       // alone" rather than "she stopped" — the empty string is a real answer here, and
       // means she is doing nothing in particular.
       if (result.activity !== undefined) live.activity = result.activity;
+      if (result.background !== undefined) live.background = result.background;
       const requested = normalizeIntensity(result.intensity ?? live.intensity);
       if (result.declared) {
         // The character named this mood, so it lands where it asked. Running it
@@ -1702,6 +1901,10 @@ export class OppaiChat extends LitElement {
         live.progress = progression.progress; live.intensity = setIntensity(progression.intensity);
       }
       live.updatedAt = Date.now(); this.touchWorkspace();
+      // She rang, or hung up. The ring is a popup and only answering opens the call;
+      // the hang-up ends one that is open, with a line saying so.
+      if (result.callRequest && !this.callOpen) this.ring();
+      if (result.callEnd && this.callOpen) { this.endCall(); this.say(`${character.name} ended the call.`); }
       // Anything she thought rather than said lands first and on its own, because that
       // is the order it happened in: she looked, reacted, and then decided what to say.
       if (!this.pushThoughts(conversationID, result.thoughts)) return false;
@@ -1720,6 +1923,9 @@ export class OppaiChat extends LitElement {
         links: result.links?.length ? result.links : undefined,
         attachments: result.attachments?.length ? result.attachments : undefined,
         actions: result.actions?.length ? result.actions : undefined,
+      }, {
+        // The quote rides the first bubble: it is what the reply *starts* by answering.
+        replyTo: result.replyTo ?? undefined,
       });
     } catch (error) {
       if (this.status?.configured || this.status?.modelBackend) {
@@ -1739,7 +1945,7 @@ export class OppaiChat extends LitElement {
    * The discarded text is not recoverable, which matches how every other chat client
    * behaves — and unlike deleting a message, the exchange it belonged to survives.
    */
-  private async regenerate() {
+  private async regenerate(nudge = "") {
     const conversation = this.activeConversation;
     if (!conversation || this.busy) return;
     const messages = conversation.messages;
@@ -1753,7 +1959,40 @@ export class OppaiChat extends LitElement {
     conversation.messages = messages.slice(0, cut);
     conversation.updatedAt = Date.now();
     this.touchWorkspace(); void this.scrollToEnd();
-    await this.generateReply(conversationID, seed, cut === 0);
+    // The items they attached to the message being answered go again, or a retry
+    // would answer a message she can no longer see the attachments of.
+    const answered = cut > 0 ? messages[cut - 1] : undefined;
+    await this.generateReply(conversationID, seed, {
+      continuation: cut === 0, nudge,
+      sharedMediaIds: answered?.role === "user" ? (answered.attachments ?? []).map((item) => item.id) : [],
+    });
+  }
+
+  /** Re-rolls with a word of direction: "shorter", "answer the question", "less
+      pouty". The note steers this one attempt and is never stored. */
+  private async regenerateWithNote() {
+    const note = prompt("Ask her to try again — what should be different?", "")?.trim();
+    if (note === undefined) return;
+    await this.regenerate(note ? (note.endsWith(".") ? note : note + ".") : "");
+  }
+
+  /**
+   * Retries from one of your messages: everything after it is dropped and she
+   * answers it again. The message itself stays as written; edit it first if that
+   * is what you wanted.
+   */
+  private async retryFrom(message: StoredChatMessage) {
+    const conversation = this.activeConversation;
+    if (!conversation || this.busy || message.role !== "user") return;
+    const at = conversation.messages.indexOf(message);
+    if (at < 0) return;
+    const conversationID = conversation.id;
+    conversation.messages = conversation.messages.slice(0, at + 1);
+    conversation.updatedAt = Date.now();
+    this.touchWorkspace(); void this.scrollToEnd();
+    await this.generateReply(conversationID, message.content, {
+      sharedMediaIds: (message.attachments ?? []).map((item) => item.id),
+    });
   }
 
   // --- Autopilot ------------------------------------------------------------
@@ -1797,7 +2036,7 @@ export class OppaiChat extends LitElement {
     const conversation = this.activeConversation;
     if (!conversation || !this.autoRunning) return;
     this.autoTurns--;
-    const ok = await this.generateReply(conversation.id, "", true);
+    const ok = await this.generateReply(conversation.id, "", { continuation:true });
     if (ok) this.scheduleAuto();
     else this.autoPaused = true;
   }
@@ -2014,27 +2253,76 @@ export class OppaiChat extends LitElement {
       this.say(`${character.name} has no picture to show — set one on their character card first.`, true);
       return;
     }
-    this.callOpen = true; this.callSeconds = 0; this.settingsOpen = false;
+    this.stopRinging();
+    this.callOpen = true; this.callSeconds = 0; this.settingsOpen = false; this.scenePickerOpen = false;
     window.clearInterval(this.callTimer);
     this.callTimer = window.setInterval(() => (this.callSeconds += 1), 1000);
+    void this.loadBackgrounds();
     this.focusComposer();
   }
 
   private endCall() {
-    this.callOpen = false;
+    this.callOpen = false; this.scenePickerOpen = false;
     window.clearInterval(this.callTimer);
     this.focusComposer();
+  }
+
+  /** She is ringing. The popup stays up until answered, declined, or it rings out. */
+  private ring() {
+    if (this.callOpen || libbyHidden()) return;
+    this.incomingCall = true;
+    window.clearTimeout(this.ringTimer);
+    this.ringTimer = window.setTimeout(() => this.declineCall(true), RING_MS);
+    try { navigator.vibrate?.([220, 120, 220]); } catch { /* not every browser rings */ }
+  }
+
+  private stopRinging() { this.incomingCall = false; window.clearTimeout(this.ringTimer); }
+
+  private acceptCall() { this.stopRinging(); this.startCall(); }
+
+  private declineCall(missed = false) {
+    if (!this.incomingCall) return;
+    this.stopRinging();
+    if (missed) this.say("Missed a call from " + (this.activeCharacter?.name ?? "her") + ".");
+  }
+
+  /** The places she can be. Best-effort: an old server has none and the call simply
+      shows its plain stage. */
+  private async loadBackgrounds() {
+    try { this.backgrounds = (await api.libbyBackgrounds()).backgrounds; }
+    catch { this.backgrounds = []; }
+  }
+
+  /** Puts her somewhere by hand. Conversation state, so she is told next turn and
+      stays there until one of you moves her. */
+  private setBackground(id: string) {
+    const conversation = this.activeConversation;
+    if (!conversation) return;
+    conversation.background = id; conversation.updatedAt = Date.now();
+    this.touchWorkspace(); this.scenePickerOpen = false;
+  }
+
+  private toggleScenePicker() {
+    this.scenePickerOpen = !this.scenePickerOpen;
+    if (this.scenePickerOpen) void this.loadBackgrounds();
   }
 
   private renderCall(character: ChatCharacter, conversation: ChatConversation) {
     if (!this.callOpen) return nothing;
     const emotion = normalizeEmotion(conversation.emotion), intensity = normalizeIntensity(conversation.intensity);
-    const activity = conversation.activity ?? "";
+    const typing = this.busy && this.typingPhase === "typing";
+    // Her typing art while she writes, when she is not otherwise in a state with art
+    // of its own; the bubble of dots says the same thing either way.
+    const activity = conversation.activity || (typing ? "typing" : "");
     const assets = this.spriteFor(character, emotion, intensity, activity);
-    const spoken = [...conversation.messages].reverse().find((message) => message.role === "assistant");
+    const place = this.backgrounds.find((bg) => bg.id === conversation.background && bg.hasImage);
+    // The last few lines as subtitles, newest at the bottom. Thoughts are not speech.
+    const recent = conversation.messages.filter((message) => !message.thought).slice(-3);
     const clock = `${Math.floor(this.callSeconds / 60)}:${String(this.callSeconds % 60).padStart(2, "0")}`;
     return html`<div class="call" role="dialog" aria-modal="true" aria-label=${`Video call with ${character.name}`}>
-      <div class="call-stage">
+      <div class="call-scene" @click=${() => { if (this.scenePickerOpen) this.scenePickerOpen = false; }}>
+        <div class="call-bg ${place ? "" : "plain"}" style=${place ? `background-image:url("${api.libbyBackgroundURL(place.id)}")` : ""}></div>
+        <div class="call-veil"></div>
         <!-- Keyed on the pose: a mood change replaces the element instead of
              mutating src, so the fade-in replays and the fallback chain restarts
              from the top for the new emotion's art. -->
@@ -2043,22 +2331,48 @@ export class OppaiChat extends LitElement {
           alt=${`${character.name} looking ${emotion}`}
           @error=${(event:Event) => applyImageFallback(event.target as HTMLImageElement, assets)} />`)}</span>
         <div class="call-top">
-          <span class="call-who"><strong>${character.name}</strong><span>${this.busy ? "Speaking…" : clock}</span></span>
+          <span class="call-who">${this.avatar(character, "avatar")}<span><strong>${character.name}</strong><span><i class="call-live"></i>${typing ? "typing…" : this.busy ? "thinking…" : clock}</span></span></span>
           <span class="call-mood" title=${`Feeling ${emotion}, intensity ${intensity} of 5`}>
             <span class="material-symbols-rounded">mood</span>${emotion}
-            ${activity ? html`<span class="call-doing" title=${`She is ${activity}`}>${activityLabel(activity)}</span>` : nothing}
+            ${conversation.activity ? html`<span class="call-doing" title=${`She is ${conversation.activity}`}>${activityLabel(conversation.activity)}</span>` : nothing}
+            ${place ? html`<span class="call-place" title="Where she is">${place.name}</span>` : nothing}
             <span class="call-pips">${[1,2,3,4,5].map((step) => html`<i class=${step <= intensity ? "on" : ""}></i>`)}</span>
           </span>
         </div>
-        ${spoken ? html`<p class="call-caption">${formatted(spoken.content)}</p>` : nothing}
+        ${this.callCaptions ? html`<div class="call-captions" aria-live="polite">
+          ${recent.map((message, index) => html`<p class="call-caption ${message.role === "user" ? "mine" : ""} ${index < recent.length - 1 ? "older" : ""}">${formatted(message.content)}</p>`)}
+          ${typing ? html`<p class="call-caption typing" aria-label="${character.name} is typing"><span class="dots"><i></i><i></i><i></i></span></p>` : nothing}
+        </div>` : nothing}
+        ${this.scenePickerOpen ? this.renderScenePicker(conversation) : nothing}
       </div>
       <div class="call-bar">
         <input class="call-input" placeholder=${`Say something to ${character.name}…`} aria-label=${`Message ${character.name}`}
-          .value=${this.draft} @input=${(event:Event)=>(this.draft=(event.target as HTMLTextAreaElement).value)}
+          .value=${this.draft} @input=${(event:Event)=>(this.draft=(event.target as HTMLInputElement).value)}
           @keydown=${(event:KeyboardEvent)=>{ if (event.key === "Enter") { event.preventDefault(); void this.send(); } }} />
+        <button class="call-btn send" title="Send" aria-label="Send" ?disabled=${!this.draft.trim() || this.busy} @click=${()=>void this.send()}><span class="material-symbols-rounded">send</span></button>
+        <button class="call-btn ${this.scenePickerOpen ? "on" : ""}" title="Change where she is" aria-label="Change the background" @click=${()=>this.toggleScenePicker()}><span class="material-symbols-rounded">wallpaper</span></button>
+        <button class="call-btn captions ${this.callCaptions ? "on" : ""}" title=${this.callCaptions ? "Hide captions" : "Show captions"} aria-pressed=${this.callCaptions ? "true" : "false"} @click=${()=>(this.callCaptions=!this.callCaptions)}><span class="material-symbols-rounded">closed_caption</span></button>
         <button class="call-btn" title="Re-respond" aria-label="Ask for a different reply" ?disabled=${this.busy} @click=${()=>void this.regenerate()}><span class="material-symbols-rounded">refresh</span></button>
         <button class="call-btn end" title="End call" aria-label="End call" @click=${()=>this.endCall()}><span class="material-symbols-rounded">call_end</span></button>
       </div>
+    </div>`;
+  }
+
+  /** The rooms she can be in, on the call. "Plain" is the stage with no room; she
+      moves herself with a tag, and this is how you move her by hand. */
+  private renderScenePicker(conversation: ChatConversation) {
+    const usable = this.backgrounds.filter((bg) => bg.hasImage);
+    return html`<div class="call-tray" @click=${(event:Event) => event.stopPropagation()}>
+      <h4>Where she is</h4>
+      <div class="call-scenes">
+        <button class="call-scene-btn ${!conversation.background ? "on" : ""}" title="No background" @click=${() => this.setBackground("")}>
+          <span class="scene-icon material-symbols-rounded">blur_on</span><span class="scene-name">Plain</span>
+        </button>
+        ${usable.map((bg) => html`<button class="call-scene-btn ${conversation.background === bg.id ? "on" : ""}" title=${bg.tags.join(", ") || bg.name} @click=${() => this.setBackground(bg.id)}>
+          <img src=${api.libbyBackgroundURL(bg.id)} alt="" loading="lazy"/><span class="scene-name">${bg.name}</span>
+        </button>`)}
+      </div>
+      <p>${usable.length ? "She picks a room herself when the scene moves; this overrides her until she moves again." : "No backgrounds yet — add and tag some in the outfit studio, and she'll choose between them."}</p>
     </div>`;
   }
 
@@ -2066,7 +2380,10 @@ export class OppaiChat extends LitElement {
     const hidden = character.id === "libby" && libbyHidden();
     if (hidden) return nothing;
     const emotion = normalizeEmotion(conversation.emotion), intensity = normalizeIntensity(conversation.intensity);
-    const activity = conversation.activity ?? "";
+    const typing = this.busy && this.typingPhase === "typing";
+    // While she writes, the outfit's typing art (if it drew one) stands in for a state
+    // she is not otherwise in, and a bubble of dots sits by her head either way.
+    const activity = conversation.activity || (typing ? "typing" : "");
     const assets = this.spriteFor(character, emotion, intensity, activity);
     // Nothing to stand on the stage: a character with no art gets no column at all
     // rather than an empty one. Their picture is set from the character card.
@@ -2083,8 +2400,9 @@ export class OppaiChat extends LitElement {
           class="sprite ${this.busy ? "" : "libby-speak"}" src=${assets[0]} data-fallback-index="0"
           alt=${activity ? `${character.name} ${activity}, looking ${emotion}` : `${character.name} looking ${emotion}`}
           @error=${(event:Event) => applyImageFallback(event.target as HTMLImageElement, assets)} />`)}</span>
+        ${typing ? html`<div class="stage-bubble" aria-hidden="true"><span class="dots"><i></i><i></i><i></i></span></div>` : nothing}
       </div>
-      ${activity ? html`<div class="stage-doing" role="status">${activityLabel(activity)}</div>` : nothing}
+      ${conversation.activity ? html`<div class="stage-doing" role="status">${activityLabel(conversation.activity)}</div>` : nothing}
       ${character.id === "libby" ? html`<div class="stage-meter" title=${`Intensity ${intensity} of 5`} aria-label=${`Intensity ${intensity} of 5`}>
         ${[1,2,3,4,5].map((step) => html`<span class="pip ${step <= intensity ? "on" : ""}"></span>`)}
       </div>` : nothing}
@@ -3079,8 +3397,10 @@ export class OppaiChat extends LitElement {
         ]
       : [
           { label:"Re-respond", icon:"refresh", disabled:this.busy || !conversation?.messages.some((m) => m.role === "assistant"), run:() => void this.regenerate() },
+          { label:"Retry with a note…", icon:"edit_note", disabled:this.busy || !conversation?.messages.some((m) => m.role === "assistant"), run:() => void this.regenerateWithNote() },
           { label:this.callOpen ? "End video call" : "Video call", icon:this.callOpen ? "call_end" : "videocam", run:() => this.callOpen ? this.endCall() : this.startCall() },
           { label:"Share a photo", icon:"add_photo_alternate", disabled:this.busy, run:() => this.pickPhoto() },
+          { label:"Attach from the library", icon:"collections_bookmark", disabled:this.busy, run:() => this.openPicker() },
           { label:this.autopilot ? "Turn off autopilot" : "Let the AI continue on its own", icon:"smart_toy", run:() => this.toggleAutopilot() },
           { label:this.stageOpen ? "Hide portrait" : "Show portrait", icon:"wallpaper", run:() => (this.stageOpen = !this.stageOpen) },
           menuDivider,
@@ -3100,9 +3420,14 @@ export class OppaiChat extends LitElement {
     event.preventDefault(); event.stopPropagation();
     const redo = this.canRedo(message);
     const items: MenuItem[] = [
+      ...(message.thought ? [] : [{ label:"Reply", icon:"reply", run:() => this.replyTo(message) }]),
       { label:"Copy text", icon:"content_copy", run:() => void navigator.clipboard.writeText(message.content) },
       { label:"Edit message", icon:"edit", run:() => this.editMessage(message) },
-      ...(redo ? [{ label:"Re-respond", icon:"refresh", disabled:this.busy, run:() => void this.regenerate() }] : []),
+      ...(redo ? [
+        { label:"Retry", icon:"refresh", disabled:this.busy, run:() => void this.regenerate() },
+        { label:"Retry with a note…", icon:"edit_note", disabled:this.busy, run:() => void this.regenerateWithNote() },
+      ] : []),
+      ...(message.role === "user" && !message.thought ? [{ label:"Retry from here", icon:"replay", disabled:this.busy, run:() => void this.retryFrom(message) }] : []),
       menuDivider,
       { label:"Delete message", icon:"delete", danger:true, run:() => this.deleteMessage(message.id) },
     ];
@@ -3143,10 +3468,13 @@ export class OppaiChat extends LitElement {
     if (message.thought) return html`${day}${this.renderThought(message, character)}`;
     const first = !this.sameRun(previous, message) || day !== nothing, last = !this.sameRun(message, next);
     const friend = message.role === "assistant", name = friend ? character.name : (this.workspace.profile.displayName || this.user?.username || "You");
-    return html`${day}<article class="msg ${friend ? "theirs" : "mine"} ${first ? "first" : ""} ${last ? "last" : ""}" @contextmenu=${(event:MouseEvent) => this.messageMenu(message, event)}>
+    return html`${day}<article class="msg ${friend ? "theirs" : "mine"} ${first ? "first" : ""} ${last ? "last" : ""}" data-message-id=${message.id} @contextmenu=${(event:MouseEvent) => this.messageMenu(message, event)}>
       ${friend ? this.avatar(character, "avatar") : nothing}
       <div class="bubble-wrap">
         <div class="bubble">
+          ${message.replyTo ? html`<button type="button" class="quote" title="Go to that message" @click=${() => this.jumpTo(message.replyTo)}>
+            <strong>${message.replyTo.role === "assistant" ? character.name : (this.workspace.profile.displayName || this.user?.username || "You")}</strong>
+            <span>${message.replyTo.excerpt}</span></button>` : nothing}
           ${message.content.trim() ? html`<div class="text">${formatted(message.content)}</div>` : nothing}
           ${message.imageId ? html`<img class="sent-image" src=${api.chatImageURL(message.imageId)} alt="Image sent by ${name}"/>` : nothing}
           ${renderAttachments(message.attachments, (id) => requestOpenMedia(this, id), name)}
@@ -3154,7 +3482,7 @@ export class OppaiChat extends LitElement {
           ${renderActionCards(message.actions, this.approvals.stateOf, this.approvals.decide)}
           <div class="meta"><span>${timeOf(message.at)}</span></div>
         </div>
-        <span class="msg-actions">${this.canRedo(message) ? html`<button title="Re-respond" aria-label="Ask for a different reply" ?disabled=${this.busy} @click=${() => void this.regenerate()}><span class="material-symbols-rounded" style="font-size:16px">refresh</span></button>` : nothing}<button title="Copy" @click=${() => void navigator.clipboard.writeText(message.content)}><span class="material-symbols-rounded" style="font-size:16px">content_copy</span></button><button title="Edit" @click=${() => this.editMessage(message)}><span class="material-symbols-rounded" style="font-size:16px">edit</span></button><button title="Delete" @click=${() => this.deleteMessage(message.id)}><span class="material-symbols-rounded" style="font-size:16px">delete</span></button></span>
+        <span class="msg-actions"><button title="Reply" aria-label="Reply to this message" @click=${() => this.replyTo(message)}><span class="material-symbols-rounded" style="font-size:16px">reply</span></button>${this.canRedo(message) ? html`<button title="Retry" aria-label="Ask for a different reply" ?disabled=${this.busy} @click=${() => void this.regenerate()}><span class="material-symbols-rounded" style="font-size:16px">refresh</span></button>` : nothing}${message.role === "user" ? html`<button title="Retry from here" aria-label="Retry from this message" ?disabled=${this.busy} @click=${() => void this.retryFrom(message)}><span class="material-symbols-rounded" style="font-size:16px">replay</span></button>` : nothing}<button title="Copy" @click=${() => void navigator.clipboard.writeText(message.content)}><span class="material-symbols-rounded" style="font-size:16px">content_copy</span></button><button title="Edit" @click=${() => this.editMessage(message)}><span class="material-symbols-rounded" style="font-size:16px">edit</span></button><button title="Delete" @click=${() => this.deleteMessage(message.id)}><span class="material-symbols-rounded" style="font-size:16px">delete</span></button></span>
       </div>
     </article>`;
   }
@@ -3215,14 +3543,67 @@ export class OppaiChat extends LitElement {
             <span class="attachment-copy"><strong>${this.pendingPhoto.name}</strong><span>${this.pendingPhoto.tags.length ? this.pendingPhoto.tags.slice(0,8).join(", ") : "No content tags found"}</span></span>
             <button type="button" class="icon-btn" title="Remove photo" aria-label="Remove photo" @click=${()=>void this.discardPhoto()}><span class="material-symbols-rounded">close</span></button></div>` : nothing}
           ${this.renderLinkPreview()}
+          ${this.replyTarget ? html`<div class="attachment reply-preview">
+            <span class="material-symbols-rounded link-icon">reply</span>
+            <span class="attachment-copy"><strong>Replying to ${this.replyTarget.role === "assistant" ? character.name : "yourself"}</strong><span>${excerptOf(this.replyTarget.content)}</span></span>
+            <button type="button" class="icon-btn" title="Cancel reply" aria-label="Cancel reply" @click=${() => (this.replyTarget = null)}><span class="material-symbols-rounded">close</span></button></div>` : nothing}
+          ${this.pendingItems.length ? html`<div class="items-preview">${this.pendingItems.map((item) => html`<span class="item-chip">
+            ${item.hasThumb ? html`<img src=${api.thumbURL(item.id)} alt=""/>` : html`<span class="chip-icon"><span class="material-symbols-rounded">${KIND_ICONS[item.kind] ?? "folder"}</span></span>`}
+            <strong>${item.title}</strong>
+            <button type="button" title="Remove" aria-label=${`Remove ${item.title}`} @click=${() => this.removeItem(item.id)}><span class="material-symbols-rounded" style="font-size:16px">close</span></button>
+          </span>`)}</div>` : nothing}
           <div class="composer">
             <div class="box">
               <span class="attach-btn ${this.busy?"off":""}" title="Share a photo"><span class="material-symbols-rounded">add_photo_alternate</span><input type="file" accept="image/png,image/jpeg,image/webp,image/gif" aria-label="Share a photo" ?disabled=${this.busy} @change=${(event:Event)=>void this.attachPhoto(event)}/></span>
+              <button type="button" class="attach-btn ${this.busy?"off":""}" style="border:0;background:transparent" title="Attach from the library" aria-label="Attach from the library" ?disabled=${this.busy} @click=${()=>this.openPicker()}><span class="material-symbols-rounded">collections_bookmark</span></button>
               <textarea rows="1" aria-label=${`Message ${character.name}`} placeholder=${this.busy?`${character.name} is replying — keep typing…`:`Message ${character.name}…`} .value=${this.draft} @input=${(event:Event)=>{this.draft=(event.target as HTMLTextAreaElement).value;this.noticeLink();}} @keydown=${this.onKey}></textarea>
             </div>
             <button class="send" type="submit" title="Send message" aria-label="Send message" ?disabled=${(!this.draft.trim()&&!this.pendingPhoto)||this.busy}><span class="material-symbols-rounded">send</span></button>
           </div><div class="format-help"><span>"speech" · **action** · *emphasis* · ~~strike~~ · &#96;code&#96;</span><span class="send-help"></span></div></form>
-      </main>${stage}${this.renderCall(character,conversation)}
+      </main>${stage}${this.renderPicker2()}${this.renderIncomingCall(character)}${this.renderCall(character,conversation)}
+    </div>`;
+  }
+
+  /** The library picker sheet. Named apart from the character picker above. */
+  private renderPicker2() {
+    const picker = this.picker;
+    if (!picker) return nothing;
+    const chosen = new Set(this.pendingItems.map((item) => item.id));
+    return html`<div class="picker" @click=${() => this.closePicker()}>
+      <div class="picker-card" role="dialog" aria-modal="true" aria-label="Attach from the library" @click=${(event:Event) => event.stopPropagation()}>
+        <div class="picker-head">
+          <span class="material-symbols-rounded" style="color:var(--muted)">search</span>
+          <input placeholder="Search your library…" .value=${picker.query}
+            @input=${(event:Event) => void this.searchLibrary((event.target as HTMLInputElement).value)}
+            @keydown=${(event:KeyboardEvent) => { if (event.key === "Escape") this.closePicker(); }} />
+          <button type="button" class="icon-btn" title="Close" aria-label="Close" @click=${() => this.closePicker()}><span class="material-symbols-rounded">close</span></button>
+        </div>
+        <div class="picker-grid">
+          ${picker.loading && !picker.items.length ? html`<div class="picker-empty">Looking…</div>` : nothing}
+          ${!picker.loading && !picker.items.length ? html`<div class="picker-empty">Nothing matches.</div>` : nothing}
+          ${picker.items.map((item) => html`<button type="button" class="picker-tile ${chosen.has(item.id) ? "on" : ""}" title=${item.title} @click=${() => this.toggleItem(item)}>
+            ${item.hasThumb || item.kind === "image" || item.kind === "gif"
+              ? html`<img src=${api.thumbURL(item.id)} alt="" loading="lazy"/>`
+              : html`<span class="tile-kind material-symbols-rounded">${KIND_ICONS[item.kind] ?? "folder"}</span>`}
+            <span class="tile-name">${item.title || `Item ${item.id}`}</span>
+          </button>`)}
+        </div>
+        <div class="picker-foot">
+          <span>${chosen.size ? `${chosen.size} chosen` : "Pick videos, pictures, gifs, comics or games to show her."}</span>
+          <button type="button" class="autobar-btn" @click=${() => this.closePicker()}>${chosen.size ? "Done" : "Close"}</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  /** Her ringing you: a notification over the chat, with answer and decline. */
+  private renderIncomingCall(character: ChatCharacter) {
+    if (!this.incomingCall) return nothing;
+    return html`<div class="incoming" role="alertdialog" aria-label=${`${character.name} is calling`}>
+      ${this.avatar(character, "avatar")}
+      <span class="incoming-copy"><strong>${character.name} is calling</strong><span>Video call</span></span>
+      <button type="button" class="incoming-btn no" title="Decline" aria-label="Decline" @click=${() => this.declineCall()}><span class="material-symbols-rounded">call_end</span></button>
+      <button type="button" class="incoming-btn yes" title="Answer" aria-label="Answer" @click=${() => this.acceptCall()}><span class="material-symbols-rounded">videocam</span></button>
     </div>`;
   }
 }

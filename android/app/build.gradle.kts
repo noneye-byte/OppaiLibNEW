@@ -29,8 +29,8 @@ android {
         targetSdk = 35
         // Overridable by CI so a tagged build gets a monotonically increasing
         // code — Android rejects an update whose versionCode isn't higher.
-        versionCode = (System.getenv("ANDROID_VERSION_CODE") ?: "44").toInt()
-        versionName = System.getenv("ANDROID_VERSION_NAME") ?: "0.28.1"
+        versionCode = (System.getenv("ANDROID_VERSION_CODE") ?: "45").toInt()
+        versionName = System.getenv("ANDROID_VERSION_NAME") ?: "0.31.0"
     }
 
     signingConfigs {

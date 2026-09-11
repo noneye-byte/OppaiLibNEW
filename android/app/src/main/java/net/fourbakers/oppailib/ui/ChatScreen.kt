@@ -70,6 +70,18 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.CallEnd
 import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ClosedCaption
+import androidx.compose.material.icons.filled.CollectionsBookmark
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.EditNote
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Replay
+import androidx.compose.material.icons.automirrored.filled.Reply
+import androidx.compose.material.icons.filled.Wallpaper
+import androidx.compose.material.icons.filled.BlurOn
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -104,7 +116,16 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.border
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -132,6 +153,8 @@ import net.fourbakers.oppailib.data.ChatConversation
 import net.fourbakers.oppailib.data.ChatImage
 import net.fourbakers.oppailib.data.ChatImageUpload
 import net.fourbakers.oppailib.data.ChatMessage
+import net.fourbakers.oppailib.data.ChatReplyRef
+import net.fourbakers.oppailib.data.LibbyBackground
 import net.fourbakers.oppailib.data.ChatModels
 import net.fourbakers.oppailib.data.ChatRequest
 import net.fourbakers.oppailib.data.ChatStatus
@@ -170,6 +193,24 @@ private val chatModes = listOf(
     ChatMode("horny", "horny", "mischievous"),
 )
 private fun chatID() = UUID.randomUUID().toString().replace("-", "")
+
+/** How long an incoming call rings before it counts as missed. */
+private const val RING_MS = 40_000L
+
+/**
+ * The first line of a message, cut at a word, for a quoted reply. Mirrors excerptOf on
+ * the server and the web client so a quote drawn here reads the same everywhere.
+ */
+private fun excerptOf(content: String, max: Int = 140): String {
+    var text = content.trim()
+    val nl = text.indexOf('\n')
+    if (nl >= 0 && text.substring(0, nl).isNotBlank()) text = text.substring(0, nl).trim()
+    if (text.length <= max) return text
+    var cut = text.substring(0, max)
+    val space = cut.lastIndexOf(' ')
+    if (space > max / 2) cut = cut.substring(0, space)
+    return cut.trim() + "…"
+}
 private val chatStamp = SimpleDateFormat("h:mm a", Locale.getDefault())
 private fun timeOf(ms: Long) = chatStamp.format(Date(ms))
 /**
@@ -281,6 +322,20 @@ fun ChatScreen(
     var pendingPhoto by remember { mutableStateOf<ChatImage?>(null) }
     var callOpen by remember { mutableStateOf(false) }
     var callSeconds by remember { mutableStateOf(0) }
+    /** She rang: the popup is up until answered, declined, or it rings out. */
+    var incomingCall by remember { mutableStateOf(false) }
+    /** The places she can be, for the call screen and its picker. */
+    var backgrounds by remember { mutableStateOf<List<LibbyBackground>>(emptyList()) }
+    /** The message the next thing you send answers. */
+    var replyTarget by remember { mutableStateOf<StoredChatMessage?>(null) }
+    /** Library items attached to the composer, sent with the next message. */
+    var pendingItems by remember { mutableStateOf<List<LibbyAttachment>>(emptyList()) }
+    var pickerOpen by remember { mutableStateOf(false) }
+    /** A message held for its menu. */
+    var holdMessage by remember { mutableStateOf<StoredChatMessage?>(null) }
+    var retryNoteOpen by remember { mutableStateOf(false) }
+    var retryNote by remember { mutableStateOf("") }
+    val clipboard = LocalClipboardManager.current
     var overflowOpen by remember { mutableStateOf(false) }
     // A conversation pending a delete confirmation, so a mis-tap doesn't wipe history.
     var confirmDelete by remember { mutableStateOf<ChatConversation?>(null) }
@@ -497,22 +552,24 @@ fun ChatScreen(
         list.animateScrollToItem(rows - 1)
     }
 
-    fun sendMessage() {
-        val ws = workspace ?: return; val char = currentCharacter(ws) ?: return; val convo = currentConversation(ws) ?: return
-        val photo = pendingPhoto
-        val text = draft.trim().ifBlank { if (photo != null) "*shares a photo with you*" else "" }
-        if (text.isBlank() || busy) return
-        val now = System.currentTimeMillis(); val userLine = StoredChatMessage(chatID(), "user", text, now, imageId = photo?.id.orEmpty())
-        val pending = convo.copy(title = if (convo.title == "New conversation") text.take(42) else convo.title, messages = convo.messages + userLine, updatedAt = now)
-        workspace = ws.copy(conversations = ws.conversations.map { if (it.id == convo.id) pending else it }); draft = ""; pendingPhoto = null; busy = true; message = ""
+    /**
+     * One assistant turn on top of [pending], which already holds whatever the user just
+     * said. Sending, retrying and retrying-from all end here; they differ only in what
+     * they do to the log first. [seed] is the line being answered, which is what Libby's
+     * offline voice writes from; [nudge] is a one-off steer for this attempt, sent on
+     * the history and never stored.
+     */
+    fun generate(pending: ChatConversation, char: ChatCharacter, seed: String, photo: ChatImage?, sharedIds: List<Long>, nudge: String) {
+        val ws = workspace ?: return
+        busy = true; message = ""
         scope.launch {
             if (status?.enabled != true && (status?.configured == true || status?.modelBackend == true)) {
                 runCatching { repo.api.chatStatus() }.getOrNull()?.let { status = it }
             }
             if (status?.enabled != true) {
                 if (char.id != "libby") { message = status?.message?.ifBlank { null } ?: "Load a model in text-generation-webui, then refresh backend status."; busy = false; return@launch }
-                val progression = LibbyMeter.applyProgression(pending.progress, LibbyVoice.heatDelta(text, pending.mode))
-                val line = LibbyVoice.reply(text, pending.mode, pending.emotion, progression.second, advance = false)
+                val progression = LibbyMeter.applyProgression(pending.progress, LibbyVoice.heatDelta(seed, pending.mode))
+                val line = LibbyVoice.reply(seed, pending.mode, pending.emotion, progression.second, advance = false)
                 typeLikeAPerson(line.message, 0) { typingPhase = it }
                 LibbyMeter.set(progression.second)
                 val done = pending.copy(emotion = line.emotion, intensity = progression.second, progress = progression.first, messages = pending.messages + StoredChatMessage(chatID(), "assistant", line.message, System.currentTimeMillis()), updatedAt = System.currentTimeMillis())
@@ -521,7 +578,9 @@ fun ChatScreen(
             // Thoughts are left out: they were never said, so replaying them as assistant
             // lines hands the model words she did not speak and teaches it that the format
             // belongs inline. Continuity is carried by her memory and the bond instead.
-            val history = pending.messages.filter { it.thought.isBlank() }.map { ChatMessage(it.role, it.content) }
+            // Ids and quoted replies ride along so she can point at an earlier message.
+            val history = pending.messages.filter { it.thought.isBlank() }.map { ChatMessage(it.role, it.content, it.id, it.replyTo) } +
+                if (nudge.isBlank()) emptyList() else listOf(ChatMessage("user", "(Try that reply again. $nudge Do not mention this note.)"))
             val startedAt = System.currentTimeMillis()
             typingPhase = TypingPhase.TYPING
             // Pictures already seen in this conversation ride along so the server can
@@ -551,16 +610,23 @@ fun ChatScreen(
                         recentMoods = pending.messages.mapNotNull { it.mood.ifBlank { null } }.takeLast(8),
                         // That they have her full-screen and are watching her answer.
                         call = callOpen,
-                        // What she is already doing. A state, not a per-message value.
+                        // What she is already doing, and where. States, not per-message values.
                         activity = pending.activity,
+                        background = pending.background,
                         // What she has on: the worn outfit is a per-device pref, so the
                         // server cannot know it unless this says so.
                         outfit = if (char.id == "libby") repo.prefs.libbyOutfit else "",
+                        // Library items attached to this message, by id.
+                        sharedMediaIds = sharedIds,
                     ),
                 )
             }
             generation
                 .onSuccess { reply ->
+                    // She rang, or hung up. A ring is a popup and only answering opens the
+                    // call; a hang-up ends one that is open, with a line saying so.
+                    if (reply.callRequest && !callOpen && !repo.prefs.hideLibby) incomingCall = true
+                    if (reply.callEnd && callOpen) { callOpen = false; message = "${char.name} ended the call." }
                     // Whatever the model already spent counts as time she was "writing", so
                     // this only ever tops the wait up to something human — never adds a full
                     // delay on top of a slow generation.
@@ -593,12 +659,15 @@ fun ChatScreen(
                         attachments = reply.attachments, actions = reply.actions,
                         // What she looked like saying it, for the run the next turn reports.
                         mood = reply.emotion,
+                        // The earlier message she answered, when she quoted one.
+                        replyTo = reply.replyTo,
                     ))
                     val done = pending.copy(
                         emotion = reply.emotion, intensity = level, progress = progress,
                         // Blank is a real answer here — it means she is doing nothing in
-                        // particular — so this is assigned rather than merged.
+                        // particular, or is nowhere in particular — so these are assigned.
                         activity = reply.activity,
+                        background = reply.background,
                         messages = pending.messages + thoughtLines + spoken, updatedAt = System.currentTimeMillis(),
                     )
                     val latest = workspace ?: ws; save(latest.copy(conversations = latest.conversations.map { if (it.id == done.id) done else it }))
@@ -611,13 +680,88 @@ fun ChatScreen(
         }
     }
 
+    fun sendMessage() {
+        val ws = workspace ?: return; val char = currentCharacter(ws) ?: return; val convo = currentConversation(ws) ?: return
+        val photo = pendingPhoto
+        val items = pendingItems
+        val text = draft.trim().ifBlank {
+            when {
+                photo != null -> "*shares a photo with you*"
+                items.size == 1 -> "*shares ${items[0].title} from the library*"
+                items.isNotEmpty() -> "*shares ${items.size} things from the library*"
+                else -> ""
+            }
+        }
+        if (text.isBlank() || busy) return
+        val now = System.currentTimeMillis()
+        val reply = replyTarget
+        val userLine = StoredChatMessage(
+            chatID(), "user", text, now, imageId = photo?.id.orEmpty(), attachments = items,
+            replyTo = reply?.let { ChatReplyRef(it.id, it.role, excerptOf(it.content)) },
+        )
+        val pending = convo.copy(title = if (convo.title == "New conversation") text.take(42) else convo.title, messages = convo.messages + userLine, updatedAt = now)
+        workspace = ws.copy(conversations = ws.conversations.map { if (it.id == convo.id) pending else it })
+        draft = ""; pendingPhoto = null; pendingItems = emptyList(); replyTarget = null
+        generate(pending, char, text, photo, items.map { it.id }, "")
+    }
+
+    /**
+     * Re-rolls her last turn: the trailing assistant messages are dropped and she
+     * answers again from the same history, with [nudge] as a word of direction if any.
+     */
+    fun regenerate(nudge: String = "") {
+        val ws = workspace ?: return; val char = currentCharacter(ws) ?: return; val convo = currentConversation(ws) ?: return
+        if (busy) return
+        val msgs = convo.messages
+        var cut = msgs.size
+        while (cut > 0 && msgs[cut - 1].role == "assistant") cut--
+        if (cut == msgs.size) { message = "There is no reply to redo yet."; return }
+        val pending = convo.copy(messages = msgs.take(cut), updatedAt = System.currentTimeMillis())
+        workspace = ws.copy(conversations = ws.conversations.map { if (it.id == convo.id) pending else it })
+        // The items they attached to the message being answered go again, or a retry
+        // would answer a message she can no longer see the attachments of.
+        val answered = msgs.getOrNull(cut - 1)?.takeIf { it.role == "user" }
+        generate(pending, char, answered?.content ?: "", null, answered?.attachments?.map { it.id }.orEmpty(), nudge)
+    }
+
+    /** Retries from one of your messages: everything after it is dropped and she
+        answers it again. The message itself stays as written. */
+    fun retryFrom(entry: StoredChatMessage) {
+        val ws = workspace ?: return; val char = currentCharacter(ws) ?: return; val convo = currentConversation(ws) ?: return
+        if (busy || entry.role != "user") return
+        val at = convo.messages.indexOfFirst { it.id == entry.id }
+        if (at < 0) return
+        val pending = convo.copy(messages = convo.messages.take(at + 1), updatedAt = System.currentTimeMillis())
+        workspace = ws.copy(conversations = ws.conversations.map { if (it.id == convo.id) pending else it })
+        generate(pending, char, entry.content, null, entry.attachments.map { it.id }, "")
+    }
+
+    fun deleteMessage(entry: StoredChatMessage) {
+        updateConversation { it.copy(messages = it.messages.filterNot { m -> m.id == entry.id }) }
+    }
+
+    /** Whether retrying would redo this message: only the last assistant run can be. */
+    fun canRedo(entry: StoredChatMessage): Boolean {
+        val msgs = currentConversation(workspace)?.messages ?: return false
+        val at = msgs.indexOfFirst { it.id == entry.id }
+        return entry.role == "assistant" && at >= 0 && msgs.drop(at + 1).all { it.role == "assistant" }
+    }
+
     // Back steps out one level, matching the header arrow: out of a conversation to
     // the list first, then out of chat to the library.
     BackHandler { if (inbox) onBack() else inbox = true }
     LaunchedEffect(callOpen) {
         if (!callOpen) return@LaunchedEffect
         callSeconds = 0
+        incomingCall = false
+        runCatching { repo.api.libbyBackgrounds() }.onSuccess { backgrounds = it.backgrounds }
         while (callOpen) { delay(1_000); callSeconds++ }
+    }
+    // A ring that nobody answers stops on its own and counts as missed.
+    LaunchedEffect(incomingCall) {
+        if (!incomingCall) return@LaunchedEffect
+        delay(RING_MS)
+        if (incomingCall) { incomingCall = false; message = "Missed a call from ${currentCharacter(workspace)?.name ?: "her"}." }
     }
     confirmDelete?.let { pending ->
         AlertDialog(
@@ -646,10 +790,15 @@ fun ChatScreen(
             repo = repo,
             conversation = callConversation,
             busy = busy,
+            typing = busy && typingPhase == TypingPhase.TYPING,
             seconds = callSeconds,
             draft = draft,
+            backgrounds = backgrounds,
             onDraft = { draft = it },
             onSend = { sendMessage() },
+            onRetry = { regenerate() },
+            onBackground = { id -> updateConversation { it.copy(background = id) } },
+            onRefreshBackgrounds = { scope.launch { runCatching { repo.api.libbyBackgrounds() }.onSuccess { backgrounds = it.backgrounds } } },
             onEnd = { callOpen = false },
         )
         return
@@ -666,6 +815,7 @@ fun ChatScreen(
     val ws = workspace
     val char = currentCharacter(ws)
     val convo = currentConversation(ws)
+    Box(Modifier.fillMaxSize()) {
     when {
         ws == null || char == null ->
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
@@ -792,7 +942,7 @@ fun ChatScreen(
                             // never showed: a conversation picked up a week later ran
                             // straight on from the one before it with nothing to say so.
                             if (previous == null || !sameChatDay(previous.at, item.at)) ChatDaySeparator(item.at)
-                            ChatMessageRow(repo, ws, char, item, previous, convo.messages.getOrNull(index + 1), onOpenMedia)
+                            ChatMessageRow(repo, ws, char, item, previous, convo.messages.getOrNull(index + 1), onOpenMedia, onHold = { holdMessage = it })
                         }
                     }
                     if (busy && typingPhase == TypingPhase.TYPING) item { ChatTypingBubble(repo, char) }
@@ -815,6 +965,42 @@ fun ChatScreen(
                 }
             }
             if (message.isNotBlank()) Text(message, color = if (message.contains("fail", true) || message.contains("couldn", true)) ChatColors.danger else ChatColors.muted, fontSize = 13.sp, modifier = Modifier.fillMaxWidth().background(ChatColors.side).padding(10.dp))
+            // What the next message answers. A bar above the box, the way every messenger
+            // draws it, with its own close.
+            replyTarget?.let { target ->
+                Row(
+                    Modifier.fillMaxWidth().background(ChatColors.side).padding(start = 12.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(Modifier.width(3.dp).height(36.dp).clip(RoundedCornerShape(2.dp)).background(ChatColors.accent))
+                    Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
+                        Text("Replying to ${if (target.role == "assistant") char.name else "yourself"}", color = ChatColors.accent, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                        Text(excerptOf(target.content), color = ChatColors.muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    IconButton(onClick = { replyTarget = null }) { Icon(Icons.Filled.Close, "Cancel reply", tint = ChatColors.muted) }
+                }
+            }
+            // Library items going with the next message, as removable chips.
+            if (pendingItems.isNotEmpty()) {
+                Row(
+                    Modifier.fillMaxWidth().background(ChatColors.side).horizontalScroll(rememberScrollState()).padding(horizontal = 10.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    pendingItems.forEach { item ->
+                        Row(
+                            Modifier.clip(RoundedCornerShape(10.dp)).background(ChatColors.input).padding(start = 4.dp, end = 2.dp, top = 3.dp, bottom = 3.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            if (item.hasThumb) AsyncImage(repo.thumbUrl(item.id), null, imageLoader = repo.imageLoader, contentScale = ContentScale.Crop, modifier = Modifier.size(26.dp).clip(RoundedCornerShape(6.dp)))
+                            else Icon(linkIcon(item.kind), null, tint = ChatColors.muted, modifier = Modifier.size(22.dp))
+                            Text(item.title, color = ChatColors.text, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 6.dp).widthIn(max = 150.dp))
+                            IconButton(onClick = { pendingItems = pendingItems.filterNot { it.id == item.id } }, modifier = Modifier.size(24.dp)) {
+                                Icon(Icons.Filled.Close, "Remove ${item.title}", tint = ChatColors.muted, modifier = Modifier.size(14.dp))
+                            }
+                        }
+                    }
+                }
+            }
             pendingPhoto?.let { photo ->
                 Row(
                     Modifier.fillMaxWidth().background(ChatColors.side).padding(horizontal = 12.dp, vertical = 8.dp),
@@ -843,6 +1029,11 @@ fun ChatScreen(
                     // in every other chat app, so it is one here.
                     IconButton(onClick = { attachPicker.launch("image/*") }, enabled = !uploading && !busy) {
                         Icon(Icons.Filled.AddPhotoAlternate, "Attach a photo", tint = ChatColors.muted)
+                    }
+                    // A library item goes by reference — a video, a game, a comic — so she
+                    // is told what it is rather than handed a still of it.
+                    IconButton(onClick = { pickerOpen = true }, enabled = !busy, modifier = Modifier.size(40.dp)) {
+                        Icon(Icons.Filled.CollectionsBookmark, "Attach from the library", tint = ChatColors.muted)
                     }
                     TextField(
                         draft, { draft = it },
@@ -876,6 +1067,83 @@ fun ChatScreen(
         }
     }
 
+    // She is ringing. A card over whichever pane is up, with answer and decline; it
+    // rings out on its own (see the LaunchedEffect above).
+    if (incomingCall && char != null) {
+        IncomingCallCard(
+            repo = repo, char = char,
+            onAnswer = { incomingCall = false; callOpen = true },
+            onDecline = { incomingCall = false },
+            modifier = Modifier.align(Alignment.TopCenter).padding(top = 52.dp, start = 12.dp, end = 12.dp),
+        )
+    }
+    } // Box
+
+    // The held message's menu: reply, copy, the retries, delete.
+    holdMessage?.let { held ->
+        ModalBottomSheet(onDismissRequest = { holdMessage = null }) {
+            val redo = canRedo(held)
+            if (held.thought.isBlank()) ListItem(
+                headlineContent = { Text("Reply") }, supportingContent = { Text("Quote this in your next message") },
+                leadingContent = { Icon(Icons.AutoMirrored.Filled.Reply, null) },
+                modifier = Modifier.clickable { replyTarget = held; holdMessage = null },
+            )
+            ListItem(
+                headlineContent = { Text("Copy text") },
+                leadingContent = { Icon(Icons.Filled.ContentCopy, null) },
+                modifier = Modifier.clickable { clipboard.setText(AnnotatedString(held.content)); holdMessage = null },
+            )
+            if (redo) {
+                ListItem(
+                    headlineContent = { Text("Retry") }, supportingContent = { Text("Ask for a different reply") },
+                    leadingContent = { Icon(Icons.Filled.Refresh, null) },
+                    modifier = Modifier.clickable { holdMessage = null; regenerate() },
+                )
+                ListItem(
+                    headlineContent = { Text("Retry with a note…") }, supportingContent = { Text("Say what should be different") },
+                    leadingContent = { Icon(Icons.Filled.EditNote, null) },
+                    modifier = Modifier.clickable { holdMessage = null; retryNote = ""; retryNoteOpen = true },
+                )
+            }
+            if (held.role == "user" && held.thought.isBlank()) ListItem(
+                headlineContent = { Text("Retry from here") }, supportingContent = { Text("Drop everything after this and have her answer it again") },
+                leadingContent = { Icon(Icons.Filled.Replay, null) },
+                modifier = Modifier.clickable { holdMessage = null; retryFrom(held) },
+            )
+            ListItem(
+                headlineContent = { Text("Delete message", color = ChatColors.danger) },
+                leadingContent = { Icon(Icons.Filled.Delete, null, tint = ChatColors.danger) },
+                modifier = Modifier.clickable { deleteMessage(held); holdMessage = null },
+            )
+            Spacer(Modifier.size(16.dp))
+        }
+    }
+
+    if (retryNoteOpen) AlertDialog(
+        onDismissRequest = { retryNoteOpen = false },
+        title = { Text("Try that again") },
+        text = { TextField(retryNote, { retryNote = it }, placeholder = { Text("shorter · answer the question · less pouty") }) },
+        confirmButton = { Button(onClick = {
+            retryNoteOpen = false
+            val note = retryNote.trim().let { if (it.isEmpty() || it.endsWith(".")) it else "$it." }
+            regenerate(note)
+        }) { Text("Retry") } },
+        dismissButton = { TextButton(onClick = { retryNoteOpen = false }) { Text("Cancel") } },
+    )
+
+    if (pickerOpen) {
+        LibraryPickerSheet(
+            repo = repo,
+            chosen = pendingItems,
+            onToggle = { item ->
+                pendingItems = if (pendingItems.any { it.id == item.id }) pendingItems.filterNot { it.id == item.id }
+                else if (pendingItems.size >= 6) pendingItems
+                else pendingItems + LibbyAttachment(item.id, item.title.ifBlank { "Item ${item.id}" }, item.kind, item.hasThumb)
+            },
+            onDismiss = { pickerOpen = false },
+        )
+    }
+
     if (settingsOpen && workspace != null) {
         val ws = workspace ?: return
         val char = currentCharacter(ws) ?: return
@@ -896,65 +1164,110 @@ fun ChatScreen(
     }
 }
 
-/** Full-screen sprite call, mirroring the web client's call presentation. It is the
- * same conversation underneath: sending here writes to the ordinary log and mood
- * changes swap Libby's sprite on the next recomposition. */
+/**
+ * The video call.
+ *
+ * The room she is in fills the screen, she stands in it, and everything else — who,
+ * how long, how she feels, what was just said — is laid over it in the thinnest chrome
+ * that still reads. It is the same conversation underneath: sending here writes to the
+ * ordinary log, her mood swaps the sprite on the next recomposition, and where she is
+ * comes from the conversation, chosen by her with a tag or by hand from the tray.
+ */
 @Composable
 private fun LibbyVideoCall(
     repo: Repository,
     conversation: ChatConversation,
     busy: Boolean,
+    typing: Boolean,
     seconds: Int,
     draft: String,
+    backgrounds: List<LibbyBackground>,
     onDraft: (String) -> Unit,
     onSend: () -> Unit,
+    onRetry: () -> Unit,
+    onBackground: (String) -> Unit,
+    onRefreshBackgrounds: () -> Unit,
     onEnd: () -> Unit,
 ) {
     val emotion = conversation.emotion.ifBlank { "neutral" }
     val tier = conversation.intensity.coerceIn(1, LibbyMeter.MAX)
-    // What she is doing, when she has put herself into one of the MISC states. The
-    // portrait shows it where the worn wardrobe has art for it; the header says it
-    // either way, which is what makes the state visible on the bundled artwork.
-    val activity = conversation.activity
-    val caption = conversation.messages.lastOrNull { it.role == "assistant" }?.content
+    // Her typing art while she writes, when she is not otherwise in a state with art of
+    // its own; the caption of dots says the same thing either way.
+    val activity = conversation.activity.ifBlank { if (typing) "typing" else "" }
+    val place = backgrounds.firstOrNull { it.id == conversation.background && it.hasImage }
+    // The last few lines as subtitles, newest at the bottom. Thoughts are not speech.
+    val recent = conversation.messages.filter { it.thought.isBlank() }.takeLast(3)
     val clock = "%d:%02d".format(seconds / 60, seconds % 60)
+    var trayOpen by remember { mutableStateOf(false) }
+    var captions by remember { mutableStateOf(true) }
 
-    Column(
-        Modifier.fillMaxSize().background(ChatColors.rail).windowInsetsPadding(WindowInsets.safeDrawing),
-    ) {
-        Box(
-            Modifier.weight(1f).fillMaxWidth().background(
-                Brush.verticalGradient(
-                    listOf(MaterialTheme.colorScheme.primaryContainer.copy(alpha = .72f), ChatColors.rail),
+    Column(Modifier.fillMaxSize().background(Color.Black)) {
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            // The room. A picture when she is somewhere; the old gradient when not.
+            if (place != null) {
+                AsyncImage(
+                    repo.libbyBackgroundUrl(place.id), null, imageLoader = repo.imageLoader,
+                    contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize().scale(1.03f),
+                )
+            } else {
+                Box(
+                    Modifier.fillMaxSize().background(
+                        Brush.radialGradient(
+                            listOf(MaterialTheme.colorScheme.primaryContainer.copy(alpha = .55f), Color(0xFF0B0A0D)),
+                            radius = 1400f,
+                        ),
+                    ),
+                )
+            }
+            // A veil so the chrome reads on any picture: dark at the top for the header,
+            // dark at the bottom for the captions, clear where she stands.
+            Box(
+                Modifier.fillMaxSize().background(
+                    Brush.verticalGradient(
+                        0f to Color(0x8C000000), .22f to Color.Transparent, .62f to Color.Transparent, 1f to Color(0x99000000),
+                    ),
                 ),
-            ),
-        ) {
+            )
             LibbyPortrait(
                 repo = repo,
                 emotion = emotion,
                 tier = tier,
                 fallbackAsset = mascotAsset(emotion, tier),
-                modifier = Modifier.fillMaxSize().padding(top = 56.dp),
+                modifier = Modifier.fillMaxSize().padding(top = 60.dp),
                 activity = activity,
             )
+            // Header: who, how long, and how she is — two pills, not a bar.
             Row(
-                Modifier.align(Alignment.TopCenter).fillMaxWidth().background(Color(0x66000000)).padding(horizontal = 18.dp, vertical = 12.dp),
+                Modifier.align(Alignment.TopCenter).fillMaxWidth().windowInsetsPadding(WindowInsets.safeDrawing).padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Column(Modifier.weight(1f)) {
-                    Text("Libby", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 17.sp)
-                    Text(if (busy) "Speaking…" else clock, color = Color.White.copy(alpha = .78f), fontSize = 12.sp)
+                Row(
+                    Modifier.clip(RoundedCornerShape(999.dp)).background(Color(0x6B000000)).padding(start = 8.dp, end = 12.dp, top = 5.dp, bottom = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(Modifier.size(7.dp).clip(CircleShape).background(Color(0xFFF04747)))
+                    Column(Modifier.padding(start = 8.dp)) {
+                        Text("Libby", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        Text(if (typing) "typing…" else if (busy) "thinking…" else clock, color = Color.White.copy(alpha = .78f), fontSize = 11.sp)
+                    }
                 }
-                Column(horizontalAlignment = Alignment.End) {
+                Spacer(Modifier.weight(1f))
+                Column(
+                    Modifier.clip(RoundedCornerShape(999.dp)).background(Color(0x6B000000)).padding(horizontal = 11.dp, vertical = 5.dp),
+                    horizontalAlignment = Alignment.End,
+                ) {
                     Text(
-                        if (activity.isEmpty()) emotion.replaceFirstChar(Char::uppercase)
-                        else "${emotion.replaceFirstChar(Char::uppercase)} · ${activity.replaceFirstChar(Char::uppercase)}",
-                        color = Color.White, fontSize = 12.sp,
+                        listOfNotNull(
+                            emotion.replaceFirstChar(Char::uppercase),
+                            conversation.activity.ifBlank { null }?.replaceFirstChar(Char::uppercase),
+                            place?.name,
+                        ).joinToString(" · "),
+                        color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis,
                     )
-                    Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(3.dp), modifier = Modifier.padding(top = 2.dp)) {
                         repeat(LibbyMeter.MAX) { index ->
                             Box(
-                                Modifier.size(6.dp).clip(CircleShape).background(
+                                Modifier.size(5.dp).clip(CircleShape).background(
                                     if (index < tier) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = .28f),
                                 ),
                             )
@@ -962,41 +1275,235 @@ private fun LibbyVideoCall(
                     }
                 }
             }
-            caption?.let {
-                Text(
-                    richChatText(it),
-                    color = Color.White,
-                    modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth(.9f)
-                        .padding(bottom = 16.dp).clip(RoundedCornerShape(12.dp))
-                        .background(Color(0xAA000000)).padding(horizontal = 14.dp, vertical = 11.dp),
-                )
+            // Subtitles: the last few lines, yours tinted, hers plain, the newest brightest.
+            if (captions) Column(
+                Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                recent.forEachIndexed { index, line ->
+                    val mine = line.role == "user"
+                    val newest = index == recent.lastIndex
+                    Text(
+                        richChatText(line.content),
+                        color = Color.White,
+                        fontSize = if (newest) 15.sp else 13.sp,
+                        modifier = Modifier.alpha(if (newest) 1f else .62f).fillMaxWidth(.92f).clip(RoundedCornerShape(14.dp))
+                            .background(if (mine) MaterialTheme.colorScheme.primary.copy(alpha = .62f) else Color(0x8F000000))
+                            .padding(horizontal = 14.dp, vertical = 9.dp),
+                    )
+                }
+                if (typing) Box(
+                    Modifier.clip(RoundedCornerShape(14.dp)).background(Color(0x8F000000)).padding(horizontal = 16.dp, vertical = 12.dp),
+                ) { TypingDots(Color.White.copy(alpha = .85f)) }
+            }
+            // The tray: where she is, chosen by hand. Overrides her until she moves again.
+            if (trayOpen) {
+                val usable = backgrounds.filter { it.hasImage }
+                Column(
+                    Modifier.align(Alignment.BottomEnd).padding(12.dp).widthIn(max = 420.dp).fillMaxWidth()
+                        .clip(RoundedCornerShape(16.dp)).background(Color(0xF00E0E12)).padding(12.dp),
+                ) {
+                    Text("WHERE SHE IS", color = Color.White.copy(alpha = .7f), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                    LazyVerticalGrid(
+                        columns = GridCells.Adaptive(96.dp), modifier = Modifier.padding(top = 8.dp).heightIn(max = 220.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        item {
+                            SceneTile(selected = conversation.background.isBlank(), name = "Plain", onClick = { onBackground(""); trayOpen = false }) {
+                                Icon(Icons.Filled.BlurOn, null, tint = Color.White.copy(alpha = .7f), modifier = Modifier.size(28.dp))
+                            }
+                        }
+                        items(usable, key = { it.id }) { bg ->
+                            SceneTile(selected = conversation.background == bg.id, name = bg.name, onClick = { onBackground(bg.id); trayOpen = false }) {
+                                AsyncImage(repo.libbyBackgroundUrl(bg.id), bg.name, imageLoader = repo.imageLoader, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                            }
+                        }
+                    }
+                    Text(
+                        if (usable.isEmpty()) "No backgrounds yet — add and tag some in Settings, and she'll choose between them."
+                        else "She picks a room herself when the scene moves; this overrides her until she moves again.",
+                        color = Color.White.copy(alpha = .6f), fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp),
+                    )
+                }
             }
         }
         Row(
-            Modifier.fillMaxWidth().background(ChatColors.rail).imePadding().padding(12.dp),
+            Modifier.fillMaxWidth().background(Color(0xFF0C0C10)).imePadding().navigationBarsPadding().padding(horizontal = 10.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             TextField(
                 value = draft,
                 onValueChange = onDraft,
-                placeholder = { Text("Say something to Libby…") },
+                placeholder = { Text("Say something to Libby…", color = Color.White.copy(alpha = .5f)) },
                 enabled = !busy,
                 maxLines = 3,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                 keyboardActions = KeyboardActions(onSend = { onSend() }),
                 shape = RoundedCornerShape(24.dp),
-                colors = TextFieldDefaults.colors(focusedContainerColor = ChatColors.input, unfocusedContainerColor = ChatColors.input),
+                colors = TextFieldDefaults.colors(
+                    focusedContainerColor = Color(0x1AFFFFFF), unfocusedContainerColor = Color(0x1AFFFFFF), disabledContainerColor = Color(0x1AFFFFFF),
+                    focusedTextColor = Color.White, unfocusedTextColor = Color.White, disabledTextColor = Color.White.copy(alpha = .6f),
+                    focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent, disabledIndicatorColor = Color.Transparent,
+                ),
                 modifier = Modifier.weight(1f),
             )
-            IconButton(
-                onClick = onSend,
-                enabled = draft.isNotBlank() && !busy,
-                modifier = Modifier.padding(start = 7.dp).clip(CircleShape).background(ChatColors.accent),
-            ) { Icon(Icons.AutoMirrored.Filled.Send, "Send", tint = MaterialTheme.colorScheme.onPrimary) }
-            IconButton(
-                onClick = onEnd,
-                modifier = Modifier.padding(start = 7.dp).clip(CircleShape).background(ChatColors.danger),
-            ) { Icon(Icons.Filled.CallEnd, "End video chat", tint = MaterialTheme.colorScheme.onError) }
+            CallButton(Icons.AutoMirrored.Filled.Send, "Send", enabled = draft.isNotBlank() && !busy, background = MaterialTheme.colorScheme.primary, tint = MaterialTheme.colorScheme.onPrimary, onClick = onSend)
+            CallButton(Icons.Filled.Wallpaper, "Change the background", on = trayOpen, onClick = { trayOpen = !trayOpen; if (trayOpen) onRefreshBackgrounds() })
+            CallButton(Icons.Filled.ClosedCaption, if (captions) "Hide captions" else "Show captions", on = captions, onClick = { captions = !captions })
+            CallButton(Icons.Filled.Refresh, "Ask for a different reply", enabled = !busy, onClick = onRetry)
+            CallButton(Icons.Filled.CallEnd, "End video chat", background = Color(0xFFE5484D), tint = Color.White, onClick = onEnd)
+        }
+    }
+}
+
+/** One round control on the call bar. */
+@Composable
+private fun CallButton(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    enabled: Boolean = true,
+    on: Boolean = false,
+    background: Color = if (on) MaterialTheme.colorScheme.primary.copy(alpha = .8f) else Color(0x1AFFFFFF),
+    tint: Color = Color.White,
+    onClick: () -> Unit,
+) {
+    IconButton(onClick = onClick, enabled = enabled, modifier = Modifier.size(42.dp).clip(CircleShape).background(background)) {
+        Icon(icon, label, tint = tint.copy(alpha = if (enabled) 1f else .45f), modifier = Modifier.size(20.dp))
+    }
+}
+
+/** One room in the call's tray. */
+@Composable
+private fun SceneTile(selected: Boolean, name: String, onClick: () -> Unit, content: @Composable () -> Unit) {
+    Box(
+        Modifier.fillMaxWidth().height(60.dp).clip(RoundedCornerShape(10.dp)).background(Color(0xFF26242C))
+            .border(2.dp, if (selected) MaterialTheme.colorScheme.primary else Color.Transparent, RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        content()
+        Text(
+            name, color = Color.White, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.align(Alignment.BottomStart).fillMaxWidth()
+                .background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xCC000000)))).padding(start = 6.dp, end = 6.dp, top = 12.dp, bottom = 4.dp),
+        )
+    }
+}
+
+/** Three pulsing dots, the typing indicator's own vocabulary. */
+@Composable
+private fun TypingDots(color: Color) {
+    val pulse = rememberInfiniteTransition(label = "typing")
+    Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+        repeat(3) { index ->
+            val alpha by pulse.animateFloat(
+                initialValue = .3f, targetValue = 1f,
+                animationSpec = infiniteRepeatable(tween(520, delayMillis = index * 160, easing = LinearEasing), RepeatMode.Reverse),
+                label = "dot$index",
+            )
+            Box(Modifier.size(7.dp).clip(CircleShape).background(color.copy(alpha = alpha)))
+        }
+    }
+}
+
+/**
+ * She is ringing you. A card over the conversation rather than a screen: it floats
+ * where a notification would, pulses, and either you pick up or it rings out.
+ */
+@Composable
+private fun IncomingCallCard(repo: Repository, char: ChatCharacter, onAnswer: () -> Unit, onDecline: () -> Unit, modifier: Modifier = Modifier) {
+    val pulse = rememberInfiniteTransition(label = "ring")
+    val ring by pulse.animateFloat(
+        initialValue = 1f, targetValue = 1.12f,
+        animationSpec = infiniteRepeatable(tween(650, easing = LinearEasing), RepeatMode.Reverse), label = "ringScale",
+    )
+    Row(
+        modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(ChatColors.side).padding(start = 10.dp, end = 10.dp, top = 10.dp, bottom = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        ChatAvatar(repo, char, Modifier.size(46.dp).scale(ring).clip(CircleShape))
+        Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+            Text("${char.name} is calling", color = ChatColors.text, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+            Text("Video call", color = ChatColors.muted, fontSize = 12.sp)
+        }
+        IconButton(onClick = onDecline, modifier = Modifier.size(42.dp).clip(CircleShape).background(ChatColors.danger)) {
+            Icon(Icons.Filled.CallEnd, "Decline", tint = MaterialTheme.colorScheme.onError, modifier = Modifier.size(20.dp))
+        }
+        Spacer(Modifier.width(8.dp))
+        IconButton(onClick = onAnswer, modifier = Modifier.size(42.dp).clip(CircleShape).background(Color(0xFF2FB35A))) {
+            Icon(Icons.Filled.Videocam, "Answer", tint = Color.White, modifier = Modifier.size(20.dp))
+        }
+    }
+}
+
+/**
+ * Attaching library items to a message. A sheet with a search box and the library
+ * under it, newest first; tapping toggles. Items go by reference — a video or a game
+ * cannot be copied into a gallery of stills, and does not need to be.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun LibraryPickerSheet(repo: Repository, chosen: List<LibbyAttachment>, onToggle: (Media) -> Unit, onDismiss: () -> Unit) {
+    var query by remember { mutableStateOf("") }
+    var items by remember { mutableStateOf<List<Media>?>(null) }
+    LaunchedEffect(Unit) { items = runCatching { repo.listAll(null) }.getOrDefault(emptyList()) }
+    val words = remember(query) { query.trim().lowercase().split(' ').filter { it.isNotEmpty() } }
+    val shown = remember(items, words) {
+        (items ?: emptyList()).filter { m ->
+            words.all { w -> m.title.lowercase().contains(w) || m.kind.contains(w) || m.tags.any { t -> t.name.lowercase().contains(w) } }
+        }.take(200)
+    }
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp).heightIn(max = 560.dp)) {
+            TextField(
+                query, { query = it }, placeholder = { Text("Search your library…") }, singleLine = true,
+                leadingIcon = { Icon(Icons.Filled.Search, null) },
+                shape = RoundedCornerShape(24.dp),
+                colors = TextFieldDefaults.colors(focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Text(
+                if (chosen.isEmpty()) "Pick videos, pictures, gifs, comics or games to show her." else "${chosen.size} chosen",
+                color = ChatColors.muted, fontSize = 12.sp, modifier = Modifier.padding(vertical = 8.dp),
+            )
+            when {
+                items == null -> Box(Modifier.fillMaxWidth().padding(30.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+                shown.isEmpty() -> Text("Nothing matches.", color = ChatColors.muted, modifier = Modifier.padding(24.dp).align(Alignment.CenterHorizontally))
+                else -> LazyVerticalGrid(
+                    columns = GridCells.Adaptive(100.dp), modifier = Modifier.weight(1f, fill = false),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp),
+                    contentPadding = PaddingValues(bottom = 24.dp),
+                ) {
+                    items(shown, key = { it.id }) { m ->
+                        val on = chosen.any { it.id == m.id }
+                        Box(
+                            Modifier.fillMaxWidth().height(100.dp).clip(RoundedCornerShape(12.dp)).background(ChatColors.input)
+                                .border(2.dp, if (on) ChatColors.accent else Color.Transparent, RoundedCornerShape(12.dp))
+                                .clickable { onToggle(m) },
+                        ) {
+                            if (m.hasThumb || m.kind == "image" || m.kind == "gif") {
+                                AsyncImage(repo.thumbUrl(m.id), m.title, imageLoader = repo.imageLoader, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                            } else {
+                                Icon(linkIcon(m.kind), null, tint = ChatColors.muted, modifier = Modifier.align(Alignment.Center).size(34.dp))
+                            }
+                            Text(
+                                m.title.ifBlank { "Item ${m.id}" }, color = Color.White, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.align(Alignment.BottomStart).fillMaxWidth()
+                                    .background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xCC000000)))).padding(start = 6.dp, end = 6.dp, top = 16.dp, bottom = 5.dp),
+                            )
+                            if (on) Box(
+                                Modifier.align(Alignment.TopEnd).padding(5.dp).size(20.dp).clip(CircleShape).background(ChatColors.accent),
+                                contentAlignment = Alignment.Center,
+                            ) { Icon(Icons.Filled.Check, null, tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(14.dp)) }
+                        }
+                    }
+                }
+            }
+            Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), horizontalArrangement = Arrangement.End) {
+                Button(onClick = onDismiss) { Text(if (chosen.isEmpty()) "Close" else "Done") }
+            }
         }
     }
 }
@@ -1513,6 +2020,7 @@ private fun ChatThoughtRow(char: ChatCharacter, entry: StoredChatMessage) {
  *    of it, one timestamp at the end. [previous] and [next] are what make that visible
  *    from inside a single row.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ChatMessageRow(
     repo: Repository,
@@ -1522,6 +2030,7 @@ private fun ChatMessageRow(
     previous: StoredChatMessage?,
     next: StoredChatMessage?,
     onOpenMedia: OpenMedia,
+    onHold: (StoredChatMessage) -> Unit = {},
 ) {
     if (entry.thought.isNotBlank()) { ChatThoughtRow(char, entry); return }
     val friend = entry.role == "assistant"
@@ -1562,9 +2071,26 @@ private fun ChatMessageRow(
         Column(
             Modifier.widthIn(max = 320.dp).clip(shape)
                 .background(if (friend) ChatColors.side else MaterialTheme.colorScheme.primaryContainer)
+                .combinedClickable(onClick = {}, onLongClick = { onHold(entry) })
                 .padding(horizontal = 13.dp, vertical = 8.dp),
         ) {
             val ink = if (friend) ChatColors.text else MaterialTheme.colorScheme.onPrimaryContainer
+            // A quoted reply: the earlier line above the new one, on a bar.
+            entry.replyTo?.let { ref ->
+                Row(
+                    Modifier.padding(bottom = 6.dp).clip(RoundedCornerShape(6.dp)).background(ink.copy(alpha = .08f)).padding(end = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(Modifier.width(3.dp).height(34.dp).background(if (friend) ChatColors.accent else ink.copy(alpha = .75f)))
+                    Column(Modifier.padding(start = 7.dp, top = 3.dp, bottom = 3.dp)) {
+                        Text(
+                            if (ref.role == "assistant") char.name else ws.profile.displayName.ifBlank { "You" },
+                            color = if (friend) ChatColors.accent else ink, fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(ref.excerpt, color = ink.copy(alpha = .8f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+            }
             Text(richChatText(entry.content), color = ink, fontSize = 15.sp)
             if (entry.imageId.isNotBlank()) {
                 AsyncImage(

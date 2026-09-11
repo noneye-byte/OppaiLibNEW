@@ -247,7 +247,7 @@ func TestChatAttachesWhenDirected(t *testing.T) {
 		t.Fatalf("chat: %d %s", rec.Code, rec.Body)
 	}
 	// The directive has to say what triggers it, or a 7B never reaches for the tag.
-	for _, want := range []string{"[attach:", "ask you to show"} {
+	for _, want := range []string{"[attach:", "\"show me\""} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("system prompt missing %q", want)
 		}

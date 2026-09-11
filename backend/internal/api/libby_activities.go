@@ -64,6 +64,14 @@ type libbyActivity struct {
 	// MinIntensity is the heat below which this state is not available to her, on the
 	// 1-5 session meter. Zero and one mean always.
 	MinIntensity int `json:"minIntensity"`
+	// Auto marks a state the app sets rather than one she declares. There is one:
+	// typing. It used to be a state she could put herself into, which made no sense —
+	// "at a keyboard, typing back to them" is what she is doing whenever a reply is on
+	// its way, and the client already knows exactly when that is. So the slot is now
+	// the picture behind the typing indicator: shown while a reply is being written,
+	// with a speech bubble of dots beside it, and never chosen by a tag. The editor
+	// says so beside the slot, and the directive leaves it out.
+	Auto bool `json:"auto,omitempty"`
 }
 
 // libbyActivities is the MISC vocabulary.
@@ -72,7 +80,9 @@ type libbyActivity struct {
 // its slots out in, idle first. Nothing here is required of an outfit.
 var libbyActivities = []libbyActivity{
 	// ── idle ─────────────────────────────────────────────────────────────────
-	{ID: "typing", Label: "Typing", Group: activityIdle, Says: "at a keyboard, typing back to them"},
+	// Shown by the client while she is composing a reply — the art behind the "…"
+	// speech bubble — and never declared by her. See Auto.
+	{ID: "typing", Label: "Typing", Group: activityIdle, Says: "typing a reply to them", Auto: true},
 	{ID: "reading", Label: "Reading", Group: activityIdle, Says: "reading something, half paying attention"},
 	{ID: "gaming", Label: "Gaming", Group: activityIdle, Says: "playing something, controller or keyboard in hand"},
 	{ID: "lounging", Label: "Lounging", Group: activityIdle, Says: "sprawled out comfortably, doing nothing in particular"},
@@ -118,6 +128,14 @@ func libbyActivityValid(id string) bool {
 	return ok
 }
 
+// libbyActivityDeclarable reports whether a state is one she can be in between turns
+// — every state but the app-driven ones. What the workspace and the request may
+// carry as her current state.
+func libbyActivityDeclarable(id string) bool {
+	activity, ok := libbyActivityByID[id]
+	return ok && !activity.Auto
+}
+
 // libbySlots is every art slot an outfit may hold: the emotions, then the MISC
 // states. One list because the storage, the upload endpoint, the work-in-progress
 // store and the cover walk all want "every square this outfit could have", and three
@@ -153,7 +171,10 @@ var activityTag = regexp.MustCompile(`(?is)\n*[ \t]*[*_~>` + "`" + `]*\[\s*doing
 var activitySynonyms = map[string]string{
 	"none": "", "nothing": "", "stop": "", "stopped": "", "idle": "", "clear": "",
 
-	"typing": "typing", "keyboard": "typing", "writing": "typing", "texting": "typing",
+	// Typing is the app's to show, not hers to declare (see libbyActivity.Auto): a
+	// model that writes it is saying "I am here and answering", which is nothing in
+	// particular — so these clear rather than set.
+	"typing": "", "keyboard": "", "writing": "", "texting": "",
 	"reading": "reading", "book": "reading", "studying": "reading",
 	"gaming": "gaming", "playing": "gaming", "game": "gaming",
 	"lounging": "lounging", "sprawled": "lounging", "relaxing": "lounging", "lying": "lounging",
@@ -241,7 +262,7 @@ func findLooseActivity(reply string) (activity string, declared bool) {
 // worth interrupting a reply over.
 func allowedActivity(id string, intensity int) string {
 	activity, known := libbyActivityByID[id]
-	if !known {
+	if !known || activity.Auto {
 		return ""
 	}
 	if intensity < activity.MinIntensity {
@@ -263,7 +284,7 @@ func allowedActivity(id string, intensity int) string {
 func activityDirective(intensity int) string {
 	var idle, intimate []string
 	for _, a := range libbyActivities {
-		if intensity < a.MinIntensity {
+		if intensity < a.MinIntensity || a.Auto {
 			continue
 		}
 		entry := a.ID + " (" + a.Says + ")"
@@ -301,7 +322,7 @@ func currentActivityPhrase(int) string { return "nothing in particular." }
 // one reply, which is the opposite of what a state is for.
 func activityStateDirective(id string) string {
 	activity, known := libbyActivityByID[id]
-	if !known {
+	if !known || activity.Auto {
 		return ""
 	}
 	return "\n\nRight now you are " + activity.Says + ". That is still true unless you change it, and the picture of you they can see shows it."

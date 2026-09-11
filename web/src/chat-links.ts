@@ -71,7 +71,7 @@ export function requestOpenMedia(source: EventTarget, id: number): void {
 }
 
 /** Icon per library kind, matching the nav so a chip reads as the same object. */
-const KIND_ICONS: Record<string, string> = {
+export const KIND_ICONS: Record<string, string> = {
   video: "movie", gif: "gif_box", image: "image", comic: "menu_book", game: "sports_esports",
 };
 

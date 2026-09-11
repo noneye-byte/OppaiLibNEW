@@ -264,7 +264,26 @@ data class HealthResponse(
 )
 
 @Serializable
-data class ChatMessage(val role: String, val content: String)
+data class ChatMessage(
+    val role: String,
+    val content: String,
+    /** The client's id for this message, so a reply can point at it. */
+    val id: String = "",
+    /** The earlier message this one answers, when it was written as a reply. */
+    val replyTo: ChatReplyRef? = null,
+)
+
+/**
+ * What a quoted reply points at: enough to draw the quote without looking the message
+ * up, and the id to jump to it. Mirrors chatReplyRef server-side.
+ */
+@Serializable
+data class ChatReplyRef(
+    val id: String = "",
+    /** Who wrote the quoted message — "user" or "assistant". */
+    val role: String = "user",
+    val excerpt: String = "",
+)
 
 @Serializable
 data class ChatRequest(
@@ -330,6 +349,12 @@ data class ChatRequest(
      * outfit's name itself.
      */
     val outfit: String = "",
+    /** Where she is — the background id the call screen shows. Conversation state,
+        sent back each turn for the same reason as [activity]. */
+    val background: String = "",
+    /** Library items attached to the latest message, by id. The server describes them
+        to her from its own rows. */
+    val sharedMediaIds: List<Long> = emptyList(),
 )
 
 @Serializable
@@ -427,6 +452,16 @@ data class ChatResponse(
         It persists until she changes it, so the client stores it on the conversation
         and sends it back with the next turn. */
     val activity: String = "",
+    /** Where she is leaving this turn: a background id, or blank for the plain call
+        screen. Persists like [activity]. */
+    val background: String = "",
+    /** She rang: show an incoming-call popup, and only answering opens the call. */
+    val callRequest: Boolean = false,
+    /** She hung up an open call. */
+    val callEnd: Boolean = false,
+    /** The earlier message this reply answers, drawn as a quote above it. Null when it
+        answers the latest one, which is the ordinary case. */
+    val replyTo: ChatReplyRef? = null,
     val imageId: String = "",
     /** Library items this reply points at. The titles are already substituted into
         the prose server-side, so a client that does not draw chips still reads right. */
@@ -535,6 +570,8 @@ data class StoredChatMessage(
         expressions the server is told about, and carried through this client so a
         workspace round-trip does not erase what the web UI recorded. */
     val mood: String = "",
+    /** The earlier message this one answers, drawn as a quote above it. */
+    val replyTo: ChatReplyRef? = null,
 )
 
 @Serializable
@@ -550,6 +587,9 @@ data class ChatConversation(
         this client even where nothing here draws it, because the workspace round-trips
         between the web UI and the phone and a field dropped here is a field erased. */
     val activity: String = "",
+    /** Where she is — a background id for the call screen, blank for none. Conversation
+        state like [activity], and carried for the same reason. */
+    val background: String = "",
     val progress: Double = intensity.toDouble(),
     val options: JsonObject = JsonObject(emptyMap()),
     val messages: List<StoredChatMessage> = emptyList(),
@@ -738,6 +778,22 @@ data class LibbyOutfit(
 
 @Serializable
 data class LibbyOutfitsResponse(val outfits: List<LibbyOutfit> = emptyList())
+
+/** A place she can be on a call: the user's own picture, named and tagged so she can
+    pick it by what it is. */
+@Serializable
+data class LibbyBackground(
+    val id: String,
+    val name: String = "",
+    val tags: List<String> = emptyList(),
+    val hasImage: Boolean = false,
+)
+
+@Serializable
+data class LibbyBackgroundsResponse(val backgrounds: List<LibbyBackground> = emptyList())
+
+@Serializable
+data class LibbyBackgroundSaveRequest(val id: String = "", val name: String, val tags: List<String> = emptyList())
 
 /** One durable fact Libby has kept about you, carried between conversations. */
 @Serializable

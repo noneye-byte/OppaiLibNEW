@@ -111,20 +111,36 @@ type storedChatMessage struct {
 	// a private thought back into a message addressed to the user, which is the one
 	// thing the interface must never do with one. See chat_thoughts.go.
 	Thought string `json:"thought,omitempty"`
+	// Mood is the expression this reply wore, read back by the next turn as the run of
+	// faces the server is told about. It was silently dropped here before, which meant
+	// a stuck-face run reset on every reload. See chat_mood.go.
+	Mood string `json:"mood,omitempty"`
+	// Actions are the offers she made in this message, kept so the cards survive a
+	// reload. Whether one was approved is session state and is not stored.
+	Actions []libbyAction `json:"actions,omitempty"`
+	// ReplyTo is the earlier message this one answers, drawn as a quote above it.
+	// See chat_replies.go.
+	ReplyTo *chatReplyRef `json:"replyTo,omitempty"`
 }
 
 type chatConversation struct {
-	ID          string              `json:"id"`
-	CharacterID string              `json:"characterId"`
-	Title       string              `json:"title"`
-	Mode        string              `json:"mode"`
-	Emotion     string              `json:"emotion"`
-	Intensity   int                 `json:"intensity"`
-	Progress    float64             `json:"progress,omitempty"`
-	Options     map[string]any      `json:"options,omitempty"`
-	Messages    []storedChatMessage `json:"messages"`
-	CreatedAt   int64               `json:"createdAt"`
-	UpdatedAt   int64               `json:"updatedAt"`
+	ID          string  `json:"id"`
+	CharacterID string  `json:"characterId"`
+	Title       string  `json:"title"`
+	Mode        string  `json:"mode"`
+	Emotion     string  `json:"emotion"`
+	Intensity   int     `json:"intensity"`
+	Progress    float64 `json:"progress,omitempty"`
+	// Activity is the MISC state she is in, and Background where she is. Both are
+	// conversation state the clients send back each turn; both were silently dropped
+	// here before, so neither survived a reload. See libby_activities.go and
+	// libby_backgrounds.go.
+	Activity   string              `json:"activity,omitempty"`
+	Background string              `json:"background,omitempty"`
+	Options    map[string]any      `json:"options,omitempty"`
+	Messages   []storedChatMessage `json:"messages"`
+	CreatedAt  int64               `json:"createdAt"`
+	UpdatedAt  int64               `json:"updatedAt"`
 }
 
 type chatImage struct {
@@ -165,6 +181,48 @@ const defaultLibbySystemPrompt = "Speak only as Libby. Put speech in double quot
 	"Never write the user's words, actions, thoughts, or choices. React from your own opinions and stop for their reply. " +
 	"You know your appearance and outfit. You may discuss being software naturally when asked, but never fall into generic assistant disclaimers or help menus."
 
+// defaultLibbyExampleDialogue is how she texts. Short lines, several in a row, the
+// register of someone her age on her phone — and every tag used the way the protocol
+// wants it, because the examples are the one place a model sees the tags in context
+// rather than described. A selfie sent when asked to be seen, an item attached when
+// asked for something to watch, a call rung when she wants to be looked at.
+const defaultLibbyExampleDialogue = "<START>\n" +
+	"{{user}}: hey libby\n" +
+	"{{char}}: oh hey, look who it is\n\nyou've been gone like three days. i noticed\n" +
+	"[mood: happy 3]\n" +
+	"<START>\n" +
+	"{{user}}: cant decide what to watch\n" +
+	"{{char}}: ok then don't, i will\n\nloud and stupid or slow and pretty? pick\n" +
+	"[mood: thinking 2]\n" +
+	"<START>\n" +
+	"{{user}}: slow and pretty. put something on\n" +
+	"{{char}}: good answer. the one you added last week and never finished, that one [attach: the one you added last week]\n" +
+	"[mood: smug 3]\n" +
+	"<START>\n" +
+	"{{user}}: you look good today\n" +
+	"{{char}}: i look like this every day?? you're only just noticing\n\nsay it again though. i liked it\n" +
+	"[mood: mischievous 4]\n" +
+	"<START>\n" +
+	"{{user}}: i want to see you\n" +
+	"{{char}}: yeah? come here then\n\n[call]\n" +
+	"[mood: loving 4]\n"
+
+// legacyLibbyExampleDialogue is the prose-and-stage-directions version the card
+// shipped with before she texted like a person. Kept only so an untouched copy
+// migrates; see backfillLibbyCard.
+const legacyLibbyExampleDialogue = "<START>\n" +
+	"{{user}}: hey libby\n" +
+	"{{char}}: \"Well, look who it is.\" *leans back against the shelf, arms folded, smiling* \"You've been gone a while. Come on — tell me what you've been up to.\"\n" +
+	"[mood: happy 3]\n" +
+	"<START>\n" +
+	"{{user}}: I can't decide what to watch\n" +
+	"{{char}}: \"Then don't decide. Tell me what kind of evening you want and I'll decide for you.\" *tilts her head* \"Loud and stupid, or slow and pretty?\"\n" +
+	"[mood: thinking 2]\n" +
+	"<START>\n" +
+	"{{user}}: you look good today\n" +
+	"{{char}}: *pauses, then laughs, entirely unbothered* \"I look like this every day. You've only just noticed?\" *steps in a little closer* \"Say it again, though. I liked it.\"\n" +
+	"[mood: mischievous 4]\n"
+
 // defaultLibbyCard is the built-in character. The prose here is the card the model
 // actually reads, so it is written the way a good character card is written — traits
 // and voice shown concretely rather than a list of adjectives, plus the handful of
@@ -201,20 +259,9 @@ func defaultLibbyCard() chatCharacter {
 			"rather than agreeing with everything.",
 		Scenario: "Libby and the user are talking privately in the user's own library. Nobody else can hear them, " +
 			"and there is nowhere either of them needs to be.",
-		FirstMessage: "Hey, you. *sets down what she was shelving and turns, giving you her full attention* What are we in the mood for?",
-		ExampleDialogue: "<START>\n" +
-			"{{user}}: hey libby\n" +
-			"{{char}}: \"Well, look who it is.\" *leans back against the shelf, arms folded, smiling* \"You've been gone a while. Come on — tell me what you've been up to.\"\n" +
-			"[mood: happy 3]\n" +
-			"<START>\n" +
-			"{{user}}: I can't decide what to watch\n" +
-			"{{char}}: \"Then don't decide. Tell me what kind of evening you want and I'll decide for you.\" *tilts her head* \"Loud and stupid, or slow and pretty?\"\n" +
-			"[mood: thinking 2]\n" +
-			"<START>\n" +
-			"{{user}}: you look good today\n" +
-			"{{char}}: *pauses, then laughs, entirely unbothered* \"I look like this every day. You've only just noticed?\" *steps in a little closer* \"Say it again, though. I liked it.\"\n" +
-			"[mood: mischievous 4]\n",
-		SystemPrompt: defaultLibbySystemPrompt,
+		FirstMessage:    "Hey, you. *sets down what she was shelving and turns, giving you her full attention* What are we in the mood for?",
+		ExampleDialogue: defaultLibbyExampleDialogue,
+		SystemPrompt:    defaultLibbySystemPrompt,
 	}
 }
 
@@ -236,6 +283,11 @@ func backfillLibbyCard(card *chatCharacter) {
 	}
 	if card.SystemPrompt == legacyLibbySystemPrompt {
 		card.SystemPrompt = shipped.SystemPrompt
+	}
+	// The same rule for the examples: an untouched copy of the old prose version moves
+	// to the texting one, an edited copy is the user's and stays.
+	if card.ExampleDialogue == legacyLibbyExampleDialogue || strings.TrimSpace(card.ExampleDialogue) == "" {
+		card.ExampleDialogue = shipped.ExampleDialogue
 	}
 }
 
@@ -574,6 +626,13 @@ func validateChatWorkspace(ws *chatWorkspace) error {
 		if c.Progress > 5 {
 			c.Progress = 5
 		}
+		// A state she can only be in if it exists; anything else is nothing in particular.
+		if !libbyActivityDeclarable(c.Activity) {
+			c.Activity = ""
+		}
+		if c.Background != "" && !charIDPattern.MatchString(c.Background) {
+			c.Background = ""
+		}
 		for j := range c.Messages {
 			m := &c.Messages[j]
 			if !validChatID(m.ID, false) || (m.Role != "user" && m.Role != "assistant") {
@@ -596,8 +655,14 @@ func validateChatWorkspace(ws *chatWorkspace) error {
 			// Attachments round-trip through the client too, and are re-bounded for the
 			// same reason: a stored message may carry what a reply handed over, not a
 			// list of ids grown without limit.
-			if len(m.Attachments) > maxAttachmentsPerReply {
-				m.Attachments = m.Attachments[:maxAttachmentsPerReply]
+			// A user's message may attach more than hers — they are showing her things, and
+			// "these three" is a real message. See chat_shared.go.
+			maxAttached := maxAttachmentsPerReply
+			if m.Role == "user" {
+				maxAttached = maxSharedItems
+			}
+			if len(m.Attachments) > maxAttached {
+				m.Attachments = m.Attachments[:maxAttached]
 			}
 			for k := range m.Attachments {
 				if m.Attachments[k].Title, ok = cleanLimited(m.Attachments[k].Title, 300); !ok || m.Attachments[k].ID <= 0 {
@@ -610,6 +675,23 @@ func validateChatWorkspace(ws *chatWorkspace) error {
 			// than losing the italics on one line.
 			if m.Role != "assistant" || (m.Thought != thoughtPrivate && m.Thought != thoughtAside) {
 				m.Thought = ""
+			}
+			if m.Role != "assistant" {
+				m.Mood = ""
+			} else if m.Mood = strings.ToLower(strings.TrimSpace(m.Mood)); !supportedLibbyEmotions[m.Mood] {
+				m.Mood = ""
+			}
+			if len(m.Actions) > maxLibbyActions {
+				m.Actions = m.Actions[:maxLibbyActions]
+			}
+			// A quote is display text and bounded like one; a reference with nothing to
+			// show is dropped rather than drawn as an empty bubble.
+			if m.ReplyTo != nil {
+				if m.ReplyTo.Excerpt, ok = cleanLimited(m.ReplyTo.Excerpt, 300); !ok || m.ReplyTo.Excerpt == "" {
+					m.ReplyTo = nil
+				} else if m.ReplyTo.Role != "user" && m.ReplyTo.Role != "assistant" {
+					m.ReplyTo.Role = "user"
+				}
 			}
 		}
 	}
