@@ -75,14 +75,22 @@ type libbyAttachment struct {
 // photo path — see the handler.
 var attachTag = regexp.MustCompile(`(?i)\[\s*attach(?:es|ing|ment)?\s*[:=-]?\s*([^\]\n]{1,120}?)\s*\]`)
 
-// attachDirective tells her she can hand something over, and what that costs.
+// attachDirective tells her she can hand something over, when to, and what it costs.
 //
-// It is deliberately explicit that this is a different act from naming something.
-// Without the contrast a model uses whichever tag it saw last and every mention of an
-// item becomes an attachment — the chat equivalent of a colleague who forwards you
-// the file every time they say its name.
-const attachDirective = "Write [attach: <real library title>] to put one of their own library items in front of them; it arrives as something they can open and play. " +
-	"That is a different act from [link: <title>], which only makes a name tappable mid-sentence — attach when you mean \"here, watch this\", link when you are merely mentioning it. " +
+// Three things it has to do, and the middle one is the one it was missing. It has to be
+// explicit that this is a different act from naming something, or a model uses whichever
+// tag it saw last and every mention of an item becomes an attachment. It has to say what
+// *triggers* it: a directive that only describes a capability is one a 7B never reaches
+// for, and being asked to show, play or put something on is exactly the request this
+// exists to answer — which is when it was most conspicuously not happening. And it has to
+// say that a description will do, because the library snapshot is the first section the
+// budget sheds, so on a busy turn she does not know what anything is called; the resolver
+// matches loosely and falls back to the user's own words, and a model told to write only
+// exact titles answers "show me the beach one" with an apology instead of the video.
+const attachDirective = "Write [attach: <library title, or how they described it>] to put one of their own library items in front of them; it arrives as something they can open and play. " +
+	"When they ask you to show, send, play or put something on, that is this — agree in your own words and attach it in the same reply, never promise to and then not. " +
+	"Their description is a good enough query; write what they called it rather than declining because you are unsure of the exact title. " +
+	"It is a different act from [link: <title>], which only makes a name tappable mid-sentence — attach when you mean \"here, watch this\", link when you are merely mentioning it. " +
 	"At most one per reply, never something already attached in this conversation, and never anything you have not actually decided to show them."
 
 // findAttachRequests reads every attach request out of a reply, in order, capped.
@@ -115,13 +123,26 @@ func findAttachRequests(reply string) []string {
 // the message rather than inside a sentence, and the tag has already been taken out by
 // the scrubber. A request that matches nothing resolves to nothing and is reported as
 // such, so the caller can try reading it as a picture request instead.
-func (s *Server) resolveLibraryAttachments(ctx context.Context, requests []string, skip map[int64]bool) []libbyAttachment {
+//
+// asked is the user's own latest message, and it is the difference between this working
+// and not. The failure it exists for is the ordinary one: they say "put on the beach
+// video", she agrees and writes [attach: the beach video] — a description rather than a
+// title, because the library snapshot is the first section the budget sheds and she may
+// genuinely not have been told what anything is called. Her words are tried first
+// because when she does know the title they are the better query; theirs are tried after,
+// because a request that named the thing is a query that was written by someone who could
+// see it.
+func (s *Server) resolveLibraryAttachments(ctx context.Context, requests []string, asked string, skip map[int64]bool) []libbyAttachment {
 	if len(requests) == 0 {
 		return nil
 	}
+	queries := append([]string{}, requests...)
+	if asked = strings.TrimSpace(asked); asked != "" {
+		queries = append(queries, asked)
+	}
 	var words []string
-	for _, request := range requests {
-		words = append(words, normalizeLookupWords(request)...)
+	for _, query := range queries {
+		words = append(words, normalizeLookupWords(query)...)
 	}
 	candidates := s.libraryCandidates(ctx, words)
 	if len(candidates) == 0 {
@@ -129,16 +150,21 @@ func (s *Server) resolveLibraryAttachments(ctx context.Context, requests []strin
 	}
 	var out []libbyAttachment
 	picked := map[int64]bool{}
-	for _, request := range requests {
-		link, found := bestLibraryMatch(candidates, request)
-		if !found || picked[link.ID] || skip[link.ID] {
-			continue
+	take := func(query string) {
+		link, found := bestLibraryMatchAbove(candidates, query, minAttachMatchScore)
+		if !found || picked[link.ID] || skip[link.ID] || len(out) >= maxAttachmentsPerReply {
+			return
 		}
 		picked[link.ID] = true
 		out = append(out, libbyAttachment{libbyLink: link})
-		if len(out) >= maxAttachmentsPerReply {
-			break
-		}
+	}
+	for _, request := range requests {
+		take(request)
+	}
+	// Their words are a rescue, not a second helping: consulted only when everything she
+	// named resolved to nothing, so a reply that worked never grows an extra item.
+	if len(out) == 0 && asked != "" {
+		take(asked)
 	}
 	return out
 }

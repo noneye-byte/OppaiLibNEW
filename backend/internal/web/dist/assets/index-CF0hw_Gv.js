@@ -10043,7 +10043,7 @@ This also deletes ${t} generated square${t===1?"":"s"} the outfit studio is hold
         <h3>Generation<span>Tuned automatically for each kind of turn. Anything you set here overrides that for this conversation.</span></h3>
         <div class="grid">
           ${a("Temperature","temperature",0,2,.05,.85)}${a("Top P","top_p",.05,1,.05,.92)}
-          ${a("Repetition penalty","repetition_penalty",1,2,.05,1.1)}${a("Max reply tokens","max_tokens",64,2048,32,220)}
+          ${a("Repetition penalty","repetition_penalty",1,2,.05,1.1)}${a("Max reply tokens","max_tokens",64,1536,32,512)}
         </div>
         ${this.lastSampling?r`<div class="sampling">
           <span>Last reply sampled as <strong>${this.lastSampling.task}</strong>${(s=this.lastSampling.overridden)!=null&&s.length?r` — you overrode ${this.lastSampling.overridden.join(", ")}`:d}</span>

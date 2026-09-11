@@ -1,7 +1,10 @@
 package api
 
 import (
+	"context"
+	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -162,5 +165,174 @@ func TestAttachmentsSurviveTheWorkspaceRoundTrip(t *testing.T) {
 	bad := strings.Replace(body, `"id":7,`, `"id":0,`, 1)
 	if rec := do(t, h, token, http.MethodPut, "/api/chat/workspace", bad); rec.Code == http.StatusOK {
 		t.Fatal("an attachment with no library id was accepted")
+	}
+}
+
+// The report that sent us back here: told to show something, she says she will and
+// nothing arrives. Two causes, both reproduced below.
+//
+// The first is the match floor. "Show me the beach one" against an item tagged beach
+// scores a single tag word, and the floor a *link* needs is two — so the tag resolved to
+// nothing, the reply fell through to the photo path, matched no gallery picture, and the
+// user got an agreement with nothing attached to it.
+func TestADirectedAttachResolvesOnOneTagWord(t *testing.T) {
+	s, _ := newTestServer(t)
+	id := seedTitledMedia(t, s, "Untitled import 4192", "video", "beach")
+	ctx := context.Background()
+
+	got := s.resolveLibraryAttachments(ctx, []string{"the beach one"}, "", nil)
+	if len(got) != 1 || got[0].ID != id {
+		t.Fatalf("attachments = %+v, want the beach video", got)
+	}
+	// A link still needs two: pointing at the wrong thing mid-sentence is worse than
+	// describing it, and that trade is unchanged.
+	if _, found := bestLibraryMatch(s.libraryCandidates(ctx, []string{"beach"}), "the beach one"); found {
+		t.Fatal("the link floor was lowered along with the attachment floor")
+	}
+}
+
+// The second cause: she agrees in her own words and names the thing the way the user
+// did, but the library snapshot was shed from the prompt this turn, so what she writes
+// is a description of something she was never told the title of. Their words are the
+// fallback query — a request that named the thing was written by someone who could see it.
+func TestAFailedAttachFallsBackToWhatTheUserAsked(t *testing.T) {
+	s, _ := newTestServer(t)
+	id := seedTitledMedia(t, s, "Summer at the Coast", "video", "swimsuit")
+	ctx := context.Background()
+
+	// Nothing in the library answers to this, so her own tag resolves to nothing.
+	if got := s.resolveLibraryAttachments(ctx, []string{"that thing from last week"}, "", nil); len(got) != 0 {
+		t.Fatalf("an invented description resolved to %+v", got)
+	}
+	got := s.resolveLibraryAttachments(ctx, []string{"that thing from last week"}, "put on Summer at the Coast", nil)
+	if len(got) != 1 || got[0].ID != id {
+		t.Fatalf("fallback attachments = %+v, want the seeded video", got)
+	}
+	// The rescue never adds to a reply that already worked.
+	both := s.resolveLibraryAttachments(ctx, []string{"Summer at the Coast"}, "put on Summer at the Coast", nil)
+	if len(both) != 1 {
+		t.Fatalf("a working request grew a second item: %+v", both)
+	}
+}
+
+// End to end, the way the user meets it: they ask to be shown something, she agrees and
+// tags it loosely, and the item comes back on the reply.
+func TestChatAttachesWhenDirected(t *testing.T) {
+	var prompt string
+	llm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/internal/model/info" {
+			_, _ = w.Write([]byte(`{"model_name":"test-local"}`))
+			return
+		}
+		var body struct {
+			Messages []chatMessage `json:"messages"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if len(body.Messages) > 0 {
+			prompt = body.Messages[0].Content
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"Of course — putting it on now.\n[attach: the beach one]"}}]}`))
+	}))
+	defer llm.Close()
+
+	s, token := newTestServer(t)
+	id := seedTitledMedia(t, s, "Untitled import 4192", "video", "beach")
+	cur := s.settings.Get()
+	cur.ChatURL = llm.URL
+	s.settings.Set(cur)
+
+	rec := do(t, s.Handler(), token, http.MethodPost, "/api/chat",
+		`{"mode":"sweet","characterId":"libby","messages":[{"role":"user","content":"show me the beach one"}]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("chat: %d %s", rec.Code, rec.Body)
+	}
+	// The directive has to say what triggers it, or a 7B never reaches for the tag.
+	for _, want := range []string{"[attach:", "ask you to show"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("system prompt missing %q", want)
+		}
+	}
+	var out struct {
+		Message     string            `json:"message"`
+		Attachments []libbyAttachment `json:"attachments"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if strings.Contains(out.Message, "attach") {
+		t.Fatalf("the tag was left in the prose: %q", out.Message)
+	}
+	if len(out.Attachments) != 1 || out.Attachments[0].ID != id {
+		t.Fatalf("attachments = %+v, want the beach video (%d)", out.Attachments, id)
+	}
+}
+
+// A reply allowance the client asked for may be shorter than the budget's but never
+// longer: past it the backend drops the front of the prompt, which is the character card,
+// and the whole point of fitting the turn was to stop exactly that happening silently.
+func TestClientMaxTokensCannotExceedTheFittedAllowance(t *testing.T) {
+	var asked int
+	llm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/internal/model/info" {
+			_, _ = w.Write([]byte(`{"model_name":"test-local"}`))
+			return
+		}
+		var body struct {
+			MaxTokens int `json:"max_tokens"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		asked = body.MaxTokens
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`))
+	}))
+	defer llm.Close()
+
+	s, token := newTestServer(t)
+	cur := s.settings.Get()
+	cur.ChatURL = llm.URL
+	s.settings.Set(cur)
+
+	rec := do(t, s.Handler(), token, http.MethodPost, "/api/chat",
+		`{"mode":"sweet","characterId":"libby","options":{"max_tokens":99999},"messages":[{"role":"user","content":"hi"}]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("chat: %d %s", rec.Code, rec.Body)
+	}
+	if asked <= 0 || asked > samplingBounds.maxTokMax {
+		t.Fatalf("max_tokens sent to the backend = %d, want the fitted allowance", asked)
+	}
+	// Smaller is a real choice and is honoured as written.
+	rec = do(t, s.Handler(), token, http.MethodPost, "/api/chat",
+		`{"mode":"sweet","characterId":"libby","options":{"max_tokens":80},"messages":[{"role":"user","content":"hi"}]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("chat: %d %s", rec.Code, rec.Body)
+	}
+	if asked != 80 {
+		t.Fatalf("a smaller override was not honoured: max_tokens = %d", asked)
+	}
+}
+
+// The stored-options migration. Conversations created before the server began tuning
+// samplers carry the old fixed block, and a stored option is an override — so those
+// chats stayed pinned at 400 reply tokens and one temperature for every kind of turn.
+func TestLegacySamplerDefaultsAreDroppedButRealChoicesKept(t *testing.T) {
+	legacy := chatConversation{Options: map[string]any{
+		"temperature": 0.8, "top_p": 0.95, "repetition_penalty": 1.1, "max_tokens": float64(400),
+	}}
+	dropLegacySamplerOptions(&legacy)
+	if legacy.Options != nil {
+		t.Fatalf("the legacy block survived: %v", legacy.Options)
+	}
+	// One slider moved is a choice, and the whole set is kept.
+	chosen := chatConversation{Options: map[string]any{
+		"temperature": 1.02, "top_p": 0.95, "repetition_penalty": 1.1, "max_tokens": float64(400),
+	}}
+	dropLegacySamplerOptions(&chosen)
+	if len(chosen.Options) != 4 {
+		t.Fatalf("a deliberate setting was dropped: %v", chosen.Options)
+	}
+	// A single explicit value is not the fingerprint and is left alone.
+	one := chatConversation{Options: map[string]any{"max_tokens": float64(400)}}
+	dropLegacySamplerOptions(&one)
+	if len(one.Options) != 1 {
+		t.Fatalf("a lone override was dropped: %v", one.Options)
 	}
 }

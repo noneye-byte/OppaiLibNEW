@@ -2325,7 +2325,7 @@ export class OppaiChat extends LitElement {
         <h3>Generation<span>Tuned automatically for each kind of turn. Anything you set here overrides that for this conversation.</span></h3>
         <div class="grid">
           ${range("Temperature","temperature",0,2,.05,.85)}${range("Top P","top_p",.05,1,.05,.92)}
-          ${range("Repetition penalty","repetition_penalty",1,2,.05,1.1)}${range("Max reply tokens","max_tokens",64,2048,32,220)}
+          ${range("Repetition penalty","repetition_penalty",1,2,.05,1.1)}${range("Max reply tokens","max_tokens",64,1536,32,512)}
         </div>
         ${this.lastSampling ? html`<div class="sampling">
           <span>Last reply sampled as <strong>${this.lastSampling.task}</strong>${this.lastSampling.overridden?.length ? html` — you overrode ${this.lastSampling.overridden.join(", ")}` : nothing}</span>

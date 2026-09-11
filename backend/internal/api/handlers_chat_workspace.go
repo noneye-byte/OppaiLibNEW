@@ -317,12 +317,50 @@ func normalizeChatWorkspace(ws *chatWorkspace) {
 		if ws.Conversations[i].Messages == nil {
 			ws.Conversations[i].Messages = []storedChatMessage{}
 		}
+		dropLegacySamplerOptions(&ws.Conversations[i])
 	}
 	for i := range ws.Images {
 		if ws.Images[i].Tags == nil {
 			ws.Images[i].Tags = []string{}
 		}
 	}
+}
+
+// legacySamplerDefaults is the fixed block both clients used to ship with every turn,
+// back when the client picked the samplers. Once the server began choosing them per turn
+// (chat_sampling.go) an empty options object became the correct default — but these
+// numbers were *stored* on every conversation created before that, and stored options are
+// explicit overrides that beat the server's choice. So every old conversation stayed
+// pinned at 400 reply tokens and one temperature for every kind of turn, indefinitely,
+// and nothing in either client could tell the user why.
+//
+// The set is matched whole. A user who has since moved any one of these sliders has made
+// a choice, and a choice is kept; the exact quartet is a fingerprint of a default nobody
+// ever chose. Somebody who did deliberately set all four to these values loses them and
+// gets the server's per-turn tuning, which is the better answer anyway.
+var legacySamplerDefaults = map[string]float64{
+	"temperature": 0.8, "top_p": 0.95, "repetition_penalty": 1.1, "max_tokens": 400,
+}
+
+// dropLegacySamplerOptions clears that block from one conversation, and leaves anything
+// else — including a partial overlap — exactly as it is.
+func dropLegacySamplerOptions(c *chatConversation) {
+	if len(c.Options) != len(legacySamplerDefaults) {
+		return
+	}
+	for key, want := range legacySamplerDefaults {
+		value, present := c.Options[key]
+		if !present {
+			return
+		}
+		// JSON numbers decode as float64; the epsilon is for 1.1, which no binary float
+		// represents exactly and which a round-trip through two clients may have nudged.
+		got, ok := value.(float64)
+		if !ok || got < want-0.0001 || got > want+0.0001 {
+			return
+		}
+	}
+	c.Options = nil
 }
 
 func (s *Server) writeChatWorkspace(userID int64, ws chatWorkspace) error {

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -69,29 +70,37 @@ type samplingPreset struct {
 // min_p is the sampler that keeps a high temperature coherent — it cuts the long tail
 // relative to the top token, so raising temperature buys variety instead of nonsense. That
 // is why the creative preset can sit at 0.95 without falling apart.
+//
+// The length caps are the relative shape rather than absolute limits: a reaction is a
+// beat, casual is texting, a scene is a scene. They were raised across the board once
+// truncation turned out to be costing more than rambling did — a reply that runs out of
+// allowance stops mid-sentence *and* loses the protocol tags written at its end, which
+// is a picture never attached and a mood never applied. Under-running a generous cap
+// costs nothing; over-running a tight one costs the feature.
 var samplingPresets = map[chatTask]samplingPreset{
-	// Roomy enough to sound unrehearsed, short enough that she texts rather than writes.
-	taskCasual: {Temperature: 0.85, TopP: 0.92, TopK: 40, MinP: 0.05, RepetitionPen: 1.10, RepetitionRange: 1024, MaxTokens: 220},
+	// Roomy enough to sound unrehearsed, and to finish the thought it started.
+	taskCasual: {Temperature: 0.85, TopP: 0.92, TopK: 40, MinP: 0.05, RepetitionPen: 1.10, RepetitionRange: 1024, MaxTokens: 512},
 	// Slightly tighter and a little longer: feeling wants coherence more than novelty, and
 	// a hurt or tender turn is where she is allowed a few more lines.
-	taskEmotional: {Temperature: 0.80, TopP: 0.90, TopK: 40, MinP: 0.06, RepetitionPen: 1.12, RepetitionRange: 1536, MaxTokens: 280},
+	taskEmotional: {Temperature: 0.80, TopP: 0.90, TopK: 40, MinP: 0.06, RepetitionPen: 1.12, RepetitionRange: 1536, MaxTokens: 640},
 	// Cold, because this is the class where a small model invents. Facts about the library
 	// are all in the prompt; the job is to read them out in her voice, not to imagine them.
-	taskFactual: {Temperature: 0.40, TopP: 0.85, TopK: 20, MinP: 0.10, RepetitionPen: 1.05, RepetitionRange: 1024, MaxTokens: 320},
+	taskFactual: {Temperature: 0.40, TopP: 0.85, TopK: 20, MinP: 0.10, RepetitionPen: 1.05, RepetitionRange: 1024, MaxTokens: 576},
 	// The one preset that runs hot. A long scene has to keep finding new words, and the
 	// wide repetition range is what stops the paragraph-level loops a 7B falls into.
-	taskCreative: {Temperature: 0.95, TopP: 0.95, TopK: 60, MinP: 0.04, RepetitionPen: 1.15, RepetitionRange: 2048, MaxTokens: 480},
-	// A beat. The hard cap is doing the real work here — asked to react to a picture with
-	// 400 tokens available, a model writes an essay about it.
-	taskReaction: {Temperature: 0.90, TopP: 0.92, TopK: 40, MinP: 0.05, RepetitionPen: 1.12, RepetitionRange: 1024, MaxTokens: 100},
+	taskCreative: {Temperature: 0.95, TopP: 0.95, TopK: 60, MinP: 0.04, RepetitionPen: 1.15, RepetitionRange: 2048, MaxTokens: 1024},
+	// A beat. The cap is still doing the real work here — handed a picture and a long
+	// allowance, a model writes an essay about it — but not so tight that the reply is
+	// cut off before the tags that end it.
+	taskReaction: {Temperature: 0.90, TopP: 0.92, TopK: 40, MinP: 0.05, RepetitionPen: 1.12, RepetitionRange: 1024, MaxTokens: 200},
 	// Opening a conversation from nothing. High penalties because unprompted messages are
 	// the ones that come out as the same greeting every time.
-	taskAutonomous: {Temperature: 0.92, TopP: 0.93, TopK: 50, MinP: 0.05, RepetitionPen: 1.18, RepetitionRange: 2048, MaxTokens: 140, PresencePenalty: 0.2},
+	taskAutonomous: {Temperature: 0.92, TopP: 0.93, TopK: 50, MinP: 0.05, RepetitionPen: 1.18, RepetitionRange: 2048, MaxTokens: 288, PresencePenalty: 0.2},
 	// A private thought: short, plain, and not a performance.
-	taskObservation: {Temperature: 0.70, TopP: 0.90, TopK: 40, MinP: 0.08, RepetitionPen: 1.10, RepetitionRange: 1024, MaxTokens: 120},
+	taskObservation: {Temperature: 0.70, TopP: 0.90, TopK: 40, MinP: 0.08, RepetitionPen: 1.10, RepetitionRange: 1024, MaxTokens: 224},
 	// Working out an action to propose. Nearly deterministic: this output is parsed, and
 	// creativity in a tag's arguments is only ever a bug.
-	taskPlanning: {Temperature: 0.30, TopP: 0.80, TopK: 20, MinP: 0.10, RepetitionPen: 1.05, RepetitionRange: 512, MaxTokens: 200},
+	taskPlanning: {Temperature: 0.30, TopP: 0.80, TopK: 20, MinP: 0.10, RepetitionPen: 1.05, RepetitionRange: 512, MaxTokens: 320},
 }
 
 // samplingBounds is the envelope every preset and every adjustment is clamped into.
@@ -101,6 +110,11 @@ var samplingPresets = map[chatTask]samplingPreset{
 // theirs to get wrong. Nothing the automatic path chooses can push the model into the
 // regions where it loops (repetition penalty at 1.0), degenerates (temperature past 1.1
 // with a loose tail), or takes minutes to answer (unbounded max_tokens).
+//
+// max_tokens is the one exception to "theirs to get wrong", and not because of model
+// behaviour: the prompt is fitted to leave exactly the reply allowance the budget
+// reserved, so an override above it is spending room the history already occupies. See
+// handleChat, which caps that one field at the fitted figure and honours any smaller.
 var samplingBounds = struct {
 	tempMin, tempMax   float64
 	topPMin, topPMax   float64
@@ -117,7 +131,7 @@ var samplingBounds = struct {
 	minPMin: 0.00, minPMax: 0.20,
 	repMin: 1.00, repMax: 1.25,
 	rangeMin: 256, rangeMax: 4096,
-	maxTokMin: 48, maxTokMax: 768,
+	maxTokMin: 48, maxTokMax: 1536,
 }
 
 func (p *samplingPreset) clamp() {
@@ -128,6 +142,28 @@ func (p *samplingPreset) clamp() {
 	p.TopK = clampInt(p.TopK, samplingBounds.topKMin, samplingBounds.topKMax)
 	p.RepetitionRange = clampInt(p.RepetitionRange, samplingBounds.rangeMin, samplingBounds.rangeMax)
 	p.MaxTokens = clampInt(p.MaxTokens, samplingBounds.maxTokMin, samplingBounds.maxTokMax)
+}
+
+// intFromAny reads a whole number out of a decoded JSON value. Every numeric field in
+// an options object arrives as float64, but a client that sent one as a string, or a
+// value that is not a number at all, has to come back as 0 rather than a panic — this
+// is untrusted pass-through by design.
+func intFromAny(value any) int {
+	switch n := value.(type) {
+	case float64:
+		return int(n)
+	case float32:
+		return int(n)
+	case int:
+		return n
+	case int64:
+		return int(n)
+	case json.Number:
+		if parsed, err := n.Int64(); err == nil {
+			return int(parsed)
+		}
+	}
+	return 0
 }
 
 // clampFloat is the float twin of clampInt (handlers_imagegen.go), which this reuses.

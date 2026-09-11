@@ -172,7 +172,23 @@ private val chatModes = listOf(
 private fun chatID() = UUID.randomUUID().toString().replace("-", "")
 private val chatStamp = SimpleDateFormat("h:mm a", Locale.getDefault())
 private fun timeOf(ms: Long) = chatStamp.format(Date(ms))
-private fun baseOptions() = buildJsonObject { put("temperature", .8); put("top_p", .95); put("repetition_penalty", 1.1); put("max_tokens", 400) }
+/**
+ * No sampler settings by default — the server tunes them per turn.
+ *
+ * This used to pin `temperature 0.8, top_p 0.95, repetition_penalty 1.1, max_tokens 400`
+ * onto every new conversation, and stored options are explicit overrides: they beat the
+ * per-turn choice the server makes from what the turn is *for*. So every conversation
+ * started on this phone was sampled identically whether it was a one-line reaction or a
+ * long scene, and capped at 400 reply tokens forever — which truncates a scene mid-
+ * sentence and, worse, cuts off the protocol tags written at the end of a reply, so the
+ * picture she meant to send and the item she meant to attach never arrive.
+ *
+ * An empty object is therefore the correct default, and anything in here is a deliberate
+ * override. The advanced sliders are what write one; untouched, they only display what
+ * came back. The web client dropped the same block for the same reason, and the server
+ * clears it from conversations created before this.
+ */
+private fun baseOptions() = JsonObject(emptyMap())
 
 /**
  * What the typing indicator is doing right now.
@@ -1331,7 +1347,11 @@ private fun ChatSettings(
                 ChatSlider("Temperature", convo.options, "temperature", 0f, 2f, .8f) { onConversation(convo.copy(options = convo.options.withNumber("temperature", it))) }
                 ChatSlider("Top P", convo.options, "top_p", .05f, 1f, .95f) { onConversation(convo.copy(options = convo.options.withNumber("top_p", it))) }
                 ChatSlider("Repetition penalty", convo.options, "repetition_penalty", 1f, 2f, 1.1f) { onConversation(convo.copy(options = convo.options.withNumber("repetition_penalty", it))) }
-                ChatSlider("Max reply tokens", convo.options, "max_tokens", 64f, 2048f, 400f) { onConversation(convo.copy(options = convo.options.withNumber("max_tokens", it))) }
+                // The ceiling matches the server's own (samplingBounds.maxTokMax). Above it
+                // is not a longer reply: the prompt is fitted to leave exactly the room the
+                // budget reserved, and the server caps this one field at that figure.
+                ChatSlider("Max reply tokens", convo.options, "max_tokens", 64f, 1536f, 512f) { onConversation(convo.copy(options = convo.options.withNumber("max_tokens", it))) }
+                Text("Untouched, these show what the server picked for the last turn — it tunes them to what the turn is for. Moving one pins it for this conversation.", color = ChatColors.muted, fontSize = 11.sp)
                 if (char.id != "libby") {
                     Text("Intensity ${convo.intensity}/5", color = ChatColors.muted)
                     Slider(convo.intensity.toFloat(), { onConversation(convo.copy(intensity = it.toInt(), progress = it.toDouble())) }, valueRange = 1f..5f, steps = 3)

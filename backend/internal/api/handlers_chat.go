@@ -991,6 +991,20 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		switch key {
 		case "model", "messages", "stream", "truncation_length":
 			continue
+		case "max_tokens":
+			// The one override that is not purely the caller's to get wrong. The prompt was
+			// fitted to leave exactly this much room, so a larger number does not buy a
+			// longer reply — it spends room the history is already using, and the backend
+			// answers by dropping the front of the prompt, which is the character card. A
+			// smaller number is honoured as written.
+			asked := intFromAny(value)
+			if asked <= 0 || asked > replyTokens {
+				asked = replyTokens
+			}
+			if asked != replyTokens {
+				overridden = append(overridden, key)
+			}
+			payloadMap[key] = asked
 		default:
 			if _, tuned := payloadMap[key]; tuned {
 				overridden = append(overridden, key)
@@ -1174,7 +1188,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// does not own, and reading it that way is free.
 	attachments := []libbyAttachment{}
 	if len(attachRequests) > 0 && !silent {
-		if resolved := s.resolveLibraryAttachments(r.Context(), attachRequests, sentMedia); len(resolved) > 0 {
+		if resolved := s.resolveLibraryAttachments(r.Context(), attachRequests, latestUser, sentMedia); len(resolved) > 0 {
 			attachments = resolved
 		} else if !photoAsked {
 			photoRequest, photoAsked = attachRequests[0], true

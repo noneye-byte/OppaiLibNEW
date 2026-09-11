@@ -27,6 +27,13 @@ const (
 	// linkCandidates bounds the rows a name lookup will decrypt and rank. Titles are
 	// ciphertext, so a title match cannot use an index — somebody has to open them.
 	linkCandidates = 240
+	// minLinkMatchScore is the confidence a *link* needs. Two points is one title word,
+	// or two independent tag words. One incidental tag hit is noise, and pointing the
+	// user at the wrong thing mid-sentence is worse than not pointing at anything.
+	minLinkMatchScore = 2
+	// minAttachMatchScore is the confidence an *attachment* needs, and is deliberately
+	// lower. See bestLibraryMatchAbove for why the two differ.
+	minAttachMatchScore = 1
 	// maxViewingItems bounds the on-screen list folded into the prompt.
 	maxViewingItems = 18
 	// viewingTags bounds the tags shown per on-screen item, so a shelf of eighteen
@@ -154,6 +161,19 @@ func (s *Server) libraryCandidates(ctx context.Context, words []string) []librar
 // share one tag word with fifty items should not beat the one thing actually named.
 // Whole-phrase containment on top of that settles the common case outright.
 func bestLibraryMatch(candidates []libraryCandidate, query string) (libbyLink, bool) {
+	return bestLibraryMatchAbove(candidates, query, minLinkMatchScore)
+}
+
+// bestLibraryMatchAbove is the same ranking with the confidence floor named by the caller.
+//
+// Two floors exist because the two callers are asking different questions. A link is
+// pointing at something in passing, so a single incidental tag hit has to be rejected:
+// naming the wrong item mid-sentence is worse than describing it in her own words. An
+// attachment is a deliberate act on something the user has usually just asked for by
+// name, and "show me the beach one" against an item tagged beach is one tag word — the
+// exact score the link floor throws away. Requiring two there is why a directed request
+// resolved to nothing at all. See chat_attachments.go.
+func bestLibraryMatchAbove(candidates []libraryCandidate, query string, floor int) (libbyLink, bool) {
 	words := normalizeLookupWords(query)
 	if len(words) == 0 {
 		return libbyLink{}, false
@@ -180,10 +200,7 @@ func bestLibraryMatch(candidates []libraryCandidate, query string) (libbyLink, b
 			best, bestScore = candidate.link, score
 		}
 	}
-	// Two points is one title word, or two independent tag words. One incidental tag
-	// hit is noise, and pointing the user at the wrong thing is worse than not
-	// pointing at anything.
-	if bestScore < 2 {
+	if bestScore < floor {
 		return libbyLink{}, false
 	}
 	return best, true
