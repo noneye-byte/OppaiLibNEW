@@ -1,13 +1,12 @@
 import { LitElement, css, html, nothing } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
-import { keyed } from "lit/directives/keyed.js";
 import {
   api, type ChatCharacter, type ChatMessage, type ChatProfile, type ChatStatus, type ChatViewingItem,
   type LibbyAction, type LibbyAttachment, type LibbyLink, type Media, type SourceItem,
 } from "../api.js";
 import { iconStyles, motionStyles } from "../theme.js";
 import {
-  applyImageFallback, libbyAssetCandidates, libbyHidden, loadLibbyOutfit,
+  DEFAULT_LIBBY_PFP, libbyHidden, loadLibbyOutfit,
   normalizeEmotion, normalizeIntensity, type LibbyEmotion,
 } from "../libby.js";
 import { applyProgression, getIntensity, setIntensity } from "../libby-meter.js";
@@ -197,7 +196,6 @@ export class OppaiLibbyDrawer extends LitElement {
       font-size: 12px; font-weight: 750; color: var(--oppai-primary-bright, #ffb877);
     }
     .remark-avatar img { width: 100%; height: 100%; display: block; object-fit: cover; object-position: top center; }
-    .remark-avatar.libby img { object-fit: contain; object-position: bottom center; }
     .remark-body { min-width: 0; }
     .remark-meta { display: flex; align-items: baseline; gap: 7px; min-width: 0; margin-bottom: 1px; }
     .remark-author { font-weight: 720; color: var(--oppai-primary-bright, #ffb877); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -502,13 +500,10 @@ export class OppaiLibbyDrawer extends LitElement {
         : html`<span class="remark-avatar">${author.slice(0, 2).toUpperCase()}</span>`;
     }
     if (character?.id === "libby" || !character) {
-      const emotion = remark.emotion ?? this.emotion;
-      const intensity = remark.intensity ?? this.intensity;
-      const assets = libbyAssetCandidates(emotion, intensity, loadLibbyOutfit());
-      return html`<span class="remark-avatar libby libby-breathe">${keyed(`${remark.id}-${emotion}-${intensity}`,
-        html`<img class="libby-speak" src=${assets[0]} data-fallback-index="0"
-          alt=${`Libby looking ${emotion}`}
-          @error=${(event: Event) => applyImageFallback(event.target as HTMLImageElement, assets)}/>`)}</span>`;
+      // Her face, not her figure: the cowboy-shot sprite in a 40px circle was a
+      // silhouette. The stage beside the log is where the sprite is.
+      const src = character?.avatarImageId ? api.chatImageURL(character.avatarImageId) : DEFAULT_LIBBY_PFP;
+      return html`<span class="remark-avatar"><img src=${src} alt="Libby"/></span>`;
     }
     return character.avatarImageId
       ? html`<span class="remark-avatar"><img src=${api.chatImageURL(character.avatarImageId)} alt="" /></span>`

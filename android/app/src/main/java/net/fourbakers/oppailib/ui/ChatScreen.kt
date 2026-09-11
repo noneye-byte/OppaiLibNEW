@@ -124,6 +124,12 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.border
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.TextLinkStyles
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.withLink
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.text.AnnotatedString
@@ -911,6 +917,17 @@ fun ChatScreen(
                 }
             }
             HorizontalDivider(color = ChatColors.input)
+            // Her sprite, in the conversation rather than only on the call: a bust along
+            // the top of the log that wears her mood and tier and types when she types.
+            // The same art the web's stage and banner draw, framed the same way.
+            if (char.id == "libby" && !repo.prefs.hideLibby && !callOpen) {
+                LibbyChatBanner(
+                    repo = repo, char = char, conversation = convo,
+                    busy = busy, typing = busy && typingPhase == TypingPhase.TYPING,
+                    status = status?.takeIf { it.enabled }?.model ?: "Local replies",
+                    onOpenCall = { callOpen = true },
+                )
+            }
             if (char.id != "libby") {
                 Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     chatModes.forEach { mode -> FilterChip(selected = convo.mode == mode.id, onClick = { updateConversation { it.copy(mode = mode.id) } }, label = { Text(mode.label.replaceFirstChar(Char::uppercase)) }) }
@@ -1235,6 +1252,9 @@ private fun LibbyVideoCall(
                 fallbackAsset = mascotAsset(emotion, tier),
                 modifier = Modifier.fillMaxSize().padding(top = 60.dp),
                 activity = activity,
+                // A cowboy shot stands on the bottom edge — cut at the thigh by the frame,
+                // the way the web call draws her — rather than floating mid-screen.
+                alignment = Alignment.BottomCenter,
             )
             // Header: who, how long, and how she is — two pills, not a bar.
             Row(
@@ -1972,8 +1992,11 @@ private fun ChatIntro(repo: Repository, char: ChatCharacter, convo: ChatConversa
 
 @Composable
 private fun ChatAvatar(repo: Repository, char: ChatCharacter, modifier: Modifier) {
-    if (char.avatarImageId.isNotBlank()) AsyncImage(repo.chatImageUrl(char.avatarImageId), char.name, imageLoader = repo.imageLoader, modifier = modifier)
-    else if (char.id == "libby" && !repo.prefs.hideLibby) LibbyPortrait(repo, "happy", LibbyMeter.tier(), mascotAsset("happy", LibbyMeter.tier()), modifier)
+    // A pfp is a face: the picture set on the card, or Libby's bundled face crop. The
+    // live sprite is a figure and belongs on the banner and the call, where all of it
+    // fits — see LIBBY_PFP_ASSET for why a crop of the current pose is not an option.
+    if (char.avatarImageId.isNotBlank()) AsyncImage(repo.chatImageUrl(char.avatarImageId), char.name, imageLoader = repo.imageLoader, contentScale = ContentScale.Crop, modifier = modifier)
+    else if (char.id == "libby" && !repo.prefs.hideLibby) AsyncImage("file:///android_asset/$LIBBY_PFP_ASSET", "Libby", imageLoader = repo.imageLoader, contentScale = ContentScale.Crop, modifier = modifier)
     else Box(modifier.background(ChatColors.accent), contentAlignment = Alignment.Center) { Text(char.name.take(2).uppercase(), color = MaterialTheme.colorScheme.onPrimary, fontWeight = FontWeight.Bold) }
 }
 
@@ -2091,7 +2114,7 @@ private fun ChatMessageRow(
                     }
                 }
             }
-            Text(richChatText(entry.content), color = ink, fontSize = 15.sp)
+            Text(richChatText(entry.content, entry.links, onOpenMedia, if (friend) ChatColors.accent else ink), color = ink, fontSize = 15.sp)
             if (entry.imageId.isNotBlank()) {
                 AsyncImage(
                     repo.chatImageUrl(entry.imageId),
@@ -2318,17 +2341,117 @@ private fun ChatLinkChips(repo: Repository, links: List<LibbyLink>, onOpenMedia:
     }
 }
 
-private fun richChatText(text: String): AnnotatedString = buildAnnotatedString {
+/**
+ * A message's text with its markup applied and, where the reply points at a library
+ * item, the item's name tappable in the sentence.
+ *
+ * The server writes the real title into the prose in place of her tag and sends the
+ * item alongside; the chip under the bubble is the "open it" affordance, and this is
+ * the name itself reading as the link it is. Without it the title sat in the text as
+ * plain words, which is what a pretend hyperlink looks like.
+ */
+private fun richChatText(
+    text: String,
+    links: List<LibbyLink> = emptyList(),
+    onOpenMedia: OpenMedia? = null,
+    linkColor: Color = Color.Unspecified,
+): AnnotatedString = buildAnnotatedString {
     val regex = Regex("(\\*\\*[^*\\n]+\\*\\*|\\*[^*\\n]+\\*|\"[^\"\\n]+\")")
+    val titles = links.filter { it.title.trim().length >= 3 }
+    val titlePattern = titles.takeIf { it.isNotEmpty() && onOpenMedia != null }
+        ?.let { Regex(it.joinToString("|") { link -> Regex.escape(link.title) }, RegexOption.IGNORE_CASE) }
+    // Plain words, with each linked title inside them made tappable.
+    fun words(part: String) {
+        if (titlePattern == null) { append(part); return }
+        var from = 0
+        titlePattern.findAll(part).forEach { hit ->
+            append(part.substring(from, hit.range.first))
+            val link = titles.first { it.title.equals(hit.value, ignoreCase = true) }
+            withLink(
+                LinkAnnotation.Clickable(
+                    tag = "media:${link.id}",
+                    styles = TextLinkStyles(SpanStyle(color = linkColor, fontWeight = FontWeight.SemiBold, textDecoration = TextDecoration.Underline)),
+                ) { onOpenMedia?.invoke(link.id) },
+            ) { append(hit.value) }
+            from = hit.range.last + 1
+        }
+        append(part.substring(from))
+    }
     var at = 0
     regex.findAll(text).forEach { match ->
-        append(text.substring(at, match.range.first)); val token = match.value
-        when { token.startsWith("**") -> { pushStyle(SpanStyle(fontWeight = FontWeight.Bold, fontStyle = FontStyle.Italic)); append(token.drop(2).dropLast(2)); pop() }
-            token.startsWith("*") -> { pushStyle(SpanStyle(fontStyle = FontStyle.Italic)); append(token.drop(1).dropLast(1)); pop() }
-            else -> { pushStyle(SpanStyle(fontWeight = FontWeight.Medium)); append(token); pop() } }
+        words(text.substring(at, match.range.first)); val token = match.value
+        when { token.startsWith("**") -> { pushStyle(SpanStyle(fontWeight = FontWeight.Bold, fontStyle = FontStyle.Italic)); words(token.drop(2).dropLast(2)); pop() }
+            token.startsWith("*") -> { pushStyle(SpanStyle(fontStyle = FontStyle.Italic)); words(token.drop(1).dropLast(1)); pop() }
+            else -> { pushStyle(SpanStyle(fontWeight = FontWeight.Medium)); words(token); pop() } }
         at = match.range.last + 1
     }
-    append(text.substring(at))
+    words(text.substring(at))
+}
+
+/**
+ * Her bust along the top of the conversation.
+ *
+ * The art is a cowboy shot — head to mid-thigh — so it is drawn at a fixed width and
+ * cropped at the chest by the strip's height: head and shoulders, large, rather than the
+ * whole figure shrunk into a hundred dp. It wears the conversation's mood and tier, shows
+ * the typing art and a bubble of dots while a reply is on its way, and opening it is
+ * the call, where all of her fits. Mirrors the web client's banner and stage.
+ */
+@Composable
+private fun LibbyChatBanner(
+    repo: Repository,
+    char: ChatCharacter,
+    conversation: ChatConversation,
+    busy: Boolean,
+    typing: Boolean,
+    status: String,
+    onOpenCall: () -> Unit,
+) {
+    val emotion = conversation.emotion.ifBlank { "neutral" }
+    val tier = conversation.intensity.coerceIn(1, LibbyMeter.MAX)
+    val activity = conversation.activity.ifBlank { if (typing) "typing" else "" }
+    val accent = MaterialTheme.colorScheme.primary
+    Box(
+        Modifier.fillMaxWidth().height(124.dp).clipToBounds()
+            .background(ChatColors.side)
+            .background(Brush.radialGradient(listOf(accent.copy(alpha = .3f), Color.Transparent), center = Offset(Float.POSITIVE_INFINITY, 0f), radius = 900f))
+            .clickable(onClick = onOpenCall),
+    ) {
+        LibbyPortrait(
+            repo = repo, emotion = emotion, tier = tier, fallbackAsset = mascotAsset(emotion, tier), activity = activity,
+            contentScale = ContentScale.FillWidth, alignment = Alignment.TopCenter,
+            modifier = Modifier.align(Alignment.TopEnd).padding(end = 10.dp, top = 4.dp).width(156.dp).fillMaxHeight(),
+        )
+        if (typing) {
+            Row(
+                Modifier.align(Alignment.TopEnd).padding(end = 168.dp, top = 16.dp)
+                    .clip(RoundedCornerShape(16.dp, 16.dp, 4.dp, 16.dp)).background(ChatColors.input)
+                    .padding(horizontal = 11.dp, vertical = 9.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) { repeat(3) { Box(Modifier.size(6.dp).clip(CircleShape).background(ChatColors.muted)) } }
+        }
+        Column(Modifier.align(Alignment.BottomStart).padding(start = 16.dp, bottom = 12.dp, end = 180.dp)) {
+            Text(char.name, color = accent, fontWeight = FontWeight.Bold, fontSize = 16.sp, maxLines = 1)
+            Text(
+                (if (busy) "Typing…" else status) + " · " + emotion + (if (conversation.activity.isNotBlank()) ", ${conversation.activity}" else ""),
+                color = ChatColors.muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+            Row(Modifier.padding(top = 5.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                repeat(LibbyMeter.MAX) { step ->
+                    Box(Modifier.width(20.dp).height(4.dp).clip(RoundedCornerShape(2.dp)).background(if (step < tier) accent else ChatColors.input))
+                }
+            }
+        }
+        Row(
+            Modifier.align(Alignment.BottomEnd).padding(end = 10.dp, bottom = 8.dp)
+                .clip(RoundedCornerShape(999.dp)).background(Color(0x59000000)).padding(horizontal = 9.dp, vertical = 3.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Icon(Icons.Filled.Videocam, null, tint = Color.White, modifier = Modifier.size(14.dp))
+            Text("Call", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+        }
+    }
 }
 
 /** Reads either Character Card V2 JSON or SillyTavern's PNG `chara` tEXt chunk. */

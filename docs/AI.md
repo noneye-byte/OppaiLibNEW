@@ -35,6 +35,20 @@ has been removed — the bundled wardrobe covers every mood at every tier, so th
 is nothing left to fall back to and nothing that could fall back to a file the
 build no longer ships.
 
+The wardrobe art is a **cowboy shot** — head to mid-thigh, 1024×1344 — and every
+surface frames it as one. Beside the chat it stands in a portrait column laid
+out from the top at its own aspect, as wide as the column, so her face is where a
+reader looks first; where the column does not fit (under about 960px, and on the
+phone) a banner along the top of the conversation crops the same art at the
+chest, a bust rather than a figure shrunk into a strip, and tapping it opens the
+call. On the call she stands on the bottom edge of the frame, cut at the thigh.
+Her **profile picture** — the message list, the chat list, the header, the
+bubbles — is a separate face crop (`default-libby-pfp.png`), because a pfp is a
+face and the sprite in a 34px circle was a silhouette; a picture set on her
+character card replaces it. On a wide screen the **call is the screen**: she and
+her room take the main pane and the conversation moves into a sidebar with the
+same log and composer, so nothing is lost by picking up.
+
 She speaks through a retro dialogue box: her sprite in a framed portrait window,
 a nameplate, a stepped pixel frame, and the line typed out with a blinking marker
 when it finishes. The box is sized by the whole line from the first frame, so it
@@ -104,11 +118,32 @@ bedroom no longer produces the same bedroom photo every turn.
 ### Linking things from the library
 
 Libby can point at anything in your collection: she writes the title, and the
-client draws it as a chip that opens the item. Resolution happens on the server
-against your own database — by title over the recent rows, and by tag across the
-whole library, since tags are the only searchable text a title's encryption
-leaves in the clear. A title she has invented resolves to nothing and is left as
-her own words rather than a broken link.
+client draws it as a chip that opens the item — and the name itself, where it
+sits in her sentence, is the link. Resolution happens on the server against your
+own database: by title and by tag across the whole library, since tags are the
+only searchable text a title's encryption leaves in the clear. A title she has
+invented resolves to nothing and is left as her own words rather than a broken
+link.
+
+She is taught one tag, `[link: <title>]`, and a small model half-remembers it in
+several ways. Every shape that used to come out as a pretend hyperlink now
+resolves: a markdown link to nowhere (`[Title](…)`), a wiki-style `[[Title]]`, a
+bare `[Title]`, `[Link: …]`, `[item: …]`, the title quoted inside the tag — and a
+real title she simply wrote in quotes or emphasis with no tag at all. The last
+two are exact-only, so `[laughs]` and `*leans in*` stay prose. A title she
+writes exactly beats a newer item that shares most of its words.
+
+### Which one she reaches for
+
+When she attaches something by description — "a girl with brown hair" — and ten
+items fit equally, the pick used to be the newest, every time. It is now drawn
+from everything that fits the request the same, and drawn with her own taste on
+the die: the words of her **kinks** and her standing **wants** are matched
+against the items' tags, so with a want for skirts on file she reaches for the
+one in a skirt, and what is left after that is random. Taste only ever decides
+between equal fits; it never promotes something that fits the request worse, and
+items already shown in the conversation are skipped before the draw rather than
+after it.
 
 ### Browsing together
 

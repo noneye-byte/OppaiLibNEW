@@ -133,7 +133,11 @@ func findAttachRequests(reply string) []string {
 // because when she does know the title they are the better query; theirs are tried after,
 // because a request that named the thing is a query that was written by someone who could
 // see it.
-func (s *Server) resolveLibraryAttachments(ctx context.Context, requests []string, asked string, skip map[int64]bool) []libbyAttachment {
+//
+// taste is what she would rather look at, and decides between items that fit a request
+// equally well — with a random draw after that, so "a girl with brown hair" does not
+// hand over the newest such item every single time. See pickLibraryMatch.
+func (s *Server) resolveLibraryAttachments(ctx context.Context, requests []string, asked string, skip map[int64]bool, taste libbyTaste) []libbyAttachment {
 	if len(requests) == 0 {
 		return nil
 	}
@@ -152,8 +156,21 @@ func (s *Server) resolveLibraryAttachments(ctx context.Context, requests []strin
 	var out []libbyAttachment
 	picked := map[int64]bool{}
 	take := func(query string) {
-		link, found := bestLibraryMatchAbove(candidates, query, minAttachMatchScore)
-		if !found || picked[link.ID] || skip[link.ID] || len(out) >= maxAttachmentsPerReply {
+		if len(out) >= maxAttachmentsPerReply {
+			return
+		}
+		// Already-shown items are skipped inside the pick rather than after it, so a
+		// request that fits several things reaches for one she has not shown yet rather
+		// than landing on the one she has and giving up.
+		exclude := make(map[int64]bool, len(skip)+len(picked))
+		for id := range skip {
+			exclude[id] = true
+		}
+		for id := range picked {
+			exclude[id] = true
+		}
+		link, found := pickLibraryMatch(candidates, query, minAttachMatchScore, taste, exclude, rollIndex)
+		if !found {
 			return
 		}
 		picked[link.ID] = true

@@ -44,7 +44,12 @@ container on Unraid, with a companion Android app.
   **background** you added and tagged that she picks herself as the scene moves. She
   puts herself into **Misc states** — curled up reading, dozing, and a good deal less
   idle — which an outfit can draw its own art for, and her outfit's *typing* art shows
-  with a speech bubble while she writes. Both of you can **reply to a particular
+  with a speech bubble while she writes. Her sprite is in the conversation, not only
+  on the call: a portrait column beside the chat, or a banner along the top of it where
+  the column does not fit, on web and phone alike, and on a wide screen the call takes
+  the main pane with the chat in a sidebar. What she names from the library is a real
+  link in her sentence, whichever way she wrote it, and when several items fit what
+  you asked for she picks with her own taste rather than always the newest. Both of you can **reply to a particular
   message** as a quoted reply, you can **attach library items** — videos, games,
   comics — for her to look at, and ask her to **retry** a reply with a note on what
   should change. She can offer to import a URL, tag or favorite an item, or generate a

@@ -45,7 +45,7 @@ func TestResolveLibraryLinksSubstitutesTitles(t *testing.T) {
 	id := seedTitledMedia(t, s, "Summer at the Coast", "video", "beach", "swimsuit")
 	seedTitledMedia(t, s, "Kitchen Timer", "video", "cooking")
 
-	text, links := s.resolveLibraryLinks(context.Background(), "You never did finish [link: Summer at the Coast], you know.")
+	text, links := s.resolveLibraryLinks(context.Background(), "You never did finish [link: Summer at the Coast], you know.", nil)
 	if text != "You never did finish Summer at the Coast, you know." {
 		t.Fatalf("prose = %q", text)
 	}
@@ -55,7 +55,7 @@ func TestResolveLibraryLinksSubstitutesTitles(t *testing.T) {
 
 	// Found by tag rather than title: what she calls a thing and what it is called
 	// are frequently different, and the tags are the only plaintext the library has.
-	text, links = s.resolveLibraryLinks(context.Background(), "How about [link: that beach swimsuit one]?")
+	text, links = s.resolveLibraryLinks(context.Background(), "How about [link: that beach swimsuit one]?", nil)
 	if len(links) != 1 || links[0].ID != id {
 		t.Fatalf("tag lookup links = %+v", links)
 	}
@@ -70,7 +70,7 @@ func TestResolveLibraryLinksFallsBackToHerWords(t *testing.T) {
 	s, _ := newTestServer(t)
 	seedTitledMedia(t, s, "Kitchen Timer", "video", "cooking")
 
-	text, links := s.resolveLibraryLinks(context.Background(), "Try [link: a thing that was never imported].")
+	text, links := s.resolveLibraryLinks(context.Background(), "Try [link: a thing that was never imported].", nil)
 	if len(links) != 0 {
 		t.Fatalf("links = %+v, want none", links)
 	}

@@ -66,6 +66,20 @@ export function libbyEmotionSrc(emotion: string): string {
   return `/api/libby/outfits/${encodeURIComponent(outfit)}/emotions/${encodeURIComponent(mood)}`;
 }
 
+/**
+ * Libby's profile picture: a face crop of her calm sprite, shipped beside the
+ * wardrobe as /Libby_Default/default-libby-pfp.png.
+ *
+ * A pfp is a face, and a cowboy shot in a 34px circle is a figure you cannot make
+ * out. The wardrobe sprites also move their head around between poses — the calm
+ * one stands square, the happy one leans right out of frame — so no fixed crop of
+ * "whatever she is currently drawn as" lands on her face reliably. So the message
+ * list, the chat list and the header show a picture the way any chat app does, and
+ * the sprite stays where there is room to see all of it: the stage, the banner, the
+ * call. A picture set as her avatar on the character card replaces this.
+ */
+export const DEFAULT_LIBBY_PFP = "/Libby_Default/default-libby-pfp.png";
+
 /** The bundled wardrobe's horniness tiers, in the file names, indexed by intensity 1..5. */
 const DEFAULT_TIERS = ["calm", "warm", "flirty", "heated", "peak"] as const;
 

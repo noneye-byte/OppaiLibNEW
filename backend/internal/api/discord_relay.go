@@ -385,7 +385,7 @@ func (s *Server) discordReply(ctx context.Context, settings discordSettings, cha
 	reply = scrubDirectives(reply)
 	// Link tags name library items, which nobody on Discord can open. Resolving them to
 	// their titles keeps the sentence readable instead of leaving a dangling tag.
-	reply, _ = s.resolveLibraryLinks(ctx, reply)
+	reply, _ = s.resolveLibraryLinks(ctx, reply, nil)
 	if reply = strings.TrimSpace(reply); reply == "" {
 		return "", fmt.Errorf("the model returned nothing usable")
 	}

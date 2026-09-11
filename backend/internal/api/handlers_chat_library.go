@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"math/rand/v2"
 	"regexp"
 	"sort"
 	"strings"
@@ -52,13 +53,40 @@ type libbyLink struct {
 // tags this one is *not* anchored to the end of the reply: a link stands in for the
 // item's name mid-sentence ("you never finished [link: the beach one]"), so it has
 // to be resolvable wherever it lands.
-var linkTag = regexp.MustCompile(`(?i)\[\s*link\s*[:=-]?\s*([^\]\n]{1,120}?)\s*\]`)
+//
+// "link" is the taught form and may stand bare; the synonyms need a delimiter, since
+// "[opens the door]" and "[items on the shelf]" are stage directions, not pointers.
+var linkTag = regexp.MustCompile(`(?i)\[\s*(?:link\b\s*[:=-]?|(?:library|item|open|title)\s*[:=-])\s*([^\]\n]{1,120}?)\s*\]`)
+
+// The shapes a model reaches for when it half-remembers the protocol. Every one of
+// these came out of a real reply as a "link" that opened nothing: a markdown link to
+// nowhere, a wiki-style double bracket, a bare bracketed title. They are rewritten to
+// the taught form before resolution rather than each taught to the resolver, so there
+// is one parser and one substitution rule.
+var (
+	// markdownLink is [title](anything). The target is meaningless — she has no URLs
+	// to give — so only the text is kept.
+	markdownLink = regexp.MustCompile(`\[([^\]\n]{1,120}?)\]\([^)\n]{0,300}\)`)
+	// wikiLink is [[title]].
+	wikiLink = regexp.MustCompile(`\[\[([^\]\n]{1,120}?)\]\]`)
+	// bareBracket is [title] with no keyword at all. Only an *exact* library title is
+	// taken from this shape — "[laughs]" and "[1]" are prose and stay prose — which
+	// isExactTitle decides.
+	bareBracket = regexp.MustCompile(`\[([^\[\]\n]{3,120}?)\]`)
+	// quotedSpan is a title she wrote in quotes or emphasis rather than tagging at all.
+	// Resolved exact-only, like the bare bracket, and never rewritten: the prose is
+	// already the way she wants it, it just needs the chip.
+	quotedSpan = regexp.MustCompile(`"([^"\n]{3,120}?)"|“([^”\n]{3,120}?)”|\*\*([^*\n]{3,120}?)\*\*|\*([^*\n]{3,120}?)\*`)
+	// wrappingQuotes are what a model puts around a title inside the tag itself:
+	// [link: "Summer at the Coast"]. Not part of the name.
+	wrappingQuotes = "\"'“”‘’ "
+)
 
 // linkDirective tells the character how to point at something. It is only ever
 // added when the resolver is actually wired up for that request — a model told it
 // can link things in a context where nothing resolves would write tags that get
 // stripped back out, which reads to the user as her forgetting mid-sentence.
-const linkDirective = "Write [link: <real library title>] where its name belongs to make it tappable. Link only items you genuinely mention, at most three; if unsure of the title, describe it instead."
+const linkDirective = "Write [link: <real library title>] where its name belongs to make it tappable — or simply write its exact title in quotes. Link only items you genuinely mention, at most three; if unsure of the title, describe it inside the tag instead."
 
 // normalizeLookupWords reduces a query to the words worth matching on.
 func normalizeLookupWords(query string) []string {
@@ -130,16 +158,57 @@ func bestLibraryMatch(candidates []libraryCandidate, query string) (libbyLink, b
 // name, and "show me the beach one" against an item tagged beach is one tag word — the
 // exact score the link floor throws away. Requiring two there is why a directed request
 // resolved to nothing at all. See chat_attachments.go.
+//
+// Deterministic: the first of the best-scoring candidates wins, which — since the
+// lookup returns newest first — is the newest. Callers choosing something to *show*
+// want pickLibraryMatch instead, for exactly that reason.
 func bestLibraryMatchAbove(candidates []libraryCandidate, query string, floor int) (libbyLink, bool) {
-	words := normalizeLookupWords(query)
-	if len(words) == 0 {
+	best, bestScore := libbyLink{}, 0
+	for _, match := range scoreLibraryMatches(candidates, query) {
+		if match.score > bestScore {
+			best, bestScore = match.link, match.score
+		}
+	}
+	if bestScore < floor {
 		return libbyLink{}, false
 	}
+	return best, true
+}
+
+// libraryMatch is one candidate with the score a query gave it.
+type libraryMatch struct {
+	link  libbyLink
+	tags  []string
+	score int
+}
+
+// normalizedTitle reduces a title to the words a lookup would be made of, so
+// "Summer at the Coast!" and "summer at the coast" are the same name. Stop words
+// are dropped from both sides for the same reason.
+func normalizedTitle(title string) string {
+	return strings.Join(normalizeLookupWords(title), " ")
+}
+
+// scoreLibraryMatches ranks every candidate against a query, keeping those that
+// scored at all, in the order the candidates came (newest first).
+//
+// The exact-title bonus is what makes a real title beat everything else outright: a
+// reply that wrote the name of a thing the library actually holds must resolve to that
+// thing and not to a newer item that happens to share two of its words.
+func scoreLibraryMatches(candidates []libraryCandidate, query string) []libraryMatch {
+	words := normalizeLookupWords(query)
+	if len(words) == 0 {
+		return nil
+	}
 	phrase := strings.ToLower(strings.TrimSpace(query))
-	best, bestScore := libbyLink{}, 0
+	norm := strings.Join(words, " ")
+	var out []libraryMatch
 	for _, candidate := range candidates {
 		score := 0
-		if len(phrase) >= 4 && strings.Contains(candidate.title, phrase) {
+		if norm == normalizedTitle(candidate.title) {
+			score += 30
+		} else if len(phrase) >= 4 && (strings.Contains(candidate.title, phrase) ||
+			(len(norm) >= 4 && strings.Contains(normalizedTitle(candidate.title), norm))) {
 			score += 12
 		}
 		for _, word := range words {
@@ -153,14 +222,160 @@ func bestLibraryMatchAbove(candidates []libraryCandidate, query string, floor in
 				}
 			}
 		}
-		if score > bestScore {
-			best, bestScore = candidate.link, score
+		if score > 0 {
+			out = append(out, libraryMatch{link: candidate.link, tags: candidate.tags, score: score})
 		}
 	}
-	if bestScore < floor {
+	return out
+}
+
+// isExactTitle reports whether a span of her prose is, word for word, the title of
+// something in the candidate set — the test a bare bracket or a quoted phrase has to
+// pass to become a link, since neither shape was written *as* a pointer.
+func isExactTitle(candidates []libraryCandidate, span string) (libbyLink, bool) {
+	norm := normalizedTitle(span)
+	if len(norm) < 4 {
 		return libbyLink{}, false
 	}
-	return best, true
+	for _, candidate := range candidates {
+		if normalizedTitle(candidate.title) == norm {
+			return candidate.link, true
+		}
+	}
+	return libbyLink{}, false
+}
+
+// libbyTaste is what she would rather look at: the words of her kinks and her standing
+// wants, reduced to stems. Consulted only to break ties — see pickLibraryMatch — so it
+// steers which of ten equally-fitting items she reaches for and never overrides what
+// was actually asked for.
+type libbyTaste map[string]bool
+
+// tasteStem reduces a word to the part a tag would share with it: "skirts" and
+// "skirt", "watching" and "watched". Five letters is enough to tell those apart from
+// unrelated words and short enough to survive an inflection.
+func tasteStem(word string) string {
+	if len(word) > 5 {
+		return word[:5]
+	}
+	return word
+}
+
+// tasteStopWords are too general to say anything about taste. They are the words a
+// kink or a want is *phrased* in, not the thing it is about.
+var tasteStopWords = map[string]bool{
+	"being": true, "while": true, "she": true, "her": true, "hers": true, "herself": true,
+	"you": true, "your": true, "yours": true, "given": true, "get": true, "gets": true,
+	"getting": true, "want": true, "wants": true, "wish": true, "wishes": true, "like": true,
+	"likes": true, "love": true, "loves": true, "see": true, "seeing": true, "something": true,
+	"someone": true, "more": true, "when": true, "than": true, "them": true, "they": true,
+	"will": true, "would": true, "could": true, "should": true, "into": true, "onto": true,
+	"with": true, "without": true, "just": true, "really": true, "very": true, "much": true,
+	"maybe": true, "night": true, "time": true, "way": true, "thing": true, "things": true,
+	"video": true, "videos": true, "picture": true, "pictures": true, "image": true,
+	"images": true, "comic": true, "comics": true, "game": true, "games": true,
+	"outfit": true, "outfits": true, "wear": true, "wearing": true, "library": true,
+	"shelves": true, "collection": true, "received": true, "back": true, "doubled": true,
+}
+
+// buildLibbyTaste reads her taste out of the character card's kinks and her wants.
+//
+// Kinks are what she is into; wants are what she has been craving lately, in her own
+// words. Both are prose, so the reduction is deliberately loose — stems, minus the
+// words the prose is built from — and any stem that happens to land in a tag is a
+// nudge, not a rule.
+func buildLibbyTaste(kinks string, wants []string) libbyTaste {
+	taste := libbyTaste{}
+	take := func(text string) {
+		for _, word := range normalizeLookupWords(text) {
+			if tasteStopWords[word] || len(word) < 4 {
+				continue
+			}
+			taste[tasteStem(word)] = true
+		}
+	}
+	take(kinks)
+	for _, want := range wants {
+		take(want)
+	}
+	if len(taste) == 0 {
+		return nil
+	}
+	return taste
+}
+
+// score counts how many of her tastes an item's tags land on. Each taste stem counts
+// once however many tags carry it, so a heavily tagged item does not win on volume.
+func (t libbyTaste) score(tags []string) int {
+	if len(t) == 0 {
+		return 0
+	}
+	hit := map[string]bool{}
+	for _, tag := range tags {
+		for _, word := range indexWords(tag) {
+			if len(word) < 4 {
+				continue
+			}
+			if stem := tasteStem(word); t[stem] {
+				hit[stem] = true
+			}
+		}
+	}
+	return len(hit)
+}
+
+// pickLibraryMatch chooses what to show for a query, among everything that fits it
+// equally well.
+//
+// bestLibraryMatchAbove takes the first of the best, and the candidates arrive newest
+// first, so "a girl with brown hair" against ten items tagged that way was always the
+// newest of the ten — every time, in every conversation. This ranks the same way, then
+// looks at the whole tied set: what she would rather look at (her kinks and her wants,
+// against the items' tags) narrows it, and what is left is drawn at random, so the
+// same request reaches different shelves and the one she picks says something about
+// her. The taste only ever decides between items that fit the request the same; it
+// cannot promote something that fits it worse.
+//
+// pick is the die, injected so a test can load it.
+func pickLibraryMatch(candidates []libraryCandidate, query string, floor int, taste libbyTaste, skip map[int64]bool, pick func(n int) int) (libbyLink, bool) {
+	var tied []libraryMatch
+	best := 0
+	for _, match := range scoreLibraryMatches(candidates, query) {
+		if skip[match.link.ID] {
+			continue
+		}
+		switch {
+		case match.score > best:
+			best, tied = match.score, []libraryMatch{match}
+		case match.score == best:
+			tied = append(tied, match)
+		}
+	}
+	if best < floor || len(tied) == 0 {
+		return libbyLink{}, false
+	}
+	if len(tied) > 1 && len(taste) > 0 {
+		var liked []libraryMatch
+		most := 0
+		for _, match := range tied {
+			switch t := taste.score(match.tags); {
+			case t > most:
+				most, liked = t, []libraryMatch{match}
+			case t == most:
+				liked = append(liked, match)
+			}
+		}
+		tied = liked
+	}
+	if len(tied) == 1 || pick == nil {
+		return tied[0].link, true
+	}
+	return tied[pick(len(tied))].link, true
+}
+
+// rollIndex is the die the chat path uses: a uniform pick over n.
+func rollIndex(n int) int {
+	return rand.IntN(n)
 }
 
 // resolveLibraryLinks turns the link tags in a reply into real items.
@@ -170,34 +385,127 @@ func bestLibraryMatchAbove(candidates []libraryCandidate, query string, floor in
 // becomes "you never finished Summer at the Coast". A tag that resolves to nothing
 // falls back to the character's own words, which keeps the prose intact even when
 // she has invented a title that was never in the library.
-func (s *Server) resolveLibraryLinks(ctx context.Context, reply string) (string, []libbyLink) {
+//
+// Before any of that, the shapes a model writes *instead of* the tag are folded into
+// it (see markdownLink and its siblings), and afterwards a real title she wrote in
+// quotes or emphasis with no tag at all still gets its chip. Between them these are
+// most of the "she named it but nothing was tappable" reports.
+func (s *Server) resolveLibraryLinks(ctx context.Context, reply string, taste libbyTaste) (string, []libbyLink) {
+	reply = s.foldLinkShapes(ctx, reply)
 	requests := linkTag.FindAllStringSubmatch(reply, -1)
-	if len(requests) == 0 {
-		return reply, nil
-	}
-	var words []string
-	for _, request := range requests {
-		words = append(words, normalizeLookupWords(request[1])...)
-	}
-	candidates := s.libraryCandidates(ctx, words)
-
 	var links []libbyLink
 	picked := map[int64]bool{}
-	text := linkTag.ReplaceAllStringFunc(reply, func(match string) string {
-		query := strings.TrimSpace(linkTag.FindStringSubmatch(match)[1])
-		link, found := bestLibraryMatch(candidates, query)
-		if !found {
-			return query
+	if len(requests) > 0 {
+		var words []string
+		for _, request := range requests {
+			words = append(words, normalizeLookupWords(request[1])...)
 		}
-		// Repeats collapse to one chip but keep reading naturally in the prose: she
-		// may well name the same thing twice in a paragraph.
-		if !picked[link.ID] && len(links) < maxLinksPerReply {
+		candidates := s.libraryCandidates(ctx, words)
+		reply = linkTag.ReplaceAllStringFunc(reply, func(match string) string {
+			query := strings.Trim(strings.TrimSpace(linkTag.FindStringSubmatch(match)[1]), wrappingQuotes)
+			link, found := pickLibraryMatch(candidates, query, minLinkMatchScore, taste, nil, rollIndex)
+			if !found {
+				return query
+			}
+			// Repeats collapse to one chip but keep reading naturally in the prose: she
+			// may well name the same thing twice in a paragraph.
+			if !picked[link.ID] && len(links) < maxLinksPerReply {
+				picked[link.ID] = true
+				links = append(links, link)
+			}
+			return link.Title
+		})
+	}
+	links = s.linkNamedTitles(ctx, reply, links, picked)
+	return strings.TrimSpace(reply), links
+}
+
+// foldLinkShapes rewrites the near-misses into the taught tag.
+//
+// Markdown and wiki links are pointers whatever they were meant to point at, so they
+// are always folded; the target of a markdown link is dropped since she has none to
+// give. A bare bracket is folded only when its contents are, exactly, a title the
+// library holds: "[laughs]" is a stage direction and is left alone.
+func (s *Server) foldLinkShapes(ctx context.Context, reply string) string {
+	reply = markdownLink.ReplaceAllString(reply, "[link: $1]")
+	reply = wikiLink.ReplaceAllString(reply, "[link: $1]")
+	bare := bareBracket.FindAllStringSubmatch(reply, -1)
+	if len(bare) == 0 {
+		return reply
+	}
+	isProtocol := func(match string) bool {
+		return linkTag.MatchString(match) || strayTag.MatchString(match) || strayThoughtTag.MatchString(match)
+	}
+	var words []string
+	for _, match := range bare {
+		if isProtocol(match[0]) {
+			continue
+		}
+		words = append(words, normalizeLookupWords(match[1])...)
+	}
+	if len(words) == 0 {
+		return reply
+	}
+	candidates := s.libraryCandidates(ctx, words)
+	if len(candidates) == 0 {
+		return reply
+	}
+	return bareBracket.ReplaceAllStringFunc(reply, func(match string) string {
+		if isProtocol(match) {
+			return match
+		}
+		span := strings.Trim(bareBracket.FindStringSubmatch(match)[1], wrappingQuotes)
+		if _, exact := isExactTitle(candidates, span); exact {
+			return "[link: " + span + "]"
+		}
+		return match
+	})
+}
+
+// linkNamedTitles adds chips for titles she wrote in quotes or emphasis without
+// tagging them. The prose is untouched — she already wrote the name — and only an
+// exact title counts, since "*leans in*" is not a request to search the library.
+func (s *Server) linkNamedTitles(ctx context.Context, reply string, links []libbyLink, picked map[int64]bool) []libbyLink {
+	if len(links) >= maxLinksPerReply {
+		return links
+	}
+	spans := quotedSpan.FindAllStringSubmatch(reply, 6)
+	if len(spans) == 0 {
+		return links
+	}
+	var words []string
+	texts := make([]string, 0, len(spans))
+	for _, match := range spans {
+		span := ""
+		for _, group := range match[1:] {
+			if group != "" {
+				span = group
+				break
+			}
+		}
+		if span = strings.TrimSpace(span); span == "" {
+			continue
+		}
+		texts = append(texts, span)
+		words = append(words, normalizeLookupWords(span)...)
+	}
+	if len(words) == 0 {
+		return links
+	}
+	candidates := s.libraryCandidates(ctx, words)
+	if len(candidates) == 0 {
+		return links
+	}
+	for _, span := range texts {
+		if len(links) >= maxLinksPerReply {
+			break
+		}
+		if link, exact := isExactTitle(candidates, span); exact && !picked[link.ID] {
 			picked[link.ID] = true
 			links = append(links, link)
 		}
-		return link.Title
-	})
-	return strings.TrimSpace(text), links
+	}
+	return links
 }
 
 // ── browsing the library together ───────────────────────────────────────────

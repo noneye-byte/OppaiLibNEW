@@ -22,7 +22,7 @@ func TestLibraryIndexReachesPastTheOldWindow(t *testing.T) {
 		seedTitledMedia(t, s, fmt.Sprintf("Filler Number %d", i), "image")
 	}
 
-	text, links := s.resolveLibraryLinks(context.Background(), "Put on [link: Lighthouse in the Fog] tonight.")
+	text, links := s.resolveLibraryLinks(context.Background(), "Put on [link: Lighthouse in the Fog] tonight.", nil)
 	if len(links) != 1 || links[0].ID != buried {
 		t.Fatalf("links = %+v, want the buried item %d", links, buried)
 	}
@@ -99,7 +99,7 @@ func TestLibraryIndexStillRejectsInventedTitles(t *testing.T) {
 	for i := range 50 {
 		seedTitledMedia(t, s, fmt.Sprintf("Filler Number %d", i), "image")
 	}
-	text, links := s.resolveLibraryLinks(context.Background(), "Try [link: an entirely imagined thing].")
+	text, links := s.resolveLibraryLinks(context.Background(), "Try [link: an entirely imagined thing].", nil)
 	if len(links) != 0 {
 		t.Fatalf("links = %+v, want none", links)
 	}

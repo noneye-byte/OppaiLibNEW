@@ -1,6 +1,7 @@
 package net.fourbakers.oppailib.ui
 
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
 import coil.compose.SubcomposeAsyncImage
@@ -34,6 +35,14 @@ fun LibbyPortrait(
      * a state never costs the user a broken sprite.
      */
     activity: String = "",
+    /**
+     * How the art sits in [modifier]'s box. Fit shows all of her, which is right for
+     * the call; the chat banner crops the cowboy shot at the chest with FillWidth and
+     * a top alignment, which is what makes it a bust rather than a figure shrunk to
+     * fit a strip.
+     */
+    contentScale: ContentScale = ContentScale.Fit,
+    alignment: Alignment = Alignment.Center,
 ) {
     val outfit = repo.prefs.libbyOutfit
     val chain = buildList {
@@ -56,8 +65,20 @@ fun LibbyPortrait(
         }
         add("file:///android_asset/$fallbackAsset")
     }
-    ChainImage(chain, repo, modifier)
+    ChainImage(chain, repo, modifier, contentScale, alignment)
 }
+
+/**
+ * Libby's profile picture: a face crop of her calm sprite, shipped beside the wardrobe.
+ *
+ * A pfp is a face, and the cowboy-shot sprite in a 32dp circle was a silhouette. The
+ * wardrobe also moves her head between poses — the happy one leans right out of frame —
+ * so no fixed crop of the current sprite lands on her face reliably. The message list,
+ * the inbox and the header show this the way any chat app shows a picture; the sprite
+ * stays where there is room to see all of it: the banner and the call. Mirrors
+ * DEFAULT_LIBBY_PFP in the web client, and a picture set on her card replaces it.
+ */
+const val LIBBY_PFP_ASSET = "Libby_Default/default-libby-pfp.png"
 
 /**
  * Everything Libby can feel, in the order the outfit editor lays its slots out.
@@ -105,14 +126,15 @@ fun mascotAsset(emotion: String, tier: Int = 1): String {
 
 /** Renders the first model, falling through to the next on load error. */
 @Composable
-private fun ChainImage(models: List<String>, repo: Repository, modifier: Modifier) {
+private fun ChainImage(models: List<String>, repo: Repository, modifier: Modifier, contentScale: ContentScale, alignment: Alignment) {
     if (models.isEmpty()) return
     SubcomposeAsyncImage(
         model = models.first(),
         imageLoader = repo.imageLoader,
         contentDescription = "Libby",
-        contentScale = ContentScale.Fit,
+        contentScale = contentScale,
+        alignment = alignment,
         modifier = modifier,
-        error = { ChainImage(models.drop(1), repo, modifier) },
+        error = { ChainImage(models.drop(1), repo, modifier, contentScale, alignment) },
     )
 }

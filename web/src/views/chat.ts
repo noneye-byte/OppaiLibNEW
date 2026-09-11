@@ -6,13 +6,13 @@ import {
   type ChatModelInspection, type ChatModels, type ChatOptions, type ChatProfile, type ChatSampling, type ChatStatus, type ChatWorkspace,
   type LibbyAutoDecision, type LibbyAutoSettings, type LibbyAutoState, type LibbyBond, type LibbyContext,
   type DiscordPlace, type DiscordState, type LibbyIdentity, type LibbyMemory, type LibbyThought, type LibbyWant, type SharedLink,
-  type StoredChatMessage, type User, type ChatReplyRef, type LibbyAttachment, type LibbyBackground, type Media,
+  type StoredChatMessage, type User, type ChatReplyRef, type LibbyAttachment, type LibbyBackground, type LibbyLink, type Media,
 } from "../api.js";
 import { iconStyles, motionStyles } from "../theme.js";
 import { formatBytes } from "../media-meta.js";
 import { markArrival } from "../motion.js";
 import {
-  activityLabel, AMBIENT_MAX_INTENSITY, applyImageFallback, libbyAssetCandidates, libbyHidden, loadLibbyOutfit,
+  activityLabel, AMBIENT_MAX_INTENSITY, DEFAULT_LIBBY_PFP, applyImageFallback, libbyAssetCandidates, libbyHidden, loadLibbyOutfit,
   EMOTION_LABELS, LIBBY_EMOTIONS, normalizeEmotion, normalizeIntensity, type LibbyEmotion,
 } from "../libby.js";
 import { applyProgression, getIntensity, setIntensity } from "../libby-meter.js";
@@ -295,16 +295,42 @@ async function characterFromPNG(file: File): Promise<ChatCharacter | null> {
 }
 
 /** Safe, tiny chat formatter: quotes are speech, **double stars** are actions. */
-function formatted(text: string): TemplateResult {
+function formatted(text: string, links?: LibbyLink[], open?: (id: number) => void): TemplateResult {
   const token = /(\*\*[^*\n]+\*\*|\*[^*\n]+\*|~~[^~\n]+~~|`[^`\n]+`|"[^"\n]+")/g;
   const chunks = text.split(token);
   return html`${chunks.map((part) => {
-    if (part.startsWith("**") && part.endsWith("**")) return html`<strong class="action">${part.slice(2, -2)}</strong>`;
-    if (part.startsWith("*") && part.endsWith("*")) return html`<em>${part.slice(1, -1)}</em>`;
+    if (part.startsWith("**") && part.endsWith("**")) return html`<strong class="action">${linked(part.slice(2, -2), links, open)}</strong>`;
+    if (part.startsWith("*") && part.endsWith("*")) return html`<em>${linked(part.slice(1, -1), links, open)}</em>`;
     if (part.startsWith("~~") && part.endsWith("~~")) return html`<s>${part.slice(2, -2)}</s>`;
     if (part.startsWith("`") && part.endsWith("`")) return html`<code>${part.slice(1, -1)}</code>`;
-    if (part.startsWith('"') && part.endsWith('"')) return html`<span class="speech">${part}</span>`;
-    return part;
+    if (part.startsWith('"') && part.endsWith('"')) return html`<span class="speech">${linked(part, links, open)}</span>`;
+    return linked(part, links, open);
+  })}`;
+}
+
+const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * Makes the name of a linked item clickable where it sits in the sentence.
+ *
+ * The server writes the real title into the prose in place of her tag and sends the
+ * item alongside; the chip under the bubble is the "open it" affordance, and this is
+ * the name itself reading as the link it is. Without it the title sat in the text as
+ * plain words next to a chip, which is what "pretend hyperlink" looks like.
+ */
+function linked(part: string, links?: LibbyLink[], open?: (id: number) => void): TemplateResult | string {
+  if (!links?.length || !open || !part) return part;
+  const titles = links.filter((link) => link.title.trim().length >= 3);
+  if (!titles.length) return part;
+  const pattern = new RegExp(`(${titles.map((link) => escapeRegExp(link.title)).join("|")})`, "i");
+  const pieces = part.split(pattern);
+  if (pieces.length === 1) return part;
+  return html`${pieces.map((piece) => {
+    const hit = titles.find((link) => link.title.toLowerCase() === piece.toLowerCase());
+    if (!hit) return piece;
+    const go = (event: Event) => { event.stopPropagation(); open(hit.id); };
+    return html`<a class="inline-link" role="link" tabindex="0" title=${`Open ${hit.title}`} @click=${go}
+      @keydown=${(event: KeyboardEvent) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); go(event); } }}>${piece}</a>`;
   })}`;
 }
 
@@ -464,14 +490,17 @@ export class OppaiChat extends LitElement {
       --hover:var(--md-sys-color-surface-container-high); --input:var(--md-sys-color-surface-container-highest);
       --bubble:var(--md-sys-color-surface-container-high); --muted:var(--md-sys-color-on-surface-variant);
       --line:var(--md-sys-color-outline-variant); --accent:var(--md-sys-color-primary); --on-accent:var(--md-sys-color-on-primary);
-      --side-w:340px; --bar:60px; }
+      --side-w:340px; --bar:60px;
+      /* The portrait column. Sized to the viewport rather than fixed, so a wide screen
+         shows more of her and a narrow one keeps room for the conversation. */
+      --stage-w:clamp(236px,26vw,400px); --call-side-w:clamp(340px,32vw,460px); }
     button,input,textarea,select { font:inherit; }
     button { color:inherit; }
     /* Two panes, the way every messenger is laid out: the list of chats and the open
        chat. The portrait is a third pane that exists only when there is art to show. */
     .client { position:relative; display:grid; grid-template-columns:var(--side-w) minmax(0,1fr); height:100%; min-height:0;
       overflow:hidden; background:var(--main); }
-    .client.with-stage { grid-template-columns:var(--side-w) minmax(0,1fr) 268px; }
+    .client.with-stage { grid-template-columns:var(--side-w) minmax(0,1fr) var(--stage-w); }
     .avatar img,.chat-avatar img,.top-avatar img,.me-avatar img,.intro-avatar img,.pick-avatar img {
       width:100%; height:100%; object-fit:cover; object-position:top center; display:block; }
     .initial { font-weight:700; color:var(--on-accent); background:var(--accent); display:grid; place-items:center; }
@@ -696,9 +725,15 @@ export class OppaiChat extends LitElement {
     .stage-status { color:var(--muted); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     /* The sprite wrapper carries the idle breathing and the sprite itself carries the
        per-line reaction, so a rock into a new message does not cancel the idle loop. */
-    .stage-art { flex:1; min-height:0; display:grid; place-items:end center; }
-    .stage-art .sprite-hold { display:grid; place-items:end center; width:100%; height:100%; transform-origin:50% 100%; }
-    .stage-art .sprite { max-width:100%; max-height:100%; object-fit:contain; object-position:bottom;
+    /* The art is a cowboy shot — head to mid-thigh — drawn at 1024×1344. It is laid
+       out at that aspect, as wide as the column, from the top: her face is where a
+       reader's eye goes first, and it has to be at the top of the column, large,
+       rather than at the foot of a tall empty strip. A column too short for the whole
+       shot keeps it whole (contain) and simply draws it smaller, since cropping her at
+       the waist would hide the wardrobe tier the meter is about. */
+    .stage-art { width:100%; aspect-ratio:1024/1344; max-height:calc(100% - 96px); display:grid; place-items:start center; }
+    .stage-art .sprite-hold { display:grid; place-items:start center; width:100%; height:100%; transform-origin:50% 100%; }
+    .stage-art .sprite { width:100%; height:100%; object-fit:contain; object-position:top center;
       transform-origin:50% 100%; filter:drop-shadow(0 10px 26px rgba(0,0,0,.42)); }
     .stage-art.empty-art { place-items:center; gap:8px; align-content:center; padding:16px; text-align:center;
       color:var(--muted); font-size:12px; }
@@ -717,7 +752,31 @@ export class OppaiChat extends LitElement {
     .stage-meter { display:flex; gap:4px; justify-content:center; padding:8px 0 12px; }
     .stage-meter .pip { width:20px; height:4px; border-radius:2px; background:var(--input); transition:background .28s ease; }
     .stage-meter .pip.on { background:var(--accent); }
-    @media(max-width:1200px){ .client.with-stage { grid-template-columns:var(--side-w) minmax(0,1fr); } .stage,.stage-toggle { display:none; } }
+    /* Under this width the column goes and the banner below takes over: same art,
+       same reactions, along the top of the conversation instead of beside it. */
+    @media(max-width:960px){ .client.with-stage { grid-template-columns:var(--side-w) minmax(0,1fr); } .stage { display:none; } .client.with-stage .hero { display:block; } }
+
+    /* ── the banner ──────────────────────────────────────────────────────── */
+    /* Her bust along the top of the chat, for screens with no room for the column.
+       The sprite is drawn at a fixed width and the box crops it at the chest, which
+       on a cowboy shot is a head-and-shoulders framing rather than a figure shrunk to
+       fit. Tapping it opens the call, where all of her fits. */
+    .hero { position:relative; display:none; height:124px; flex:0 0 auto; overflow:hidden; border-bottom:1px solid var(--line); cursor:pointer;
+      background:radial-gradient(120% 160% at 84% 10%,color-mix(in srgb,var(--accent) 30%,transparent),transparent 62%),var(--side); }
+    .hero-hold { position:absolute; right:10px; top:4px; width:156px; height:100%; transform-origin:50% 100%; }
+    .hero-sprite { width:100%; height:auto; display:block; object-fit:contain; object-position:top center;
+      transform-origin:50% 100%; filter:drop-shadow(0 6px 16px rgba(0,0,0,.4)); }
+    .hero-copy { position:absolute; left:16px; right:180px; bottom:12px; display:grid; gap:3px; min-width:0; }
+    .hero-name { font-weight:750; font-size:16px; color:var(--accent); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .hero-status { font-size:12px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .hero .stage-meter { padding:3px 0 0; justify-content:start; }
+    .hero .stage-doing { margin:0; justify-self:start; }
+    .hero-bubble { position:absolute; right:168px; top:16px; padding:8px 11px; border-radius:16px; border-bottom-right-radius:4px; background:var(--bubble);
+      box-shadow:0 3px 10px rgba(0,0,0,.22); animation:chat-rise .2s var(--oppai-ease-standard,cubic-bezier(.2,0,0,1)) both; z-index:2; }
+    .hero-bubble::after { content:""; position:absolute; right:-6px; bottom:6px; border:7px solid transparent; border-left-color:var(--bubble); border-right:0; }
+    .hero-open { position:absolute; right:10px; bottom:8px; z-index:2; display:inline-flex; align-items:center; gap:4px; padding:3px 9px; border-radius:999px;
+      background:rgba(0,0,0,.35); color:#fff; font-size:11px; font-weight:650; backdrop-filter:blur(4px); }
+    .hero-open .material-symbols-rounded { font-size:14px; }
     .notice { margin:0 16px 8px; padding:9px 12px; border-left:3px solid var(--accent); background:var(--side); border-radius:9px; font-size:13px; }
     .notice.error { border-color:var(--md-sys-color-error); color:var(--md-sys-color-error); }
     .backend-state { padding:9px 16px; border-bottom:1px solid var(--line); background:var(--side); color:var(--muted); font-size:12px; }
@@ -878,9 +937,9 @@ export class OppaiChat extends LitElement {
     /* Covers the whole client. The room she is in fills the frame, she stands in it,
        and everything else — who, how long, how she feels, what was said — is laid
        over it in the thinnest chrome that still reads. */
-    .call { position:absolute; inset:0; z-index:60; display:grid; grid-template-rows:minmax(0,1fr) auto; background:#000; color:#fff;
-      animation:chat-fade .2s ease both; }
-    .call-scene { position:relative; min-height:0; overflow:hidden; isolation:isolate; }
+    .call { position:absolute; inset:0; z-index:60; display:grid; grid-template-rows:minmax(0,1fr) auto; grid-template-columns:minmax(0,1fr);
+      background:#000; color:#fff; animation:chat-fade .2s ease both; }
+    .call-scene { position:relative; min-width:0; min-height:0; overflow:hidden; isolation:isolate; }
     .call-bg { position:absolute; inset:-2%; background-size:cover; background-position:center; transform:scale(1.02);
       transition:background-image .4s ease, filter .4s ease; }
     .call-bg.plain { background:radial-gradient(120% 90% at 50% 12%,color-mix(in srgb,var(--accent) 30%,transparent),transparent 68%),
@@ -933,8 +992,8 @@ export class OppaiChat extends LitElement {
     .call-scene-btn.on { border-color:var(--accent); }
     .call-tray p { margin:8px 0 0; font-size:12px; color:rgba(255,255,255,.6); }
     .call-tray p a { color:var(--accent); cursor:pointer; }
-    .call-bar { display:flex; align-items:center; gap:8px; padding:10px 14px; background:#0c0c10; }
-    .call-input { flex:1; min-width:0; border:0; border-radius:999px; padding:11px 16px; background:rgba(255,255,255,.1); color:#fff; }
+    .call-bar { display:flex; align-items:center; gap:8px; min-width:0; padding:10px 14px; background:#0c0c10; }
+    .call-input { flex:1; width:0; min-width:0; border:0; border-radius:999px; padding:11px 16px; background:rgba(255,255,255,.1); color:#fff; }
     .call-input::placeholder { color:rgba(255,255,255,.5); }
     .call-input:focus { outline:2px solid var(--accent); outline-offset:-2px; }
     .call-btn { width:44px; height:44px; flex:0 0 44px; border:0; border-radius:50%; background:rgba(255,255,255,.1); color:#fff;
@@ -946,6 +1005,38 @@ export class OppaiChat extends LitElement {
     .call-btn.end { background:#e5484d; color:#fff; }
     .call-note { position:absolute; top:64px; left:50%; transform:translateX(-50%); z-index:3; padding:6px 12px; border-radius:999px; background:rgba(0,0,0,.6); font-size:12px; animation:chat-rise .2s ease both; }
     @media (max-width:640px) { .call-mood .call-place,.call-mood .call-doing { display:none; } .call-btn.captions { display:none; } }
+    /* On a screen with the room for it the call is the screen: she and her room take
+       the main pane and the conversation moves into a sidebar on the right — the same
+       log, composer and attachments as before, so nothing is lost by picking up. The
+       chat list and the portrait column step aside; the call bar keeps only what the
+       sidebar does not already do. Narrower than this it stays a full-screen overlay
+       with subtitles and its own input, since there is no room for both. */
+    @media (min-width:901px) {
+      .client.in-call { grid-template-columns:minmax(0,1fr) var(--call-side-w); }
+      .client.in-call .side,.client.in-call .stage,.client.in-call .hero,.client.in-call .mobile-nav { display:none; }
+      .client.in-call .call { position:relative; inset:auto; order:-1; z-index:auto; min-height:0; animation:none; }
+      .client.in-call .main { border-left:1px solid var(--line); }
+      .client.in-call .call-input,.client.in-call .call-btn.send { display:none; }
+      /* The log is right there: the subtitles keep only her latest line, under her. */
+      .client.in-call .call-caption.older,.client.in-call .call-caption.mine { display:none; }
+      .client.in-call .call-bar { justify-content:center; }
+      .client.in-call .call-sprite { max-width:min(100%,900px); }
+      .client.in-call .msg { grid-template-columns:28px minmax(0,88%); }
+      .client.in-call .msg.mine { grid-template-columns:minmax(0,88%); }
+      .client.in-call .msg .avatar { width:28px; height:28px; }
+      .client.in-call .log { padding:10px 12px 8px; }
+      .client.in-call .format-help,.client.in-call .destructive-action { display:none; }
+      /* Settings opened from the sidebar get the phone treatment: no room for a rail. */
+      .client.in-call .settings { grid-template-columns:minmax(0,1fr); grid-template-rows:auto minmax(0,1fr); }
+      .client.in-call .settings-nav { flex-direction:row; align-items:center; gap:4px; padding:8px; overflow-x:auto; overflow-y:hidden; border-bottom:1px solid var(--line); }
+      .client.in-call .nav-cat,.client.in-call .nav-sep,.client.in-call .nav-row.close { display:none; }
+      .client.in-call .nav-row { flex:0 0 auto; padding:7px 12px; border-radius:999px; }
+    }
+    /* A linked title in the prose. Underlined the way a link is, in the accent on her
+       side and in the bubble's own ink on yours. */
+    .inline-link { color:var(--accent); text-decoration:underline; text-decoration-style:dotted; text-decoration-thickness:1.5px; text-underline-offset:3px; cursor:pointer; font-weight:600; }
+    .inline-link:hover { text-decoration-style:solid; }
+    .msg.mine .inline-link,.call-caption .inline-link { color:inherit; }
     @media (prefers-reduced-motion:reduce) { .call,.call-sprite { animation:none; } }
   `];
 
@@ -2196,14 +2287,12 @@ export class OppaiChat extends LitElement {
   }
 
   private avatar(character: ChatCharacter, className: string) {
-    // Libby's avatar is alive: her current wardrobe sprite belongs anywhere a chat
-    // app would normally show a static pfp. A saved character thumbnail must not
-    // freeze that expression in the message list or header.
-    if (character.id === "libby" && !libbyHidden()) {
-      const conversation = this.activeConversation; const assets = libbyAssetCandidates(normalizeEmotion(conversation?.emotion), conversation?.intensity ?? 1, loadLibbyOutfit());
-      return html`<span class=${className}><img src=${assets[0]} data-fallback-index="0" alt="Libby" @error=${(event:Event) => applyImageFallback(event.target as HTMLImageElement, assets)} /></span>`;
-    }
+    // A pfp is a face. Libby's is the picture set on her character card, or the
+    // bundled face crop of her; the live sprite is a figure, and it belongs on the
+    // stage, the banner and the call, where there is room to see all of it. See
+    // DEFAULT_LIBBY_PFP for why a crop of the current sprite is not an option.
     if (character.avatarImageId) return html`<span class=${className}><img src=${api.chatImageURL(character.avatarImageId)} alt="" /></span>`;
+    if (character.id === "libby" && !libbyHidden()) return html`<span class=${className}><img src=${DEFAULT_LIBBY_PFP} alt="Libby" /></span>`;
     return html`<span class="${className} initial">${character.name.slice(0,2).toUpperCase()}</span>`;
   }
 
@@ -2309,12 +2398,9 @@ export class OppaiChat extends LitElement {
 
   private renderCall(character: ChatCharacter, conversation: ChatConversation) {
     if (!this.callOpen) return nothing;
-    const emotion = normalizeEmotion(conversation.emotion), intensity = normalizeIntensity(conversation.intensity);
-    const typing = this.busy && this.typingPhase === "typing";
-    // Her typing art while she writes, when she is not otherwise in a state with art
-    // of its own; the bubble of dots says the same thing either way.
-    const activity = conversation.activity || (typing ? "typing" : "");
-    const assets = this.spriteFor(character, emotion, intensity, activity);
+    const pose = this.poseOf(character, conversation);
+    if (!pose) return nothing;
+    const { emotion, intensity, typing, activity, assets } = pose;
     const place = this.backgrounds.find((bg) => bg.id === conversation.background && bg.hasImage);
     // The last few lines as subtitles, newest at the bottom. Thoughts are not speech.
     const recent = conversation.messages.filter((message) => !message.thought).slice(-3);
@@ -2340,7 +2426,7 @@ export class OppaiChat extends LitElement {
           </span>
         </div>
         ${this.callCaptions ? html`<div class="call-captions" aria-live="polite">
-          ${recent.map((message, index) => html`<p class="call-caption ${message.role === "user" ? "mine" : ""} ${index < recent.length - 1 ? "older" : ""}">${formatted(message.content)}</p>`)}
+          ${recent.map((message, index) => html`<p class="call-caption ${message.role === "user" ? "mine" : ""} ${index < recent.length - 1 ? "older" : ""}">${formatted(message.content, message.links, (id) => requestOpenMedia(this, id))}</p>`)}
           ${typing ? html`<p class="call-caption typing" aria-label="${character.name} is typing"><span class="dots"><i></i><i></i><i></i></span></p>` : nothing}
         </div>` : nothing}
         ${this.scenePickerOpen ? this.renderScenePicker(conversation) : nothing}
@@ -2376,9 +2462,14 @@ export class OppaiChat extends LitElement {
     </div>`;
   }
 
-  private renderStage(character: ChatCharacter, conversation: ChatConversation) {
-    const hidden = character.id === "libby" && libbyHidden();
-    if (hidden) return nothing;
+  /**
+   * What she looks like right now, for the stage, the banner and the call: the mood
+   * and tier from the conversation, the typing art while a reply is on its way, and
+   * the fallback chain for that pose. Null when there is nothing to draw — Libby is
+   * hidden on this device, or the character has no reactive art.
+   */
+  private poseOf(character: ChatCharacter, conversation: ChatConversation) {
+    if (character.id === "libby" && libbyHidden()) return null;
     const emotion = normalizeEmotion(conversation.emotion), intensity = normalizeIntensity(conversation.intensity);
     const typing = this.busy && this.typingPhase === "typing";
     // While she writes, the outfit's typing art (if it drew one) stands in for a state
@@ -2387,7 +2478,43 @@ export class OppaiChat extends LitElement {
     const assets = this.spriteFor(character, emotion, intensity, activity);
     // Nothing to stand on the stage: a character with no art gets no column at all
     // rather than an empty one. Their picture is set from the character card.
-    if (!assets.length) return nothing;
+    if (!assets.length) return null;
+    return { emotion, intensity, typing, activity, assets, key: `${emotion}-${intensity}-${activity}-${this.spoken}` };
+  }
+
+  /**
+   * Her bust along the top of the conversation, where the portrait column does not
+   * fit. Same pose, same reactions, same key as the stage, so she rocks into a line
+   * here exactly as she does there. Tapping it opens the call.
+   */
+  private renderHero(character: ChatCharacter, conversation: ChatConversation) {
+    const pose = this.poseOf(character, conversation);
+    if (!pose) return nothing;
+    const { emotion, intensity, typing, activity, assets, key } = pose;
+    const status = this.busy ? "Typing…" : this.autoRunning ? "Talking on their own" : this.status?.enabled ? this.status.model : "Local replies";
+    return html`<div class="hero" role="button" tabindex="0" aria-label=${`${character.name} — open the call`} title="Open the call"
+      @click=${() => this.startCall()} @keydown=${(event:KeyboardEvent) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); this.startCall(); } }}>
+      <span class="hero-hold libby-breathe">${keyed(key, html`<img
+        class="hero-sprite ${this.busy ? "" : "libby-speak"}" src=${assets[0]} data-fallback-index="0"
+        alt=${activity ? `${character.name} ${activity}, looking ${emotion}` : `${character.name} looking ${emotion}`}
+        @error=${(event:Event) => applyImageFallback(event.target as HTMLImageElement, assets)} />`)}</span>
+      ${typing ? html`<div class="hero-bubble" aria-hidden="true"><span class="dots"><i></i><i></i><i></i></span></div>` : nothing}
+      <div class="hero-copy">
+        <span class="hero-name">${character.name}</span>
+        <span class="hero-status">${status}${character.id === "libby" ? ` · ${emotion}` : ""}</span>
+        ${conversation.activity ? html`<div class="stage-doing" role="status">${activityLabel(conversation.activity)}</div>` : nothing}
+        ${character.id === "libby" ? html`<div class="stage-meter" title=${`Intensity ${intensity} of 5`} aria-label=${`Intensity ${intensity} of 5`}>
+          ${[1,2,3,4,5].map((step) => html`<span class="pip ${step <= intensity ? "on" : ""}"></span>`)}
+        </div>` : nothing}
+      </div>
+      <span class="hero-open"><span class="material-symbols-rounded">videocam</span>Call</span>
+    </div>`;
+  }
+
+  private renderStage(character: ChatCharacter, conversation: ChatConversation) {
+    const pose = this.poseOf(character, conversation);
+    if (!pose) return nothing;
+    const { emotion, intensity, typing, activity, assets } = pose;
     const status = this.busy ? "Typing…" : this.autoRunning ? "Talking on their own" : this.status?.enabled ? this.status.model : "Local replies";
     return html`<aside class="stage" aria-label="${character.name} portrait">
       <div class="stage-head"><span class="stage-name">${character.name}</span><span class="stage-status">${status}</span></div>
@@ -3475,7 +3602,7 @@ export class OppaiChat extends LitElement {
           ${message.replyTo ? html`<button type="button" class="quote" title="Go to that message" @click=${() => this.jumpTo(message.replyTo)}>
             <strong>${message.replyTo.role === "assistant" ? character.name : (this.workspace.profile.displayName || this.user?.username || "You")}</strong>
             <span>${message.replyTo.excerpt}</span></button>` : nothing}
-          ${message.content.trim() ? html`<div class="text">${formatted(message.content)}</div>` : nothing}
+          ${message.content.trim() ? html`<div class="text">${formatted(message.content, message.links, (id) => requestOpenMedia(this, id))}</div>` : nothing}
           ${message.imageId ? html`<img class="sent-image" src=${api.chatImageURL(message.imageId)} alt="Image sent by ${name}"/>` : nothing}
           ${renderAttachments(message.attachments, (id) => requestOpenMedia(this, id), name)}
           ${renderLinkChips(message.links, (id) => requestOpenMedia(this, id))}
@@ -3521,19 +3648,21 @@ export class OppaiChat extends LitElement {
     const online = !!this.status?.enabled;
     const presence = online ? this.status!.model : character.id === "libby" ? "Local replies" : "Model offline";
     const messages = conversation.messages;
-    return html`<div class="client ${this.mobileNavOpen ? "nav-open" : ""} ${stage!==nothing ? "with-stage" : ""}" @pointerdown=${this.armIdle} @contextmenu=${this.chatMenu}>${this.renderSidebar()}
+    const hero=this.stageOpen?this.renderHero(character,conversation):nothing;
+    return html`<div class="client ${this.mobileNavOpen ? "nav-open" : ""} ${stage!==nothing ? "with-stage" : ""} ${this.callOpen ? "in-call" : ""}" @pointerdown=${this.armIdle} @contextmenu=${this.chatMenu}>${this.renderSidebar()}
       <main class="main"><header class="top">
         <button class="icon-btn mobile-nav" title="Chats" aria-label="Back to chats" @click=${() => (this.mobileNavOpen=true)}><span class="material-symbols-rounded">arrow_back</span></button>
         ${this.avatar(character,"top-avatar")}
         <span class="top-title"><span class="name">${character.name}</span><span class="presence"><span class="status-dot ${online ? "online" : ""}"></span>${presence}${character.id === "libby" ? ` · ${conversation.emotion}${conversation.activity ? `, ${conversation.activity}` : ""}` : ` · ${channel.topic}`}</span></span>
         ${character.id === "libby" ? nothing : html`<select class="quick-mode" aria-label="Conversation mode" title="Conversation mode" .value=${conversation.mode} @change=${(event:Event) => this.updateConversation({mode:(event.target as HTMLSelectElement).value})}>${MODES.map((mode)=>html`<option value=${mode.id}>${mode.label}</option>`)}</select>`}
-        <span class="top-actions"><button class="icon-btn ${this.callOpen?"on":""}" title="Video call" aria-label="Video call" @click=${()=>this.startCall()}><span class="material-symbols-rounded">videocam</span></button><button class="icon-btn ${this.autopilot?"on":""}" title=${this.autopilot?"Turn off autopilot":"Let the AI continue on its own"} aria-label="Autopilot" aria-pressed=${this.autopilot?"true":"false"} @click=${()=>this.toggleAutopilot()}><span class="material-symbols-rounded">smart_toy</span></button><button class="icon-btn stage-toggle ${this.stageOpen?"on":""}" title=${this.stageOpen?"Hide portrait":"Show portrait"} aria-label="Portrait" aria-pressed=${this.stageOpen?"true":"false"} @click=${()=>(this.stageOpen=!this.stageOpen)}><span class="material-symbols-rounded">wallpaper</span></button><button class="icon-btn destructive-action" title="Clear messages" aria-label="Clear messages" @click=${this.clearConversation}><span class="material-symbols-rounded">delete_sweep</span></button><button class="icon-btn ${this.settingsOpen?"on":""}" title="Chat settings" aria-label="Chat settings" @click=${()=>(this.settingsOpen=!this.settingsOpen)}><span class="material-symbols-rounded">tune</span></button></span>
+        <span class="top-actions"><button class="icon-btn ${this.callOpen?"on":""}" title=${this.callOpen?"End call":"Video call"} aria-label=${this.callOpen?"End call":"Video call"} @click=${()=>this.callOpen?this.endCall():this.startCall()}><span class="material-symbols-rounded">${this.callOpen?"call_end":"videocam"}</span></button><button class="icon-btn ${this.autopilot?"on":""}" title=${this.autopilot?"Turn off autopilot":"Let the AI continue on its own"} aria-label="Autopilot" aria-pressed=${this.autopilot?"true":"false"} @click=${()=>this.toggleAutopilot()}><span class="material-symbols-rounded">smart_toy</span></button><button class="icon-btn stage-toggle ${this.stageOpen?"on":""}" title=${this.stageOpen?"Hide portrait":"Show portrait"} aria-label="Portrait" aria-pressed=${this.stageOpen?"true":"false"} @click=${()=>(this.stageOpen=!this.stageOpen)}><span class="material-symbols-rounded">wallpaper</span></button><button class="icon-btn destructive-action" title="Clear messages" aria-label="Clear messages" @click=${this.clearConversation}><span class="material-symbols-rounded">delete_sweep</span></button><button class="icon-btn ${this.settingsOpen?"on":""}" title="Chat settings" aria-label="Chat settings" @click=${()=>(this.settingsOpen=!this.settingsOpen)}><span class="material-symbols-rounded">tune</span></button></span>
       </header>
         ${this.settingsOpen?this.renderSettings():nothing}
         ${this.loadError ? html`<div class="backend-state load-error" role="alert"><strong>Chat didn't load.</strong> ${this.loadError}
           ${this.workspaceLoaded ? nothing : html` Your saved characters and conversations aren't shown, and nothing is being saved until this succeeds.`}
           <button class="autobar-btn" @click=${() => void this.retryLoad()}>Retry</button></div>` : nothing}
         ${this.status?.modelBackend && !this.status.enabled ? html`<div class="backend-state" role="status"><strong>Text generation offline.</strong> ${this.status.message || "Load a model in text-generation-webui, then refresh status."}</div>` : nothing}
+        ${hero}
         ${this.renderAutopilotBar(character)}
         <section class="log">${messages.length ? nothing : html`<div class="intro">${this.avatar(character,"intro-avatar")}<h2>${character.name}</h2><p>${character.description || `This is the beginning of your conversation with ${character.name}.`}</p><p>${online?`Running on ${this.status!.model}.`:character.id === "libby" ? "Libby is using built-in local replies." : "Connect a local model to start chatting."}</p></div>`}
           ${messages.map((message,index)=>this.renderEntry(message,messages[index-1],messages[index+1]))}${this.busy&&this.typingPhase==="typing"?html`<div class="msg theirs last typing-row">${this.avatar(character,"avatar")}<div class="bubble-wrap"><div class="bubble" aria-label="${character.name} is typing"><span class="dots"><i></i><i></i><i></i></span></div></div></div>`:nothing}

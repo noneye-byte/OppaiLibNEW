@@ -855,6 +855,10 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	if character.ID == "libby" {
 		selfPics = s.libbySelfPictures(r.Context())
 	}
+	// What she would rather look at, for choosing between items that fit a request
+	// equally well. Hers alone, like the wants it is partly read from; an imported card
+	// gets the plain ranking. See pickLibraryMatch.
+	var taste libbyTaste
 	add("her photos", rankPhotoCatalogue, "\n\n"+photoCatalogue(ws, character.ID, sentPhotos, selfPics, sentMedia))
 	// Libby alone gets her self-grounding and the library snapshot. She is this
 	// server's librarian, so knowing who she is, what she can do, and what is on the
@@ -874,6 +878,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			// Her own standing wants, kept the same way and carried beside memory.
 			// See handlers_libby_wants.go.
 			wants, _ := s.readLibbyWants(u.ID)
+			taste = buildLibbyTaste(character.Kinks, wantTexts(wants))
 			// Where the two of them stand — time since last, carried mood, closeness.
 			// See handlers_libby_bond.go.
 			bond, _ := s.readLibbyBond(u.ID)
@@ -1308,7 +1313,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	links := []libbyLink{}
 	if linkable {
 		var resolved []libbyLink
-		reply, resolved = s.resolveLibraryLinks(r.Context(), reply)
+		reply, resolved = s.resolveLibraryLinks(r.Context(), reply, taste)
 		if resolved != nil {
 			links = resolved
 		}
@@ -1347,7 +1352,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// does not own, and reading it that way is free.
 	attachments := []libbyAttachment{}
 	if len(attachRequests) > 0 && !silent {
-		if resolved := s.resolveLibraryAttachments(r.Context(), attachRequests, latestUser, sentMedia); len(resolved) > 0 {
+		if resolved := s.resolveLibraryAttachments(r.Context(), attachRequests, latestUser, sentMedia, taste); len(resolved) > 0 {
 			attachments = resolved
 		} else if !photoAsked {
 			photoRequest, photoAsked = attachRequests[0], true

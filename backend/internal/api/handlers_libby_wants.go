@@ -263,3 +263,13 @@ func (s *Server) handleForgetLibbyWant(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
+
+// wantTexts is the wants as plain strings, for the code that reads them as words
+// rather than as a ledger — her taste, when choosing between library items.
+func wantTexts(store libbyWantStore) []string {
+	out := make([]string, 0, len(store.Wants))
+	for _, want := range store.Wants {
+		out = append(out, want.Text)
+	}
+	return out
+}
