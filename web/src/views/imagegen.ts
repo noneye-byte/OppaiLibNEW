@@ -180,11 +180,12 @@ const OUTFIT_FACES: { id: LibbyEmotion; label: string; face: string; pose: strin
  * *is* the wardrobe slot the finished square is filed into. Adding one here without
  * adding it there produces a square the upload endpoint refuses.
  *
- * Unlike OUTFIT_FACES these are not part of the sixty-square board, and deliberately
- * so. A complete wardrobe is still twelve expressions across five tiers; these are
- * extras somebody generates because they want that particular state, one at a time. So
- * each carries a `face` of its own rather than borrowing the expression picker's — a
- * pose this specific reads wrong with an unrelated expression stapled to it.
+ * They sit on the board as a second block under the sixty expression squares, with
+ * their own rows per heat tier, and are addressed in the same index space (see
+ * squareAddress). A complete wardrobe is still the twelve expressions; these are
+ * extras, so the default batch leaves them out and a switch brings them in. Each
+ * carries a `face` of its own rather than borrowing the expression picker's — a pose
+ * this specific reads wrong with an unrelated expression stapled to it.
  */
 const OUTFIT_ACTIVITIES: { id: string; label: string; face: string; pose: string }[] = [
   { id: "typing", label: "Typing", face: "focused expression, eyes on a screen, faint smile", pose: "sitting at a desk, both hands on a keyboard, leaning slightly toward the monitor" },
@@ -223,6 +224,40 @@ const OUTFIT_TIERS: { label: string; mood: string }[] = [
   { label: "Heated", mood: "heavy blush, sultry posture, parted lips, heavy-lidded eyes" },
   { label: "Peak", mood: "deep blush, flushed skin, breathless needy expression" },
 ];
+
+/**
+ * One index space for every square the studio can aim at.
+ *
+ * The sixty expression squares come first — face-major within a tier, which is the
+ * order the wardrobe editor lays them out in — and the MISC squares follow as a second
+ * block, state-major within a tier. Keeping both in one integer is what lets the batch
+ * runner, the sheet, the draft and "aim the generator here" share a single
+ * selectOutfitSlot without any of them knowing which kind of square they are holding.
+ */
+const EXPRESSION_SQUARES = OUTFIT_FACES.length * OUTFIT_TIERS.length;
+const MISC_SQUARES = OUTFIT_ACTIVITIES.length * OUTFIT_TIERS.length;
+
+/** Decodes a square index into the tier, the expression, and the MISC state ("" for an
+ * expression square). Out-of-range indexes clamp to the last square of their block. */
+function squareAddress(index: number): { tier: number; face: number; misc: string } {
+  if (index >= EXPRESSION_SQUARES) {
+    const offset = Math.min(index - EXPRESSION_SQUARES, MISC_SQUARES - 1);
+    return {
+      tier: Math.floor(offset / OUTFIT_ACTIVITIES.length),
+      face: 0,
+      misc: OUTFIT_ACTIVITIES[offset % OUTFIT_ACTIVITIES.length].id,
+    };
+  }
+  const clamped = Math.max(0, Math.min(index, EXPRESSION_SQUARES - 1));
+  return { tier: Math.floor(clamped / OUTFIT_FACES.length), face: clamped % OUTFIT_FACES.length, misc: "" };
+}
+
+/** The inverse: where a (tier, face | misc) square sits in the index space. */
+function squareIndex(tier: number, face: number, misc: string): number {
+  const miscIndex = misc ? OUTFIT_ACTIVITIES.findIndex((item) => item.id === misc) : -1;
+  if (miscIndex >= 0) return EXPRESSION_SQUARES + miscIndex + tier * OUTFIT_ACTIVITIES.length;
+  return face + tier * OUTFIT_FACES.length;
+}
 
 // A character being edited (or created — id undefined until saved).
 interface CharDraft {
@@ -290,6 +325,10 @@ export class OppaiImageGen extends LitElement {
    * review, the filing) is already generic on the slot name. See OUTFIT_ACTIVITIES.
    */
   @state() private outfitMisc = "";
+  /** Whether "Generate all" also renders the MISC block. Off by default: a complete
+      wardrobe is sixty squares, and tripling a batch nobody asked to triple is the sort
+      of thing that gets discovered four hours in. */
+  @state() private outfitMiscBatch = false;
   @state() private outfitTier = 0;
   @state() private outfitBackground: "black" | "white" = "white";
   @state() private outfitUnderwearColor = "black";
@@ -1494,6 +1533,32 @@ export class OppaiImageGen extends LitElement {
         letter-spacing: 0.2px;
         text-transform: none;
       }
+      /* The MISC block: a framed group of its own tiers under the sixty. Its rows
+         reuse the tier styling so a square reads the same wherever it sits; only the
+         frame says these are the optional ones. */
+      .sheet-block {
+        display: grid;
+        gap: 12px;
+        padding: 12px;
+        margin-top: 6px;
+        border: 1px dashed var(--oppai-border);
+        border-radius: 16px;
+      }
+      .sheet-block-head {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 8px;
+        color: var(--oppai-text);
+        font-size: 13px;
+        font-weight: 700;
+      }
+      .sheet-block-head .sheet-block-note {
+        flex-basis: 100%;
+        color: var(--oppai-text-muted);
+        font-size: 12px;
+        font-weight: 400;
+      }
       .sheet-grid {
         display: grid;
         grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
@@ -2219,7 +2284,7 @@ export class OppaiImageGen extends LitElement {
     "width", "height", "steps", "cfg", "cfgRescale", "clipSkip",
     "seamlessX", "seamlessY", "vaePrecision", "cpuNoise", "count", "seed", "board",
     "selectedLoras", "selectedTriggers", "selectedChars",
-    "outfitOn", "outfitText", "outfitGear", "outfitFace", "outfitMisc", "outfitTier", "outfitBackground",
+    "outfitOn", "outfitText", "outfitGear", "outfitFace", "outfitMisc", "outfitMiscBatch", "outfitTier", "outfitBackground",
     "outfitLockColors", "outfitLoadoutId", "outfitWardrobeId",
     "outfitUnderwearColor", "outfitPubicHair", "outfitPubicHairColor", "camera",
     "detailerEnabled", "detailerModel", "detailerPrompt", "detailerNegative",
@@ -2315,6 +2380,7 @@ export class OppaiImageGen extends LitElement {
       outfitGear: this.outfitGear,
       outfitFace: this.outfitFace,
       outfitMisc: this.outfitMisc,
+      outfitMiscBatch: this.outfitMiscBatch,
       outfitTier: this.outfitTier,
       outfitBackground: this.outfitBackground,
       outfitUnderwearColor: this.outfitUnderwearColor,
@@ -2386,6 +2452,7 @@ export class OppaiImageGen extends LitElement {
     if (d.outfitMisc !== undefined) {
       this.outfitMisc = OUTFIT_ACTIVITIES.some((item) => item.id === d.outfitMisc) ? d.outfitMisc : "";
     }
+    if (d.outfitMiscBatch !== undefined) this.outfitMiscBatch = d.outfitMiscBatch;
     if (d.outfitTier !== undefined) this.outfitTier = Math.max(0, Math.min(OUTFIT_TIERS.length - 1, Math.round(d.outfitTier)));
     if (d.outfitBackground !== undefined) this.outfitBackground = d.outfitBackground;
     if (d.outfitUnderwearColor !== undefined) this.outfitUnderwearColor = d.outfitUnderwearColor;
@@ -2693,6 +2760,15 @@ export class OppaiImageGen extends LitElement {
    * next heat tier. Generate, Next pose, generate — that loop is the helper.
    */
   private nextOutfitPose() {
+    if (this.outfitMisc) {
+      // Through the MISC states, then on to the next tier of them — the same loop the
+      // expressions take, on the block that is open.
+      const at = OUTFIT_ACTIVITIES.findIndex((item) => item.id === this.outfitMisc) + 1;
+      if (at < OUTFIT_ACTIVITIES.length) { this.outfitMisc = OUTFIT_ACTIVITIES[at].id; return; }
+      this.outfitMisc = OUTFIT_ACTIVITIES[0].id;
+      this.outfitTier = (this.outfitTier + 1) % OUTFIT_TIERS.length;
+      return;
+    }
     const face = this.outfitFace + 1;
     if (face < OUTFIT_FACES.length) { this.outfitFace = face; return; }
     this.outfitFace = 0;
@@ -2726,20 +2802,19 @@ export class OppaiImageGen extends LitElement {
   }
 
   // ── generate / save ─────────────────────────────────────────────────────────
-  private outfitSlot(tier = this.outfitTier, face = this.outfitFace) {
+  private outfitSlot(tier = this.outfitTier, face = this.outfitFace, miscId = this.outfitMisc) {
     const heat = OUTFIT_TIERS[tier];
-    // A MISC square is filed by its state name and is deliberately left out of the
-    // board's numbering: index is what orders the sixty-square grid, and a state has no
-    // place in it. The filename still differs by id, so its previews never collide with
-    // an expression's.
-    const misc = OUTFIT_ACTIVITIES.find((item) => item.id === this.outfitMisc);
+    // A MISC square is filed by its state name, which is also what keeps its filename
+    // and previews apart from an expression's. Its index lives in the block after the
+    // sixty expression squares — see squareAddress.
+    const misc = OUTFIT_ACTIVITIES.find((item) => item.id === miscId);
     const expression = misc ?? OUTFIT_FACES[face];
     const slot: DraftOutfitSlot = {
       emotion: expression.id,
       emotionLabel: expression.label,
       tier,
       tierLabel: heat.label,
-      index: misc ? -1 : face + tier * OUTFIT_FACES.length,
+      index: squareIndex(tier, face, misc ? misc.id : ""),
     };
     return {
       slot,
@@ -2753,11 +2828,10 @@ export class OppaiImageGen extends LitElement {
     const byName = new Map(this.shots.filter((shot) => shot.outfitFilename && this.shotMatchesCurrentOutfit(shot))
       .map((shot) => [shot.outfitFilename!, shot]));
     const ordered: Shot[] = [];
-    for (let tier = 0; tier < OUTFIT_TIERS.length; tier++) {
-      for (let face = 0; face < OUTFIT_FACES.length; face++) {
-        const shot = byName.get(this.outfitSlot(tier, face).filename);
-        if (shot) ordered.push(shot);
-      }
+    for (let index = 0; index < EXPRESSION_SQUARES + MISC_SQUARES; index++) {
+      const { tier, face, misc } = squareAddress(index);
+      const shot = byName.get(this.outfitSlot(tier, face, misc).filename);
+      if (shot) ordered.push(shot);
     }
     return ordered;
   }
@@ -2891,8 +2965,9 @@ export class OppaiImageGen extends LitElement {
     }
     const restored: Shot[] = squares.map((square) => {
       const face = OUTFIT_FACES.findIndex((f) => f.id === square.emotion);
+      const misc = OUTFIT_ACTIVITIES.some((item) => item.id === square.emotion) ? square.emotion : "";
       const tier = Math.max(0, Math.min(OUTFIT_TIERS.length - 1, square.level));
-      const slot = this.outfitSlot(tier, Math.max(0, face));
+      const slot = this.outfitSlot(tier, Math.max(0, face), misc);
       return {
         // No live preview stands behind a restored square; the id only has to be
         // stable and unique, and the picture is read from the wardrobe.
@@ -2930,8 +3005,10 @@ export class OppaiImageGen extends LitElement {
   }
 
   private selectOutfitSlot(index: number) {
-    this.outfitTier = Math.floor(index / OUTFIT_FACES.length);
-    this.outfitFace = index % OUTFIT_FACES.length;
+    const { tier, face, misc } = squareAddress(index);
+    this.outfitTier = tier;
+    this.outfitMisc = misc;
+    if (!misc) this.outfitFace = face;
   }
 
   /** Makes one request using a snapshot of the selected outfit square. */
@@ -3090,14 +3167,14 @@ export class OppaiImageGen extends LitElement {
     this.outfitBatchRunning = true;
     this.stopOutfitBatch = false;
     this.error = "";
-    const total = OUTFIT_FACES.length * OUTFIT_TIERS.length;
+    const total = EXPRESSION_SQUARES + (this.outfitMiscBatch ? MISC_SQUARES : 0);
     try {
       for (let index = 0; index < total; index++) {
         if (this.stopOutfitBatch) break;
         this.selectOutfitSlot(index);
-        const expected = this.outfitSlot().filename;
+        const { slot, filename: expected } = this.outfitSlot();
         if (this.shots.some((shot) => shot.outfitFilename === expected && this.shotMatchesCurrentOutfit(shot))) continue;
-        this.outfitProgress = `Generating ${index + 1} of ${total} · ${OUTFIT_TIERS[this.outfitTier].label} · ${OUTFIT_FACES[this.outfitFace].label}`;
+        this.outfitProgress = `Generating ${index + 1} of ${total} · ${slot.tierLabel} · ${slot.emotionLabel}`;
         await this.generateOne(true);
         this.persistDraft();
       }
@@ -3873,14 +3950,18 @@ export class OppaiImageGen extends LitElement {
     }
     const shots = this.currentOutfitShots();
     const reviewed = shots.filter((shot) => shot.cutoutReviewed).length;
-    const total = OUTFIT_FACES.length * OUTFIT_TIERS.length;
+    // The two blocks are counted apart: "48/60" is a wardrobe nearly done, and folding
+    // twenty optional MISC squares into the denominator would make every finished
+    // wardrobe read as a third complete.
+    const expressions = shots.filter((shot) => (shot.outfitSlot?.index ?? 0) < EXPRESSION_SQUARES).length;
+    const misc = shots.length - expressions;
     const wardrobe = this.wardrobes.find((o) => o.id === this.outfitWardrobeId);
     return html`<div class="canvas-toolbar">
       <span class="canvas-name">${wardrobe?.name ?? (this.outfitText.trim() || "New wardrobe")}</span>
       <span class="toolbar-spacer"></span>
-      <span class="toolbar-stat" title="Squares generated">
+      <span class="toolbar-stat" title="Expression squares generated, and Misc squares">
         <span class="material-symbols-rounded" style="font-size:14px;">grid_view</span>
-        ${shots.length}/${total} generated
+        ${expressions}/${EXPRESSION_SQUARES} generated${misc ? ` · ${misc} misc` : ""}
       </span>
       <span class="toolbar-stat" title="Squares whose cutout has been reviewed">
         <span class="material-symbols-rounded" style="font-size:14px;">check_circle</span>
@@ -4369,9 +4450,12 @@ export class OppaiImageGen extends LitElement {
   }
 
   private renderOutfitSection() {
-    const face = OUTFIT_FACES[this.outfitFace], tier = OUTFIT_TIERS[this.outfitTier];
-    const slot = this.outfitFace + 1 + this.outfitTier * OUTFIT_FACES.length;
-    const total = OUTFIT_FACES.length * OUTFIT_TIERS.length;
+    const { slot: aimed } = this.outfitSlot();
+    const face = { label: aimed.emotionLabel }, tier = OUTFIT_TIERS[this.outfitTier];
+    // Position within its own block: "Misc 7 of 120" rather than a number past sixty
+    // that means nothing to somebody looking at the board.
+    const slot = aimed.index < EXPRESSION_SQUARES ? aimed.index + 1 : aimed.index - EXPRESSION_SQUARES + 1;
+    const total = aimed.index < EXPRESSION_SQUARES ? EXPRESSION_SQUARES : MISC_SQUARES;
     const outfitShots = this.currentOutfitShots();
     const completed = new Map(outfitShots.map((shot) => [shot.outfitFilename, shot]));
     const reviewed = outfitShots.filter((shot) => shot.cutoutReviewed).length;
@@ -4472,10 +4556,15 @@ export class OppaiImageGen extends LitElement {
       </div>
       ${this.outfitMisc ? html`<div class="sec-note">
         This square is filed into the wardrobe's Misc slot rather than an expression, and
-        the pose brings its own face — the expression picker is off while it is set. Misc
-        states are extras: they are not part of the ${OUTFIT_FACES.length * OUTFIT_TIERS.length}-square
-        board, and the batch below still renders expressions only. Turn this off to go back to it.
+        the pose brings its own face — the expression picker is off while it is set.
+        Next pose steps through the Misc states. Turn this off to go back to the
+        expressions.
       </div>` : nothing}
+      <label class="switch">
+        <input type="checkbox" .checked=${this.outfitMiscBatch} ?disabled=${this.outfitBatchRunning}
+          @change=${(e: Event) => { this.outfitMiscBatch = (e.target as HTMLInputElement).checked; this.persistDraft(); }} />
+        Include Misc states when generating all (+${MISC_SQUARES} squares)
+      </label>
       <div>
         <label class="field">Heat tier</label>
         <select class="num" .value=${String(this.outfitTier)} ?disabled=${this.outfitBatchRunning}
@@ -4501,7 +4590,7 @@ export class OppaiImageGen extends LitElement {
         <button class="side-add" ?disabled=${this.generating || !this.outfitOn}
           @click=${() => void this.generateOutfitAndNext()}>
           <span class="material-symbols-rounded" style="font-size:17px;">${selectedReady ? "refresh" : "skip_next"}</span>
-          ${selectedReady ? "Redo selected emotion + move next" : "Generate selected + move next"}
+          ${selectedReady ? "Redo selected square + move next" : "Generate selected + move next"}
         </button>
         ${this.outfitBatchRunning
           ? html`<button class="side-add" @click=${() => this.cancelOutfitBatch()}>
@@ -5477,68 +5566,96 @@ export class OppaiImageGen extends LitElement {
     const selected = this.outfitSlot().filename;
     return html`
       <div class="outfit-sheet">
-        ${OUTFIT_TIERS.map((tier, tierIndex) => {
-          const cells = OUTFIT_FACES.map((face, faceIndex) => {
-            const state = this.outfitSlot(tierIndex, faceIndex);
-            return { face, faceIndex, state, shot: byName.get(state.filename) };
-          });
-          const made = cells.filter((cell) => cell.shot).length;
-          const done = cells.filter((cell) => cell.shot?.cutoutReviewed).length;
-          return html`<section class="sheet-tier">
-            <header class="sheet-tier-head">
-              <span class="material-symbols-rounded" style="font-size:15px;">local_fire_department</span>
-              ${tier.label}
-              <span class="tier-count">
-                ${made}/${OUTFIT_FACES.length} generated${made ? ` · ${done} reviewed` : ""}
-              </span>
-            </header>
-            <div class="sheet-grid">
-              ${cells.map(({ face, state, shot }) => {
-                const current = state.filename === selected;
-                return html`<div class="sheet-cell ${current ? "current" : ""}">
-                  <button
-                    class="sheet-hit"
-                    title=${shot
-                      ? `${tier.label} · ${face.label} — click to aim the generator here`
-                      : `Not generated yet — click to aim the generator at ${tier.label} · ${face.label}`}
-                    @click=${() => this.selectOutfitSlot(state.slot.index)}
-                  >
-                    ${shot
-                      ? html`<img class="art" src=${this.previewURL(shot)} alt=${face.label} loading="lazy" />`
-                      : html`<div class="art-empty">
-                          <span class="material-symbols-rounded" style="font-size:22px;">add_photo_alternate</span>
-                        </div>`}
-                    <div class="cell-label">
-                      <span>${face.label}</span>
-                      ${shot
-                        ? html`<span class="cell-state ${shot.cutoutReviewed ? "ready" : "needs"}"
-                            title=${shot.cutoutReviewed ? "Cutout reviewed" : "Needs a cutout review"}></span>`
-                        : nothing}
-                    </div>
-                  </button>
-                  ${shot ? html`<div class="sheet-actions">
-                    <button class="sheet-act" title="Expand" @click=${() => (this.expandedShot = shot)}>
-                      <span class="material-symbols-rounded" style="font-size:15px;">zoom_in</span>
-                    </button>
-                    <button class="sheet-act"
-                      title=${shot.cutoutReviewed ? "Adjust this cutout again" : "Review the automatic cutout"}
-                      @click=${() => void this.openCutout(
-                        this.previewURL(shot), `seed-${shot.seed}`, shot.outfitFilename, shot.id,
-                      )}>
-                      <span class="material-symbols-rounded" style="font-size:15px;">background_replace</span>
-                    </button>
-                    <button class="sheet-act danger" title="Delete this square"
-                      @click=${() => void this.deleteOutfitSquare(shot)}>
-                      <span class="material-symbols-rounded" style="font-size:15px;">delete</span>
-                    </button>
-                  </div>` : nothing}
-                </div>`;
-              })}
-            </div>
-          </section>`;
-        })}
+        ${OUTFIT_TIERS.map((tier, tierIndex) => this.renderSheetTier(tier, tierIndex, "", byName, selected))}
+        <section class="sheet-block">
+          <header class="sheet-block-head">
+            <span class="material-symbols-rounded" style="font-size:16px;">interests</span>
+            Misc states
+            <span class="sheet-block-note">
+              What she is doing rather than what she is feeling. Optional: a state with no
+              square falls back to her expression. Click any to aim the generator at it.
+            </span>
+          </header>
+          ${OUTFIT_TIERS.map((tier, tierIndex) => this.renderSheetTier(tier, tierIndex, "misc", byName, selected))}
+        </section>
       </div>
     `;
+  }
+
+  /**
+   * One heat tier of the sheet: the twelve expressions, or the MISC states.
+   *
+   * The same renderer for both blocks on purpose. A square is a square to everything
+   * below this — the hit target, the preview, the review and delete actions — and the
+   * only thing the two blocks differ in is which vocabulary names the cells.
+   */
+  private renderSheetTier(
+    tier: { label: string }, tierIndex: number, block: "" | "misc",
+    byName: Map<string | undefined, Shot>, selected: string,
+  ) {
+    const cells = block === "misc"
+      ? OUTFIT_ACTIVITIES.map((item) => {
+        const state = this.outfitSlot(tierIndex, 0, item.id);
+        return { label: item.label, state, shot: byName.get(state.filename) };
+      })
+      : OUTFIT_FACES.map((face, faceIndex) => {
+        const state = this.outfitSlot(tierIndex, faceIndex, "");
+        return { label: face.label, state, shot: byName.get(state.filename) };
+      });
+    const made = cells.filter((cell) => cell.shot).length;
+    const done = cells.filter((cell) => cell.shot?.cutoutReviewed).length;
+    return html`<section class="sheet-tier ${block}">
+      <header class="sheet-tier-head">
+        <span class="material-symbols-rounded" style="font-size:15px;">local_fire_department</span>
+        ${tier.label}
+        <span class="tier-count">
+          ${made}/${cells.length} generated${made ? ` · ${done} reviewed` : ""}
+        </span>
+      </header>
+      <div class="sheet-grid">
+        ${cells.map(({ label, state, shot }) => {
+          const current = state.filename === selected;
+          return html`<div class="sheet-cell ${current ? "current" : ""}">
+            <button
+              class="sheet-hit"
+              title=${shot
+                ? `${tier.label} · ${label} — click to aim the generator here`
+                : `Not generated yet — click to aim the generator at ${tier.label} · ${label}`}
+              @click=${() => this.selectOutfitSlot(state.slot.index)}
+            >
+              ${shot
+                ? html`<img class="art" src=${this.previewURL(shot)} alt=${label} loading="lazy" />`
+                : html`<div class="art-empty">
+                    <span class="material-symbols-rounded" style="font-size:22px;">add_photo_alternate</span>
+                  </div>`}
+              <div class="cell-label">
+                <span>${label}</span>
+                ${shot
+                  ? html`<span class="cell-state ${shot.cutoutReviewed ? "ready" : "needs"}"
+                      title=${shot.cutoutReviewed ? "Cutout reviewed" : "Needs a cutout review"}></span>`
+                  : nothing}
+              </div>
+            </button>
+            ${shot ? html`<div class="sheet-actions">
+              <button class="sheet-act" title="Expand" @click=${() => (this.expandedShot = shot)}>
+                <span class="material-symbols-rounded" style="font-size:15px;">zoom_in</span>
+              </button>
+              <button class="sheet-act"
+                title=${shot.cutoutReviewed ? "Adjust this cutout again" : "Review the automatic cutout"}
+                @click=${() => void this.openCutout(
+                  this.previewURL(shot), `seed-${shot.seed}`, shot.outfitFilename, shot.id,
+                )}>
+                <span class="material-symbols-rounded" style="font-size:15px;">background_replace</span>
+              </button>
+              <button class="sheet-act danger" title="Delete this square"
+                @click=${() => void this.deleteOutfitSquare(shot)}>
+                <span class="material-symbols-rounded" style="font-size:15px;">delete</span>
+              </button>
+            </div>` : nothing}
+          </div>`;
+        })}
+      </div>
+    </section>`;
   }
 
   /**

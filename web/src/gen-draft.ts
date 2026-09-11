@@ -110,6 +110,8 @@ export interface GenDraft {
       trusted, so a draft from a build with a state this one lacks does not come back
       as a square with no pose. */
   outfitMisc?: string;
+  /** Whether "Generate all" also renders the MISC block. */
+  outfitMiscBatch?: boolean;
   outfitTier?: number;
   outfitBackground?: "black" | "white";
   outfitUnderwearColor?: string;
@@ -210,7 +212,7 @@ export function loadDraft(): GenDraft | null {
     "outfitFace", "outfitTier", "detailerConfidence", "detailerDenoise",
     "detailerMaskBlur", "scrollTop"] as const).forEach(num);
   (["seamlessX", "seamlessY", "cpuNoise", "outfitOn", "outfitCutout", "outfitPubicHair",
-    "outfitLockColors", "detailerEnabled", "showOptions"] as const).forEach(bool);
+    "outfitLockColors", "outfitMiscBatch", "detailerEnabled", "showOptions"] as const).forEach(bool);
 
   if (d.vaePrecision === "fp16" || d.vaePrecision === "fp32") out.vaePrecision = d.vaePrecision;
   if (d.outfitBackground === "black" || d.outfitBackground === "white") {

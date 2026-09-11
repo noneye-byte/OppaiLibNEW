@@ -692,7 +692,7 @@ export class OppaiOutfitWardrobe extends LitElement {
         <div class="card-meta">
           ${o.emotions.length}/${LIBBY_EMOTION_SLOTS.length} emotions${slots > o.emotions.length
             ? html` · ${slots} images`
-            : nothing}
+            : nothing}${o.activitySlots ? html` · ${o.activitySlots} misc` : nothing}
           <!-- Unfinished squares are the reason a wardrobe with no sprites is not an
                empty wardrobe: they are hours of generation the studio is holding. -->
           ${o.wip ? html`<br />${o.wip} in progress` : nothing}

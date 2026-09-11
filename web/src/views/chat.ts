@@ -135,6 +135,27 @@ const newID = () => {
     .map((byte) => byte.toString(16).padStart(2, "0")).join("");
 };
 const timeOf = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+/** The date chip between runs of messages: today and yesterday by name, the rest by date. */
+function dayOf(ms: number): string {
+  const day = new Date(ms), today = new Date();
+  const startOf = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const gap = Math.round((startOf(today) - startOf(day)) / 86_400_000);
+  if (gap === 0) return "Today";
+  if (gap === 1) return "Yesterday";
+  if (gap < 7) return day.toLocaleDateString([], { weekday: "long" });
+  return day.toLocaleDateString([], { month: "short", day: "numeric", year: day.getFullYear() === today.getFullYear() ? undefined : "numeric" });
+}
+/** When a chat last moved, as a list shows it: a time today, a weekday this week, a date otherwise. */
+function listTimeOf(ms: number): string {
+  const label = dayOf(ms);
+  if (label === "Today") return timeOf(ms);
+  if (label === "Yesterday") return label;
+  return new Date(ms).toLocaleDateString([], { month: "short", day: "numeric" });
+}
+/** One line of what was last said, with the markup that formats a message stripped out. */
+function previewText(text: string): string {
+  return text.replace(/\*\*|~~|`|\*/g, "").replace(/\s+/g, " ").trim();
+}
 /**
  * No sampler settings by default — the server tunes them per turn.
  *
@@ -367,6 +388,10 @@ export class OppaiChat extends LitElement {
     return !!this.user?.isAdmin;
   }
   @state() private mobileNavOpen = false;
+  /** The chat list's search box. Filters by who, by title, and by what was last said. */
+  @state() private chatSearch = "";
+  /** The "new chat" screen is open in place of the list: who to start one with. */
+  @state() private pickerOpen = false;
   /** The AI is driving the conversation on its own. */
   @state() private autopilot = localStorage.getItem(AUTO_KEY) === "1";
   @state() private autoPaused = false;
@@ -413,77 +438,110 @@ export class OppaiChat extends LitElement {
   private approvals = new ActionApprovals(() => this.requestUpdate());
 
   static styles = [iconStyles, motionStyles, linkChipStyles, attachmentStyles, actionCardStyles, libbyMotion, css`
-    :host { display:block; height:100%; color:var(--md-sys-color-on-surface); font:400 15px/1.375 "gg sans","Noto Sans",Roboto,system-ui,sans-serif;
-      --rail:var(--md-sys-color-surface-container-lowest); --side:var(--md-sys-color-surface-container-low);
-      --main:var(--md-sys-color-surface); --hover:var(--md-sys-color-surface-container-high);
-      --input:var(--md-sys-color-surface-container-highest); --muted:var(--md-sys-color-on-surface-variant);
-      --line:var(--md-sys-color-outline-variant); --accent:var(--md-sys-color-primary); --on-accent:var(--md-sys-color-on-primary); }
+    :host { display:block; height:100%; color:var(--md-sys-color-on-surface);
+      font:400 15px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans",system-ui,sans-serif;
+      --side:var(--md-sys-color-surface-container-low); --main:var(--md-sys-color-surface);
+      --hover:var(--md-sys-color-surface-container-high); --input:var(--md-sys-color-surface-container-highest);
+      --bubble:var(--md-sys-color-surface-container-high); --muted:var(--md-sys-color-on-surface-variant);
+      --line:var(--md-sys-color-outline-variant); --accent:var(--md-sys-color-primary); --on-accent:var(--md-sys-color-on-primary);
+      --side-w:340px; --bar:60px; }
     button,input,textarea,select { font:inherit; }
     button { color:inherit; }
-    /* Full-bleed: no border, radius, or shadow. The chat fills its pane and reads
-       as the application itself rather than a framed client embedded in one. */
-    .client { position:relative; display:grid; grid-template-columns:64px 272px minmax(0,1fr); height:100%; min-height:0;
+    /* Two panes, the way every messenger is laid out: the list of chats and the open
+       chat. The portrait is a third pane that exists only when there is art to show. */
+    .client { position:relative; display:grid; grid-template-columns:var(--side-w) minmax(0,1fr); height:100%; min-height:0;
       overflow:hidden; background:var(--main); }
-    /* The portrait column only exists when there is art to show, so the log keeps
-       the full width for a character with no picture. */
-    .client.with-stage { grid-template-columns:64px 272px minmax(0,1fr) 268px; }
-    .rail { background:var(--rail); padding:12px 0; display:flex; flex-direction:column; align-items:center; gap:8px; overflow-y:auto; }
-    .guild { position:relative; width:44px; height:44px; flex:0 0 44px; border:0; border-radius:50%; background:var(--input); display:grid;
-      place-items:center; overflow:hidden; cursor:pointer; transition:.15s; }
-    .guild:hover,.guild.on { border-radius:14px; background:var(--accent); }
-    .guild.on::before { content:""; position:absolute; left:0; width:4px; height:30px; border-radius:0 4px 4px 0; background:var(--md-sys-color-on-surface); }
-    /* Every avatar frame, not just some. .top-avatar and .me-avatar were missing
-       here, so their images rendered at natural size and showed a clipped crop
-       instead of filling the circle. Portraits are anchored to the top so a tall
-       character image keeps the face rather than centring on the torso. */
-    .guild img,.avatar img,.member-avatar img,.top-avatar img,.me-avatar img,.call-avatar img {
+    .client.with-stage { grid-template-columns:var(--side-w) minmax(0,1fr) 268px; }
+    .avatar img,.chat-avatar img,.top-avatar img,.me-avatar img,.intro-avatar img,.pick-avatar img {
       width:100%; height:100%; object-fit:cover; object-position:top center; display:block; }
-    .initial { font-weight:700; color:var(--on-accent); background:var(--accent); }
-    .rail-sep { width:32px; height:2px; background:var(--line); }
-    .side { min-width:0; display:flex; flex-direction:column; background:var(--side); }
-    .side-head,.top { min-height:56px; flex:0 0 56px; display:flex; align-items:center; border-bottom:1px solid var(--line); }
-    .side-head { padding:0 12px 0 16px; gap:8px; }
-    .side-title { min-width:0; flex:1; }.side-title strong,.side-title span { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .side-title span { color:var(--muted); font-size:11px; margin-top:1px; }
-    .side-head button,.icon-btn { border:0; background:transparent; border-radius:5px; padding:5px; display:grid; place-items:center; cursor:pointer; color:var(--muted); }
-    .side-head button:hover,.icon-btn:hover,.icon-btn.on { background:var(--hover); color:var(--md-sys-color-on-surface); }
-    .cat { padding:17px 12px 7px 16px; color:var(--muted); font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; display:flex; }
-    .cat button { margin-left:auto; border:0; background:transparent; cursor:pointer; color:var(--muted); }
-    .convos { overflow-y:auto; min-height:0; }
-    .convo-wrap { display:flex; align-items:center; margin:2px 8px; border-radius:9px; color:var(--muted); }
-    .convo-wrap:hover,.convo-wrap.on { color:var(--md-sys-color-on-surface); background:var(--hover); }
-    .convo { min-width:0; flex:1; padding:9px 8px; border:0; background:transparent; color:inherit; display:grid; grid-template-columns:22px minmax(0,1fr);
-      gap:1px 7px; cursor:pointer; text-align:left; }
-    .convo-icon { grid-row:1/3; align-self:center; }.convo-title { font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-    .convo-meta { color:var(--muted); font-size:10px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-    .convo-delete { opacity:0; margin-right:4px; border:0; border-radius:6px; padding:5px; background:transparent; color:var(--muted); cursor:pointer; }
-    .convo-wrap:hover .convo-delete,.convo-wrap:focus-within .convo-delete { opacity:1; }.convo-delete:hover { color:var(--md-sys-color-error); background:var(--main); }
-    .side-foot { margin-top:auto; background:var(--rail); padding:8px; display:flex; align-items:center; gap:8px; }
-    .me-avatar { width:32px; height:32px; flex:0 0 32px; border-radius:50%; overflow:hidden; display:grid; place-items:center; }
-    .me-copy { min-width:0; flex:1; } .me-name { font-size:13px; font-weight:650; overflow:hidden; text-overflow:ellipsis; }
-    .me-sub { font-size:11px; color:var(--muted); display:flex; align-items:center; gap:5px; }.status-dot { width:7px; height:7px; border-radius:50%; background:#8a8f98; }.status-dot.online { background:#35c46a; }
+    .initial { font-weight:700; color:var(--on-accent); background:var(--accent); display:grid; place-items:center; }
+    .icon-btn { border:0; background:transparent; border-radius:50%; width:38px; height:38px; display:grid; place-items:center;
+      cursor:pointer; color:var(--muted); transition:background .12s ease,color .12s ease; }
+    .icon-btn:hover,.icon-btn.on { background:var(--hover); color:var(--md-sys-color-on-surface); }
+    .icon-btn.on { color:var(--accent); }
+    .icon-btn:disabled { opacity:.4; cursor:default; }
+
+    /* ── the chat list ───────────────────────────────────────────────────── */
+    .side { min-width:0; display:flex; flex-direction:column; background:var(--side); border-right:1px solid var(--line); }
+    .side-head { min-height:var(--bar); flex:0 0 var(--bar); display:flex; align-items:center; gap:4px; padding:0 8px 0 18px; }
+    .side-head h1 { flex:1; min-width:0; margin:0; font-size:22px; font-weight:750; letter-spacing:-.01em; }
+    .me-avatar { width:34px; height:34px; flex:0 0 34px; border-radius:50%; overflow:hidden; display:grid; place-items:center; font-size:12px; }
+    .me-btn { border:0; background:transparent; padding:2px; border-radius:50%; cursor:pointer; }
+    .search { margin:2px 12px 10px; display:flex; align-items:center; gap:8px; padding:7px 12px; border-radius:999px; background:var(--input); color:var(--muted); }
+    .search input { flex:1; min-width:0; border:0; outline:0; background:transparent; color:var(--md-sys-color-on-surface); }
+    .search input::placeholder { color:var(--muted); }
+    .chats { flex:1; min-height:0; overflow-y:auto; padding:0 8px 10px; }
+    .chat-wrap { position:relative; }
+    .chat-row { width:100%; display:grid; grid-template-columns:52px minmax(0,1fr) auto; grid-template-rows:auto auto; gap:1px 12px; align-items:center;
+      padding:9px 10px; border:0; border-radius:14px; background:transparent; color:inherit; text-align:left; cursor:pointer;
+      transition:background .12s ease; }
+    .chat-row:hover { background:var(--hover); }
+    .chat-wrap.on .chat-row { background:color-mix(in srgb,var(--accent) 14%,transparent); }
+    .chat-avatar { grid-row:1/3; width:52px; height:52px; border-radius:50%; overflow:hidden; display:grid; place-items:center; background:var(--input); font-size:16px; }
+    .chat-name { font-weight:650; font-size:15px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .chat-name small { font-weight:500; color:var(--muted); }
+    .chat-time { grid-column:3; font-size:11px; color:var(--muted); white-space:nowrap; align-self:start; padding-top:3px; }
+    .chat-preview { grid-column:2/4; font-size:13px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .chat-preview .material-symbols-rounded { font-size:14px; vertical-align:-2px; margin-right:3px; }
+    .chat-delete { position:absolute; right:10px; bottom:8px; opacity:0; border:0; border-radius:50%; width:28px; height:28px; display:grid;
+      place-items:center; background:var(--main); color:var(--muted); cursor:pointer; box-shadow:0 1px 4px rgba(0,0,0,.25); }
+    .chat-wrap:hover .chat-delete,.chat-wrap:focus-within .chat-delete { opacity:1; }
+    .chat-delete:hover { color:var(--md-sys-color-error); }
+    .chats-empty { padding:32px 18px; color:var(--muted); font-size:13px; text-align:center; }
+    /* Starting a chat: who with. Replaces the list rather than floating over it, so
+       it works identically as a phone screen and as a desktop pane. */
+    .picker { flex:1; min-height:0; overflow-y:auto; padding:0 8px 10px; display:flex; flex-direction:column; gap:2px; }
+    .pick { width:100%; display:grid; grid-template-columns:44px minmax(0,1fr); gap:0 12px; align-items:center; padding:8px 10px;
+      border:0; border-radius:12px; background:transparent; color:inherit; text-align:left; cursor:pointer; }
+    .pick:hover { background:var(--hover); }
+    .pick-avatar { grid-row:1/3; width:44px; height:44px; border-radius:50%; overflow:hidden; display:grid; place-items:center; background:var(--input); font-size:14px; }
+    .pick-name { font-weight:650; }
+    .pick-sub { font-size:12px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .pick.add .pick-avatar { background:color-mix(in srgb,var(--accent) 18%,transparent); color:var(--accent); }
+    .pick-cat { padding:14px 12px 6px; color:var(--muted); font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; }
+
+    /* ── the open chat ───────────────────────────────────────────────────── */
     .main { display:flex; min-width:0; min-height:0; flex-direction:column; background:var(--main); position:relative; }
-    .top { padding:0 10px 0 14px; gap:10px; }.mobile-nav { display:none!important; }
-    .top-avatar { width:34px; height:34px; flex:0 0 34px; border-radius:50%; overflow:hidden; display:grid; place-items:center; }
-    .top-title { min-width:0; }.top .name { display:block; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }.topic { display:block; color:var(--muted); font-size:11px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-    .quick-mode { width:auto; max-width:124px; margin-left:auto; border-radius:999px; padding:6px 28px 6px 10px; font-size:12px; font-weight:650; background-color:var(--input); }
-    .top-actions { display:flex; }
-    .log { min-height:0; flex:1 1 0; overflow-y:auto; overflow-anchor:auto; padding:12px 0 20px; scroll-behavior:smooth; }
-    .intro { margin:8px 16px 16px; padding:18px; border:1px solid var(--line); border-radius:14px; background:linear-gradient(135deg,var(--side),transparent); display:grid; grid-template-columns:56px minmax(0,1fr); gap:0 13px; align-items:center; }
-    .intro .round { grid-row:1/3; width:56px; height:56px; border-radius:50%; background:var(--input); display:grid; place-items:center; overflow:hidden; }
-    .intro .round img { width:100%; height:100%; object-fit:cover; }.intro h2 { font-size:20px; margin:0 0 3px; }.intro p { color:var(--muted); margin:0; font-size:13px; }
-    .row { display:grid; grid-template-columns:56px minmax(0,1fr); padding:2px 44px 2px 0; position:relative; }
-    .row.first { margin-top:15px; }.row:hover { background:color-mix(in srgb,var(--md-sys-color-on-surface) 5%,transparent); }
-    .avatar { grid-column:1; justify-self:center; width:40px; height:40px; border-radius:50%; overflow:hidden; display:grid; place-items:center; margin-top:2px; }
-    .stamp { grid-column:1; justify-self:end; opacity:0; color:var(--muted); font-size:10px; padding-right:4px; line-height:22px; }.row:hover .stamp { opacity:1; }
-    .message { grid-column:2; min-width:0; }.who { display:flex; align-items:baseline; gap:7px; }.author { font-weight:550; }.author.friend { color:var(--accent); }
-    .when { color:var(--muted); font-size:11px; }
+    .top { min-height:var(--bar); flex:0 0 var(--bar); display:flex; align-items:center; gap:12px; padding:0 10px 0 16px; border-bottom:1px solid var(--line); }
+    .mobile-nav { display:none!important; }
+    .top-avatar { width:40px; height:40px; flex:0 0 40px; border-radius:50%; overflow:hidden; display:grid; place-items:center; background:var(--input); font-size:13px; }
+    .top-title { min-width:0; flex:1; display:grid; gap:1px; }
+    .top .name { font-weight:700; font-size:16px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .presence { display:flex; align-items:center; gap:6px; color:var(--muted); font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .status-dot { width:8px; height:8px; flex:0 0 8px; border-radius:50%; background:#8a8f98; }
+    .status-dot.online { background:#35c46a; }
+    .quick-mode { width:auto; max-width:124px; border-radius:999px; padding:6px 28px 6px 10px; font-size:12px; font-weight:650; background-color:var(--input); }
+    .top-actions { display:flex; gap:2px; }
+
+    .log { min-height:0; flex:1 1 0; overflow-y:auto; overflow-anchor:auto; padding:14px 18px 10px; display:flex; flex-direction:column; scroll-behavior:smooth; }
+    .log > :first-child { margin-top:auto; } /* a short chat sits at the bottom, like a phone */
+    .day { align-self:center; margin:12px 0 6px; padding:3px 11px; border-radius:999px; background:var(--input); color:var(--muted);
+      font-size:11px; font-weight:650; }
+    .intro { align-self:center; margin:auto 0 28px; padding:12px; display:grid; justify-items:center; gap:6px; max-width:460px; text-align:center; }
+    .intro-avatar { width:92px; height:92px; border-radius:50%; overflow:hidden; display:grid; place-items:center; background:var(--input); font-size:28px; margin-bottom:6px; }
+    .intro h2 { margin:0; font-size:20px; font-weight:750; }
+    .intro p { margin:0; color:var(--muted); font-size:13px; line-height:1.5; }
+
+    /* A message is a bubble. Theirs sit left with their avatar closing the run; yours
+       sit right in the accent, with no avatar — you know who you are. Radii tighten on
+       the side where a run continues, so a run reads as one voice speaking. */
+    .msg { position:relative; display:grid; grid-template-columns:34px minmax(0,min(76%,680px)); gap:0 8px; align-items:end; margin-top:2px; }
+    .msg.mine { grid-template-columns:minmax(0,min(76%,680px)); justify-content:end; }
+    .msg.first { margin-top:10px; }
+    .msg .avatar { width:34px; height:34px; border-radius:50%; overflow:hidden; display:grid; place-items:center; visibility:hidden; background:var(--input); font-size:11px; }
+    .msg.last .avatar { visibility:visible; }
+    .bubble-wrap { position:relative; min-width:0; display:grid; justify-items:start; }
+    .msg.mine .bubble-wrap { justify-items:end; }
+    .bubble { position:relative; min-width:0; max-width:100%; padding:8px 13px 6px; border-radius:18px; background:var(--bubble); }
+    .msg.mine .bubble { background:var(--accent); color:var(--on-accent); }
+    .msg.theirs:not(.last) .bubble { border-bottom-left-radius:6px; }
+    .msg.theirs:not(.first) .bubble { border-top-left-radius:6px; }
+    .msg.mine:not(.last) .bubble { border-bottom-right-radius:6px; }
+    .msg.mine:not(.first) .bubble { border-top-right-radius:6px; }
+    .text { white-space:pre-wrap; overflow-wrap:anywhere; }
     /* Roleplay prose is read by scanning for its parts — who spoke, what they did,
-       what was stressed. The old palette blended actions 72% into the body colour
-       and left speech identical to it, so those parts only separated by weight.
-       Each role now carries its own hue at full strength: speech is the accent,
-       action is the tertiary italic, emphasis is secondary, and code keeps a chip. */
-    .text { white-space:pre-wrap; overflow-wrap:anywhere; color:var(--md-sys-color-on-surface); }
+       what was stressed — so each keeps a hue of its own in their bubbles. In yours
+       the bubble is already the accent, so the parts separate by weight instead. */
     .text .speech { color:var(--accent); font-weight:500; }
     .text .action { font-style:italic; font-weight:700;
       color:var(--md-sys-color-tertiary,color-mix(in srgb,var(--accent) 45%,var(--md-sys-color-on-surface))); }
@@ -491,10 +549,65 @@ export class OppaiChat extends LitElement {
     .text code { background:var(--input); color:var(--md-sys-color-tertiary,var(--accent));
       padding:1px 4px; border-radius:3px; font-family:ui-monospace,"Cascadia Code",Consolas,monospace; font-size:.92em; }
     .text s { opacity:.55; }
+    .msg.mine .text .speech,.msg.mine .text .action,.msg.mine .text em { color:inherit; }
+    .msg.mine .text .speech { font-weight:600; }
+    .msg.mine .text em { opacity:.85; }
+    .msg.mine .text code { background:rgba(0,0,0,.18); color:inherit; }
+    .meta { display:flex; justify-content:flex-end; align-items:center; gap:5px; margin-top:2px; font-size:10px; opacity:.6; line-height:1; }
+    .sent-image { display:block; max-width:min(420px,100%); max-height:420px; border-radius:12px; margin-top:6px; object-fit:contain; background:var(--input); }
+    /* Hover actions sit just above the bubble, on the side away from the edge. */
+    .msg-actions { opacity:0; position:absolute; top:-14px; right:6px; z-index:1; display:flex; border:1px solid var(--line); border-radius:8px;
+      overflow:hidden; background:var(--main); box-shadow:0 2px 8px rgba(0,0,0,.18); transition:opacity .12s ease; }
+    .msg.mine .msg-actions { right:auto; left:6px; }
+    .msg:hover .msg-actions,.msg:focus-within .msg-actions { opacity:1; }
+    .msg-actions button { border:0; background:transparent; padding:5px; cursor:pointer; color:var(--muted); display:grid; }
+    .msg-actions button:hover { color:inherit; background:var(--hover); }
+    /* Something she thought, or muttered to herself. It has to be impossible to read
+       as a message to you, so it shares none of a message's furniture: no bubble, no
+       avatar, and it sits in the middle the way a system line does. An overheard
+       mutter is drawn warmer than a private thought, since one of them reached you. */
+    .thought { align-self:center; max-width:min(72%,560px); margin:8px 0 2px; text-align:center; font-size:13px; font-style:italic;
+      color:color-mix(in srgb,var(--md-sys-color-on-surface) 68%,transparent);
+      animation:chat-rise .3s var(--oppai-ease-standard,cubic-bezier(.2,0,0,1)) both; }
+    .thought-label { display:flex; justify-content:center; align-items:center; gap:5px; font-style:normal; font-size:11px; color:var(--muted); margin-bottom:2px; }
+    .thought-label .material-symbols-rounded { font-size:15px; }
+    .thought.aloud { font-style:normal; color:color-mix(in srgb,var(--md-sys-color-on-surface) 84%,transparent); }
+    .thought.aloud .thought-label .material-symbols-rounded { color:var(--md-sys-color-tertiary,var(--accent)); }
+    .typing-row .bubble { padding:11px 14px; }
+    .dots { display:inline-flex; gap:4px; }
+    .dots i { width:7px; height:7px; border-radius:50%; background:var(--muted); animation:chat-bounce 1.1s infinite ease-in-out; }
+    .dots i:nth-child(2) { animation-delay:.16s; } .dots i:nth-child(3) { animation-delay:.32s; }
+    @keyframes chat-bounce { 0%,60%,100% { transform:translateY(0); opacity:.55; } 30% { transform:translateY(-4px); opacity:1; } }
+    @keyframes chat-rise { from { opacity:0; transform:translateY(8px); } }
+    @keyframes chat-fade { from { opacity:0; } }
+    @keyframes chat-sprite-in { from { opacity:0; transform:translateY(10px) scale(.985); } }
+    /* Only the run-opening row animates. Lit reuses a row's DOM across renders, so
+       this fires when a message is appended and not on every state change. */
+    .msg.first,.typing-row { animation:chat-rise .26s var(--oppai-ease-standard,cubic-bezier(.2,0,0,1)) both; }
+    .sent-image { animation:chat-fade .35s ease both; }
+    .intro { animation:chat-rise .34s var(--oppai-ease-standard,cubic-bezier(.2,0,0,1)) both; }
+
+    /* ── composer ────────────────────────────────────────────────────────── */
+    form.composer-form { padding:8px 14px 12px; border-top:1px solid var(--line); background:var(--main); }
+    .composer { display:flex; align-items:flex-end; gap:8px; }
+    .box { flex:1; min-width:0; display:flex; align-items:flex-end; gap:4px; background:var(--input); border:1px solid transparent; border-radius:22px; padding:6px 6px 6px 8px; }
+    .box:focus-within { border-color:color-mix(in srgb,var(--accent) 55%,transparent); }
+    .composer textarea { resize:none; border:0; outline:0; background:transparent; color:inherit; max-height:160px; min-height:24px; line-height:24px; flex:1; padding:6px 6px; }
+    .attach-btn { position:relative; width:36px; height:36px; flex:0 0 36px; display:grid; place-items:center; border-radius:50%; color:var(--muted); cursor:pointer; }
+    .attach-btn:hover { color:var(--md-sys-color-on-surface); background:var(--hover); }
+    .attach-btn.off { opacity:.4; pointer-events:none; }
+    .attach-btn input { position:absolute; inset:0; opacity:0; cursor:pointer; }
+    .attach-btn.off input { cursor:default; }
+    .send { width:42px; height:42px; flex:0 0 42px; border:0; border-radius:50%; background:var(--accent); color:var(--on-accent); display:grid; place-items:center; cursor:pointer;
+      transition:transform .12s var(--oppai-ease-spring,cubic-bezier(.34,1.4,.64,1)),opacity .12s ease; }
+    .send:disabled { opacity:.35; cursor:default; }
+    .send:not(:disabled):active { transform:scale(.9); }
+    .format-help { color:var(--muted); font-size:10px; padding:5px 6px 0; display:flex; justify-content:space-between; }
+    .send-help::after { content:"Enter to send · Shift+Enter for a new line"; }
     /* Attached photo, held in the composer until the message is sent. */
-    .attachment { display:flex; align-items:center; gap:10px; margin:0 16px 8px; padding:8px; border:1px solid var(--line);
-      border-radius:10px; background:var(--input); }
-    .attachment img { width:44px; height:44px; flex:0 0 44px; border-radius:7px; object-fit:cover; }
+    .attachment { display:flex; align-items:center; gap:10px; margin:0 0 8px; padding:8px; border:1px solid var(--line);
+      border-radius:14px; background:var(--input); }
+    .attachment img { width:44px; height:44px; flex:0 0 44px; border-radius:9px; object-fit:cover; }
     .attachment-copy { min-width:0; flex:1; display:grid; }
     .attachment-copy strong { font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .attachment-copy span { color:var(--muted); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -503,51 +616,6 @@ export class OppaiChat extends LitElement {
        the link goes is visible rather than hidden behind whatever it called itself. */
     .link-preview .link-icon { width:44px; flex:0 0 44px; text-align:center; color:var(--muted); }
     .link-preview .link-host { color:var(--muted); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .attach-btn { position:relative; display:grid; place-items:center; padding:0 4px; color:var(--muted); cursor:pointer; }
-    .attach-btn:hover { color:var(--md-sys-color-on-surface); }
-    .attach-btn.off { opacity:.4; pointer-events:none; }
-    .attach-btn input { position:absolute; inset:0; opacity:0; cursor:pointer; }
-    .attach-btn.off input { cursor:default; }
-    .sent-image { display:block; max-width:min(460px,100%); max-height:420px; border-radius:8px; margin-top:7px; object-fit:contain; background:var(--input); }
-    /* Something she thought, or muttered to herself. It has to be impossible to read
-       as a message to you, so it shares none of a message's furniture: no avatar, no
-       author line, no hover actions, and a hairline down the left instead of a bubble.
-       An overheard mutter is drawn warmer than a private thought, since one of them
-       reached you and the other did not. */
-    .row.thought { grid-template-columns:56px minmax(0,1fr); padding:6px 44px 6px 0; margin-top:9px; align-items:start; }
-    .row.thought:hover { background:none; }
-    .thought-mark { grid-column:1; justify-self:center; font-size:18px; margin-top:3px; color:var(--muted); opacity:.7; }
-    .row.thought.aloud .thought-mark { color:var(--md-sys-color-tertiary,var(--accent)); opacity:.85; }
-    .thought-body { grid-column:2; min-width:0; border-left:2px dashed color-mix(in srgb,var(--muted) 45%,transparent); padding-left:11px; }
-    .row.thought.aloud .thought-body { border-left-style:solid;
-      border-left-color:color-mix(in srgb,var(--md-sys-color-tertiary,var(--accent)) 45%,transparent); }
-    .thought-label { display:block; color:var(--muted); font-size:11px; letter-spacing:.02em; margin-bottom:2px; }
-    .thought-text { white-space:pre-wrap; overflow-wrap:anywhere; font-style:italic;
-      color:color-mix(in srgb,var(--md-sys-color-on-surface) 72%,transparent); }
-    .row.thought.aloud .thought-text { font-style:normal;
-      color:color-mix(in srgb,var(--md-sys-color-on-surface) 85%,transparent); }
-    .row.thought { animation:chat-rise .3s var(--oppai-ease-standard,cubic-bezier(.2,0,0,1)) both; }
-    .message-actions { opacity:0; position:absolute; right:8px; top:-8px; display:flex; border:1px solid var(--line); border-radius:5px; overflow:hidden; background:var(--side); }
-    .row:hover .message-actions { opacity:1; }.message-actions button { border:0; background:transparent; padding:4px; cursor:pointer; color:var(--muted); }.message-actions button:hover { color:inherit; background:var(--hover); }
-    .typing { padding:6px 16px 0 56px; color:var(--muted); font-size:13px; display:flex; align-items:center; gap:8px;
-      animation:chat-rise .22s var(--oppai-ease-standard,cubic-bezier(.2,0,0,1)) both; }
-    .typing b { color:var(--md-sys-color-on-surface); }
-    .dots { display:inline-flex; gap:3px; }
-    .dots i { width:5px; height:5px; border-radius:50%; background:var(--muted); animation:chat-bounce 1.1s infinite ease-in-out; }
-    .dots i:nth-child(2) { animation-delay:.16s; } .dots i:nth-child(3) { animation-delay:.32s; }
-    @keyframes chat-bounce { 0%,60%,100% { transform:translateY(0); opacity:.55; } 30% { transform:translateY(-4px); opacity:1; } }
-    @keyframes chat-rise { from { opacity:0; transform:translateY(8px); } }
-    @keyframes chat-fade { from { opacity:0; } }
-    @keyframes chat-sprite-in { from { opacity:0; transform:translateY(10px) scale(.985); } }
-    /* Only the run-opening row animates. Lit reuses a row's DOM across renders, so
-       this fires when a message is appended and not on every state change. */
-    .row.first { animation:chat-rise .3s var(--oppai-ease-standard,cubic-bezier(.2,0,0,1)) both; }
-    .row .message-actions,.row .stamp { transition:opacity .12s ease; }
-    .row:hover { transition:background .12s ease; }
-    .sent-image { animation:chat-fade .35s ease both; }
-    .intro { animation:chat-rise .34s var(--oppai-ease-standard,cubic-bezier(.2,0,0,1)) both; }
-    .composer button[type=submit]:not(:disabled):active { transform:scale(.9); }
-    .composer button[type=submit] { transition:transform .12s var(--oppai-ease-spring,cubic-bezier(.34,1.4,.64,1)); }
 
     /* ── autopilot ───────────────────────────────────────────────────────── */
     .autobar { display:flex; align-items:center; gap:9px; padding:8px 16px; font-size:12px;
@@ -585,8 +653,8 @@ export class OppaiChat extends LitElement {
     .stage-meter { display:flex; gap:4px; justify-content:center; padding:8px 0 12px; }
     .stage-meter .pip { width:20px; height:4px; border-radius:2px; background:var(--input); transition:background .28s ease; }
     .stage-meter .pip.on { background:var(--accent); }
-    @media(max-width:1200px){ .client.with-stage { grid-template-columns:64px 272px minmax(0,1fr); } .stage,.stage-toggle { display:none; } }
-    .notice { margin:4px 16px 8px; padding:9px 12px; border-left:3px solid var(--accent); background:var(--side); border-radius:7px; font-size:13px; }
+    @media(max-width:1200px){ .client.with-stage { grid-template-columns:var(--side-w) minmax(0,1fr); } .stage,.stage-toggle { display:none; } }
+    .notice { margin:0 16px 8px; padding:9px 12px; border-left:3px solid var(--accent); background:var(--side); border-radius:9px; font-size:13px; }
     .notice.error { border-color:var(--md-sys-color-error); color:var(--md-sys-color-error); }
     .backend-state { padding:9px 16px; border-bottom:1px solid var(--line); background:var(--side); color:var(--muted); font-size:12px; }
     .backend-state strong { color:var(--md-sys-color-error); }
@@ -597,16 +665,9 @@ export class OppaiChat extends LitElement {
     .load-failed h2 { margin:0; font-size:18px; }
     .load-failed p { margin:0; color:var(--muted); overflow-wrap:anywhere; }
     .load-failed .hint { font-size:12px; }
-    form.composer-form { padding:0 16px 14px; }.composer { display:flex; align-items:flex-end; gap:9px; background:var(--input); border:1px solid transparent; border-radius:14px; padding:10px 12px; }
-    .composer:focus-within { border-color:var(--accent); box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 18%,transparent); }
-    .composer textarea { resize:none; border:0; outline:0; background:transparent; color:inherit; max-height:140px; min-height:22px; line-height:22px; flex:1; padding:0; }
-    .composer button { align-self:flex-end; }.format-help { color:var(--muted); font-size:10px; padding:5px 4px 0; display:flex; justify-content:space-between; }.send-help::after { content:"Enter to send · Shift+Enter for a new line"; }
-    .members { min-width:0; background:var(--side); padding:12px 8px; overflow-y:auto; }.member { display:flex; align-items:center; gap:9px; padding:6px 8px; border-radius:5px; }
-    .member:hover { background:var(--hover); }.member-avatar { width:34px; height:34px; border-radius:50%; overflow:hidden; display:grid; place-items:center; }
-    .member-name { font-size:13px; font-weight:650; color:var(--accent); }.member-status { font-size:11px; color:var(--muted); }
     /* Settings read as their own room, the way Discord's do: a category rail on the
        left, one panel on the right, and no tab strip competing with the header. */
-    .settings { position:absolute; inset:56px 0 0 0; z-index:5; display:grid; grid-template-columns:212px minmax(0,1fr);
+    .settings { position:absolute; inset:var(--bar) 0 0 0; z-index:5; display:grid; grid-template-columns:212px minmax(0,1fr);
       overflow:hidden; background:var(--main); box-shadow:0 10px 28px rgba(0,0,0,.28);
       animation:chat-fade .16s ease both; }
     .settings-nav { display:flex; flex-direction:column; gap:2px; padding:14px 8px; overflow-y:auto; background:var(--side); }
@@ -694,7 +755,7 @@ export class OppaiChat extends LitElement {
     .image-card .remove:hover { background:var(--md-sys-color-error); }
     .image-card .card-body button { border:1px solid var(--line); border-radius:5px; padding:4px 8px; background:transparent; cursor:pointer; }
     .badge { background:var(--accent); color:var(--on-accent); border-radius:3px; padding:1px 5px; font-size:10px; font-weight:700; }
-    .empty { color:var(--muted); font-size:13px; }.nav-scrim { display:none; }
+    .empty { color:var(--muted); font-size:13px; }
     /* Model deletion. Deliberately shows facts rather than asking "are you sure": a
        model is gigabytes over someone's connection, and that is not a question anyone
        can answer without the path, the size and the file list. */
@@ -714,16 +775,20 @@ export class OppaiChat extends LitElement {
     .inline-check input { margin-top:2px; flex-shrink:0; }
     .empty.error { color:var(--md-sys-color-error); }
     .model-row { display:flex; align-items:center; gap:9px; }.model-row strong { min-width:0; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; text-transform:none; }
-    @media(max-width:900px){.client{grid-template-columns:60px 236px minmax(0,1fr)}.side-head{padding-left:12px}}
+    @media(max-width:1000px){ :host { --side-w:300px; } }
     @media(max-width:700px){
+      /* A phone shows one screen at a time: the list, or the chat with a back arrow. */
       .client{display:block;height:100%;min-height:0}.main{height:100%}
-      .rail,.side{display:none;position:absolute;top:0;bottom:0;z-index:12}.client.nav-open .rail{display:flex;left:0;width:60px}.client.nav-open .side{display:flex;left:60px;width:min(286px,calc(100% - 60px))}
-      .client.nav-open .nav-scrim{display:block;position:absolute;inset:0;z-index:11;border:0;background:rgba(0,0,0,.55)}
-      .mobile-nav{display:grid!important}.top{padding-left:4px;gap:7px}.quick-mode{max-width:96px;padding-left:8px}.topic{max-width:130px}.grid{grid-template-columns:1fr}
-      .row{grid-template-columns:48px minmax(0,1fr);padding-right:12px}.avatar{width:34px;height:34px}.typing{padding-left:48px}.destructive-action{display:none}.format-help{display:none}
-      .intro{margin:6px 10px 12px;padding:13px}.panel{padding-left:12px;padding-right:12px}.message-actions{opacity:1;position:static;grid-column:2;justify-self:end;margin-top:3px;border:0;background:transparent}
+      .side{display:none;position:absolute;inset:0;z-index:12;width:100%;border-right:0}
+      .client.nav-open .side{display:flex}
+      .mobile-nav{display:grid!important}.top{padding-left:6px;gap:8px}.quick-mode{max-width:96px;padding-left:8px}.grid{grid-template-columns:1fr}
+      .msg{grid-template-columns:28px minmax(0,84%)}.msg.mine{grid-template-columns:minmax(0,84%)}.msg .avatar{width:28px;height:28px}
+      .log{padding:10px 10px 8px}.destructive-action{display:none}.format-help{display:none}
+      /* Long-press opens the message menu on a phone; a row of buttons under every bubble is noise. */
+      .msg-actions{display:none}
+      .intro{margin-bottom:16px}.panel{padding-left:12px;padding-right:12px}
       /* No room for a rail: the categories become a scrolling strip above the panel. */
-      .settings{inset:56px 0 0;grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(0,1fr)}
+      .settings{inset:var(--bar) 0 0;grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(0,1fr)}
       .settings-nav{flex-direction:row;align-items:center;gap:4px;padding:8px;overflow-x:auto;overflow-y:hidden;border-bottom:1px solid var(--line)}
       .nav-cat,.nav-sep,.nav-row.close{display:none}
       .nav-row{flex:0 0 auto;padding:7px 12px;border-radius:999px}
@@ -893,7 +958,7 @@ export class OppaiChat extends LitElement {
     const switching = !this.lastArrivalID;
     this.lastArrivalID = last.id;
     if (switching) return;
-    markArrival(this.renderRoot.querySelector(".log article.row:last-of-type"));
+    markArrival(this.renderRoot.querySelector(".log article.msg:last-of-type"));
   }
 
   private get activeCharacter(): ChatCharacter | undefined {
@@ -2043,38 +2108,90 @@ export class OppaiChat extends LitElement {
     </div>`;
   }
 
-  private renderRail() {
-    return html`<nav class="rail" aria-label="Friends">
-      ${this.visibleCharacters.map((character, index) => html`
-        ${index === 1 ? html`<span class="rail-sep"></span>` : nothing}
-        <button class="guild ${character.id === this.characterID ? "on" : ""}" title=${character.name} @click=${() => this.activateCharacter(character.id)}>
-          ${this.avatar(character, "member-avatar")}
-        </button>`)}
-      <button class="guild" title="Add a friend" @click=${this.addCharacter}><span class="material-symbols-rounded">add</span></button>
-    </nav>`;
+  /**
+   * The chat list, the way every messenger lays one out: one row per conversation,
+   * newest first, with who it is with, when it last moved, and what was last said.
+   *
+   * Every character's conversations are in one list rather than filed under the
+   * character, because that is how a chat app is read — you scan for the person and
+   * the last line, not for a folder. A character with more than one open conversation
+   * shows its title after the name so the rows are still told apart.
+   */
+  private renderSidebar() {
+    const me = this.workspace.profile.displayName || this.user?.username || "You";
+    return html`<aside class="side">
+      <div class="side-head">
+        <h1>${this.pickerOpen ? "New chat" : "Chats"}</h1>
+        ${this.pickerOpen
+          ? html`<button class="icon-btn" title="Back to chats" aria-label="Back to chats" @click=${() => (this.pickerOpen = false)}><span class="material-symbols-rounded">close</span></button>`
+          : html`<button class="icon-btn" title="New chat" aria-label="New chat" @click=${() => (this.pickerOpen = true)}><span class="material-symbols-rounded">edit_square</span></button>
+            <button class="me-btn" title="Your profile" aria-label="Your profile" @click=${() => { this.settingsOpen = true; this.editorTab = "profile"; this.mobileNavOpen = false; }}>${this.profileAvatar(me, "me-avatar")}</button>`}
+      </div>
+      ${this.pickerOpen ? this.renderPicker() : html`
+        <label class="search"><span class="material-symbols-rounded" style="font-size:18px">search</span>
+          <input type="search" placeholder="Search" aria-label="Search chats" .value=${this.chatSearch} @input=${(event: Event) => (this.chatSearch = (event.target as HTMLInputElement).value)} /></label>
+        <div class="chats">${this.renderChatRows()}</div>`}
+    </aside>`;
   }
 
-  private renderSidebar() {
-    const character = this.activeCharacter, me = this.workspace.profile.displayName || this.user?.username || "You";
-    return html`<aside class="side">
-      <div class="side-head"><div class="side-title"><strong>${character?.name ?? "Chat"}</strong><span>Choose a conversation</span></div><button title="Start a new conversation" aria-label="Start a new conversation" @click=${() => this.newConversation()}><span class="material-symbols-rounded">add_comment</span></button></div>
-      <div class="cat"><span>Conversations · ${this.conversationsFor().length}</span><button title="New conversation" @click=${() => this.newConversation()}>+</button></div>
-      <div class="convos">${this.conversationsFor().map((conversation) => html`
-        <div class="convo-wrap ${conversation.id === this.conversationID ? "on" : ""}" data-id=${conversation.id}>
-          <button class="convo" @click=${() => this.activateConversation(conversation.id)} aria-current=${conversation.id === this.conversationID ? "page" : "false"}>
-            <span class="convo-icon material-symbols-rounded" style="font-size:18px">forum</span><span class="convo-title">${conversation.title}</span>
-            <span class="convo-meta">${conversation.messages.length} messages · ${timeOf(conversation.updatedAt)}</span>
-          </button>
-          <button class="convo-delete" title="Delete conversation" aria-label="Delete ${conversation.title}" @click=${() => this.deleteConversation(conversation.id)}><span class="material-symbols-rounded" style="font-size:16px">delete</span></button>
-        </div>`)}
-      </div>
-      <div class="side-foot">${this.workspace.profile.avatarImageId
-        ? html`<span class="me-avatar"><img src=${api.chatImageURL(this.workspace.profile.avatarImageId)} alt="" /></span>`
-        : html`<span class="me-avatar initial">${me.slice(0,2).toUpperCase()}</span>`}
-        <div class="me-copy"><div class="me-name">${me}</div><div class="me-sub"><span class="status-dot ${this.status?.enabled ? "online" : ""}"></span>${this.status?.enabled ? `Model: ${this.status.model}` : character?.id === "libby" ? "Libby local replies" : "Model offline"}</div></div>
-        <button class="icon-btn" title="Profile" @click=${() => { this.settingsOpen = true; this.editorTab = "profile"; }}><span class="material-symbols-rounded">manage_accounts</span></button>
-      </div>
-    </aside>`;
+  private renderChatRows() {
+    const query = this.chatSearch.trim().toLowerCase();
+    const count = new Map<string, number>();
+    for (const conversation of this.workspace.conversations) count.set(conversation.characterId, (count.get(conversation.characterId) ?? 0) + 1);
+    const rows = [...this.workspace.conversations]
+      .map((conversation) => ({ conversation, character: this.visibleCharacters.find((c) => c.id === conversation.characterId) }))
+      .filter((row): row is { conversation: ChatConversation; character: ChatCharacter } => !!row.character)
+      .sort((a, b) => b.conversation.updatedAt - a.conversation.updatedAt)
+      .filter(({ conversation, character }) => !query
+        || character.name.toLowerCase().includes(query)
+        || conversation.title.toLowerCase().includes(query)
+        || previewText(this.lastLine(conversation)).toLowerCase().includes(query));
+    if (!rows.length) return html`<div class="chats-empty">${query ? "No chats match that." : "No chats yet — start one."}</div>`;
+    return rows.map(({ conversation, character }) => {
+      const last = [...conversation.messages].reverse().find((message) => !message.thought);
+      const several = (count.get(character.id) ?? 0) > 1;
+      return html`<div class="chat-wrap ${conversation.id === this.conversationID ? "on" : ""}" data-id=${conversation.id}>
+        <button class="chat-row" @click=${() => this.activateConversation(conversation.id)} aria-current=${conversation.id === this.conversationID ? "page" : "false"}>
+          ${this.avatar(character, "chat-avatar")}
+          <span class="chat-name">${character.name}${several ? html` <small>· ${conversation.title}</small>` : nothing}</span>
+          <span class="chat-time">${listTimeOf(conversation.updatedAt)}</span>
+          <span class="chat-preview">${last
+            ? html`${last.role === "user" ? "You: " : ""}${last.imageId && !last.content.trim() ? html`<span class="material-symbols-rounded">photo_camera</span>Photo` : previewText(last.content)}`
+            : html`<em>${character.firstMessage?.trim() ? "Say hello" : "No messages yet"}</em>`}</span>
+        </button>
+        <button class="chat-delete" title="Delete chat" aria-label="Delete chat with ${character.name}" @click=${() => this.deleteConversation(conversation.id)}><span class="material-symbols-rounded" style="font-size:16px">delete</span></button>
+      </div>`;
+    });
+  }
+
+  /** The most recent thing said in a conversation, for search and the row preview. */
+  private lastLine(conversation: ChatConversation): string {
+    return [...conversation.messages].reverse().find((message) => !message.thought)?.content ?? "";
+  }
+
+  /** Who to start a chat with. Every character, then the option of making a new one. */
+  private renderPicker() {
+    return html`<div class="picker">
+      <div class="pick-cat">Friends</div>
+      ${this.visibleCharacters.map((character) => html`
+        <button class="pick" @click=${() => this.startChatWith(character.id)}>
+          ${this.avatar(character, "pick-avatar")}
+          <span class="pick-name">${character.name}</span>
+          <span class="pick-sub">${character.description?.trim() || (character.id === "libby" ? "Your library's companion" : "Custom character")}</span>
+        </button>`)}
+      <div class="pick-cat">More</div>
+      <button class="pick add" @click=${() => { this.pickerOpen = false; this.addCharacter(); }}>
+        <span class="pick-avatar"><span class="material-symbols-rounded">person_add</span></span>
+        <span class="pick-name">Add a friend</span>
+        <span class="pick-sub">Write a new character card</span>
+      </button>
+    </div>`;
+  }
+
+  private startChatWith(id: string) {
+    this.pickerOpen = false;
+    this.characterID = id;
+    this.newConversation();
   }
 
   private renderSettings() {
@@ -2120,7 +2237,7 @@ export class OppaiChat extends LitElement {
     const libby = character.id === "libby" && !libbyHidden();
     return html`<div class="panel">
       <section class="group">
-        <h3>Picture<span>Their face in the friend rail, the header, and every message.</span></h3>
+        <h3>Picture<span>Their face in the chat list, the header, and every message.</span></h3>
         <div class="pfp-row">
           ${this.avatar(character, "pfp")}
           <div class="pfp-actions">
@@ -3005,25 +3122,40 @@ export class OppaiChat extends LitElement {
    */
   private renderThought(message: StoredChatMessage, character: ChatCharacter) {
     const aloud = message.thought === "aside";
-    return html`<article class="row thought ${aloud ? "aloud" : ""}" @contextmenu=${(event:MouseEvent) => this.messageMenu(message, event)}>
-      <span class="thought-mark material-symbols-rounded" aria-hidden="true">${aloud ? "graphic_eq" : "psychology_alt"}</span>
-      <div class="thought-body">
-        <span class="thought-label">${aloud ? `${character.name}, to herself — you overhear it` : `${character.name} thinks, and doesn't say it`}</span>
-        <div class="thought-text">${message.content}</div>
-      </div>
-    </article>`;
+    return html`<div class="thought ${aloud ? "aloud" : ""}" @contextmenu=${(event:MouseEvent) => this.messageMenu(message, event)}>
+      <span class="thought-label"><span class="material-symbols-rounded" aria-hidden="true">${aloud ? "graphic_eq" : "psychology_alt"}</span>${aloud ? `${character.name}, to herself` : `${character.name} thinks`}</span>
+      <div>${message.content}</div>
+    </div>`;
   }
 
-  private renderEntry(message: StoredChatMessage, previous?: StoredChatMessage) {
+  /**
+   * Whether two neighbouring messages belong to one run: same speaker, close in time,
+   * nothing thought in between. A thought breaks a run rather than continuing one —
+   * what follows it is her speaking again, and it comes back with her avatar.
+   */
+  private sameRun(a?: StoredChatMessage, b?: StoredChatMessage): boolean {
+    return !!a && !!b && !a.thought && !b.thought && a.role === b.role && Math.abs(b.at - a.at) < 5 * 60_000;
+  }
+
+  private renderEntry(message: StoredChatMessage, previous?: StoredChatMessage, next?: StoredChatMessage) {
     const character = this.activeCharacter; if (!character) return nothing;
-    if (message.thought) return this.renderThought(message, character);
-    // A thought breaks a run rather than continuing one: what follows it is her
-    // speaking again, and it should come back with her name on it.
-    const grouped = !!previous && !previous.thought && previous.role === message.role && message.at - previous.at < 5*60_000;
+    const day = !previous || dayOf(previous.at) !== dayOf(message.at) ? html`<div class="day">${dayOf(message.at)}</div>` : nothing;
+    if (message.thought) return html`${day}${this.renderThought(message, character)}`;
+    const first = !this.sameRun(previous, message) || day !== nothing, last = !this.sameRun(message, next);
     const friend = message.role === "assistant", name = friend ? character.name : (this.workspace.profile.displayName || this.user?.username || "You");
-    return html`<article class="row ${grouped ? "" : "first"} ${friend ? "from-friend" : "from-user"}" @contextmenu=${(event:MouseEvent) => this.messageMenu(message, event)}>${grouped ? html`<span class="stamp">${timeOf(message.at)}</span>` : (friend ? this.avatar(character,"avatar") : this.profileAvatar(name,"avatar"))}
-      <div class="message">${grouped ? nothing : html`<div class="who"><span class="author ${friend ? "friend" : ""}">${name}</span><span class="when">Today at ${timeOf(message.at)}</span></div>`}<div class="text">${formatted(message.content)}</div>${message.imageId ? html`<img class="sent-image" src=${api.chatImageURL(message.imageId)} alt="Image sent by ${name}"/>` : nothing}${renderAttachments(message.attachments, (id) => requestOpenMedia(this, id), name)}${renderLinkChips(message.links, (id) => requestOpenMedia(this, id))}${renderActionCards(message.actions, this.approvals.stateOf, this.approvals.decide)}</div>
-      <span class="message-actions">${this.canRedo(message) ? html`<button title="Re-respond" aria-label="Ask for a different reply" ?disabled=${this.busy} @click=${() => void this.regenerate()}><span class="material-symbols-rounded" style="font-size:16px">refresh</span></button>` : nothing}<button title="Copy" @click=${() => void navigator.clipboard.writeText(message.content)}><span class="material-symbols-rounded" style="font-size:16px">content_copy</span></button><button title="Edit" @click=${() => this.editMessage(message)}><span class="material-symbols-rounded" style="font-size:16px">edit</span></button><button title="Delete" @click=${() => this.deleteMessage(message.id)}><span class="material-symbols-rounded" style="font-size:16px">delete</span></button></span>
+    return html`${day}<article class="msg ${friend ? "theirs" : "mine"} ${first ? "first" : ""} ${last ? "last" : ""}" @contextmenu=${(event:MouseEvent) => this.messageMenu(message, event)}>
+      ${friend ? this.avatar(character, "avatar") : nothing}
+      <div class="bubble-wrap">
+        <div class="bubble">
+          ${message.content.trim() ? html`<div class="text">${formatted(message.content)}</div>` : nothing}
+          ${message.imageId ? html`<img class="sent-image" src=${api.chatImageURL(message.imageId)} alt="Image sent by ${name}"/>` : nothing}
+          ${renderAttachments(message.attachments, (id) => requestOpenMedia(this, id), name)}
+          ${renderLinkChips(message.links, (id) => requestOpenMedia(this, id))}
+          ${renderActionCards(message.actions, this.approvals.stateOf, this.approvals.decide)}
+          <div class="meta"><span>${timeOf(message.at)}</span></div>
+        </div>
+        <span class="msg-actions">${this.canRedo(message) ? html`<button title="Re-respond" aria-label="Ask for a different reply" ?disabled=${this.busy} @click=${() => void this.regenerate()}><span class="material-symbols-rounded" style="font-size:16px">refresh</span></button>` : nothing}<button title="Copy" @click=${() => void navigator.clipboard.writeText(message.content)}><span class="material-symbols-rounded" style="font-size:16px">content_copy</span></button><button title="Edit" @click=${() => this.editMessage(message)}><span class="material-symbols-rounded" style="font-size:16px">edit</span></button><button title="Delete" @click=${() => this.deleteMessage(message.id)}><span class="material-symbols-rounded" style="font-size:16px">delete</span></button></span>
+      </div>
     </article>`;
   }
 
@@ -3058,13 +3190,16 @@ export class OppaiChat extends LitElement {
     if (!character || !conversation) return html`<div class="client"><section class="main" style="grid-column:1/-1;padding:24px">Chat workspace is unavailable.</section></div>`;
     const channel=MODES.find((mode)=>mode.id===conversation.mode)??MODES[0];
     const stage=this.stageOpen?this.renderStage(character,conversation):nothing;
-    return html`<div class="client ${this.mobileNavOpen ? "nav-open" : ""} ${stage!==nothing ? "with-stage" : ""}" @pointerdown=${this.armIdle} @contextmenu=${this.chatMenu}><button class="nav-scrim" aria-label="Close chat navigation" @click=${() => (this.mobileNavOpen=false)}></button>${this.renderRail()}${this.renderSidebar()}
+    const online = !!this.status?.enabled;
+    const presence = online ? this.status!.model : character.id === "libby" ? "Local replies" : "Model offline";
+    const messages = conversation.messages;
+    return html`<div class="client ${this.mobileNavOpen ? "nav-open" : ""} ${stage!==nothing ? "with-stage" : ""}" @pointerdown=${this.armIdle} @contextmenu=${this.chatMenu}>${this.renderSidebar()}
       <main class="main"><header class="top">
-        <button class="icon-btn mobile-nav" title="Friends and conversations" aria-label="Open friends and conversations" @click=${() => (this.mobileNavOpen=true)}><span class="material-symbols-rounded">menu</span></button>
+        <button class="icon-btn mobile-nav" title="Chats" aria-label="Back to chats" @click=${() => (this.mobileNavOpen=true)}><span class="material-symbols-rounded">arrow_back</span></button>
         ${this.avatar(character,"top-avatar")}
-        <span class="top-title"><span class="name">${character.name}</span><span class="topic">${this.status?.enabled ? this.status.model : character.id === "libby" ? "Local replies" : "Model offline"} · ${character.id === "libby" ? "chooses her own mood" : channel.topic}</span></span>
+        <span class="top-title"><span class="name">${character.name}</span><span class="presence"><span class="status-dot ${online ? "online" : ""}"></span>${presence}${character.id === "libby" ? ` · ${conversation.emotion}${conversation.activity ? `, ${conversation.activity}` : ""}` : ` · ${channel.topic}`}</span></span>
         ${character.id === "libby" ? nothing : html`<select class="quick-mode" aria-label="Conversation mode" title="Conversation mode" .value=${conversation.mode} @change=${(event:Event) => this.updateConversation({mode:(event.target as HTMLSelectElement).value})}>${MODES.map((mode)=>html`<option value=${mode.id}>${mode.label}</option>`)}</select>`}
-        <span class="top-actions"><button class="icon-btn ${this.callOpen?"on":""}" title="Video call" aria-label="Video call" @click=${()=>this.startCall()}><span class="material-symbols-rounded">videocam</span></button><button class="icon-btn ${this.autopilot?"on":""}" title=${this.autopilot?"Turn off autopilot":"Let the AI continue on its own"} aria-label="Autopilot" aria-pressed=${this.autopilot?"true":"false"} @click=${()=>this.toggleAutopilot()}><span class="material-symbols-rounded">smart_toy</span></button><button class="icon-btn stage-toggle ${this.stageOpen?"on":""}" title=${this.stageOpen?"Hide portrait":"Show portrait"} aria-label="Portrait" aria-pressed=${this.stageOpen?"true":"false"} @click=${()=>(this.stageOpen=!this.stageOpen)}><span class="material-symbols-rounded">wallpaper</span></button><button class="icon-btn" title="New conversation" aria-label="New conversation" @click=${() => this.newConversation()}><span class="material-symbols-rounded">add_comment</span></button><button class="icon-btn destructive-action" title="Clear messages" aria-label="Clear messages" @click=${this.clearConversation}><span class="material-symbols-rounded">delete_sweep</span></button><button class="icon-btn ${this.settingsOpen?"on":""}" title="Chat settings" aria-label="Chat settings" @click=${()=>(this.settingsOpen=!this.settingsOpen)}><span class="material-symbols-rounded">tune</span></button></span>
+        <span class="top-actions"><button class="icon-btn ${this.callOpen?"on":""}" title="Video call" aria-label="Video call" @click=${()=>this.startCall()}><span class="material-symbols-rounded">videocam</span></button><button class="icon-btn ${this.autopilot?"on":""}" title=${this.autopilot?"Turn off autopilot":"Let the AI continue on its own"} aria-label="Autopilot" aria-pressed=${this.autopilot?"true":"false"} @click=${()=>this.toggleAutopilot()}><span class="material-symbols-rounded">smart_toy</span></button><button class="icon-btn stage-toggle ${this.stageOpen?"on":""}" title=${this.stageOpen?"Hide portrait":"Show portrait"} aria-label="Portrait" aria-pressed=${this.stageOpen?"true":"false"} @click=${()=>(this.stageOpen=!this.stageOpen)}><span class="material-symbols-rounded">wallpaper</span></button><button class="icon-btn destructive-action" title="Clear messages" aria-label="Clear messages" @click=${this.clearConversation}><span class="material-symbols-rounded">delete_sweep</span></button><button class="icon-btn ${this.settingsOpen?"on":""}" title="Chat settings" aria-label="Chat settings" @click=${()=>(this.settingsOpen=!this.settingsOpen)}><span class="material-symbols-rounded">tune</span></button></span>
       </header>
         ${this.settingsOpen?this.renderSettings():nothing}
         ${this.loadError ? html`<div class="backend-state load-error" role="alert"><strong>Chat didn't load.</strong> ${this.loadError}
@@ -3072,8 +3207,8 @@ export class OppaiChat extends LitElement {
           <button class="autobar-btn" @click=${() => void this.retryLoad()}>Retry</button></div>` : nothing}
         ${this.status?.modelBackend && !this.status.enabled ? html`<div class="backend-state" role="status"><strong>Text generation offline.</strong> ${this.status.message || "Load a model in text-generation-webui, then refresh status."}</div>` : nothing}
         ${this.renderAutopilotBar(character)}
-        <section class="log">${conversation.messages.length ? nothing : html`<div class="intro">${this.avatar(character,"round")}<h2>${character.name}</h2><p>${character.description || `This is the beginning of your conversation with ${character.name}.`}${this.status?.enabled?` Running on ${this.status.model}.`:character.id === "libby" ? " Libby is using built-in local replies." : " Connect a local model to start chatting."}</p></div>`}
-          ${conversation.messages.map((message,index)=>this.renderEntry(message,conversation.messages[index-1]))}${this.busy&&this.typingPhase==="typing"?html`<div class="typing"><span class="dots"><i></i><i></i><i></i></span><b>${character.name}</b> is typing…</div>`:nothing}
+        <section class="log">${messages.length ? nothing : html`<div class="intro">${this.avatar(character,"intro-avatar")}<h2>${character.name}</h2><p>${character.description || `This is the beginning of your conversation with ${character.name}.`}</p><p>${online?`Running on ${this.status!.model}.`:character.id === "libby" ? "Libby is using built-in local replies." : "Connect a local model to start chatting."}</p></div>`}
+          ${messages.map((message,index)=>this.renderEntry(message,messages[index-1],messages[index+1]))}${this.busy&&this.typingPhase==="typing"?html`<div class="msg theirs last typing-row">${this.avatar(character,"avatar")}<div class="bubble-wrap"><div class="bubble" aria-label="${character.name} is typing"><span class="dots"><i></i><i></i><i></i></span></div></div></div>`:nothing}
         </section>${this.notice?html`<div class="notice ${this.noticeError?"error":""}" role=${this.noticeError?"alert":"status"}>${this.notice}</div>`:nothing}
         <form class="composer-form" @submit=${(event:Event)=>{event.preventDefault();void this.send();}}>
           ${this.pendingPhoto ? html`<div class="attachment"><img src=${api.chatImageURL(this.pendingPhoto.imageId)} alt=${`Attached photo: ${this.pendingPhoto.name}`}/>
@@ -3081,9 +3216,11 @@ export class OppaiChat extends LitElement {
             <button type="button" class="icon-btn" title="Remove photo" aria-label="Remove photo" @click=${()=>void this.discardPhoto()}><span class="material-symbols-rounded">close</span></button></div>` : nothing}
           ${this.renderLinkPreview()}
           <div class="composer">
-            <span class="attach-btn ${this.busy?"off":""}" title="Share a photo"><span class="material-symbols-rounded">add_photo_alternate</span><input type="file" accept="image/png,image/jpeg,image/webp,image/gif" aria-label="Share a photo" ?disabled=${this.busy} @change=${(event:Event)=>void this.attachPhoto(event)}/></span>
-            <textarea rows="1" aria-label=${`Message ${character.name}`} placeholder=${this.busy?`${character.name} is replying — keep typing…`:`Message ${character.name}…`} .value=${this.draft} @input=${(event:Event)=>{this.draft=(event.target as HTMLTextAreaElement).value;this.noticeLink();}} @keydown=${this.onKey}></textarea>
-            <button class="icon-btn" type="submit" title="Send message" aria-label="Send message" ?disabled=${(!this.draft.trim()&&!this.pendingPhoto)||this.busy}><span class="material-symbols-rounded">send</span></button>
+            <div class="box">
+              <span class="attach-btn ${this.busy?"off":""}" title="Share a photo"><span class="material-symbols-rounded">add_photo_alternate</span><input type="file" accept="image/png,image/jpeg,image/webp,image/gif" aria-label="Share a photo" ?disabled=${this.busy} @change=${(event:Event)=>void this.attachPhoto(event)}/></span>
+              <textarea rows="1" aria-label=${`Message ${character.name}`} placeholder=${this.busy?`${character.name} is replying — keep typing…`:`Message ${character.name}…`} .value=${this.draft} @input=${(event:Event)=>{this.draft=(event.target as HTMLTextAreaElement).value;this.noticeLink();}} @keydown=${this.onKey}></textarea>
+            </div>
+            <button class="send" type="submit" title="Send message" aria-label="Send message" ?disabled=${(!this.draft.trim()&&!this.pendingPhoto)||this.busy}><span class="material-symbols-rounded">send</span></button>
           </div><div class="format-help"><span>"speech" · **action** · *emphasis* · ~~strike~~ · &#96;code&#96;</span><span class="send-help"></span></div></form>
       </main>${stage}${this.renderCall(character,conversation)}
     </div>`;

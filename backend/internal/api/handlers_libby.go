@@ -112,8 +112,11 @@ type libbyOutfitView struct {
 	HasThumb bool `json:"hasThumb"`
 	// Slots is how many (emotion, tier) squares this outfit has art in, which is the
 	// one number a card can show that means anything: "3/5 emotions" undercounts an
-	// outfit drawn across every tier.
+	// outfit drawn across every tier. Expressions only — the MISC squares are counted
+	// apart, or a wardrobe that drew a few of them would read as more than complete.
 	Slots int `json:"slots"`
+	// ActivitySlots is the same count for the MISC states.
+	ActivitySlots int `json:"activitySlots"`
 	// Wip is how many squares have been generated into this outfit's work in progress,
 	// finished or not. It is what tells a wardrobe card there is unfinished work here,
 	// which "0 sprites" cannot say.
@@ -161,11 +164,12 @@ func (s *Server) libbyOutfitView(o *libbyOutfit) libbyOutfitView {
 			if _, err := os.Stat(s.libbyEmotionPath(o.ID, slot, level)); err != nil {
 				continue
 			}
-			v.Slots++
 			if libbyActivityValid(slot) {
 				v.ActivityLevels[slot] = append(v.ActivityLevels[slot], level)
+				v.ActivitySlots++
 				continue
 			}
+			v.Slots++
 			v.EmotionLevels[slot] = append(v.EmotionLevels[slot], level)
 			if level == 0 {
 				v.Emotions = append(v.Emotions, slot)
@@ -175,7 +179,7 @@ func (s *Server) libbyOutfitView(o *libbyOutfit) libbyOutfitView {
 	v.Wip = s.countLibbyWIP(o.ID)
 	// Any art at all is a cover, because the thumb endpoint falls back to it —
 	// including an unfinished square, which is what a wardrobe mid-render has.
-	v.HasThumb = v.Slots > 0 || v.Wip > 0
+	v.HasThumb = v.Slots > 0 || v.ActivitySlots > 0 || v.Wip > 0
 	if _, err := os.Stat(s.libbyOutfitThumbPath(o.ID)); err == nil {
 		v.HasThumb = true
 	}

@@ -1319,6 +1319,9 @@ export interface LibbyOutfit {
   hasThumb?: boolean;
   /** How many (emotion, tier) squares have art. What a card can honestly show. */
   slots?: number;
+  /** The same for the MISC state squares, counted apart so a wardrobe that drew a
+      few of them never reads as more than complete. Absent from older servers. */
+  activitySlots?: number;
   /** How many squares exist in this wardrobe's work in progress, finished or not.
       Absent from older servers, which is treated as none. */
   wip?: number;
