@@ -679,10 +679,14 @@ func (s *Server) postChatCompletion(ctx context.Context, payloadMap map[string]a
 			Message chatMessage `json:"message"`
 		} `json:"choices"`
 	}
-	if json.Unmarshal(body, &out) != nil || len(out.Choices) == 0 || strings.TrimSpace(out.Choices[0].Message.Content) == "" {
+	if json.Unmarshal(body, &out) != nil || len(out.Choices) == 0 {
 		return "", errors.New("local LLM returned no message")
 	}
-	return strings.TrimSpace(out.Choices[0].Message.Content), nil
+	reply := stripThinking(out.Choices[0].Message.Content)
+	if reply == "" {
+		return "", errors.New("local LLM returned no message")
+	}
+	return reply, nil
 }
 
 func (s *Server) handleChatStatus(w http.ResponseWriter, r *http.Request) {

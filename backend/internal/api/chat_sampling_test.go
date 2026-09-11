@@ -85,6 +85,32 @@ func TestSamplingFieldsCoverBothDialects(t *testing.T) {
 	}
 }
 
+func TestSamplingFieldsDisableThinking(t *testing.T) {
+	fields := samplingFields(samplingPresets[taskCasual])
+	if v, ok := fields["enable_thinking"].(bool); !ok || v {
+		t.Errorf("enable_thinking = %v, want false", fields["enable_thinking"])
+	}
+	kwargs, _ := fields["chat_template_kwargs"].(map[string]any)
+	if v, ok := kwargs["enable_thinking"].(bool); !ok || v {
+		t.Errorf("chat_template_kwargs.enable_thinking = %v, want false", kwargs["enable_thinking"])
+	}
+}
+
+func TestStripThinking(t *testing.T) {
+	cases := map[string]string{
+		"plain reply": "plain reply",
+		"<think>\nshe wants a hug\n</think>\n\n*hugs* [mood: loving]": "*hugs* [mood: loving]",
+		"<think>a</think>hi<think>b</think> there":                    "hi there",
+		"<think>ran out of tokens":                                    "",
+		"  padded  ":                                                  "padded",
+	}
+	for in, want := range cases {
+		if got := stripThinking(in); got != want {
+			t.Errorf("stripThinking(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestChatStopsGuardTheTurnBoundary(t *testing.T) {
 	stops := chatStops("Owen")
 	joined := strings.Join(stops, "|")

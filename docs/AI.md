@@ -20,7 +20,19 @@ load and unload models in its own WebUI (or startup configuration). OppaiLib onl
 checks readiness and sends generation requests; its model controls are deliberately
 read-only to avoid racing or destabilizing the backend container.
 Conversation history stays in the current web/Android screen and is sent only to
-that configured endpoint. Libby's Sweet, Playful, Bold, and Roleplay modes change
+that configured endpoint.
+
+**Which model.** Libby is a text-protocol workload — a dozen-odd silent tags
+(`[mood:]`, `[link:]`, `[send:]`, `[remember:]`, `[want:]`, …) that a small model
+has to keep obeying inside an 8K window — so instruction-following matters more
+than prose. On an 8 GB card the recommended pick is an **abliterated Qwen3.5‑9B**
+at `Q4_K_M` (~5.6 GB, text-only build; the chat model never receives images, shared
+photos reach it as the local tagger's words). A Mistral‑Nemo‑12B roleplay merge at
+`IQ4_XS` trades some obedience for a better voice. Reasoning models are told not to
+think: every request carries `enable_thinking: false` (text-generation-webui) and
+`chat_template_kwargs.enable_thinking: false` (llama.cpp server, vLLM), and a
+`<think>` block that leaks anyway is stripped before the reply is parsed, so no
+loader-side switch is required. Libby's Sweet, Playful, Bold, and Roleplay modes change
 the local system prompt; the latter modes permit consensual adult NSFW chat.
 
 Prefer OppaiLib without the mascot? **Settings → Libby → Hide Libby** (per-device;

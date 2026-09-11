@@ -330,7 +330,36 @@ func samplingFields(p samplingPreset) map[string]any {
 	if p.PresencePenalty != 0 {
 		fields["presence_penalty"] = p.PresencePenalty
 	}
+	// Reasoning models (Qwen3 and later) default to writing a <think> block before the
+	// reply. Nothing here wants one: it spends the whole reply allowance on deliberation,
+	// and the tags she is meant to emit end up inside it where the parser never looks.
+	// Same union treatment as the samplers — enable_thinking is text-generation-webui's
+	// request field, chat_template_kwargs is llama.cpp server's and vLLM's, and a backend
+	// that knows neither drops the key. The reply parser strips a leaked block regardless.
+	fields["enable_thinking"] = false
+	fields["chat_template_kwargs"] = map[string]any{"enable_thinking": false}
 	return fields
+}
+
+// stripThinking removes a reasoning model's <think>…</think> preamble from a reply.
+//
+// The request already asks for no thinking, but a backend that ignored the flag still
+// answers with the block in the content, and a reply that opens with a page of "the user
+// seems to want…" is not a reply. An unclosed block — the allowance ran out mid-thought —
+// leaves nothing, and the caller reports that as no message rather than showing the
+// deliberation.
+func stripThinking(reply string) string {
+	for {
+		start := strings.Index(reply, "<think>")
+		if start < 0 {
+			return strings.TrimSpace(reply)
+		}
+		end := strings.Index(reply[start:], "</think>")
+		if end < 0 {
+			return strings.TrimSpace(reply[:start])
+		}
+		reply = reply[:start] + reply[start+end+len("</think>"):]
+	}
 }
 
 // samplingSummary is the one-line, copyable record of what a generation actually used.
