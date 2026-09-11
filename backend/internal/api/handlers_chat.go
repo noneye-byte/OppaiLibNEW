@@ -54,6 +54,14 @@ type chatRequest struct {
 	// requests — the client owns the log — so what has already been shown has to
 	// arrive with the request. See recentlySentPhotos.
 	RecentImageIDs []string `json:"recentImageIds,omitempty"`
+	// ConversationID is which of the user's conversations this turn belongs to.
+	//
+	// The server keeps no per-conversation state, but it does hold every conversation:
+	// the client-owned log round-trips through the workspace file. So the only thing
+	// missing before she could remember the *other* chats was knowing which one she was
+	// in, so as not to recap it back at herself. Optional — a client that omits it is
+	// identified by its history's tail instead. See chat_recaps.go.
+	ConversationID string `json:"conversationId,omitempty"`
 	// Viewing is what the two of them are looking at, when this message comes from a
 	// browse-together session rather than the chat screen.
 	Viewing *chatViewing `json:"viewing,omitempty"`
@@ -809,6 +817,14 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			add("her own wants", rankWantsList, wantsPromptBlock(wants))
 			add("your history together", rankBond, bondPromptBlock(bond, time.Now()))
 		}
+		// The other conversations she has had with this person. Not from a store of its
+		// own: they are already here in the workspace, and the only thing that was
+		// missing was saying so. See chat_recaps.go.
+		add(
+			"your other conversations",
+			rankRecaps,
+			conversationRecaps(ws, character.ID, currentConversationID(ws, in), time.Now()),
+		)
 		add("your library", rankLibrarySnapshot, s.buildLibbyContext(r.Context()).promptBlock())
 	}
 	// What is on screen is a different matter: browsing together is the user holding

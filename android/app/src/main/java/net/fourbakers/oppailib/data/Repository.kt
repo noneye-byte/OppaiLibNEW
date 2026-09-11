@@ -20,6 +20,7 @@ import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFact
 import retrofit2.Retrofit
 import java.io.File
 import java.net.URLEncoder
+import net.fourbakers.oppailib.ui.BrowseMemory
 
 /**
  * Single source of truth for network + session. Rebuilds the API client (and a
@@ -169,7 +170,19 @@ class Repository(private val appContext: Context, val prefs: Prefs) {
     }
 
     fun saveSession(token: String) { prefs.token = token }
-    fun clearSession() { prefs.clearSession() }
+    /**
+     * Ends the session and forgets everything about it, stored or in memory.
+     *
+     * The browse cache lives outside composition so that stepping into a thread does
+     * not throw the board away (see ui/BrowseScreen.kt). That makes it something that
+     * outlives a sign-out unless it is said not to, and thumbnails of the last person's
+     * browsing surviving into the next person's session is exactly the thing this app's
+     * lock screen exists to prevent.
+     */
+    fun clearSession() {
+        prefs.clearSession()
+        BrowseMemory.clear()
+    }
     /** Surfaces a message from Libby. [emotion] is her pose — default "surprised"
         (a worried reaction) since most reports are failures; pass "happy" for wins. */
     fun report(message: String, emotion: String = "surprised") { _errors.tryEmit(MascotSay(message, emotion)) }

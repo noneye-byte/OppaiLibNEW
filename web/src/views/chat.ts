@@ -1577,6 +1577,8 @@ export class OppaiChat extends LitElement {
       const result = await api.chat({
         mode: conversation.mode, messages: history, emotion: conversation.emotion,
         intensity: conversation.intensity, options: conversation.options, characterId: character.id,
+        // So her recall of the *other* conversations leaves this one out of it.
+        conversationId: conversation.id,
         photoTags, photoImageId: photoImageID, recentImageIds: recentlySent(conversation.messages),
         outfit: character.id === "libby" ? loadLibbyOutfit() : "",
         // The address only. What she is told about the page is the server's own

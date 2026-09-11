@@ -274,6 +274,15 @@ data class ChatRequest(
     val intensity: Int = 1,
     val options: JsonObject = JsonObject(emptyMap()),
     val characterId: String = "libby",
+    /**
+     * Which conversation this turn belongs to.
+     *
+     * The server keeps no per-conversation state, but it does hold every conversation
+     * — the log round-trips through the workspace — and it reads the other ones back
+     * into her prompt so she remembers them. This is how it knows which one she is
+     * currently in, and therefore which one not to recap back at her.
+     */
+    val conversationId: String = "",
     /** Tags and id for the photo attached to the newest user message. Text-only
         models receive the tags, while the id keeps that same photo out of replies. */
     val photoTags: List<String> = emptyList(),

@@ -354,6 +354,10 @@ export interface ChatTurn {
   intensity?: number;
   options?: ChatOptions;
   characterId?: string;
+  /** Which conversation this turn belongs to. The server holds every conversation
+      (the log round-trips through the workspace) and recalls the other ones into the
+      prompt, so it needs to know which one not to recap back at her. */
+  conversationId?: string;
   /** Content tags of a photo the user attached, from the local scanner. */
   photoTags?: string[];
   /** That photo's id, so it is never handed straight back as the reply's picture. */

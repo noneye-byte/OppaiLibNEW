@@ -194,6 +194,65 @@ class Prefs(context: Context) {
         get() = sp.getString(KEY_DOWNLOAD_QUEUE, null)
         set(v) { sp.edit().putString(KEY_DOWNLOAD_QUEUE, v).commit() }
 
+    // ── where you were ───────────────────────────────────────────────────
+    //
+    // Android is free to kill this process the moment it goes to the background, and
+    // a library app that always reopens on the unfiltered grid makes that killing
+    // visible: you come back from answering a text and the thread you were reading,
+    // the board you were three pages down, the conversation you were mid-sentence in
+    // are all simply gone. These few values are what makes reopening the app land you
+    // back where you left off instead.
+    //
+    // They are written as the user navigates rather than in onStop, because onStop is
+    // exactly the callback a force-stop does not run.
+
+    /** Which screen was open: "" (the library grid), browse, chat, downloads, studio. */
+    var lastScreen: String
+        get() = sp.getString(KEY_LAST_SCREEN, "") ?: ""
+        set(v) = sp.edit().putString(KEY_LAST_SCREEN, v).apply()
+
+    /** The library's kind filter, empty for "All media". */
+    var lastKind: String
+        get() = sp.getString(KEY_LAST_KIND, "") ?: ""
+        set(v) = sp.edit().putString(KEY_LAST_KIND, v).apply()
+
+    var lastFavoritesOnly: Boolean
+        get() = sp.getBoolean(KEY_LAST_FAVORITES, false)
+        set(v) = sp.edit().putBoolean(KEY_LAST_FAVORITES, v).apply()
+
+    /**
+     * The library item the viewer was open on, or 0 for none.
+     *
+     * Stored by id rather than by grid index: the grid is rebuilt from the server on
+     * launch, and an index into a list that has since gained or lost an item reopens
+     * on the wrong thing — which is worse than not reopening at all.
+     */
+    var lastViewerMedia: Long
+        get() = sp.getLong(KEY_LAST_VIEWER, 0L)
+        set(v) = sp.edit().putLong(KEY_LAST_VIEWER, v).apply()
+
+    /** The chat conversation that was open, so Chat reopens on it rather than on
+        whichever conversation happens to have been touched most recently. */
+    var lastChatConversation: String
+        get() = sp.getString(KEY_LAST_CHAT, "") ?: ""
+        set(v) = sp.edit().putString(KEY_LAST_CHAT, v).apply()
+
+    /**
+     * The remote feed Browse was last looking at, as a pin.
+     *
+     * A pin is exactly the shape this needs — source, feed, search term, sort — so it
+     * is reused rather than given four keys of its own. The items themselves are not
+     * stored: they belong to someone else's site and are minutes old by the time the
+     * app is reopened, so the feed is refetched and only the *place* is remembered.
+     */
+    var lastBrowseFeed: PinnedFeed?
+        get() = sp.getString(KEY_LAST_BROWSE, null)
+            ?.let { runCatching { Json.decodeFromString(PinnedFeed.serializer(), it) }.getOrNull() }
+        set(v) = sp.edit().apply {
+            if (v == null) remove(KEY_LAST_BROWSE)
+            else putString(KEY_LAST_BROWSE, Json.encodeToString(PinnedFeed.serializer(), v))
+        }.apply()
+
     /**
      * Whether uploads wait for an unmetered connection.
      *
@@ -207,7 +266,13 @@ class Prefs(context: Context) {
         set(v) = sp.edit().putBoolean(KEY_UPLOAD_WIFI_ONLY, v).apply()
 
     fun clearSession() {
-        sp.edit().remove(KEY_TOKEN).remove(KEY_REAUTH_USER).remove(KEY_REAUTH_PASSWORD).commit()
+        // Where you were is part of the session, not of the device. Signing out and
+        // handing the phone over must not drop the next person straight back into the
+        // last conversation, board, or open video.
+        sp.edit().remove(KEY_TOKEN).remove(KEY_REAUTH_USER).remove(KEY_REAUTH_PASSWORD)
+            .remove(KEY_LAST_SCREEN).remove(KEY_LAST_KIND).remove(KEY_LAST_FAVORITES)
+            .remove(KEY_LAST_VIEWER).remove(KEY_LAST_CHAT).remove(KEY_LAST_BROWSE)
+            .commit()
     }
 
     companion object {
@@ -237,6 +302,13 @@ class Prefs(context: Context) {
         private const val KEY_BACK_BUFFER = "video_back_buffer"
         private const val KEY_SORT = "sort_mode"
         private const val KEY_PINNED = "pinned_feeds"
+
+        private const val KEY_LAST_SCREEN = "last_screen"
+        private const val KEY_LAST_KIND = "last_kind"
+        private const val KEY_LAST_FAVORITES = "last_favorites_only"
+        private const val KEY_LAST_VIEWER = "last_viewer_media"
+        private const val KEY_LAST_CHAT = "last_chat_conversation"
+        private const val KEY_LAST_BROWSE = "last_browse_feed"
 
         private val pinListSerializer = ListSerializer(PinnedFeed.serializer())
     }

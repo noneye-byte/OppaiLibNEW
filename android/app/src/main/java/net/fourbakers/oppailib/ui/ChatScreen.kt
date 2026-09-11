@@ -2,9 +2,17 @@ package net.fourbakers.oppailib.ui
 
 import android.util.Base64
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -41,6 +49,12 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AddComment
+import androidx.compose.material.icons.filled.AddPhotoAlternate
+import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.ChatBubble
+import androidx.compose.material.icons.filled.DoneAll
+import androidx.compose.material.icons.filled.PersonAdd
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Download
@@ -52,8 +66,6 @@ import androidx.compose.material.icons.filled.Sell
 import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteSweep
-import androidx.compose.material.icons.filled.Group
-import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.CallEnd
@@ -61,18 +73,15 @@ import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.ModalNavigationDrawer
-import androidx.compose.material3.ModalDrawerSheet
-import androidx.compose.material3.NavigationDrawerItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Slider
@@ -80,10 +89,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
-import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -102,6 +111,7 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
@@ -136,6 +146,7 @@ import net.fourbakers.oppailib.data.Media
 import net.fourbakers.oppailib.data.Repository
 import net.fourbakers.oppailib.data.StoredChatMessage
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
@@ -257,10 +268,15 @@ fun ChatScreen(
     // A conversation pending a delete confirmation, so a mis-tap doesn't wipe history.
     var confirmDelete by remember { mutableStateOf<ChatConversation?>(null) }
     var saveJob by remember { mutableStateOf<Job?>(null) }
+    // Which of the two panes is up. Chat opens on the conversation this phone was last
+    // in — reopening a messaging app onto a list of chats you have to search for the one
+    // you were mid-sentence in is the thing no messaging app does. An empty remembered
+    // id (a fresh install, a sign-out, or leaving from the list) opens the list.
+    var inbox by remember { mutableStateOf(repo.prefs.lastChatConversation.isEmpty()) }
+    var inboxQuery by remember { mutableStateOf("") }
     val intensity by LibbyMeter.value.collectAsState()
     val scope = rememberCoroutineScope()
     val list = rememberLazyListState()
-    val drawer = rememberDrawerState(DrawerValue.Closed)
     val context = LocalContext.current
 
     fun save(next: ChatWorkspace, quiet: Boolean = true) {
@@ -300,7 +316,7 @@ fun ChatScreen(
         save(ws.copy(characters = ws.characters.map { if (it.id == characterId) transform(it) else it }))
     }
 
-    // Removes a conversation, mirroring the web drawer's delete. Only re-points the open
+    // Removes a conversation, mirroring the web client's delete. Only re-points the open
     // conversation when it was the one deleted — dropping a background chat should not
     // yank the user out of the one they are reading. When the last chat for a friend
     // goes, a fresh empty one takes its place so the screen is never left with nothing.
@@ -346,6 +362,42 @@ fun ChatScreen(
         }
     }
 
+    /**
+     * The composer's paperclip: pick a picture, scan it, and hang it on the next message.
+     *
+     * Distinct from the settings sheet's uploader above, which files a picture into the
+     * character's own gallery for *her* to send later. This one is you showing her
+     * something, so it lands in the composer as a pending photo — the same place a
+     * library item shared from the hold menu lands. Both go through the same scan, so
+     * what she is told about the picture is the same either way.
+     *
+     * On IO for the same reason as the uploader: reading, base64-encoding and
+     * serialising an 8 MB file are all synchronous, and none of it belongs on the thread
+     * drawing the conversation.
+     */
+    val attachPicker = rememberSystemPickerLauncher(ActivityResultContracts.GetContent()) { uri ->
+        val ws = workspace; val char = currentCharacter(ws)
+        if (uri != null && ws != null && char != null && !uploading) scope.launch {
+            uploading = true
+            message = "Scanning image locally…"
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val bytes = context.contentResolver.openInputStream(uri)!!.use { it.readBytes() }
+                    require(bytes.size <= 8 * 1024 * 1024) { "Image must be 8 MB or smaller" }
+                    val mime = context.contentResolver.getType(uri) ?: "image/jpeg"
+                    val data = "data:$mime;base64," + Base64.encodeToString(bytes, Base64.NO_WRAP)
+                    repo.api.uploadChatImage(ChatImageUpload(char.id, "Shared photo", data, emptyList()))
+                }
+            }.onSuccess { image ->
+                val latest = workspace ?: ws
+                save(latest.copy(images = (latest.images + image).distinctBy { it.id }))
+                pendingPhoto = image
+                message = "Ready to send — add a message or send the photo as it is."
+            }.onFailure { message = it.message ?: "Image upload failed" }
+            uploading = false
+        }
+    }
+
     val cardImporter = rememberSystemPickerLauncher(ActivityResultContracts.GetContent()) { uri ->
         val ws = workspace
         if (uri != null && ws != null) scope.launch {
@@ -363,14 +415,31 @@ fun ChatScreen(
         runCatching { status = repo.api.chatStatus(); repo.api.chatWorkspace() }
             .onSuccess { loaded ->
                 var next = loaded
-                val char = loaded.characters.firstOrNull() ?: return@onSuccess
+                // The conversation this phone was last in, if the server still has it.
+                // Deleted from another client, or never there, and the list opens instead
+                // — which is the honest answer, not a silent jump to a different chat.
+                val resumed = loaded.conversations.firstOrNull { it.id == repo.prefs.lastChatConversation }
+                val char = resumed?.let { r -> loaded.characters.firstOrNull { it.id == r.characterId } }
+                    ?: loaded.characters.firstOrNull() ?: return@onSuccess
                 characterId = char.id
-                val convo = conversations(loaded, char.id).firstOrNull()
-                if (convo == null) next = newConversation(loaded, char) else conversationId = convo.id
+                if (resumed != null) {
+                    conversationId = resumed.id
+                } else {
+                    inbox = true
+                    val convo = conversations(loaded, char.id).firstOrNull()
+                    if (convo == null) next = newConversation(loaded, char) else conversationId = convo.id
+                }
                 workspace = next
                 if (next !== loaded) save(next)
             }.onFailure { message = it.message ?: "Couldn't reach chat" }
         if (status?.modelBackend == true) models = runCatching { repo.api.chatModels() }.getOrNull()
+    }
+
+    // Written as it changes rather than on the way out: Android is free to kill this
+    // process without running anything, which is exactly when resuming matters most.
+    // Sitting on the list is itself a place, and it is stored as one.
+    LaunchedEffect(conversationId, inbox) {
+        repo.prefs.lastChatConversation = if (inbox) "" else conversationId
     }
 
     LaunchedEffect(sharedMedia?.id, workspace != null) {
@@ -380,6 +449,7 @@ fun ChatScreen(
             val libby = loaded.characters.firstOrNull { it.id == "libby" }
                 ?: error("Libby isn't available in this chat workspace.")
             characterId = libby.id
+            inbox = false
             var next = loaded
             val conversation = conversations(next, libby.id).firstOrNull()
             if (conversation == null) next = newConversation(next, libby) else conversationId = conversation.id
@@ -398,7 +468,11 @@ fun ChatScreen(
     }
 
     val active = currentConversation(workspace)
-    LaunchedEffect(active?.messages?.size, typingPhase) {
+    LaunchedEffect(active?.messages?.size, typingPhase, inbox) {
+        // Nothing to scroll while the list of conversations is up: the message list is
+        // not composed, and animateScrollToItem would sit waiting for a layout that is
+        // not coming until the user opens a conversation again.
+        if (inbox) return@LaunchedEffect
         // The intro only occupies index 0 while the log is empty, so the last row is
         // simply the item count minus one — plus the typing line when it is showing.
         val rows = (active?.messages?.size ?: 0).coerceAtLeast(1) +
@@ -446,6 +520,8 @@ fun ChatScreen(
                         intensity = pending.intensity,
                         options = pending.options,
                         characterId = char.id,
+                        // So her recall of the other conversations leaves this one out.
+                        conversationId = pending.id,
                         photoTags = photo?.tags.orEmpty(),
                         photoImageId = photo?.id.orEmpty(),
                         recentImageIds = seenPictures,
@@ -495,7 +571,9 @@ fun ChatScreen(
         }
     }
 
-    BackHandler(onBack = onBack)
+    // Back steps out one level, matching the header arrow: out of a conversation to
+    // the list first, then out of chat to the library.
+    BackHandler { if (inbox) onBack() else inbox = true }
     LaunchedEffect(callOpen) {
         if (!callOpen) return@LaunchedEffect
         callSeconds = 0
@@ -537,46 +615,112 @@ fun ChatScreen(
         return
     }
 
-    ModalNavigationDrawer(
-        drawerState = drawer,
-        drawerContent = { workspace?.let { ws -> ChatDrawer(repo, ws, characterId, conversationId, status?.enabled == true,
-            onCharacter = { id -> characterId = id; val c = conversations(ws, id).firstOrNull(); if (c == null) save(newConversation(ws, ws.characters.first { it.id == id })) else conversationId = c.id; scope.launch { drawer.close() } },
-            onConversation = { conversationId = it; characterId = ws.conversations.first { c -> c.id == it }.characterId; scope.launch { drawer.close() } },
-            onNewConversation = { val char = currentCharacter(ws) ?: return@ChatDrawer; save(newConversation(ws, char)); scope.launch { drawer.close() } }, onAddFriend = { addFriend = true }, onDeleteConversation = { confirmDelete = it }) } },
-    ) {
-        val ws = workspace; val char = currentCharacter(ws); val convo = currentConversation(ws)
-        if (ws == null || char == null || convo == null) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
-        // The activity draws edge to edge, so without this the top bar sits under the
+    // Two panes, the way every messaging app on this phone is arranged: the list of
+    // conversations, and one conversation.
+    //
+    // What was here before was a navigation drawer. A drawer is where an app puts the
+    // things you reach for occasionally — and in a chat client the list of who you are
+    // talking to is the front door, not an occasional thing. Every conversation but the
+    // open one sat behind a hamburger, which is why this read as an app with a chat in
+    // it rather than as a chat app.
+    val ws = workspace
+    val char = currentCharacter(ws)
+    val convo = currentConversation(ws)
+    when {
+        ws == null || char == null ->
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+
+        inbox || convo == null -> ChatInbox(
+            repo = repo,
+            ws = ws,
+            online = status?.enabled == true,
+            openId = conversationId,
+            query = inboxQuery,
+            onQuery = { inboxQuery = it },
+            onBack = onBack,
+            onOpen = { id ->
+                ws.conversations.firstOrNull { it.id == id }?.let { picked ->
+                    characterId = picked.characterId
+                    conversationId = picked.id
+                    inbox = false
+                }
+            },
+            onFriend = { id ->
+                characterId = id
+                val existing = conversations(ws, id).firstOrNull()
+                if (existing == null) {
+                    ws.characters.firstOrNull { it.id == id }?.let { save(newConversation(ws, it)) }
+                } else {
+                    conversationId = existing.id
+                }
+                inbox = false
+            },
+            onNewConversation = { id ->
+                ws.characters.firstOrNull { it.id == id }?.let { friend ->
+                    save(newConversation(ws, friend))
+                    inbox = false
+                }
+            },
+            onAddFriend = { addFriend = true },
+            onImport = { cardImporter.launch("*/*") },
+            onSettings = { settingsOpen = true },
+            onDelete = { confirmDelete = it },
+        )
+
+        // The activity draws edge to edge, so without this the header sits under the
         // status bar and — because adjustResize does nothing once the window stops
         // fitting system windows — the keyboard covers the composer you are typing in.
         // safeDrawing is the one that unions bars, cutout, and IME, so a raised keyboard
         // does not also pay for the navigation bar it is covering.
-        else Column(Modifier.fillMaxSize().background(ChatColors.main).windowInsetsPadding(WindowInsets.safeDrawing)) {
-            Row(Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = ChatColors.muted) }
-                IconButton(onClick = { scope.launch { drawer.open() } }) { Icon(Icons.Filled.Menu, "Friends and conversations", tint = ChatColors.muted) }
-                ChatAvatar(repo, char, Modifier.size(36.dp).clip(CircleShape))
+        else -> Column(
+            Modifier.fillMaxSize().background(ChatColors.main).windowInsetsPadding(WindowInsets.safeDrawing),
+        ) {
+            // The header of a conversation, not of an app: who you are talking to and
+            // whether they are there. Everything that is not about this person has moved
+            // to the inbox or into the overflow.
+            Row(
+                Modifier.fillMaxWidth().height(58.dp).padding(start = 2.dp, end = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                IconButton(onClick = { inbox = true }) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back to chats", tint = ChatColors.text)
+                }
+                ChatAvatar(repo, char, Modifier.size(38.dp).clip(CircleShape))
                 Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
-                    Text(char.name, color = ChatColors.text, fontWeight = FontWeight.Bold, maxLines = 1)
+                    Text(char.name, color = ChatColors.text, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, maxLines = 1)
+                    // A presence line, which is the one piece of furniture that makes a
+                    // header read as a conversation rather than as a screen title. It says
+                    // what is actually true: she is composing, she is thinking, or she is
+                    // simply there.
+                    val typing = busy && typingPhase == TypingPhase.TYPING
+                    val reachable = status?.enabled == true || char.id == "libby"
                     Text(
-                        if (char.id == "libby") "${if (status?.enabled == true) status?.model.orEmpty() else "local replies"} · chooses her own mood"
-                        else "${convo.mode.replaceFirstChar(Char::uppercase)} · ${if (status?.enabled == true) status?.model.orEmpty() else "model offline"}",
-                        color = ChatColors.muted, fontSize = 11.sp, maxLines = 1,
+                        when {
+                            typing -> "typing…"
+                            busy -> "thinking…"
+                            reachable -> "online"
+                            else -> "model offline"
+                        },
+                        color = if (typing || reachable) PresenceOnline else ChatColors.muted,
+                        fontSize = 11.sp, maxLines = 1,
                     )
                 }
-                IconButton(onClick = { settingsOpen = true }) { Icon(Icons.Filled.Settings, "Chat settings", tint = ChatColors.muted) }
+                if (char.id == "libby" && !repo.prefs.hideLibby) {
+                    IconButton(onClick = { callOpen = true }) {
+                        Icon(Icons.Filled.Videocam, "Video chat", tint = ChatColors.muted)
+                    }
+                }
                 Box {
                     IconButton(onClick = { overflowOpen = true }) { Icon(Icons.Filled.MoreVert, "Conversation actions", tint = ChatColors.muted) }
                     DropdownMenu(expanded = overflowOpen, onDismissRequest = { overflowOpen = false }) {
-                        if (char.id == "libby" && !repo.prefs.hideLibby) {
-                            DropdownMenuItem(text = { Text("Video chat") }, leadingIcon = { Icon(Icons.Filled.Videocam, null) }, onClick = { overflowOpen = false; callOpen = true })
-                        }
+                        DropdownMenuItem(text = { Text("Chat settings") }, leadingIcon = { Icon(Icons.Filled.Settings, null) }, onClick = { overflowOpen = false; settingsOpen = true })
                         DropdownMenuItem(text = { Text("New conversation") }, leadingIcon = { Icon(Icons.Filled.AddComment, null) }, onClick = { overflowOpen = false; save(newConversation(ws, char)) })
                         DropdownMenuItem(text = { Text("Clear messages") }, leadingIcon = { Icon(Icons.Filled.DeleteSweep, null) }, enabled = convo.messages.isNotEmpty(), onClick = { overflowOpen = false; updateConversation { it.copy(messages = emptyList(), title = "New conversation") } })
                         DropdownMenuItem(text = { Text("Delete conversation", color = ChatColors.danger) }, leadingIcon = { Icon(Icons.Filled.Delete, null, tint = ChatColors.danger) }, onClick = { overflowOpen = false; confirmDelete = convo })
                     }
                 }
             }
+            HorizontalDivider(color = ChatColors.input)
             if (char.id != "libby") {
                 Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     chatModes.forEach { mode -> FilterChip(selected = convo.mode == mode.id, onClick = { updateConversation { it.copy(mode = mode.id) } }, label = { Text(mode.label.replaceFirstChar(Char::uppercase)) }) }
@@ -593,12 +737,42 @@ fun ChatScreen(
                     modifier = Modifier.fillMaxWidth().background(ChatColors.side).clickable { settingsTab = "generation"; settingsOpen = true }.padding(horizontal = 16.dp, vertical = 9.dp),
                 )
             }
-            LazyColumn(state = list, modifier = Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(bottom = 12.dp)) {
-                // The intro card is a placeholder for an empty log, not a permanent
-                // header — once there is conversation to read, it is only taking room.
-                if (convo.messages.isEmpty()) item { ChatIntro(repo, char, convo, status) }
-                itemsIndexed(convo.messages, key = { _, item -> item.id }) { index, item -> ChatMessageRow(repo, ws, char, item, convo.messages.getOrNull(index - 1), onOpenMedia) }
-                if (busy && typingPhase == TypingPhase.TYPING) item { Text("${char.name} is typing…", color = ChatColors.muted, fontSize = 13.sp, modifier = Modifier.padding(start = 68.dp, top = 8.dp)) }
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                LazyColumn(state = list, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(top = 4.dp, bottom = 14.dp)) {
+                    // The intro card is a placeholder for an empty log, not a permanent
+                    // header — once there is conversation to read, it is only taking room.
+                    if (convo.messages.isEmpty()) item { ChatIntro(repo, char, convo, status) }
+                    itemsIndexed(convo.messages, key = { _, item -> item.id }) { index, item ->
+                        // The separator shares the message's slot rather than taking one of
+                        // its own, so the list's indices stay one-per-message — which is
+                        // what the auto-scroll above counts in.
+                        Column(Modifier.fillMaxWidth()) {
+                            val previous = convo.messages.getOrNull(index - 1)
+                            // A day break is something a reader needs and something this log
+                            // never showed: a conversation picked up a week later ran
+                            // straight on from the one before it with nothing to say so.
+                            if (previous == null || !sameChatDay(previous.at, item.at)) ChatDaySeparator(item.at)
+                            ChatMessageRow(repo, ws, char, item, previous, convo.messages.getOrNull(index + 1), onOpenMedia)
+                        }
+                    }
+                    if (busy && typingPhase == TypingPhase.TYPING) item { ChatTypingBubble(repo, char) }
+                }
+                // Reading back through a long night and then wanting to be at the bottom
+                // again is a chat's commonest navigation, and scrolling for it by hand is
+                // the worst way to do it.
+                val away by remember(list) {
+                    derivedStateOf {
+                        val last = list.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+                        list.layoutInfo.totalItemsCount > 0 && last < list.layoutInfo.totalItemsCount - 2
+                    }
+                }
+                if (away) {
+                    IconButton(
+                        onClick = { scope.launch { list.animateScrollToItem((convo.messages.size - 1).coerceAtLeast(0)) } },
+                        modifier = Modifier.align(Alignment.BottomEnd).padding(end = 14.dp, bottom = 10.dp)
+                            .size(38.dp).clip(CircleShape).background(ChatColors.side),
+                    ) { Icon(Icons.Filled.ArrowDownward, "Jump to the latest message", tint = ChatColors.text, modifier = Modifier.size(20.dp)) }
+                }
             }
             if (message.isNotBlank()) Text(message, color = if (message.contains("fail", true) || message.contains("couldn", true)) ChatColors.danger else ChatColors.muted, fontSize = 13.sp, modifier = Modifier.fillMaxWidth().background(ChatColors.side).padding(10.dp))
             pendingPhoto?.let { photo ->
@@ -614,12 +788,50 @@ fun ChatScreen(
                     TextButton(onClick = { pendingPhoto = null }) { Text("Remove") }
                 }
             }
-            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                TextField(draft, { draft = it }, placeholder = { Text("Message @${char.name}") }, enabled = !busy, maxLines = 4,
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send), keyboardActions = KeyboardActions(onSend = { sendMessage() }),
-                    shape = RoundedCornerShape(22.dp),
-                    colors = TextFieldDefaults.colors(focusedContainerColor = ChatColors.input, unfocusedContainerColor = ChatColors.input), modifier = Modifier.weight(1f))
-                IconButton(onClick = { sendMessage() }, enabled = (draft.isNotBlank() || pendingPhoto != null) && !busy, modifier = Modifier.padding(start = 6.dp).clip(CircleShape).background(ChatColors.accent)) { Icon(Icons.AutoMirrored.Filled.Send, "Send", tint = MaterialTheme.colorScheme.onPrimary) }
+            // One pill holding the attach key, the field and send, so the composer reads
+            // as a single control rather than as a text box with buttons parked beside it.
+            Row(
+                Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, top = 4.dp, bottom = 8.dp),
+                verticalAlignment = Alignment.Bottom,
+            ) {
+                Row(
+                    Modifier.weight(1f).clip(RoundedCornerShape(24.dp)).background(ChatColors.input),
+                    verticalAlignment = Alignment.Bottom,
+                ) {
+                    // Sending a picture used to mean opening the settings sheet, finding
+                    // the images tab, uploading there, and coming back. It is a paperclip
+                    // in every other chat app, so it is one here.
+                    IconButton(onClick = { attachPicker.launch("image/*") }, enabled = !uploading && !busy) {
+                        Icon(Icons.Filled.AddPhotoAlternate, "Attach a photo", tint = ChatColors.muted)
+                    }
+                    TextField(
+                        draft, { draft = it },
+                        placeholder = { Text("Message", color = ChatColors.muted) },
+                        enabled = !busy, maxLines = 5,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                        keyboardActions = KeyboardActions(onSend = { sendMessage() }),
+                        colors = TextFieldDefaults.colors(
+                            focusedContainerColor = Color.Transparent,
+                            unfocusedContainerColor = Color.Transparent,
+                            disabledContainerColor = Color.Transparent,
+                            focusedIndicatorColor = Color.Transparent,
+                            unfocusedIndicatorColor = Color.Transparent,
+                            disabledIndicatorColor = Color.Transparent,
+                        ),
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                val canSend = (draft.isNotBlank() || pendingPhoto != null) && !busy
+                IconButton(
+                    onClick = { sendMessage() }, enabled = canSend,
+                    modifier = Modifier.padding(start = 7.dp).size(48.dp).clip(CircleShape)
+                        .background(if (canSend) ChatColors.accent else ChatColors.input),
+                ) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.Send, "Send",
+                        tint = if (canSend) MaterialTheme.colorScheme.onPrimary else ChatColors.muted,
+                    )
+                }
             }
         }
     }
@@ -740,51 +952,318 @@ private fun LibbyVideoCall(
     }
 }
 
+/** The dot beside a face. Not a theme colour: "available" is green everywhere. */
+private val PresenceOnline = Color(0xFF35C759)
+
+/**
+ * The list of conversations, which is what a messaging app opens on.
+ *
+ * A friends rail across the top and the conversations under it, newest first. The rail
+ * is deliberately the way you start a chat: in the drawer this replaced, beginning a
+ * conversation meant finding a menu item, and the only face you ever saw was the one
+ * you were already talking to.
+ *
+ * [openId] only shades the row you came out of, so coming back from a conversation
+ * shows you where you were rather than making you find it again.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ChatDrawer(
-    repo: Repository, ws: ChatWorkspace, characterId: String, conversationId: String, online: Boolean,
-    onCharacter: (String) -> Unit, onConversation: (String) -> Unit, onNewConversation: () -> Unit, onAddFriend: () -> Unit,
-    onDeleteConversation: (ChatConversation) -> Unit,
+private fun ChatInbox(
+    repo: Repository,
+    ws: ChatWorkspace,
+    online: Boolean,
+    openId: String,
+    query: String,
+    onQuery: (String) -> Unit,
+    onBack: () -> Unit,
+    onOpen: (String) -> Unit,
+    onFriend: (String) -> Unit,
+    onNewConversation: (String) -> Unit,
+    onAddFriend: () -> Unit,
+    onImport: () -> Unit,
+    onSettings: () -> Unit,
+    onDelete: (ChatConversation) -> Unit,
 ) {
-    ModalDrawerSheet(Modifier.fillMaxHeight().width(340.dp)) {
-        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 20.dp)) {
-            item {
-                Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 14.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) { Text("Chats", fontSize = 23.sp, fontWeight = FontWeight.Bold); Text("Friends and conversation history", color = ChatColors.muted, fontSize = 12.sp) }
-                    IconButton(onClick = onAddFriend) { Icon(Icons.Filled.Group, "Add friend", tint = ChatColors.accent) }
-                }
-                Text("FRIENDS", color = ChatColors.muted, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 20.dp, vertical = 7.dp))
+    var menuOpen by remember { mutableStateOf(false) }
+    var holdOn by remember { mutableStateOf<ChatConversation?>(null) }
+    val terms = query.trim().lowercase()
+    // Searching the messages and not only the titles, because a conversation's title is
+    // its first line and nobody remembers a chat by its first line.
+    val rows = remember(ws, terms) {
+        ws.conversations.filter { convo ->
+            terms.isEmpty() ||
+                convo.title.lowercase().contains(terms) ||
+                ws.characters.firstOrNull { it.id == convo.characterId }?.name?.lowercase()?.contains(terms) == true ||
+                convo.messages.any { it.content.lowercase().contains(terms) }
+        }.sortedByDescending { it.updatedAt }
+    }
+
+    Column(Modifier.fillMaxSize().background(ChatColors.main).windowInsetsPadding(WindowInsets.safeDrawing)) {
+        Row(
+            Modifier.fillMaxWidth().height(58.dp).padding(start = 2.dp, end = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back to the library", tint = ChatColors.text)
             }
-            items(ws.characters, key = { "friend-${it.id}" }) { char ->
-                NavigationDrawerItem(
-                    selected = char.id == characterId,
-                    onClick = { onCharacter(char.id) },
-                    icon = { ChatAvatar(repo, char, Modifier.size(36.dp).clip(CircleShape)) },
-                    label = { Column { Text(char.name, fontWeight = FontWeight.SemiBold); Text(if (char.id == characterId) "Current friend" else "View conversations", color = ChatColors.muted, fontSize = 11.sp) } },
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 1.dp),
+            Text("Chats", color = ChatColors.text, fontWeight = FontWeight.Bold, fontSize = 22.sp, modifier = Modifier.weight(1f))
+            IconButton(onClick = onSettings) { Icon(Icons.Filled.Settings, "Chat settings", tint = ChatColors.muted) }
+            Box {
+                IconButton(onClick = { menuOpen = true }) { Icon(Icons.Filled.MoreVert, "More", tint = ChatColors.muted) }
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    DropdownMenuItem(text = { Text("Add a friend") }, leadingIcon = { Icon(Icons.Filled.PersonAdd, null) }, onClick = { menuOpen = false; onAddFriend() })
+                    DropdownMenuItem(text = { Text("Import a character card") }, leadingIcon = { Icon(Icons.Filled.Download, null) }, onClick = { menuOpen = false; onImport() })
+                }
+            }
+        }
+        TextField(
+            query, onQuery,
+            placeholder = { Text("Search conversations", color = ChatColors.muted) },
+            leadingIcon = { Icon(Icons.Filled.Search, null, tint = ChatColors.muted) },
+            singleLine = true,
+            shape = RoundedCornerShape(22.dp),
+            colors = TextFieldDefaults.colors(
+                focusedContainerColor = ChatColors.input,
+                unfocusedContainerColor = ChatColors.input,
+                focusedIndicatorColor = Color.Transparent,
+                unfocusedIndicatorColor = Color.Transparent,
+            ),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp),
+        )
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            ws.characters.forEach { friend ->
+                Column(
+                    Modifier.width(66.dp).clip(RoundedCornerShape(12.dp)).clickable { onFriend(friend.id) }.padding(vertical = 4.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Box {
+                        ChatAvatar(repo, friend, Modifier.size(52.dp).clip(CircleShape))
+                        // Libby answers with or without a model loaded, so she is never
+                        // shown as away; anyone else depends on the backend being up.
+                        if (online || friend.id == "libby") {
+                            Box(
+                                Modifier.align(Alignment.BottomEnd).size(14.dp).clip(CircleShape).background(ChatColors.main),
+                                contentAlignment = Alignment.Center,
+                            ) { Box(Modifier.size(9.dp).clip(CircleShape).background(PresenceOnline)) }
+                        }
+                    }
+                    Text(
+                        friend.name, color = ChatColors.text, fontSize = 11.sp, maxLines = 1,
+                        overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 5.dp),
+                    )
+                }
+            }
+            Column(
+                Modifier.width(66.dp).clip(RoundedCornerShape(12.dp)).clickable { onAddFriend() }.padding(vertical = 4.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Box(Modifier.size(52.dp).clip(CircleShape).background(ChatColors.input), contentAlignment = Alignment.Center) {
+                    Icon(Icons.Filled.PersonAdd, "Add a friend", tint = ChatColors.muted)
+                }
+                Text("Add", color = ChatColors.muted, fontSize = 11.sp, modifier = Modifier.padding(top = 5.dp))
+            }
+        }
+        HorizontalDivider(color = ChatColors.input)
+        if (rows.isEmpty()) {
+            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                Text(
+                    if (terms.isEmpty()) "No conversations yet — tap a friend above to start one." else "Nothing matched that.",
+                    color = ChatColors.muted, fontSize = 13.sp, modifier = Modifier.padding(24.dp),
                 )
             }
-            item {
-                HorizontalDivider(Modifier.padding(vertical = 12.dp))
-                Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) { Text(ws.characters.firstOrNull { it.id == characterId }?.name ?: "Conversations", fontWeight = FontWeight.Bold); Text("CONVERSATIONS", color = ChatColors.muted, fontSize = 10.sp) }
-                    TextButton(onClick = onNewConversation) { Icon(Icons.Filled.AddComment, null, modifier = Modifier.size(18.dp)); Text(" New") }
+        } else {
+            LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(bottom = 16.dp)) {
+                items(rows, key = { it.id }) { convo ->
+                    ChatInboxRow(
+                        repo = repo,
+                        friend = ws.characters.firstOrNull { it.id == convo.characterId },
+                        convo = convo,
+                        // The conversation's own name earns a line only when there is more
+                        // than one with this person; otherwise the friend's name says it all
+                        // and a second line of "New conversation" is noise.
+                        showTitle = ws.conversations.count { it.characterId == convo.characterId } > 1,
+                        selected = convo.id == openId,
+                        onClick = { onOpen(convo.id) },
+                        onHold = { holdOn = convo },
+                    )
                 }
             }
-            val conversations = ws.conversations.filter { it.characterId == characterId }.sortedByDescending { it.updatedAt }
-            items(conversations, key = { "conversation-${it.id}" }) { convo ->
-                NavigationDrawerItem(
-                    selected = convo.id == conversationId,
-                    onClick = { onConversation(convo.id) },
-                    icon = { Icon(Icons.Filled.AddComment, null) },
-                    label = { Column { Text(convo.title, maxLines = 1); Text("${convo.messages.size} messages · ${timeOf(convo.updatedAt)}", color = ChatColors.muted, fontSize = 10.sp) } },
-                    badge = { IconButton(onClick = { onDeleteConversation(convo) }) { Icon(Icons.Filled.Delete, "Delete conversation", tint = ChatColors.muted) } },
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 1.dp),
+        }
+        Text(
+            if (online) "● Model online" else "○ Libby answers locally; other friends need a model",
+            color = if (online) ChatColors.accent else ChatColors.muted,
+            fontSize = 11.sp,
+            modifier = Modifier.padding(horizontal = 18.dp, vertical = 8.dp),
+        )
+    }
+
+    holdOn?.let { target ->
+        val friend = ws.characters.firstOrNull { it.id == target.characterId }
+        ModalBottomSheet(onDismissRequest = { holdOn = null }) {
+            Text(
+                target.title, style = MaterialTheme.typography.titleMedium, maxLines = 2,
+                modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
+            )
+            ListItem(
+                headlineContent = { Text("Open") },
+                leadingContent = { Icon(Icons.Filled.ChatBubble, contentDescription = null) },
+                modifier = Modifier.clickable { holdOn = null; onOpen(target.id) },
+            )
+            ListItem(
+                headlineContent = { Text("Start a new one with ${friend?.name ?: "them"}") },
+                leadingContent = { Icon(Icons.Filled.AddComment, contentDescription = null) },
+                modifier = Modifier.clickable { holdOn = null; onNewConversation(target.characterId) },
+            )
+            ListItem(
+                headlineContent = { Text("Delete", color = ChatColors.danger) },
+                supportingContent = { Text("Removes this conversation and its messages") },
+                leadingContent = { Icon(Icons.Filled.Delete, contentDescription = null, tint = ChatColors.danger) },
+                modifier = Modifier.clickable { holdOn = null; onDelete(target) },
+            )
+            Spacer(Modifier.size(16.dp))
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun ChatInboxRow(
+    repo: Repository,
+    friend: ChatCharacter?,
+    convo: ChatConversation,
+    showTitle: Boolean,
+    selected: Boolean,
+    onClick: () -> Unit,
+    onHold: () -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth()
+            .background(if (selected) ChatColors.input else Color.Transparent)
+            .combinedClickable(onClick = onClick, onLongClick = onHold)
+            .padding(horizontal = 14.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (friend != null) ChatAvatar(repo, friend, Modifier.size(50.dp).clip(CircleShape))
+        Column(Modifier.weight(1f).padding(start = 12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    friend?.name ?: "Conversation", color = ChatColors.text, fontWeight = FontWeight.SemiBold,
+                    fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
+                )
+                Text(chatInboxStamp(convo.updatedAt), color = ChatColors.muted, fontSize = 11.sp, modifier = Modifier.padding(start = 8.dp))
+            }
+            Text(
+                conversationPreview(convo), color = ChatColors.muted, fontSize = 13.sp,
+                maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 1.dp),
+            )
+            if (showTitle) {
+                Text(
+                    convo.title, color = ChatColors.muted.copy(alpha = .65f), fontSize = 11.sp,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
                 )
             }
-            item {
-                val localLibby = ws.characters.firstOrNull { it.id == characterId }?.id == "libby"
-                Text(if (online) "● Model online" else if (localLibby) "○ Libby local replies" else "○ Model offline", color = if (online) ChatColors.accent else ChatColors.muted, fontSize = 12.sp, modifier = Modifier.padding(20.dp))
+        }
+    }
+}
+
+/**
+ * The one line of a conversation that shows in the list.
+ *
+ * A thought is not speech, so it is never previewed as though she said it — the log
+ * draws those as their own thing and quoting one here would put words in her mouth.
+ */
+private fun conversationPreview(convo: ChatConversation): String {
+    val last = convo.messages.lastOrNull() ?: return "No messages yet"
+    val body = when {
+        last.thought.isNotBlank() -> "…"
+        last.content.isNotBlank() -> last.content.replace('\n', ' ')
+        last.imageId.isNotBlank() -> "Photo"
+        else -> "…"
+    }
+    return if (last.role == "user") "You: $body" else body
+}
+
+// ── when things were said ────────────────────────────────────────────────────
+
+private val chatDayStamp = SimpleDateFormat("EEEE d MMMM", Locale.getDefault())
+private val chatShortDate = SimpleDateFormat("d MMM", Locale.getDefault())
+
+private fun startOfDay(at: Long): Long = Calendar.getInstance().apply {
+    timeInMillis = at
+    set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0)
+    set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
+}.timeInMillis
+
+private fun sameChatDay(a: Long, b: Long): Boolean = startOfDay(a) == startOfDay(b)
+
+/** Yesterday by the calendar, not by subtracting 24 hours — the clocks move twice a year. */
+private fun yesterdayStart(): Long =
+    Calendar.getInstance().apply {
+        timeInMillis = startOfDay(System.currentTimeMillis())
+        add(Calendar.DAY_OF_YEAR, -1)
+    }.timeInMillis
+
+private fun chatDayLabel(at: Long): String = when (startOfDay(at)) {
+    startOfDay(System.currentTimeMillis()) -> "Today"
+    yesterdayStart() -> "Yesterday"
+    else -> chatDayStamp.format(Date(at))
+}
+
+/** Today's chats are stamped with the time, older ones with the day. */
+private fun chatInboxStamp(at: Long): String = when (startOfDay(at)) {
+    startOfDay(System.currentTimeMillis()) -> timeOf(at)
+    yesterdayStart() -> "Yesterday"
+    else -> chatShortDate.format(Date(at))
+}
+
+@Composable
+private fun ChatDaySeparator(at: Long) {
+    Box(Modifier.fillMaxWidth().padding(top = 14.dp, bottom = 4.dp), contentAlignment = Alignment.Center) {
+        Text(
+            chatDayLabel(at), color = ChatColors.muted, fontSize = 11.sp,
+            modifier = Modifier.clip(RoundedCornerShape(10.dp)).background(ChatColors.side)
+                .padding(horizontal = 10.dp, vertical = 4.dp),
+        )
+    }
+}
+
+/**
+ * The dots, while she is writing.
+ *
+ * A line of grey text saying "Libby is typing…" is a status report. Three dots in a
+ * bubble where the message is about to appear is what a chat does, and it is the same
+ * information — [typeLikeAPerson] decides when it shows, and that has not changed.
+ */
+@Composable
+private fun ChatTypingBubble(repo: Repository, char: ChatCharacter) {
+    Row(
+        Modifier.fillMaxWidth().padding(start = 10.dp, end = 10.dp, top = 8.dp),
+        verticalAlignment = Alignment.Bottom,
+    ) {
+        Box(Modifier.width(44.dp), contentAlignment = Alignment.BottomCenter) {
+            ChatAvatar(repo, char, Modifier.size(30.dp).clip(CircleShape))
+        }
+        Row(
+            Modifier.clip(RoundedCornerShape(18.dp, 18.dp, 18.dp, 4.dp)).background(ChatColors.side)
+                .padding(horizontal = 14.dp, vertical = 13.dp),
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            val pulse = rememberInfiniteTransition(label = "typing")
+            repeat(3) { index ->
+                val alpha by pulse.animateFloat(
+                    initialValue = .25f,
+                    targetValue = 1f,
+                    animationSpec = infiniteRepeatable(
+                        animation = tween(520, delayMillis = index * 160, easing = LinearEasing),
+                        repeatMode = RepeatMode.Reverse,
+                    ),
+                    label = "dot$index",
+                )
+                Box(Modifier.size(7.dp).clip(CircleShape).background(ChatColors.muted.copy(alpha = alpha)))
             }
         }
     }
@@ -963,39 +1442,98 @@ private fun ChatThoughtRow(char: ChatCharacter, entry: StoredChatMessage) {
     }
 }
 
+/**
+ * One message, drawn the way a phone draws messages.
+ *
+ * Three things changed from the version this replaces, and all three are what made the
+ * old log read as a transcript rather than as a conversation:
+ *
+ *  - Bubbles hug their text. Every bubble used to be stretched to four-fifths of the
+ *    screen, so "ok" and a paragraph were the same width and the shape of the exchange
+ *    carried no information at all.
+ *  - Nobody's name is repeated. This is a conversation between two people, both of whom
+ *    know who they are; the avatar and the side of the screen already say it.
+ *  - A run of messages is drawn as a run: square inner corners, one avatar at the foot
+ *    of it, one timestamp at the end. [previous] and [next] are what make that visible
+ *    from inside a single row.
+ */
 @Composable
-private fun ChatMessageRow(repo: Repository, ws: ChatWorkspace, char: ChatCharacter, entry: StoredChatMessage, previous: StoredChatMessage?, onOpenMedia: OpenMedia) {
+private fun ChatMessageRow(
+    repo: Repository,
+    ws: ChatWorkspace,
+    char: ChatCharacter,
+    entry: StoredChatMessage,
+    previous: StoredChatMessage?,
+    next: StoredChatMessage?,
+    onOpenMedia: OpenMedia,
+) {
     if (entry.thought.isNotBlank()) { ChatThoughtRow(char, entry); return }
-    // A thought breaks a run rather than continuing one: what follows it is her speaking
-    // again, and it should come back with her name on it.
-    val grouped = previous != null && previous.thought.isBlank() && previous.role == entry.role && entry.at - previous.at < 5 * 60_000
     val friend = entry.role == "assistant"
-    val name = if (friend) char.name else ws.profile.displayName.ifBlank { repo.prefs.reauthUsername ?: "You" }
+    // A thought breaks a run rather than continuing one: what follows it is her speaking
+    // again, and it should come back with her face on it. So does a day boundary, which
+    // already has a separator drawn across it.
+    fun runsWith(other: StoredChatMessage?): Boolean =
+        other != null && other.thought.isBlank() && other.role == entry.role &&
+            sameChatDay(other.at, entry.at) && kotlin.math.abs(entry.at - other.at) < 5 * 60_000
+    val first = !runsWith(previous)
+    val last = !runsWith(next)
+
+    val big = 18.dp
+    val tight = 6.dp
+    val tail = 4.dp
+    val shape = if (friend) {
+        RoundedCornerShape(
+            topStart = if (first) big else tight, topEnd = big,
+            bottomEnd = big, bottomStart = if (last) tail else tight,
+        )
+    } else {
+        RoundedCornerShape(
+            topStart = big, topEnd = if (first) big else tight,
+            bottomEnd = if (last) tail else tight, bottomStart = big,
+        )
+    }
+
     Row(
-        Modifier.fillMaxWidth().padding(start = 10.dp, end = 10.dp, top = if (grouped) 3.dp else 12.dp),
+        Modifier.fillMaxWidth().padding(start = 10.dp, end = 10.dp, top = if (first) 10.dp else 2.dp),
         horizontalArrangement = if (friend) Arrangement.Start else Arrangement.End,
         verticalAlignment = Alignment.Bottom,
     ) {
         if (friend) {
             Box(Modifier.width(44.dp), contentAlignment = Alignment.BottomCenter) {
-                if (!grouped) ChatAvatar(repo, char, Modifier.size(36.dp).clip(CircleShape))
+                if (last) ChatAvatar(repo, char, Modifier.size(32.dp).clip(CircleShape))
             }
         }
         Column(
-            Modifier.fillMaxWidth(if (friend) .82f else .78f).widthIn(max = 520.dp)
-                .clip(if (friend) RoundedCornerShape(5.dp, 17.dp, 17.dp, 17.dp) else RoundedCornerShape(17.dp, 5.dp, 17.dp, 17.dp))
+            Modifier.widthIn(max = 320.dp).clip(shape)
                 .background(if (friend) ChatColors.side else MaterialTheme.colorScheme.primaryContainer)
-                .padding(horizontal = 13.dp, vertical = 9.dp),
+                .padding(horizontal = 13.dp, vertical = 8.dp),
         ) {
-            if (!grouped) Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(name, color = if (friend) ChatColors.accent else MaterialTheme.colorScheme.onPrimaryContainer, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                Spacer(Modifier.weight(1f))
-                Text(timeOf(entry.at), color = ChatColors.muted, fontSize = 10.sp)
+            val ink = if (friend) ChatColors.text else MaterialTheme.colorScheme.onPrimaryContainer
+            Text(richChatText(entry.content), color = ink, fontSize = 15.sp)
+            if (entry.imageId.isNotBlank()) {
+                AsyncImage(
+                    repo.chatImageUrl(entry.imageId),
+                    "Image sent by ${if (friend) char.name else ws.profile.displayName.ifBlank { "you" }}",
+                    imageLoader = repo.imageLoader,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.padding(top = 7.dp).width(260.dp).height(260.dp).clip(RoundedCornerShape(12.dp)),
+                )
             }
-            Text(richChatText(entry.content), color = if (friend) ChatColors.text else MaterialTheme.colorScheme.onPrimaryContainer, fontSize = 15.sp, modifier = Modifier.padding(top = if (grouped) 0.dp else 2.dp))
-            if (entry.imageId.isNotBlank()) AsyncImage(repo.chatImageUrl(entry.imageId), "Image sent by $name", imageLoader = repo.imageLoader, modifier = Modifier.fillMaxWidth().height(260.dp).padding(top = 7.dp).clip(RoundedCornerShape(10.dp)))
             ChatLinkChips(repo, entry.links, onOpenMedia)
             ChatActionCards(repo, entry.actions)
+            // One stamp per run, at its foot, so a burst of four texts is marked once
+            // instead of four times. The ticks are the same idea as everywhere else: the
+            // message is in the log on the server, which is as delivered as it gets here.
+            if (last) {
+                Row(
+                    Modifier.align(Alignment.End).padding(top = 3.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(3.dp),
+                ) {
+                    Text(timeOf(entry.at), color = ink.copy(alpha = .55f), fontSize = 10.sp)
+                    if (!friend) Icon(Icons.Filled.DoneAll, null, tint = ink.copy(alpha = .55f), modifier = Modifier.size(13.dp))
+                }
+            }
         }
     }
 }

@@ -177,6 +177,7 @@ const (
 	rankPhotoCatalogue  = 20 // which selfies she could send
 	rankThoughts        = 25 // that she may think something instead of saying it
 	rankWantsList       = 30 // her own standing desires
+	rankRecaps          = 35 // the other conversations she has had with them
 	rankBond            = 40 // the gap, carried mood, closeness
 	rankActions         = 50 // what she may offer to do to the collection
 	rankMemoryList      = 60 // what she knows about them — shed last

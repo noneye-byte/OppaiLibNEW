@@ -3,6 +3,7 @@ package net.fourbakers.oppailib.ui
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
@@ -19,7 +20,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -51,6 +52,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -66,6 +68,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.ImeAction
@@ -120,6 +123,61 @@ internal fun mergeSourcePage(
     return MergedSourcePage(current + fresh, nextCursor)
 }
 
+/** One feed's tiles, its paging cursor, and how far down it you were. */
+internal data class BrowsePane(
+    val items: List<SourceItem>,
+    val cursor: String,
+    val scrollIndex: Int,
+    val scrollOffset: Int,
+)
+
+/**
+ * What each remote feed looked like when you left it, for as long as this process lives.
+ *
+ * Browse is composed conditionally — it is torn down entirely when you go back to the
+ * library, and its feed is torn down and rebuilt when you step into a thread — so every
+ * such move used to throw the whole feed away: the pages you had loaded, the cursor you
+ * had reached, and the place you had scrolled to. Coming back out of a thread put you on
+ * page one of the board again, and the retained scroll index of the grid you had just
+ * been reading dropped you somewhere near the bottom of it.
+ *
+ * So it is kept here instead, outside composition. Deliberately in memory only: these are
+ * someone else's pages and they are stale within minutes, so surviving a relaunch would be
+ * a promise this cannot keep. Across a relaunch only the *place* is restored, from
+ * [net.fourbakers.oppailib.data.Prefs.lastBrowseFeed], and the feed is fetched fresh.
+ */
+internal object BrowseMemory {
+    /**
+     * How many feeds are held. One board, a thread inside it, and a handful of boards
+     * either side of them is the whole of what anyone navigates between in one sitting;
+     * past that this would be holding thumbnails for pages nobody is going back to.
+     */
+    private const val MAX_PANES = 8
+
+    // Access-ordered so eviction drops the feed you have gone longest without.
+    private val panes = object : LinkedHashMap<String, BrowsePane>(0, .75f, true) {
+        override fun removeEldestEntry(eldest: Map.Entry<String, BrowsePane>) = size > MAX_PANES
+    }
+
+    /** Identifies a feed. A search term and a sort make a different feed of the same board. */
+    fun key(sourceId: String?, feed: String, query: String, sort: String): String =
+        listOf(sourceId.orEmpty(), feed, query, sort).joinToString("\n")
+
+    @Synchronized
+    fun take(key: String): BrowsePane? = panes.remove(key)
+
+    @Synchronized
+    fun save(key: String, pane: BrowsePane) {
+        // Nothing to come back to: a feed that never loaded would otherwise be restored
+        // as a permanently empty one, since a restored pane is never re-fetched.
+        if (pane.items.isEmpty()) panes.remove(key) else panes[key] = pane
+    }
+
+    /** Forgets everything. Called on sign-out: browsing history is session state. */
+    @Synchronized
+    fun clear() = panes.clear()
+}
+
 /**
  * Browses a remote catalogue — a 4chan board, a doujin listing — without importing
  * anything. Items stream from the origin through the server's proxy; only the save
@@ -153,8 +211,18 @@ fun BrowseScreen(repo: Repository, openAt: PinnedFeed? = null, onBack: () -> Uni
     var query by remember { mutableStateOf("") }
     var draft by remember { mutableStateOf("") }
 
-    var items by remember { mutableStateOf<List<SourceItem>>(emptyList()) }
-    var cursor by remember { mutableStateOf("") }
+    // Everything below is scoped to *one* feed, and re-scoped the moment the feed
+    // changes — stepping into a thread, picking another board, committing a search.
+    // Keying the state on the feed rather than reassigning it is what keeps a grid from
+    // ever being drawn with one feed's tiles at another feed's scroll position: the
+    // whole pane, tiles and scroll together, is swapped in one go.
+    val feedKey = BrowseMemory.key(source?.id, feed, query, sort)
+    val restored = remember(feedKey) { BrowseMemory.take(feedKey) }
+    var items by remember(feedKey) { mutableStateOf(restored?.items ?: emptyList()) }
+    var cursor by remember(feedKey) { mutableStateOf(restored?.cursor ?: "") }
+    val grid = remember(feedKey) {
+        LazyGridState(restored?.scrollIndex ?: 0, restored?.scrollOffset ?: 0)
+    }
     var loading by remember { mutableStateOf(false) }
     // Distinct from `loading`: until the source list arrives there is no feed to be
     // empty, and saying "Nothing on this feed" before we've even asked is a lie.
@@ -177,7 +245,6 @@ fun BrowseScreen(repo: Repository, openAt: PinnedFeed? = null, onBack: () -> Uni
     // the grid of the board we're on. See load().
     var req by remember { mutableIntStateOf(0) }
 
-    val grid = rememberLazyGridState()
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
     val keyboard = LocalSoftwareKeyboardController.current
@@ -195,15 +262,19 @@ fun BrowseScreen(repo: Repository, openAt: PinnedFeed? = null, onBack: () -> Uni
         runCatching { repo.api.sources().sources }
             .onSuccess { list ->
                 sources = list
-                // A pin names the source and feed it wants; otherwise land on something
-                // browsable rather than an empty picker.
-                val want = openAt?.let { pin -> list.firstOrNull { it.id == pin.sourceId } }
-                if (want != null) {
-                    source = want
-                    boardFeed = openAt.feedId
-                    query = openAt.query
-                    draft = openAt.query
-                    sort = openAt.sort
+                // A pin names the source and feed it wants. Failing that, the feed this
+                // phone was last reading is a far better guess at where the user wants to
+                // be than whichever source the server happens to list first — opening
+                // Browse to a board nobody chose is what made every visit start over.
+                val want = openAt?.let { pin -> list.firstOrNull { it.id == pin.sourceId } to pin }
+                    ?: resumableFeed(repo, list)
+                if (want != null && want.first != null) {
+                    val (src, pin) = want
+                    source = src
+                    boardFeed = pin.feedId
+                    query = pin.query
+                    draft = pin.query
+                    sort = pin.sort
                 } else {
                     list.firstOrNull()?.let { first ->
                         source = first
@@ -213,6 +284,16 @@ fun BrowseScreen(repo: Repository, openAt: PinnedFeed? = null, onBack: () -> Uni
             }
             .onFailure { error = it.message ?: "Couldn't reach the server" }
         loadingSources = false
+    }
+
+    // Written as you navigate rather than on the way out, because leaving is exactly
+    // what this screen does not get told about when Android kills the process. A thread
+    // is never stored: it 404s off the board within days, and reopening the app onto a
+    // dead thread is worse than reopening onto the board it was on.
+    LaunchedEffect(source?.id, boardFeed, query, sort) {
+        val src = source ?: return@LaunchedEffect
+        if (boardFeed.isEmpty()) return@LaunchedEffect
+        repo.prefs.lastBrowseFeed = PinnedFeed(src.id, boardFeed, src.name, query, sort)
     }
 
     /** Loads a page of the current feed. [reset] starts the feed over. */
@@ -283,23 +364,45 @@ fun BrowseScreen(repo: Repository, openAt: PinnedFeed? = null, onBack: () -> Uni
     // grid.scrollToItem() here would then wait forever for a layout that never comes,
     // never reaching load(). That is exactly what left the screen stuck on "Nothing on
     // this feed". Emptying the list resets the scroll on its own anyway.
-    LaunchedEffect(source?.id, feed, query, sort) {
-        if (source != null && feed.isNotEmpty()) {
-            items = emptyList()
-            cursor = ""
-            error = null
-            load(reset = true)
+    LaunchedEffect(feedKey) {
+        if (source == null || feed.isEmpty()) return@LaunchedEffect
+        error = null
+        // Retire anything still in the air for the feed we just left. Its reply would
+        // land in a pane nobody is looking at, but its error message would land on this
+        // one — and "this source repeated an earlier page" about a board you have left
+        // is a confusing thing to read.
+        //
+        // A superseded request deliberately leaves `loading` alone (see load()), on the
+        // understanding that whoever replaced it now owns the flag. When the new feed is
+        // one that came back from memory there is no new request to own it, so it is
+        // cleared here — otherwise the pane would sit with a spinner over it and refuse
+        // to page, waiting on a reply that has already been thrown away.
+        req += 1
+        loading = false
+        // Already in hand: this feed was left, not lost — its pages, its cursor and its
+        // scroll came back with it, and re-fetching would throw all three away again.
+        if (items.isEmpty()) load(reset = true)
+    }
+
+    // The counterpart. This runs when the feed changes or Browse itself goes away, and
+    // both lambdas below close over the pane being left, not the one arriving.
+    DisposableEffect(feedKey) {
+        onDispose {
+            BrowseMemory.save(
+                feedKey,
+                BrowsePane(items, cursor, grid.firstVisibleItemIndex, grid.firstVisibleItemScrollOffset),
+            )
         }
     }
 
     // Infinite scroll: fetch the next page as the last row comes into view.
-    val nearEnd by remember {
+    val nearEnd by remember(grid) {
         derivedStateOf {
             val last = grid.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
             items.isNotEmpty() && last >= items.size - 6
         }
     }
-    LaunchedEffect(Unit) {
+    LaunchedEffect(grid) {
         snapshotFlow { nearEnd }.collect { if (it && cursor.isNotEmpty()) load(reset = false) }
     }
 
@@ -462,7 +565,42 @@ fun BrowseScreen(repo: Repository, openAt: PinnedFeed? = null, onBack: () -> Uni
             )
         }
 
-        Column(Modifier.padding(padding).fillMaxSize()) {
+        // Reading the thread is a swipe away.
+        //
+        // A thread is a conversation with pictures in it, and the grid only ever shows
+        // the pictures — so the posts, which are the half that says what any of it is,
+        // were behind a small icon in the top bar that nobody found. Dragging right over
+        // the files opens them, the way a side panel opens in every app that has one.
+        //
+        // Rightward specifically, and never from the very edge: the system's own back
+        // gesture owns the edge, and a drag that starts in the middle of the screen is
+        // not one. The toolbar button stays for discoverability and for anyone who would
+        // rather tap. Vertical drags are untouched, so the grid scrolls as it always did.
+        val swipeToComments = container?.takeIf { it.hasComments }
+        val swipeModifier = if (swipeToComments == null) {
+            Modifier
+        } else {
+            Modifier.pointerInput(swipeToComments.id) {
+                val threshold = 72.dp.toPx()
+                var travelled = 0f
+                var opened = false
+                detectHorizontalDragGestures(
+                    onDragStart = { travelled = 0f; opened = false },
+                ) { change, delta ->
+                    if (opened) return@detectHorizontalDragGestures
+                    // Reversing cancels rather than accumulating: a drag that wanders
+                    // back and forth is not someone asking for anything.
+                    travelled = if (delta < 0f) 0f else travelled + delta
+                    if (travelled >= threshold) {
+                        opened = true
+                        change.consume()
+                        commentsFor = swipeToComments
+                    }
+                }
+            }
+        }
+
+        Column(Modifier.padding(padding).fillMaxSize().then(swipeModifier)) {
             // Inside a thread the pickers would be lying about what's on screen, so the
             // thread's own header replaces them.
             if (container == null) {
@@ -519,7 +657,10 @@ fun BrowseScreen(repo: Repository, openAt: PinnedFeed? = null, onBack: () -> Uni
                 }
             } else {
                 Text(
-                    "${items.size} files in this thread",
+                    buildString {
+                        append(items.size).append(" files in this thread")
+                        if (container?.hasComments == true) append("  ·  swipe right to read the posts")
+                    },
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
@@ -621,6 +762,25 @@ fun BrowseScreen(repo: Repository, openAt: PinnedFeed? = null, onBack: () -> Uni
             }
         }
     }
+}
+
+/**
+ * The feed this phone was last browsing, if it still exists.
+ *
+ * Validated rather than trusted. Sources come and go with the server's adapters, and a
+ * stored feed id that its source no longer offers would leave the chip row with nothing
+ * selected and the grid permanently empty. 4chan is the exception: any board id is a
+ * real feed there, including one typed into the box by hand, so a stored board is
+ * accepted without having to appear among the chips.
+ */
+private fun resumableFeed(
+    repo: Repository,
+    sources: List<RemoteSource>,
+): Pair<RemoteSource, PinnedFeed>? {
+    val pin = repo.prefs.lastBrowseFeed?.takeIf { it.feedId.isNotEmpty() } ?: return null
+    val src = sources.firstOrNull { it.id == pin.sourceId } ?: return null
+    if (!src.feeds.any { it.id == pin.feedId } && src.id != "4chan") return null
+    return src to pin
 }
 
 /** Accepts b, /b/, or a copied board URL and returns the bare API board id. */

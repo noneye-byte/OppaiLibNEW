@@ -122,6 +122,25 @@ import net.fourbakers.oppailib.work.DownloadWorker
 import net.fourbakers.oppailib.work.UploadQueue
 import net.fourbakers.oppailib.work.UploadWorker
 
+/**
+ * Screen ids for [net.fourbakers.oppailib.data.Prefs.lastScreen].
+ *
+ * Strings rather than an enum because they are written to storage: a reordered enum
+ * would change what an ordinal means, and a renamed constant would silently stop
+ * matching what previous versions of the app wrote. An id nothing recognises simply
+ * falls through to the library grid, which is the right answer for an unknown screen.
+ *
+ * Settings and the viewer are deliberately absent. Settings is somewhere you visit and
+ * leave, not somewhere you were; the viewer is restored by the id of what was open in
+ * it instead, since an index into a grid rebuilt from the server points at the wrong
+ * thing by the time the app is reopened.
+ */
+private const val SCREEN_LIBRARY = ""
+private const val SCREEN_BROWSE = "browse"
+private const val SCREEN_CHAT = "chat"
+private const val SCREEN_DOWNLOADS = "downloads"
+private const val SCREEN_STUDIO = "studio"
+
 /** Sidebar sections. The empty kind is the unfiltered "everything" view. */
 private data class Section(val kind: String, val label: String, val icon: ImageVector)
 
@@ -180,7 +199,10 @@ private fun sorted(items: List<Media>, mode: SortMode): List<Media> = when (mode
 @Composable
 fun LibraryScreen(repo: Repository, onLogout: () -> Unit) {
     var items by remember { mutableStateOf<List<Media>>(emptyList()) }
-    var kind by remember { mutableStateOf("") }
+    // Seeded from where the app was last used rather than from the defaults. Android
+    // kills a backgrounded app whenever it likes, and coming back to the unfiltered
+    // grid every time is how that killing becomes the user's problem. See Prefs.
+    var kind by remember { mutableStateOf(repo.prefs.lastKind) }
     var loading by remember { mutableStateOf(false) }
     var viewerAt by remember { mutableStateOf<Int?>(null) }
     var showScrape by remember { mutableStateOf(false) }
@@ -188,15 +210,16 @@ fun LibraryScreen(repo: Repository, onLogout: () -> Unit) {
     var query by remember { mutableStateOf("") }
     var searching by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
-    var showBrowse by remember { mutableStateOf(false) }
-    var showChat by remember { mutableStateOf(false) }
+    val resumeTo = remember { repo.prefs.lastScreen }
+    var showBrowse by remember { mutableStateOf(resumeTo == SCREEN_BROWSE) }
+    var showChat by remember { mutableStateOf(resumeTo == SCREEN_CHAT) }
     // A hold-menu handoff is deliberately in-memory: it is an attachment for this
     // visit to Chat, not a preference that should reappear after relaunching the app.
     var chatShare by remember { mutableStateOf<Media?>(null) }
     var holdMedia by remember { mutableStateOf<Media?>(null) }
     var confirmExport by remember { mutableStateOf<Media?>(null) }
-    var showDownloads by remember { mutableStateOf(false) }
-    var showImageGen by remember { mutableStateOf(false) }
+    var showDownloads by remember { mutableStateOf(resumeTo == SCREEN_DOWNLOADS) }
+    var showImageGen by remember { mutableStateOf(resumeTo == SCREEN_STUDIO) }
     var showUploads by remember { mutableStateOf(false) }
     // Which pinned feed to open the browser on; null means the browser's own default.
     var browsePin by remember { mutableStateOf<PinnedFeed?>(null) }
@@ -206,13 +229,13 @@ fun LibraryScreen(repo: Repository, onLogout: () -> Unit) {
     var confirmDelete by remember { mutableStateOf<Media?>(null) }
     // Favorites is a filter, not a kind: it cuts across all of them, and the server
     // has no endpoint for it — the list already carries the flag.
-    var favoritesOnly by remember { mutableStateOf(false) }
+    var favoritesOnly by remember { mutableStateOf(repo.prefs.lastFavoritesOnly) }
     // Non-empty means the grid is in selection mode: tiles toggle instead of opening.
     var selected by remember { mutableStateOf(emptySet<Long>()) }
     var confirmBulkDelete by remember { mutableStateOf(false) }
     // A library item some other screen asked us to open, held until the grid contains
     // it. See openLinked.
-    var pendingOpenId by remember { mutableStateOf<Long?>(null) }
+    var pendingOpenId by remember { mutableStateOf(repo.prefs.lastViewerMedia.takeIf { it != 0L }) }
     val drawer = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -309,6 +332,32 @@ fun LibraryScreen(repo: Repository, onLogout: () -> Unit) {
     LaunchedEffect(Unit) {
         refresh()
         runCatching { repo.api.health() }.getOrNull()?.let { aiTagger = if (it.aiEnabled) it.aiTagger else "off" }
+    }
+
+    // Where the user is, written as they move rather than on the way out.
+    //
+    // There is no "on the way out" to hook: Android can kill this process without
+    // running anything, and a force-stop certainly does. So each of these lands the
+    // moment it changes, and reopening the app reads them back above. They are cheap —
+    // a handful of short values into the same encrypted preferences the session already
+    // lives in — and they are cleared on sign-out, because where you were is part of
+    // the session and not of the phone.
+    LaunchedEffect(showBrowse, showChat, showDownloads, showImageGen) {
+        repo.prefs.lastScreen = when {
+            showBrowse -> SCREEN_BROWSE
+            showChat -> SCREEN_CHAT
+            showDownloads -> SCREEN_DOWNLOADS
+            showImageGen -> SCREEN_STUDIO
+            else -> SCREEN_LIBRARY
+        }
+    }
+    LaunchedEffect(kind, favoritesOnly) {
+        repo.prefs.lastKind = kind
+        repo.prefs.lastFavoritesOnly = favoritesOnly
+    }
+    // By id, not by index: see the note on the screen ids above.
+    LaunchedEffect(viewerAt, shown) {
+        repo.prefs.lastViewerMedia = viewerAt?.let { shown.getOrNull(it)?.id } ?: 0L
     }
 
     // A parked open request lands as soon as the grid holds its item. Keyed on `shown`
