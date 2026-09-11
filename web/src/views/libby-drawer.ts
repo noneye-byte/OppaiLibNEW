@@ -3,7 +3,7 @@ import { customElement, property, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import {
   api, type ChatCharacter, type ChatMessage, type ChatProfile, type ChatStatus, type ChatViewingItem,
-  type LibbyAction, type LibbyLink, type Media, type SourceItem,
+  type LibbyAction, type LibbyAttachment, type LibbyLink, type Media, type SourceItem,
 } from "../api.js";
 import { iconStyles, motionStyles } from "../theme.js";
 import {
@@ -13,7 +13,8 @@ import {
 import { applyProgression, getIntensity, setIntensity } from "../libby-meter.js";
 import { libbyHeatDelta, libbyOnBrowse, libbyReply } from "../libby-voice.js";
 import {
-  ActionApprovals, actionCardStyles, linkChipStyles, renderActionCards, renderLinkChips, requestOpenMedia,
+  ActionApprovals, actionCardStyles, attachmentStyles, linkChipStyles, renderActionCards,
+  renderAttachments, renderLinkChips, requestOpenMedia,
 } from "../chat-links.js";
 import { libbyMotion } from "../libby-motion.js";
 import { KIND_META, type Kind } from "../media-meta.js";
@@ -49,6 +50,7 @@ interface Remark {
   content: string;
   at: number;
   links?: LibbyLink[];
+  attachments?: LibbyAttachment[];
   actions?: LibbyAction[];
   /** Libby's pose when she sent this line, so each message owns its expressive
       sprite instead of borrowing a static character pfp. */
@@ -115,7 +117,7 @@ export class OppaiLibbyDrawer extends LitElement {
   /** Which of her offers have been decided this session; see ActionApprovals. */
   private approvals = new ActionApprovals(() => this.requestUpdate());
 
-  static styles = [iconStyles, motionStyles, linkChipStyles, actionCardStyles, libbyMotion, css`
+  static styles = [iconStyles, motionStyles, linkChipStyles, attachmentStyles, actionCardStyles, libbyMotion, css`
     :host { position: fixed; inset: 0 0 0 auto; z-index: 60; pointer-events: none; display: block; }
 
     /* The handle: a tab on the right edge, the drawer's only permanent footprint. It
@@ -369,7 +371,7 @@ export class OppaiLibbyDrawer extends LitElement {
         const drift = applyProgression(this.progress, requested - this.intensity);
         this.applyMood(normalizeEmotion(result.emotion), drift.progress, drift.intensity);
       }
-      this.push({ role: "assistant", content: result.message, links: result.links, actions: result.actions });
+      this.push({ role: "assistant", content: result.message, links: result.links, attachments: result.attachments, actions: result.actions });
     } catch (error) {
       this.say((error as Error).message || "She didn't answer.", true);
     } finally {
@@ -480,6 +482,7 @@ export class OppaiLibbyDrawer extends LitElement {
       <div class="remark-body">
         <div class="remark-meta"><span class="remark-author">${author}</span><span class="remark-time">${time}</span></div>
         <span class="said">${remark.content}</span>
+        ${renderAttachments(remark.attachments, (id) => requestOpenMedia(this, id), author)}
         ${renderLinkChips(remark.links, (id) => requestOpenMedia(this, id))}
         ${renderActionCards(remark.actions, this.approvals.stateOf, this.approvals.decide)}
       </div>

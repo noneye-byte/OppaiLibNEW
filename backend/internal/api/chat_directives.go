@@ -104,7 +104,9 @@ var machineryPhrase = regexp.MustCompile(`(?i)^\s*(?:` +
 // trailing tag always wins over a stray one earlier in the text.
 var (
 	looseMoodTag = regexp.MustCompile(`(?i)\[\s*mood\s*[:=-]?\s*([^\]\d]{0,60}?)\s*[,;:/|-]?\s*(\d{1,2})?\s*\]`)
-	looseSendTag = regexp.MustCompile(`(?i)\[\s*(?:send|show|photo|pic|image|attach)\s*[:=-]?\s*([^\]\n]{1,200}?)\s*\]`)
+	// "attach" is absent here for the same reason it left sendTag: it belongs to the
+	// library hand-over now. See chat_attachments.go.
+	looseSendTag = regexp.MustCompile(`(?i)\[\s*(?:send|show|photo|pic|image)\s*[:=-]?\s*([^\]\n]{1,200}?)\s*\]`)
 	// looseRememberTag captures a [remember: …] note wherever it lands. Read here to be
 	// persisted; deleted by scrubDirectives (via strayTag) afterwards so it never shows.
 	looseRememberTag = regexp.MustCompile(`(?i)\[\s*(?:remember|memory|note)\s*[:=-]?\s*([^\]\n]{1,300}?)\s*\]`)

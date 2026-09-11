@@ -22,8 +22,8 @@ import { SHARE_EVENT, takePendingShare } from "../chat-share.js";
 import { libbyMotion } from "../libby-motion.js";
 import { profileUpdates } from "../ui-metrics.js";
 import {
-  ActionApprovals, actionCardStyles, linkChipStyles, recentlySent, renderActionCards, renderLinkChips,
-  requestOpenMedia,
+  ActionApprovals, actionCardStyles, attachmentStyles, linkChipStyles, recentlyAttached, recentlySent,
+  renderActionCards, renderAttachments, renderLinkChips, requestOpenMedia,
 } from "../chat-links.js";
 
 const MODES = [
@@ -412,7 +412,7 @@ export class OppaiChat extends LitElement {
   /** Which of her offers have been decided this session; see ActionApprovals. */
   private approvals = new ActionApprovals(() => this.requestUpdate());
 
-  static styles = [iconStyles, motionStyles, linkChipStyles, actionCardStyles, libbyMotion, css`
+  static styles = [iconStyles, motionStyles, linkChipStyles, attachmentStyles, actionCardStyles, libbyMotion, css`
     :host { display:block; height:100%; color:var(--md-sys-color-on-surface); font:400 15px/1.375 "gg sans","Noto Sans",Roboto,system-ui,sans-serif;
       --rail:var(--md-sys-color-surface-container-lowest); --side:var(--md-sys-color-surface-container-low);
       --main:var(--md-sys-color-surface); --hover:var(--md-sys-color-surface-container-high);
@@ -1580,6 +1580,7 @@ export class OppaiChat extends LitElement {
         // So her recall of the *other* conversations leaves this one out of it.
         conversationId: conversation.id,
         photoTags, photoImageId: photoImageID, recentImageIds: recentlySent(conversation.messages),
+        recentMediaIds: recentlyAttached(conversation.messages),
         outfit: character.id === "libby" ? loadLibbyOutfit() : "",
         // The address only. What she is told about the page is the server's own
         // summary of what it already fetched for the preview — a turn never causes a
@@ -1626,6 +1627,7 @@ export class OppaiChat extends LitElement {
       return await this.typeAndPushBubbles(conversationID, splitIntoBubbles(result.message), Date.now() - startedAt, {
         imageId: result.imageId || undefined,
         links: result.links?.length ? result.links : undefined,
+        attachments: result.attachments?.length ? result.attachments : undefined,
         actions: result.actions?.length ? result.actions : undefined,
       });
     } catch (error) {
@@ -2990,7 +2992,7 @@ export class OppaiChat extends LitElement {
     const grouped = !!previous && !previous.thought && previous.role === message.role && message.at - previous.at < 5*60_000;
     const friend = message.role === "assistant", name = friend ? character.name : (this.workspace.profile.displayName || this.user?.username || "You");
     return html`<article class="row ${grouped ? "" : "first"} ${friend ? "from-friend" : "from-user"}" @contextmenu=${(event:MouseEvent) => this.messageMenu(message, event)}>${grouped ? html`<span class="stamp">${timeOf(message.at)}</span>` : (friend ? this.avatar(character,"avatar") : this.profileAvatar(name,"avatar"))}
-      <div class="message">${grouped ? nothing : html`<div class="who"><span class="author ${friend ? "friend" : ""}">${name}</span><span class="when">Today at ${timeOf(message.at)}</span></div>`}<div class="text">${formatted(message.content)}</div>${message.imageId ? html`<img class="sent-image" src=${api.chatImageURL(message.imageId)} alt="Image sent by ${name}"/>` : nothing}${renderLinkChips(message.links, (id) => requestOpenMedia(this, id))}${renderActionCards(message.actions, this.approvals.stateOf, this.approvals.decide)}</div>
+      <div class="message">${grouped ? nothing : html`<div class="who"><span class="author ${friend ? "friend" : ""}">${name}</span><span class="when">Today at ${timeOf(message.at)}</span></div>`}<div class="text">${formatted(message.content)}</div>${message.imageId ? html`<img class="sent-image" src=${api.chatImageURL(message.imageId)} alt="Image sent by ${name}"/>` : nothing}${renderAttachments(message.attachments, (id) => requestOpenMedia(this, id), name)}${renderLinkChips(message.links, (id) => requestOpenMedia(this, id))}${renderActionCards(message.actions, this.approvals.stateOf, this.approvals.decide)}</div>
       <span class="message-actions">${this.canRedo(message) ? html`<button title="Re-respond" aria-label="Ask for a different reply" ?disabled=${this.busy} @click=${() => void this.regenerate()}><span class="material-symbols-rounded" style="font-size:16px">refresh</span></button>` : nothing}<button title="Copy" @click=${() => void navigator.clipboard.writeText(message.content)}><span class="material-symbols-rounded" style="font-size:16px">content_copy</span></button><button title="Edit" @click=${() => this.editMessage(message)}><span class="material-symbols-rounded" style="font-size:16px">edit</span></button><button title="Delete" @click=${() => this.deleteMessage(message.id)}><span class="material-symbols-rounded" style="font-size:16px">delete</span></button></span>
     </article>`;
   }

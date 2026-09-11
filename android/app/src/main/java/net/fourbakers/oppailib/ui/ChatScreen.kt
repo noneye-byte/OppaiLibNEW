@@ -138,6 +138,7 @@ import net.fourbakers.oppailib.data.ChatStatus
 import net.fourbakers.oppailib.data.ChatWorkspace
 import net.fourbakers.oppailib.data.LibbyAction
 import net.fourbakers.oppailib.data.LibbyActRequest
+import net.fourbakers.oppailib.data.LibbyAttachment
 import net.fourbakers.oppailib.data.LibbyLink
 import net.fourbakers.oppailib.data.LibbyMemory
 import net.fourbakers.oppailib.data.LibbyMeter
@@ -511,6 +512,9 @@ fun ChatScreen(
             // hold them back: without this the best-scoring image in a gallery is the
             // only one that ever gets sent.
             val seenPictures = pending.messages.mapNotNull { it.imageId.ifBlank { null } }.distinct().takeLast(12)
+            // The same for library items she has handed over, which is the other half of
+            // "you have already shown me this" now that she can attach from the collection.
+            val seenItems = pending.messages.flatMap { entry -> entry.attachments.map { it.id } }.distinct().takeLast(12)
             val generation = runCatching {
                 repo.api.chat(
                     ChatRequest(
@@ -525,6 +529,7 @@ fun ChatScreen(
                         photoTags = photo?.tags.orEmpty(),
                         photoImageId = photo?.id.orEmpty(),
                         recentImageIds = seenPictures,
+                        recentMediaIds = seenItems,
                         // What she has on: the worn outfit is a per-device pref, so the
                         // server cannot know it unless this says so.
                         outfit = if (char.id == "libby") repo.prefs.libbyOutfit else "",
@@ -559,7 +564,11 @@ fun ChatScreen(
                         StoredChatMessage(chatID(), "assistant", it.text, System.currentTimeMillis(), thought = it.kind)
                     }
                     val spoken = if (reply.message.isBlank()) emptyList()
-                    else listOf(StoredChatMessage(chatID(), "assistant", reply.message, System.currentTimeMillis(), reply.imageId, reply.links, reply.actions))
+                    else listOf(StoredChatMessage(
+                        chatID(), "assistant", reply.message, System.currentTimeMillis(),
+                        imageId = reply.imageId, links = reply.links,
+                        attachments = reply.attachments, actions = reply.actions,
+                    ))
                     val done = pending.copy(emotion = reply.emotion, intensity = level, progress = progress, messages = pending.messages + thoughtLines + spoken, updatedAt = System.currentTimeMillis())
                     val latest = workspace ?: ws; save(latest.copy(conversations = latest.conversations.map { if (it.id == done.id) done else it }))
                 }.onFailure { error ->
@@ -1181,6 +1190,9 @@ private fun conversationPreview(convo: ChatConversation): String {
         last.thought.isNotBlank() -> "…"
         last.content.isNotBlank() -> last.content.replace('\n', ' ')
         last.imageId.isNotBlank() -> "Photo"
+        // A reply whose whole content was the thing she handed over. Named rather than
+        // called "Attachment", because the name is what makes the row worth reading.
+        last.attachments.isNotEmpty() -> last.attachments.first().let { if (it.self) "Photo" else it.title.ifBlank { "Attachment" } }
         else -> "…"
     }
     return if (last.role == "user") "You: $body" else body
@@ -1519,6 +1531,7 @@ private fun ChatMessageRow(
                     modifier = Modifier.padding(top = 7.dp).width(260.dp).height(260.dp).clip(RoundedCornerShape(12.dp)),
                 )
             }
+            ChatAttachments(repo, char, entry.attachments, onOpenMedia)
             ChatLinkChips(repo, entry.links, onOpenMedia)
             ChatActionCards(repo, entry.actions)
             // One stamp per run, at its foot, so a burst of four texts is marked once
@@ -1627,6 +1640,76 @@ private fun linkIcon(kind: String) = when (kind) {
     "comic" -> Icons.AutoMirrored.Filled.MenuBook
     "game" -> Icons.Filled.SportsEsports
     else -> Icons.Filled.Image
+}
+
+/**
+ * What a reply handed over.
+ *
+ * Deliberately not the chip a link gets. A link is an affordance attached to a name
+ * she has already written into the sentence; this is the thing itself, arriving under
+ * the message the way a picture does in any other chat app — because that is what
+ * separates "you never finished the beach one" from actually giving it to you.
+ *
+ * A picture is drawn as the picture. Everything else — a video, a comic, a game — has
+ * no single frame that is the item, so it gets its thumbnail, its title and its kind,
+ * which is the most honest card for something you are about to open rather than look
+ * at. Either way the tap is the same: the viewer, by id, via whoever mounted chat.
+ */
+@Composable
+private fun ChatAttachments(
+    repo: Repository,
+    char: ChatCharacter,
+    attachments: List<LibbyAttachment>,
+    onOpenMedia: OpenMedia,
+) {
+    if (attachments.isEmpty()) return
+    Column(Modifier.fillMaxWidth().padding(top = 7.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        attachments.forEach { item ->
+            val picture = item.kind == "image" || item.kind == "gif"
+            val label = if (item.self) "Photo of ${char.name}: ${item.title}" else "From your library: ${item.title}"
+            if (picture) {
+                Column(
+                    Modifier.width(260.dp).clip(RoundedCornerShape(12.dp))
+                        .background(ChatColors.input).clickable { onOpenMedia(item.id) },
+                ) {
+                    AsyncImage(
+                        // The item itself rather than its thumbnail: this is the picture being
+                        // shown, and a 256px preview of it is not what she sent.
+                        repo.streamUrl(item.id), label, imageLoader = repo.imageLoader,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxWidth().height(260.dp),
+                    )
+                    // Her own face needs no caption — it is a photo in a conversation. An item
+                    // out of the collection does: it is a thing that has a name, and the name
+                    // is how the user knows which one they are being handed.
+                    if (!item.self) Text(
+                        item.title, color = ChatColors.text, fontSize = 12.sp, maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                    )
+                }
+            } else {
+                Row(
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+                        .background(ChatColors.input).clickable { onOpenMedia(item.id) }.padding(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (item.hasThumb) AsyncImage(
+                        repo.thumbUrl(item.id), label, imageLoader = repo.imageLoader,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.size(58.dp).clip(RoundedCornerShape(9.dp)),
+                    ) else Box(
+                        Modifier.size(58.dp).clip(RoundedCornerShape(9.dp)).background(ChatColors.side),
+                        contentAlignment = Alignment.Center,
+                    ) { Icon(linkIcon(item.kind), null, tint = ChatColors.muted, modifier = Modifier.size(24.dp)) }
+                    Column(Modifier.weight(1f).padding(start = 11.dp, end = 6.dp)) {
+                        Text(item.title, color = ChatColors.text, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        Text("Tap to open · ${item.kind.replaceFirstChar(Char::uppercase)}", color = ChatColors.muted, fontSize = 11.sp, maxLines = 1)
+                    }
+                }
+            }
+        }
+    }
 }
 
 /**

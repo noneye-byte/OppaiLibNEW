@@ -314,6 +314,18 @@ export interface LibbyLink {
 }
 
 /**
+ * A library item a reply hands over, rather than merely names.
+ *
+ * The same row a LibbyLink points at, in the other posture: a link makes a title
+ * tappable inside a sentence, an attachment is the thing itself sitting under the
+ * message. `self` marks a picture of her — her photographs live in the library as
+ * well as in her chat gallery — and only affects what the picture is called.
+ */
+export interface LibbyAttachment extends LibbyLink {
+  self?: boolean;
+}
+
+/**
  * What the two of them are looking at while browsing together.
  *
  * Ids only: the server reads the titles and tags out of the database itself, so
@@ -369,6 +381,9 @@ export interface ChatTurn {
   /** Pictures this character has already sent in this conversation, oldest first.
       The server holds them back so the same one does not come round again. */
   recentImageIds?: string[];
+  /** Library items this character has already attached in this conversation, oldest
+      first. The same bookkeeping as recentImageIds, for the items she hands over. */
+  recentMediaIds?: number[];
   /** What the two of them are looking at, in a browse-together session. */
   viewing?: ChatViewing;
   /** A web address the user is showing her with this message. The URL only — what
@@ -402,6 +417,10 @@ export interface ChatResponse {
   imageId?: string;
   /** Library items this reply points at. Absent from older servers. */
   links?: LibbyLink[];
+  /** Library items this reply hands over: something she chose to show, or a picture
+      of her kept in the library rather than her chat gallery. Absent from older
+      servers. */
+  attachments?: LibbyAttachment[];
   /** Things Libby has asked to do. Proposals only — the server performs none of
       them; a card with an Allow button is what turns one into an action. */
   actions?: LibbyAction[];
@@ -621,6 +640,9 @@ export interface StoredChatMessage extends ChatMessage {
   /** Library items this message pointed at, kept so an old reply still opens what
       it named rather than the chips vanishing on reload. */
   links?: LibbyLink[];
+  /** Library items this message handed over, kept so an old reply still shows what
+      it gave you, and read back on later turns so she does not repeat herself. */
+  attachments?: LibbyAttachment[];
   /** Things Libby offered to do in this message. Kept so the card survives a
       re-render; whether one was approved is session state, not part of the log. */
   actions?: LibbyAction[];

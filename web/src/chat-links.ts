@@ -6,7 +6,7 @@
 // items a reply named.
 
 import { css, html, nothing, type TemplateResult } from "lit";
-import { api, type LibbyAction, type LibbyLink, type StoredChatMessage } from "./api.js";
+import { api, type LibbyAction, type LibbyAttachment, type LibbyLink, type StoredChatMessage } from "./api.js";
 
 /**
  * The pictures already seen in this conversation, oldest first.
@@ -23,6 +23,21 @@ export function recentlySent(messages: StoredChatMessage[], limit = 12): string[
   const ids: string[] = [];
   for (const message of messages) {
     if (message.imageId && ids[ids.length - 1] !== message.imageId) ids.push(message.imageId);
+  }
+  return ids.slice(-limit);
+}
+
+/**
+ * The library items already handed over in this conversation, oldest first.
+ *
+ * The counterpart of recentlySent, and there for the same reason: she can now attach
+ * things from the collection, and a picture of her that lives in the library is one of
+ * them, so "you have already shown me this" has to cover both kinds of id.
+ */
+export function recentlyAttached(messages: StoredChatMessage[], limit = 12): number[] {
+  const ids: number[] = [];
+  for (const message of messages) {
+    for (const item of message.attachments ?? []) if (!ids.includes(item.id)) ids.push(item.id);
   }
   return ids.slice(-limit);
 }
@@ -215,4 +230,66 @@ export function renderLinkChips(links: LibbyLink[] | undefined, open: (id: numbe
         : html`<span class="link-icon"><span class="material-symbols-rounded" style="font-size:20px">${KIND_ICONS[link.kind] ?? "folder"}</span></span>`}
       <span class="link-copy"><strong>${link.title}</strong><span>${link.kind}</span></span>
     </button>`)}</div>`;
+}
+
+/** Styles for the attachments below, exported for the same reason the chip styles
+    are: two shadow roots draw these and they have to look like one thing. */
+export const attachmentStyles = css`
+  .attached { display:flex; flex-direction:column; gap:8px; margin-top:8px; max-width:320px; }
+  .attached-picture, .attached-item {
+    display:block; width:100%; padding:0; border:1px solid var(--md-sys-color-outline-variant, rgba(255,255,255,.14));
+    border-radius:14px; overflow:hidden; background:var(--md-sys-color-surface-container-high, rgba(255,255,255,.05));
+    color:inherit; font:inherit; text-align:left; cursor:pointer;
+  }
+  .attached-picture:hover, .attached-item:hover { border-color:var(--md-sys-color-primary, #f97316); }
+  .attached-picture img { display:block; width:100%; max-height:320px; object-fit:cover; }
+  .attached-picture figcaption {
+    padding:7px 11px; font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  }
+  .attached-item { display:flex; align-items:center; gap:11px; padding:8px; }
+  .attached-item img, .attached-item .attached-icon {
+    width:58px; height:58px; flex:0 0 auto; border-radius:9px; object-fit:cover;
+    display:grid; place-items:center; background:rgba(255,255,255,.07);
+  }
+  .attached-copy { display:flex; flex-direction:column; min-width:0; gap:2px; }
+  .attached-copy strong { font-weight:600; overflow:hidden; text-overflow:ellipsis; }
+  .attached-copy span { opacity:.6; font-size:11px; }
+`;
+
+/**
+ * Draws what a reply handed over.
+ *
+ * Deliberately not the chip a link gets. A link is an affordance hung on a name she
+ * already wrote into the sentence; this is the thing itself, arriving under the
+ * message the way a picture does in any chat app — which is the whole difference
+ * between naming the beach one and actually giving it to you.
+ *
+ * A picture is drawn as the picture, at full size rather than as its thumbnail: the
+ * item is what she sent. Anything else — a video, a comic, a game — has no single
+ * frame that *is* the item, so it gets a card with its name and kind, which is the
+ * honest shape for something you are about to open rather than look at.
+ */
+export function renderAttachments(
+  attachments: LibbyAttachment[] | undefined,
+  open: (id: number) => void,
+  from = "your library",
+): TemplateResult | typeof nothing {
+  if (!attachments?.length) return nothing;
+  return html`<div class="attached">${attachments.map((item) => {
+    const label = item.self ? `Photo of ${from}: ${item.title}` : `From your library: ${item.title}`;
+    if (item.kind === "image" || item.kind === "gif") {
+      return html`<figure class="attached-picture" role="button" tabindex="0"
+        title=${`Open ${item.title}`} @click=${() => open(item.id)}
+        @keydown=${(event: KeyboardEvent) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); open(item.id); } }}>
+        <img src=${api.streamURL(item.id)} alt=${label} loading="lazy"/>
+        ${item.self ? nothing : html`<figcaption>${item.title}</figcaption>`}
+      </figure>`;
+    }
+    return html`<button class="attached-item" title=${`Open ${item.title}`} @click=${() => open(item.id)}>
+      ${item.hasThumb
+        ? html`<img src=${api.thumbURL(item.id)} alt="" loading="lazy"/>`
+        : html`<span class="attached-icon"><span class="material-symbols-rounded" style="font-size:24px">${KIND_ICONS[item.kind] ?? "folder"}</span></span>`}
+      <span class="attached-copy"><strong>${item.title}</strong><span>Open ${item.kind}</span></span>
+    </button>`;
+  })}</div>`;
 }

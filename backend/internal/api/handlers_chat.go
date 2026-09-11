@@ -54,6 +54,11 @@ type chatRequest struct {
 	// requests — the client owns the log — so what has already been shown has to
 	// arrive with the request. See recentlySentPhotos.
 	RecentImageIDs []string `json:"recentImageIds,omitempty"`
+	// RecentMediaIDs are the library items this character has already attached in this
+	// conversation, oldest first. The same bookkeeping as RecentImageIDs and needed for
+	// the same reason — she now hands over library items, and a picture of her taken
+	// from the library is one of them. See recentlyAttached.
+	RecentMediaIDs []int64 `json:"recentMediaIds,omitempty"`
 	// ConversationID is which of the user's conversations this turn belongs to.
 	//
 	// The server keeps no per-conversation state, but it does hold every conversation:
@@ -298,30 +303,39 @@ func userAskedForPhoto(text string) bool { return photoRequestWords.MatchString(
 // be simpler and is wrong: asked for "that one from earlier" she needs to still know
 // it exists, and a model that cannot see a picture it remembers sending will happily
 // invent one instead.
-func photoCatalogue(ws chatWorkspace, characterID string, sent map[string]bool) string {
+func photoCatalogue(ws chatWorkspace, characterID string, sent map[string]bool, selfPics []selfPicture, sentMedia map[int64]bool) string {
 	lines := make([]string, 0, maxCataloguePhotos)
 	example, repeats := "", false
-	for _, img := range ws.Images {
-		// Untagged pictures are unreachable by tag, so listing them would only invite
-		// requests that can never resolve.
-		if img.CharacterID != characterID || len(img.Tags) == 0 {
-			continue
+	// One line per picture, tags only. Which pool it came from — her chat gallery, or a
+	// library item recognised as her (chat_attachments.go) — is deliberately not said.
+	// It changes nothing about how she asks for one, and a model told there are two
+	// collections starts reasoning about collections instead of choosing a photo.
+	entry := func(tags []string, already bool) {
+		// Untagged pictures are unreachable by tag, so listing one would only invite a
+		// request that can never resolve.
+		if len(lines) >= maxCataloguePhotos || len(tags) == 0 {
+			return
 		}
-		tags := img.Tags
 		if len(tags) > 8 {
 			tags = tags[:8]
 		}
 		line := "- " + strings.Join(tags, ", ")
-		if sent[img.ID] {
+		if already {
 			line += "  [already sent]"
 			repeats = true
 		} else if example == "" {
 			example = strings.Join(tags[:min(2, len(tags))], ", ")
 		}
 		lines = append(lines, line)
-		if len(lines) >= maxCataloguePhotos {
-			break
+	}
+	for _, img := range ws.Images {
+		if img.CharacterID != characterID {
+			continue
 		}
+		entry(img.Tags, sent[img.ID])
+	}
+	for _, pic := range selfPics {
+		entry(pic.tags, sentMedia[pic.link.ID])
 	}
 	if len(lines) == 0 {
 		return ""
@@ -329,7 +343,7 @@ func photoCatalogue(ws chatWorkspace, characterID string, sent map[string]bool) 
 	if example == "" {
 		example = "lingerie, bed"
 	}
-	out := "Pictures of yourself — selfies — you can send in this chat. These are pictures of you, not items in the library. Each line is one picture, described by its tags:\n" +
+	out := "Pictures of yourself — selfies — you can send in this chat. These are pictures of you, not items in the library to recommend. Each line is one picture, described by its tags:\n" +
 		strings.Join(lines, "\n") +
 		"\nTo send one, end your reply with [send: <tags>], naming tags from the picture you want — for example [send: " + example + "]. " +
 		"A selfie is a deliberate thing a person does now and then, not a reflex: most replies have no picture at all. " +
@@ -345,7 +359,14 @@ func photoCatalogue(ws chatWorkspace, characterID string, sent map[string]bool) 
 // sendTag captures the picture request described above. Same shape and the same
 // tolerance as moodTag, and for the same reason: models paraphrase the syntax they
 // are given, so "show" and "photo" are accepted alongside "send".
-var sendTag = regexp.MustCompile(`(?is)\n*[ \t]*[*_~>\x60]*\[\s*(?:send|show|photo|pic|image|attach)\s*[:=-]?\s*([^\]]{1,200}?)\s*\]\s*[*_~\x60.!]*\s*$`)
+//
+// "attach" is deliberately not among them any more. It now means handing over a
+// library item (chat_attachments.go), and while it sat here a request to attach
+// something from the collection was read as a request for a selfie whose tags matched
+// nothing, so it resolved to no picture and vanished. Both readings are still
+// reachable: an attach request that matches nothing in the library is tried as a photo
+// request by the handler.
+var sendTag = regexp.MustCompile(`(?is)\n*[ \t]*[*_~>\x60]*\[\s*(?:send|show|photo|pic|image)\s*[:=-]?\s*([^\]]{1,200}?)\s*\]\s*[*_~\x60.!]*\s*$`)
 
 // splitPhotoRequest pulls a trailing picture request off a reply.
 func splitPhotoRequest(reply string) (text, request string, ok bool) {
@@ -369,35 +390,29 @@ func splitPhotoRequest(reply string) (text, request string, ok bool) {
 // describe it again, so its request scores highest against the very picture the user
 // has already seen; without this the same file comes back every turn.
 func requestedChatImage(ws chatWorkspace, characterID, request, excludeID string, skip map[string]bool) string {
-	words := map[string]bool{}
-	for _, word := range strings.FieldsFunc(strings.ToLower(request), func(r rune) bool {
-		return !(r >= 'a' && r <= 'z') && !(r >= '0' && r <= '9')
-	}) {
-		if len(word) >= 3 {
-			words[word] = true
-		}
-	}
+	id, _ := bestGalleryImage(ws, characterID, request, excludeID, skip)
+	return id
+}
+
+// bestGalleryImage is the scoring half of the two matchers above, with the score it
+// won by. Split out because her gallery is no longer the only place her pictures live:
+// a library picture of her competes for the same slot (chat_attachments.go), and two
+// pools can only be compared if both report how well they actually fit.
+func bestGalleryImage(ws chatWorkspace, characterID, text, excludeID string, skip map[string]bool) (string, int) {
+	words := requestWords(text)
 	if len(words) == 0 {
-		return ""
+		return "", 0
 	}
 	bestID, best := "", 0
 	for _, img := range ws.Images {
 		if img.CharacterID != characterID || (excludeID != "" && img.ID == excludeID) || skip[img.ID] {
 			continue
 		}
-		score := 0
-		for _, tag := range img.Tags {
-			for _, word := range strings.Fields(tag) {
-				if len(word) >= 3 && words[word] {
-					score++
-				}
-			}
-		}
-		if score > best {
+		if score := scoreTags(words, img.Tags); score > best {
 			best, bestID = score, img.ID
 		}
 	}
-	return bestID
+	return bestID, best
 }
 
 // cardMacro matches the placeholder syntax character cards are authored in.
@@ -790,7 +805,16 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	sentPhotos, lastPhoto := recentlySentPhotos(in.RecentImageIDs)
-	add("her photos", rankPhotoCatalogue, "\n\n"+photoCatalogue(ws, character.ID, sentPhotos))
+	sentMedia := recentlyAttached(in.RecentMediaIDs)
+	// The library pictures of her. Hers alone: character:libby says who a picture is
+	// *of*, so handing an imported card the same pool would be giving somebody else's
+	// character a stranger's face. Read once and used twice — the catalogue below lists
+	// them, and the picker at the end of the turn chooses from the same set.
+	var selfPics []selfPicture
+	if character.ID == "libby" {
+		selfPics = s.libbySelfPictures(r.Context())
+	}
+	add("her photos", rankPhotoCatalogue, "\n\n"+photoCatalogue(ws, character.ID, sentPhotos, selfPics, sentMedia))
 	// Libby alone gets her self-grounding and the library snapshot. She is this
 	// server's librarian, so knowing who she is, what she can do, and what is on the
 	// shelves is in character; an imported card is somebody else's character and has
@@ -856,6 +880,13 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	var tail strings.Builder
 	if linkable {
 		tail.WriteString("\n\n" + linkDirective)
+	}
+	// Handing an item over, as opposed to naming one. Libby's alone rather than every
+	// linkable character: putting something from the collection in front of the user is
+	// the librarian acting on their library, which is the line the actions below are
+	// drawn on too. See chat_attachments.go.
+	if character.ID == "libby" {
+		tail.WriteString("\n\n" + attachDirective)
 	}
 	// Acting on the library is Libby's alone, for the same reason the library snapshot
 	// is: she is this server's librarian, and an imported character is somebody else's
@@ -1041,6 +1072,14 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// What she asked to hand over, read before scrubbing deletes those tags as well.
+	// Resolved further down, once the prose is clean: an attachment stands beside the
+	// message rather than in a sentence, so unlike a link it has nothing to substitute.
+	// See chat_attachments.go.
+	var attachRequests []string
+	if character.ID == "libby" {
+		attachRequests = findAttachRequests(reply)
+	}
 	// What she thought but did not say, read before scrubbing deletes those tags too.
 	// Never nil: a nil slice marshals to JSON `null`, which the Android client cannot
 	// parse into a list. See chat_thoughts.go.
@@ -1127,17 +1166,54 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			skip[lastPhoto] = true
 		}
 	}
+	// Things she handed over. Never nil, for the same reason links and actions are not.
+	//
+	// Resolved before the picture is picked because the two can trade: a request to
+	// attach something that matches nothing in the library is far more likely to have
+	// been a clumsily-worded request for a photo than a reference to an item the user
+	// does not own, and reading it that way is free.
+	attachments := []libbyAttachment{}
+	if len(attachRequests) > 0 && !silent {
+		if resolved := s.resolveLibraryAttachments(r.Context(), attachRequests, sentMedia); len(resolved) > 0 {
+			attachments = resolved
+		} else if !photoAsked {
+			photoRequest, photoAsked = attachRequests[0], true
+		}
+	}
 	imageID := ""
 	// A turn she decided not to speak on does not attach a picture either. The
 	// inference below reads her words, and with none of them it would be matching on
 	// the user's message alone — which is how a silent thought would end up answered
 	// with a selfie.
+	//
+	// Two pools are in the running: the pictures uploaded into her chat gallery, and
+	// the library items recognised as her. They are scored on one scale and the better
+	// fit wins, so which of the two a picture happens to live in is invisible — a tie
+	// goes to the gallery, whose pictures were put there for this and nothing else.
 	if !silent {
+		exchange := in.Messages[len(in.Messages)-1].Content + " " + reply
+		galleryText, floor := exchange, unpromptedPhotoFloor
+		if photoAsked {
+			galleryText, floor = photoRequest, 1
+		}
+		var galleryScore int
 		if photoAsked {
 			imageID = requestedChatImage(ws, character.ID, photoRequest, in.PhotoImageID, skip)
 		}
 		if imageID == "" {
-			imageID = matchingChatImage(ws, character.ID, in.Messages[len(in.Messages)-1].Content+" "+reply, in.PhotoImageID, skip)
+			imageID = matchingChatImage(ws, character.ID, exchange, in.PhotoImageID, skip)
+		}
+		if imageID != "" {
+			_, galleryScore = bestGalleryImage(ws, character.ID, galleryText, in.PhotoImageID, skip)
+		}
+		// Only when she has not already attached something: one picture per reply holds
+		// however it was chosen, and a selfie stapled to a video she just handed over is
+		// two attachments pretending to be one message.
+		if len(attachments) == 0 {
+			if pic, score := bestSelfPicture(selfPics, galleryText, sentMedia, floor); score > galleryScore {
+				imageID = ""
+				attachments = append(attachments, libbyAttachment{libbyLink: pic.link, Self: true})
+			}
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -1146,6 +1222,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		"intensity": in.Intensity,
 		"imageId":   imageID,
 		"links":     links,
+		// Library items she put in front of them: something she decided to show, or a
+		// picture of her that lives in the library rather than in her chat gallery. Drawn
+		// as the picture itself where the kind allows and as an openable card otherwise.
+		// See chat_attachments.go.
+		"attachments": attachments,
 		// Things she has asked to do. Proposals: the client draws them as cards with an
 		// Allow button, and only that press performs anything.
 		"actions": actions,

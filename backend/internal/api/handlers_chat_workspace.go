@@ -101,6 +101,11 @@ type storedChatMessage struct {
 	// resolveLibraryLinks) but stored with the message so an old reply still opens
 	// what it named, rather than the chips vanishing on reload.
 	Links []libbyLink `json:"links,omitempty"`
+	// Attachments are the library items this message handed over. Stored for the same
+	// reason as Links, plus one of its own: the client reads them back on the next turn
+	// to say what she has already shown, so dropping them here would let her attach the
+	// same thing every reply. See chat_attachments.go.
+	Attachments []libbyAttachment `json:"attachments,omitempty"`
 	// Thought marks an entry she thought or muttered rather than said — "thought" or
 	// "aside", empty for ordinary speech. Stored, not derived: without it a reload turns
 	// a private thought back into a message addressed to the user, which is the one
@@ -550,6 +555,17 @@ func validateChatWorkspace(ws *chatWorkspace) error {
 					return errors.New("invalid message link")
 				}
 			}
+			// Attachments round-trip through the client too, and are re-bounded for the
+			// same reason: a stored message may carry what a reply handed over, not a
+			// list of ids grown without limit.
+			if len(m.Attachments) > maxAttachmentsPerReply {
+				m.Attachments = m.Attachments[:maxAttachmentsPerReply]
+			}
+			for k := range m.Attachments {
+				if m.Attachments[k].Title, ok = cleanLimited(m.Attachments[k].Title, 300); !ok || m.Attachments[k].ID <= 0 {
+					return errors.New("invalid message attachment")
+				}
+			}
 			// A thought is only ever hers, and only ever one of the two kinds. Anything
 			// else is dropped to speech rather than rejected: an unreadable marker is a
 			// client's mistake, and losing the whole conversation over it would be worse
@@ -842,29 +858,7 @@ const unpromptedPhotoFloor = 3
 // sent this conversation, which is what stops the best-scoring image in a gallery
 // from becoming the only one the user ever sees.
 func matchingChatImage(ws chatWorkspace, characterID, text, excludeID string, skip map[string]bool) string {
-	words := map[string]bool{}
-	for _, word := range strings.FieldsFunc(strings.ToLower(text), func(r rune) bool { return !(r >= 'a' && r <= 'z') && !(r >= '0' && r <= '9') }) {
-		if len(word) >= 3 {
-			words[word] = true
-		}
-	}
-	bestID, best := "", 0
-	for _, img := range ws.Images {
-		if img.CharacterID != characterID || (excludeID != "" && img.ID == excludeID) || skip[img.ID] {
-			continue
-		}
-		score := 0
-		for _, tag := range img.Tags {
-			for _, word := range strings.Fields(tag) {
-				if len(word) >= 3 && words[word] {
-					score++
-				}
-			}
-		}
-		if score > best {
-			best, bestID = score, img.ID
-		}
-	}
+	bestID, best := bestGalleryImage(ws, characterID, text, excludeID, skip)
 	if best >= unpromptedPhotoFloor {
 		return bestID
 	}

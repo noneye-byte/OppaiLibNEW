@@ -44,6 +44,7 @@ import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Gif
 import androidx.compose.material.icons.filled.HeartBroken
+import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Menu
@@ -110,6 +111,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import net.fourbakers.oppailib.data.BulkRequest
+import net.fourbakers.oppailib.data.LibbyIdentityMark
 import net.fourbakers.oppailib.data.LibbyVoice
 import net.fourbakers.oppailib.data.Media
 import net.fourbakers.oppailib.data.MediaPatch
@@ -589,6 +591,26 @@ fun LibraryScreen(repo: Repository, onLogout: () -> Unit) {
                         runCatching { repo.api.uploadChatImage(mediaChatUpload(repo, target, "libby")) }
                             .onSuccess { Toast.makeText(context, "Saved for Libby to send later", Toast.LENGTH_LONG).show() }
                             .onFailure { Toast.makeText(context, it.message ?: "Couldn't save for Libby", Toast.LENGTH_LONG).show() }
+                    }
+                },
+            )
+            // Saying who a picture is of, from the phone.
+            //
+            // This is a different thing from the gallery entry above, which takes a copy
+            // for her to send. This labels the item itself: the tag lives in the library,
+            // so the picture stays one of yours and she can hand it back to you without a
+            // second copy of it existing. Recognition does this on its own for imports it
+            // is sure about; this is how you say so about the rest, and how you say no.
+            if (target.kind == "image" || target.kind == "gif") ListItem(
+                headlineContent = { Text("This is a picture of Libby") },
+                supportingContent = { Text("Tags it as her, so she can send it to you in chat") },
+                leadingContent = { Icon(Icons.Filled.Face, contentDescription = null) },
+                modifier = Modifier.clickable {
+                    holdMedia = null
+                    scope.launch {
+                        runCatching { repo.api.markLibbyIdentity(LibbyIdentityMark(target.id, isLibby = true)) }
+                            .onSuccess { Toast.makeText(context, "Libby knows this one is her", Toast.LENGTH_LONG).show() }
+                            .onFailure { Toast.makeText(context, it.message ?: "Couldn't tag that as her", Toast.LENGTH_LONG).show() }
                     }
                 },
             )

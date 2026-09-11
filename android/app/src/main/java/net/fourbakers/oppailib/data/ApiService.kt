@@ -349,6 +349,17 @@ interface ApiService {
     @POST("api/libby/act")
     suspend fun libbyAct(@Body body: LibbyActRequest)
 
+    /**
+     * Says whether a library item is a picture of Libby, or is not.
+     *
+     * The verdict is written onto the item as the `character:libby` tag, which is what
+     * makes it a picture she can send back to you — her photographs live in the library
+     * as well as in her chat gallery. "No" is a real answer and is remembered as one,
+     * so automatic recognition does not put the label straight back.
+     */
+    @POST("api/libby/identity/mark")
+    suspend fun markLibbyIdentity(@Body body: LibbyIdentityMark)
+
     // ── Libby memory ─────────────────────────────────────────────────────
     // The durable facts Libby keeps about you between conversations. Written from her
     // own replies server-side; these only read and clear it, for chat settings.

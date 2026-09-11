@@ -294,6 +294,12 @@ data class ChatRequest(
      */
     val recentImageIds: List<String> = emptyList(),
     /**
+     * Library items she has already attached in this conversation, oldest first. The
+     * same bookkeeping as [recentImageIds] and needed for the same reason: she hands
+     * over library items now, and a picture of her taken from the library is one.
+     */
+    val recentMediaIds: List<Long> = emptyList(),
+    /**
      * The id of the outfit Libby is wearing on this device, empty for her bundled
      * artwork. Which outfit is worn is a per-device choice the server does not
      * store, so it has to be told — otherwise she describes the default sprite
@@ -309,6 +315,26 @@ data class LibbyLink(
     val title: String = "",
     val kind: String = "",
     val hasThumb: Boolean = false,
+)
+
+/**
+ * A library item Libby put in front of you.
+ *
+ * The same row a [LibbyLink] names, handed over rather than mentioned: a link makes a
+ * title tappable mid-sentence, an attachment is the thing itself sitting under the
+ * message. Two paths produce one — she decided to show you something, or the picture
+ * she chose to send of herself lives in the library rather than in her chat gallery.
+ *
+ * [self] says which, and is only used for what the picture is called out loud: on
+ * screen both are a picture in a bubble, which is the point of them being one type.
+ */
+@Serializable
+data class LibbyAttachment(
+    val id: Long,
+    val title: String = "",
+    val kind: String = "",
+    val hasThumb: Boolean = false,
+    val self: Boolean = false,
 )
 
 /**
@@ -331,6 +357,21 @@ data class LibbyAction(
     val mediaId: Long = 0,
     val mediaTitle: String = "",
     val tags: List<String> = emptyList(),
+)
+
+/**
+ * A verdict on whether a library item shows Libby.
+ *
+ * [isLibby] false is an answer rather than an absence: it takes the tag off and is
+ * remembered, so automatic recognition does not keep putting it back. [reference] asks
+ * for the picture to be one of the handful that define what she looks like, which only
+ * means anything alongside a yes.
+ */
+@Serializable
+data class LibbyIdentityMark(
+    val mediaId: Long,
+    val isLibby: Boolean,
+    val reference: Boolean = false,
 )
 
 /** The approved half of a [LibbyAction], as the act endpoint takes it. */
@@ -363,6 +404,9 @@ data class ChatResponse(
     /** Library items this reply points at. The titles are already substituted into
         the prose server-side, so a client that does not draw chips still reads right. */
     val links: List<LibbyLink> = emptyList(),
+    /** Library items this reply hands over — something she chose to show, or a picture
+        of her that lives in the library rather than her chat gallery. */
+    val attachments: List<LibbyAttachment> = emptyList(),
     /** Things Libby has asked to do. Proposals only — a card with an Allow button is
         what turns one into an action. */
     val actions: List<LibbyAction> = emptyList(),
@@ -448,6 +492,9 @@ data class StoredChatMessage(
     /** Library items this message pointed at. Carried so a workspace round-trip
         through this client does not strip what the web UI draws as chips. */
     val links: List<LibbyLink> = emptyList(),
+    /** Library items this message handed over. Carried for the same reason as [links],
+        and read back on the next turn so she does not attach the same thing twice. */
+    val attachments: List<LibbyAttachment> = emptyList(),
     /** Offers Libby made in this message, kept so the card survives a redraw. Whether
         one was approved is session state, deliberately not part of the log. */
     val actions: List<LibbyAction> = emptyList(),
