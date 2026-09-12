@@ -480,7 +480,7 @@ fun ChatScreen(
                     require(bytes.size <= 8 * 1024 * 1024) { "Image must be 8 MB or smaller" }
                     val mime = context.contentResolver.getType(uri) ?: "image/jpeg"
                     val data = "data:$mime;base64," + Base64.encodeToString(bytes, Base64.NO_WRAP)
-                    repo.api.uploadChatImage(ChatImageUpload(char.id, "Character image", data, tags))
+                    repo.api.uploadChatImage(ChatImageUpload(char.id, "Character image", data, tags, subject = "self"))
                 }
             }.onSuccess { image ->
                 // The workspace may have moved on while the upload was in flight, so this
@@ -2473,7 +2473,7 @@ private fun ChatActionCards(repo: Repository, actions: List<LibbyAction>) {
 }
 
 private fun LibbyAction.toRequest() =
-    LibbyActRequest(kind = kind, prompt = prompt, url = url, mediaId = mediaId, tags = tags)
+    LibbyActRequest(kind = kind, prompt = prompt, url = url, mediaId = mediaId, tags = tags, title = title)
 
 /** Icon per action kind, falling back to a generic mark so a kind this build has never
     heard of still renders as a card the user can read and refuse. */
@@ -2482,6 +2482,7 @@ private fun actionIcon(kind: String) = when (kind) {
     "import" -> Icons.Filled.Download
     "tag" -> Icons.Filled.Sell
     "favorite" -> Icons.Filled.Favorite
+    "rename" -> Icons.Filled.EditNote
     else -> Icons.Filled.Bolt
 }
 
@@ -2492,6 +2493,7 @@ private fun actionDone(kind: String) = when (kind) {
     "import" -> "Added to your library."
     "tag" -> "Tags added."
     "favorite" -> "Favorited."
+    "rename" -> "Renamed."
     else -> "Done."
 }
 

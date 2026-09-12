@@ -248,6 +248,9 @@ func TestPlainlyStatedFactsAreCaptured(t *testing.T) {
 		"honestly I hate horror films":             "They hate horror films",
 		"I really love rainy nights":               "They love rainy nights",
 		"please don't bring up my ex again":        "They asked me never to bring up my ex again",
+		// The boundary cuts at a conjunction. This pattern shipped with a literal
+		// backspace where the word boundary should have been, so it never cut here.
+		"never mention my brother but you can ask": "They asked me never to mention my brother",
 		"I have a dog named Rex!":                  "They have a dog named Rex",
 		"my favourite game is Elden Ring. you?":    "Their favourite game is Elden Ring",
 	} {

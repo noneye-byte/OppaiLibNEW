@@ -50,8 +50,18 @@ func (d *DB) ensureTag(ctx context.Context, name, category string) (int64, error
 }
 
 // AddTag ensures the (name, category) tag exists and links it to a media row.
-// source is manual|ai|scrape; score is optional AI confidence.
+// source is manual|ai|scrape; score is optional AI confidence. The weight is left
+// unmeasured, which reads as the whole item — see AddTagWeighted.
 func (d *DB) AddTag(ctx context.Context, mediaID int64, name, category, source string, score float64) error {
+	return d.AddTagWeighted(ctx, mediaID, name, category, source, score, 0)
+}
+
+// AddTagWeighted is AddTag with the tag's weight: how much of the item it describes,
+// 0..1, which for a sampled clip is the share of frames it was seen in. Zero stores
+// NULL — unmeasured — rather than "none of it", so a caller that has no measurement
+// never writes one. The clamp is for a caller that miscounted; a weight past 1 would
+// read as more than the whole item.
+func (d *DB) AddTagWeighted(ctx context.Context, mediaID int64, name, category, source string, score, weight float64) error {
 	if category == "" {
 		category = "general"
 	}
@@ -59,10 +69,15 @@ func (d *DB) AddTag(ctx context.Context, mediaID int64, name, category, source s
 	if err != nil {
 		return err
 	}
+	if weight > 1 {
+		weight = 1
+	} else if weight < 0 {
+		weight = 0
+	}
 	_, err = d.sql.ExecContext(ctx, `
-		INSERT INTO media_tags(media_id, tag_id, source, score) VALUES(?,?,?,?)
-		ON CONFLICT(media_id, tag_id) DO UPDATE SET source=excluded.source, score=excluded.score`,
-		mediaID, tagID, source, nullFloat(score))
+		INSERT INTO media_tags(media_id, tag_id, source, score, weight) VALUES(?,?,?,?,?)
+		ON CONFLICT(media_id, tag_id) DO UPDATE SET source=excluded.source, score=excluded.score, weight=excluded.weight`,
+		mediaID, tagID, source, nullFloat(score), nullFloat(weight))
 	return err
 }
 
@@ -144,7 +159,7 @@ func (d *DB) momentsForMedia(ctx context.Context, mediaID int64) (map[int64][]fl
 // timeline moments (if any) where the AI detected it.
 func (d *DB) TagsForMedia(ctx context.Context, mediaID int64) ([]models.Tag, error) {
 	rows, err := d.sql.QueryContext(ctx, `
-		SELECT t.id, t.name, t.category, mt.source, COALESCE(mt.score, 0)
+		SELECT t.id, t.name, t.category, mt.source, COALESCE(mt.score, 0), COALESCE(mt.weight, 0)
 		FROM media_tags mt JOIN tags t ON t.id = mt.tag_id
 		WHERE mt.media_id = ? ORDER BY t.category, t.name`, mediaID)
 	if err != nil {
@@ -154,7 +169,7 @@ func (d *DB) TagsForMedia(ctx context.Context, mediaID int64) ([]models.Tag, err
 	var out []models.Tag
 	for rows.Next() {
 		var t models.Tag
-		if err := rows.Scan(&t.ID, &t.Name, &t.Category, &t.Source, &t.Score); err != nil {
+		if err := rows.Scan(&t.ID, &t.Name, &t.Category, &t.Source, &t.Score, &t.Weight); err != nil {
 			return nil, err
 		}
 		out = append(out, t)
@@ -189,7 +204,7 @@ func (d *DB) TagsForMediaBatch(ctx context.Context, ids []int64) (map[int64][]mo
 	}
 	placeholders := strings.TrimPrefix(strings.Repeat(",?", len(ids)), ",")
 	rows, err := d.sql.QueryContext(ctx, `
-		SELECT mt.media_id, t.id, t.name, t.category, mt.source, COALESCE(mt.score, 0)
+		SELECT mt.media_id, t.id, t.name, t.category, mt.source, COALESCE(mt.score, 0), COALESCE(mt.weight, 0)
 		FROM media_tags mt JOIN tags t ON t.id = mt.tag_id
 		WHERE mt.media_id IN (`+placeholders+`)
 		ORDER BY mt.media_id, t.category, t.name`, args...)
@@ -200,7 +215,7 @@ func (d *DB) TagsForMediaBatch(ctx context.Context, ids []int64) (map[int64][]mo
 	for rows.Next() {
 		var mediaID int64
 		var t models.Tag
-		if err := rows.Scan(&mediaID, &t.ID, &t.Name, &t.Category, &t.Source, &t.Score); err != nil {
+		if err := rows.Scan(&mediaID, &t.ID, &t.Name, &t.Category, &t.Source, &t.Score, &t.Weight); err != nil {
 			return nil, err
 		}
 		out[mediaID] = append(out[mediaID], t)

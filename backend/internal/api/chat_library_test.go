@@ -174,3 +174,35 @@ func TestChatResolvesLinksForABrowseTogetherTurn(t *testing.T) {
 		t.Fatalf("links = %+v", out.Links)
 	}
 }
+
+// The auto-tagger's per-item weights in her hands: two clips both tagged beach, one
+// that is all beach and one with a single beach shot, rank the same on words. Asked
+// for the beach one, she reaches for the one that is about it.
+func TestTheClipThatIsMostlyAboutItWinsTheTie(t *testing.T) {
+	candidates := []libraryCandidate{
+		{link: libbyLink{ID: 1, Title: "Flicker"}, title: "flicker", tags: []string{"beach", "car"}, weights: map[string]float64{"beach": 0.1}},
+		{link: libbyLink{ID: 2, Title: "All day"}, title: "all day", tags: []string{"beach", "swimsuit"}, weights: map[string]float64{"beach": 0.9}},
+		{link: libbyLink{ID: 3, Title: "Untouched"}, title: "untouched", tags: []string{"beach"}},
+	}
+	seen := map[int64]int{}
+	for i := 0; i < 60; i++ {
+		link, ok := pickLibraryMatch(candidates, "the beach one", minAttachMatchScore, nil, nil, rollIndex)
+		if !ok {
+			t.Fatal("nothing matched")
+		}
+		seen[link.ID]++
+	}
+	if seen[1] != 0 {
+		t.Fatalf("the clip with one beach shot was picked over clips that are about the beach: %v", seen)
+	}
+	if seen[2] == 0 || seen[3] == 0 {
+		t.Fatalf("the two clips that are about the beach should both come up: %v", seen)
+	}
+	// A title match is the whole item, and an unmeasured tag reads as the whole item.
+	if share := tagShare(map[string]float64{"beach": 0.1}, nil); share != 1 {
+		t.Fatalf("a title match has share %v, want 1", share)
+	}
+	if share := tagShare(map[string]float64{"beach": 0.1}, []string{"beach", "car"}); share != 0.55 {
+		t.Fatalf("share = %v, want the mean of 0.1 and an unmeasured 1", share)
+	}
+}

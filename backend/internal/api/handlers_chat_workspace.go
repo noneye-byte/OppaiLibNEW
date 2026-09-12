@@ -169,6 +169,12 @@ type chatImage struct {
 	// so an unset zero still means normal), rarely, normal or often. The user's dial on
 	// each picture. See chat_send_weights.go.
 	Weight float64 `json:"weight,omitempty"`
+	// Subject is who the picture is of: chatSubjectSelf for the character, chatSubjectOther
+	// for anyone or anything else. Decided by the scanner at upload and overridable by
+	// the user; only pictures of her are ever sent as selfies. Empty on a record from
+	// before subjects existed, which readChatWorkspace classifies on the way in.
+	// See chat_image_subjects.go.
+	Subject string `json:"subject,omitempty"`
 }
 
 type chatWorkspace struct {
@@ -363,6 +369,10 @@ func (s *Server) readChatWorkspace(userID int64) (chatWorkspace, error) {
 		ws.Characters = append([]chatCharacter{defaultLibbyCard()}, ws.Characters...)
 	}
 	normalizeChatWorkspace(&ws)
+	// Pictures from before subjects existed are classified here, on every read, from
+	// the tags they carry. Deterministic, so not persisting it costs nothing but the
+	// few comparisons; the next write of the workspace stores it anyway.
+	classifyLegacySubjects(&ws)
 	return ws, nil
 }
 
@@ -592,6 +602,7 @@ func validateChatWorkspace(ws *chatWorkspace) error {
 		} else if w > maxSendWeight {
 			ws.Images[i].Weight = maxSendWeight
 		}
+		ws.Images[i].Subject = normalizeChatSubject(ws.Images[i].Subject)
 	}
 	characters := make(map[string]bool, len(ws.Characters))
 	for i := range ws.Characters {
@@ -781,6 +792,14 @@ func (s *Server) handlePutChatWorkspace(w http.ResponseWriter, r *http.Request) 
 	filtered := make([]chatImage, 0, len(ws.Images))
 	for _, img := range ws.Images {
 		if trusted, exists := oldImages[img.ID]; exists {
+			// The blob, the scan tags and the timestamps are the server's; the two dials
+			// the user turns from the gallery are theirs, and are the only fields taken
+			// from the client. Both were being dropped here, which is why a picture set
+			// to "never" kept being sent.
+			trusted.Weight = img.Weight
+			if img.Subject != "" {
+				trusted.Subject = img.Subject
+			}
 			filtered = append(filtered, trusted)
 		}
 	}
@@ -803,6 +822,9 @@ type uploadChatImageReq struct {
 	Name        string   `json:"name"`
 	ImageData   string   `json:"imageData"`
 	Tags        []string `json:"tags,omitempty"`
+	// Subject says who the picture is of, when the uploader knows: "self" or "other".
+	// Anything else lets the scanner decide from the tags. See chat_image_subjects.go.
+	Subject string `json:"subject,omitempty"`
 }
 
 func (s *Server) handleUploadChatImage(w http.ResponseWriter, r *http.Request) {
@@ -855,7 +877,7 @@ func (s *Server) handleUploadChatImage(w http.ResponseWriter, r *http.Request) {
 	if !valid || name == "" {
 		name = "Character image"
 	}
-	meta := chatImage{ID: randomID(), CharacterID: req.CharacterID, Name: name, Tags: tags, MIME: mime, CreatedAt: time.Now().UnixMilli()}
+	meta := chatImage{ID: randomID(), CharacterID: req.CharacterID, Name: name, Tags: tags, MIME: mime, CreatedAt: time.Now().UnixMilli(), Subject: normalizeChatSubject(req.Subject)}
 	blob, err := crypto.SealBytes(s.kek, raw, []byte(fmt.Sprintf("chat-image:%d:%s", u.ID, meta.ID)))
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "image encryption failed")
@@ -883,6 +905,13 @@ func (s *Server) handleUploadChatImage(w http.ResponseWriter, r *http.Request) {
 		if !found {
 			writeErr(w, http.StatusBadRequest, "no such character")
 			return
+		}
+		// Nobody said who it is of, so the scanner decides: her likeness against the
+		// tags, exactly as she would recognise herself in it mid-conversation.
+		if meta.Subject == "" {
+			if character, ok := findChatCharacter(ws, owner); ok {
+				meta.Subject = classifyChatSubject(meta.Tags, character.Appearance, selfPortraitFloor)
+			}
 		}
 	}
 	dir := filepath.Dir(s.chatImagePath(u.ID, meta.ID))

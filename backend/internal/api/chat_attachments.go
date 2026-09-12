@@ -259,19 +259,12 @@ func (s *Server) libbySelfPictures(ctx context.Context) []selfPicture {
 }
 
 // scoreTags is the tag overlap between a request and a picture, counting each
-// requested word once per tag it lands in. The same scoring the gallery matcher uses,
-// lifted out so a gallery picture and a library picture are compared on one scale
-// rather than each winning against its own pool.
+// requested word once per tag it lands in, plus one for a whole multi-word tag the
+// request names in full — see scoreTagsWeighted for why. The same scoring the gallery
+// matcher uses, lifted out so a gallery picture and a library picture are compared on
+// one scale rather than each winning against its own pool.
 func scoreTags(words map[string]bool, tags []string) int {
-	score := 0
-	for _, tag := range tags {
-		for _, word := range strings.Fields(tag) {
-			if len(word) >= 3 && words[word] {
-				score++
-			}
-		}
-	}
-	return score
+	return scoreTagsWeighted(words, tags)
 }
 
 // requestWords reduces a request, or a whole exchange, to the words worth matching on.

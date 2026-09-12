@@ -3,7 +3,7 @@ import { customElement, property, query, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import {
   api, PROFILE_IMAGE_OWNER, type ChatCharacter, type ChatConversation, type ChatImage, type ChatMessage,
-  type ChatModelInspection, type ChatModels, type ChatOptions, type ChatProfile, type ChatSampling, type ChatStatus, type ChatWorkspace,
+  type ChatModelInspection, type ChatModels, type ChatOptions, type ChatPhotoReport, type ChatProfile, type ChatSampling, type ChatStatus, type ChatWorkspace,
   type LibbyAutoDecision, type LibbyAutoSettings, type LibbyAutoState, type LibbyBond, type LibbyContext,
   type DiscordPlace, type DiscordState, type LibbyIdentity, type LibbyMemory, type LibbyThought, type LibbyWant, type SharedLink,
   type StoredChatMessage, type User, type ChatReplyRef, type LibbyAttachment, type LibbyBackground, type LibbyLink, type Media,
@@ -535,6 +535,13 @@ export class OppaiChat extends LitElement {
       advanced panel renders it: with no override set the sliders show these rather than a
       made-up default, so what is on screen is what was actually used. */
   @state() private lastSampling?: ChatSampling;
+  /** Why the last reply carried the picture it did. Shown beside the sampling line
+      so a wrong picture is a thing that can be read rather than guessed at. */
+  @state() private lastPhoto?: ChatPhotoReport;
+  /** Who the next gallery upload is of: "self", "other", or "" to let the scanner
+      decide. Defaults to her — the panel is her gallery, and someone uploading here
+      is adding pictures of her; photos shared in chat are scanned instead. */
+  @state() private imageSubject = "self";
 
   /** Which of her offers have been decided this session; see ActionApprovals. */
   private approvals = new ActionApprovals(() => this.requestUpdate());
@@ -708,6 +715,9 @@ export class OppaiChat extends LitElement {
     .snap-close { position:absolute; bottom:24px; left:0; right:0; text-align:center; color:rgba(255,255,255,.7); font-size:12px; }
     /* Send weights. */
     .image-card .weight { display:flex; align-items:center; gap:5px; font-size:11px; color:var(--muted); }
+    .shelf { margin:14px 0 8px; font-size:13px; font-weight:650; display:grid; gap:2px; }
+    .shelf span { font-size:11px; font-weight:400; color:var(--muted); }
+    .upload-row select.field { min-width:0; width:100%; }
     .image-card .weight select { font:inherit; font-size:11px; background:var(--surface,var(--input)); color:inherit; border:1px solid var(--line); border-radius:6px; padding:2px 4px; }
     .weights { margin-top:14px; }
     .weight-rows { display:grid; gap:4px; }
@@ -961,7 +971,11 @@ export class OppaiChat extends LitElement {
        .initial fallback rather than the .pfp-initial span the profile panel uses. */
     .pfp.initial { font-size:24px; }
     .pfp-actions { display:grid; gap:5px; justify-items:start; }.pfp-actions strong { font-size:14px; }
-    .upload-row { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:10px; align-items:end; }
+    /* Three cells that wrap: the tags field and the subject select share a row when
+       there is room, and the upload button takes a row of its own when there is not.
+       The panel is narrow whenever the portrait is open, which is most of the time. */
+    .upload-row { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; align-items:end; }
+    .upload-row label { display:grid; gap:4px; min-width:0; }
     .file-btn { position:relative; overflow:hidden; display:inline-grid; place-items:center; white-space:nowrap;
       border:1px solid var(--line); border-radius:5px; padding:9px 12px; cursor:pointer; font-size:13px; }
     .file-btn:hover { background:var(--hover); }
@@ -2240,6 +2254,7 @@ export class OppaiChat extends LitElement {
       // something had to be cut to fit the model's window. Shown rather than swallowed:
       // silent truncation of her memory or her card is the failure this reports.
       this.lastSampling = result.sampling;
+      this.lastPhoto = result.photo;
       // Context fitting is a diagnostic, not a failed reply. Keep it visible without the
       // red error treatment that made routine summarisation look like a crash.
       if (result.context?.note) this.say(result.context.note);
@@ -2470,7 +2485,7 @@ export class OppaiChat extends LitElement {
     try {
       this.say("Scanning image locally…");
       const tags = this.imageTags.split(",").map((tag) => tag.trim()).filter(Boolean);
-      const image = await api.uploadChatImage({ characterId:character.id, name:file.name, imageData:await this.readDataURL(file), tags });
+      const image = await api.uploadChatImage({ characterId:character.id, name:file.name, imageData:await this.readDataURL(file), tags, subject:this.imageSubject || undefined });
       this.workspace.images.push(image);
       const stored = this.liveCharacter(character.id);
       if (stored && !stored.avatarImageId) stored.avatarImageId = image.id;
@@ -3202,6 +3217,9 @@ export class OppaiChat extends LitElement {
           <span>Last reply sampled as <strong>${this.lastSampling.task}</strong>${this.lastSampling.overridden?.length ? html` — you overrode ${this.lastSampling.overridden.join(", ")}` : nothing}</span>
           <button class="secondary" @click=${() => void this.copySampling()}>Copy settings</button>
         </div>` : nothing}
+        ${this.lastPhoto?.source ? html`<div class="sampling">
+          <span>Last picture chosen <strong>${describePhotoSource(this.lastPhoto.source)}</strong> — fit ${this.lastPhoto.fit} of ${this.lastPhoto.candidates} candidate${this.lastPhoto.candidates === 1 ? "" : "s"}${this.lastPhoto.tags?.length ? html`; it shows ${this.lastPhoto.tags.slice(0, 6).join(", ")}` : nothing}</span>
+        </div>` : nothing}
         <details>
           <summary>Advanced API options</summary>
           <textarea class="field" rows="5" .value=${JSON.stringify(conversation.options ?? {}, null, 2)} @change=${(event:Event) => { try { const parsed=JSON.parse((event.target as HTMLTextAreaElement).value) as ChatOptions; this.updateConversation({options:parsed}); } catch { this.say("Advanced options must be valid JSON.",true); } }}></textarea>
@@ -3228,30 +3246,59 @@ export class OppaiChat extends LitElement {
 
   private renderImagesPanel(character: ChatCharacter) {
     const images = this.workspace.images.filter((image) => image.characterId === character.id);
+    // Two shelves. Only pictures of her are ever sent as selfies; photos shared in chat
+    // of other people and things sit on the second shelf, where she knows them as what
+    // they are. The scanner files each upload; either shelf can be corrected by hand.
+    const hers = images.filter((image) => image.subject !== "other");
+    const others = images.filter((image) => image.subject === "other");
     return html`<div class="panel">
       <p class="empty">Images are scanned locally. ${character.name} may attach one when its tags match the current exchange. Your own profile picture is set under Profile and is kept separate from these.</p>
       <div class="upload-row">
         <label>Extra matching tags<input class="field" placeholder="beach, happy, bedroom" .value=${this.imageTags} @input=${(event:Event) => (this.imageTags=(event.target as HTMLInputElement).value)}/></label>
+        <label>Who it shows<select class="field" aria-label="Who the uploaded picture shows" .value=${this.imageSubject} @change=${(event:Event) => (this.imageSubject=(event.target as HTMLSelectElement).value)}>
+          <option value="self" ?selected=${this.imageSubject === "self"}>${character.name}</option>
+          <option value="other" ?selected=${this.imageSubject === "other"}>Someone or something else</option>
+          <option value="" ?selected=${this.imageSubject === ""}>Let the scanner decide</option>
+        </select></label>
         <span class="file-btn">Upload and scan<input type="file" accept="image/png,image/jpeg,image/webp,image/gif" @change=${this.uploadImage}/></span>
       </div>
-      <div class="image-grid">${images.map((image) => html`
-        <article class="image-card">
-          <img src=${api.chatImageURL(image.id)} alt=${image.name}/>
-          <button class="remove" title="Delete ${image.name}" aria-label="Delete ${image.name}" @click=${() => void this.deleteImage(image)}>×</button>
-          <div class="card-body">
-            <span class="card-name">${image.name}</span>
-            <span class="card-tags">${image.tags.join(", ") || "No tags"}</span>
-            <label class="weight">Sends<select aria-label=${`How often to send ${image.name}`} .value=${String(image.weight || 1)} @change=${(event:Event) => this.setImageWeight(image, Number((event.target as HTMLSelectElement).value))}>
-              ${SEND_WEIGHTS.map((w) => html`<option value=${String(w.value)} ?selected=${(image.weight || 1) === w.value}>${w.label}</option>`)}
-            </select></label>
-            ${character.avatarImageId === image.id
-              ? html`<span class="badge">Avatar</span>`
-              : html`<button @click=${() => this.updateCharacter("avatarImageId", image.id)}>Use as avatar</button>`}
-          </div>
-        </article>`)}</div>
-      ${images.length ? nothing : html`<div class="empty">No images for ${character.name} yet.</div>`}
-      ${character.id === "libby" ? this.renderWeightsPanel(images) : nothing}
+      <h3 class="shelf">Pictures of ${character.name}<span>What she can send as a selfie.</span></h3>
+      <div class="image-grid">${hers.map((image) => this.renderImageCard(character, image))}</div>
+      ${hers.length ? nothing : html`<div class="empty">No pictures of ${character.name} yet.</div>`}
+      ${others.length ? html`
+        <h3 class="shelf">Someone or something else<span>Photos shared with her. She remembers these but never sends them as herself. Wrong shelf? Tap “That's her”.</span></h3>
+        <div class="image-grid">${others.map((image) => this.renderImageCard(character, image))}</div>` : nothing}
+      ${character.id === "libby" ? this.renderWeightsPanel(hers) : nothing}
     </div>`;
+  }
+
+  private renderImageCard(character: ChatCharacter, image: ChatImage) {
+    const hers = image.subject !== "other";
+    return html`<article class="image-card">
+      <img src=${api.chatImageURL(image.id)} alt=${image.name}/>
+      <button class="remove" title="Delete ${image.name}" aria-label="Delete ${image.name}" @click=${() => void this.deleteImage(image)}>×</button>
+      <div class="card-body">
+        <span class="card-name">${image.name}</span>
+        <span class="card-tags">${image.tags.join(", ") || "No tags"}</span>
+        ${hers ? html`<label class="weight">Sends<select aria-label=${`How often to send ${image.name}`} .value=${String(image.weight || 1)} @change=${(event:Event) => this.setImageWeight(image, Number((event.target as HTMLSelectElement).value))}>
+          ${SEND_WEIGHTS.map((w) => html`<option value=${String(w.value)} ?selected=${(image.weight || 1) === w.value}>${w.label}</option>`)}
+        </select></label>` : nothing}
+        <button title=${hers ? `Move ${image.name} to the other shelf: not a picture of ${character.name}` : `Move ${image.name} to her shelf: this is ${character.name}`}
+          @click=${() => this.setImageSubject(image, hers ? "other" : "self")}>${hers ? "Not her" : "That's her"}</button>
+        ${hers ? (character.avatarImageId === image.id
+          ? html`<span class="badge">Avatar</span>`
+          : html`<button @click=${() => this.updateCharacter("avatarImageId", image.id)}>Use as avatar</button>`) : nothing}
+      </div>
+    </article>`;
+  }
+
+  /** Moves a picture between the two shelves. The user's word beats the scanner's,
+      and the server keeps it that way across saves. */
+  private setImageSubject(image: ChatImage, subject: "self" | "other") {
+    const live = this.workspace.images.find((it) => it.id === image.id);
+    if (!live) return;
+    live.subject = subject;
+    this.touchWorkspace();
   }
 
   /** Sets how readily she reaches for one gallery picture. Normal is stored as
@@ -4105,6 +4152,17 @@ export class OppaiChat extends LitElement {
       <button type="button" class="incoming-btn no" title="Decline" aria-label="Decline" @click=${() => this.declineCall()}><span class="material-symbols-rounded">call_end</span></button>
       <button type="button" class="incoming-btn yes" title="Answer" aria-label="Answer" @click=${() => this.acceptCall()}><span class="material-symbols-rounded">videocam</span></button>
     </div>`;
+  }
+}
+
+/** The photo report's source, in words. */
+function describePhotoSource(source: string): string {
+  switch (source) {
+    case "ready": return "from your words, before she wrote";
+    case "model": return "from the tags she wrote";
+    case "rescue": return "as a rescue: she said she was sending one and nothing fitted";
+    case "inferred": return "unprompted, because her words matched it";
+    default: return source;
   }
 }
 

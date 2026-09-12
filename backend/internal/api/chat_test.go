@@ -304,7 +304,7 @@ func TestPhotoCatalogueListsOnlyCallablePictures(t *testing.T) {
 		{ID: "b", CharacterID: "libby", Tags: nil},
 		{ID: "c", CharacterID: "other", Tags: []string{"kitchen"}},
 	}}
-	catalogue := photoCatalogue(ws, "libby", nil, nil, nil)
+	catalogue := photoCatalogue(ws, "libby", nil, nil, nil, "")
 	if !strings.Contains(catalogue, "beach, bikini") {
 		t.Fatalf("tagged picture missing from catalogue: %q", catalogue)
 	}
@@ -314,7 +314,7 @@ func TestPhotoCatalogueListsOnlyCallablePictures(t *testing.T) {
 	if !strings.Contains(catalogue, "[send:") {
 		t.Fatalf("catalogue never says how to send: %q", catalogue)
 	}
-	if photoCatalogue(chatWorkspace{}, "libby", nil, nil, nil) != "" {
+	if photoCatalogue(chatWorkspace{}, "libby", nil, nil, nil, "") != "" {
 		t.Fatal("a character with no pictures should contribute no catalogue")
 	}
 }

@@ -33,14 +33,14 @@ func TestAskingForAPictureIsRecognised(t *testing.T) {
 // model that remembers sending one unable to see it, which is how invented pictures
 // get promised.
 func TestPhotoCatalogueMarksWhatWasAlreadySent(t *testing.T) {
-	catalogue := photoCatalogue(libbyGallery(), "libby", map[string]bool{"a": true}, nil, nil)
+	catalogue := photoCatalogue(libbyGallery(), "libby", map[string]bool{"a": true}, nil, nil, "")
 	if !strings.Contains(catalogue, "[already sent]") {
 		t.Fatalf("spent picture not marked: %s", catalogue)
 	}
 	if !strings.Contains(catalogue, "unless the user asks") {
 		t.Fatalf("catalogue never states the rule: %s", catalogue)
 	}
-	if strings.Contains(photoCatalogue(libbyGallery(), "libby", nil, nil, nil), "[already sent]") {
+	if strings.Contains(photoCatalogue(libbyGallery(), "libby", nil, nil, nil, ""), "[already sent]") {
 		t.Fatal("a fresh conversation marked a picture as sent")
 	}
 }

@@ -65,9 +65,7 @@ var factPatterns = []factPattern{
 	{regexp.MustCompile(`(?i)\bi(?:'m| am) (?:really )?not into ` + factObject), "They are not into %s", "", memoryPreference},
 	{regexp.MustCompile(`(?i)\bi (?:don't|do not|dont) (?:really )?like ` + factObject), "They don't like %s", "", memoryPreference},
 	// Boundaries. Read as a limit only when it is phrased as one addressed to her.
-	{regexp.MustCompile(`(?i)\b(?:please |just )?(?:don't|do not|dont|never) (?:ever )?((?:call me|bring up|mention|talk about|ask about|ask me about|joke about|tease me about) [^.!?
-;,]{2,80}?)(?:[.!?
-;,]|\s+(?:but|and|so|because|though|although|lol|haha)|$)`), "They asked me never to %s", "", memoryBoundary},
+	{regexp.MustCompile(`(?i)\b(?:please |just )?(?:don't|do not|dont|never) (?:ever )?((?:call me|bring up|mention|talk about|ask about|ask me about|joke about|tease me about) [^.!?\n;,]{2,80}?)(?:[.!?\n;,]|\s+(?:but|and|so|because|though|although|lol|haha)\b|$)`), "They asked me never to %s", "", memoryBoundary},
 	{regexp.MustCompile(`(?i)\bi (?:don't|do not|dont) want (?:you )?to (?:ever )?(?:talk about|bring up|mention|joke about) ` + factObject), "They don't want me to bring up %s", "", memoryBoundary},
 	{regexp.MustCompile(`(?i)\b(?:that's|that is|this is) (?:a hard limit|off limits|off-limits|a no-go|not okay|not ok)\b`), "They said that was off limits", "", memoryBoundary},
 }

@@ -11,6 +11,10 @@ data class MediaTag(
     val category: String = "general",
     val source: String? = null,
     val score: Double? = null,
+    /** How much of the item this tag describes, 0..1: for a video, the share of
+        sampled frames it was seen in. Null means unmeasured, which reads as the whole
+        item. */
+    val weight: Double? = null,
 )
 
 @Serializable
@@ -431,6 +435,8 @@ data class LibbyAction(
     val mediaId: Long = 0,
     val mediaTitle: String = "",
     val tags: List<String> = emptyList(),
+    /** A rename action's new title. */
+    val title: String = "",
 )
 
 /**
@@ -456,6 +462,7 @@ data class LibbyActRequest(
     val url: String = "",
     val mediaId: Long = 0,
     val tags: List<String> = emptyList(),
+    val title: String = "",
 )
 
 /**
@@ -651,6 +658,11 @@ data class ChatImage(
         normal, 2.5 often. Set from the web client's Images panel; carried here so a
         save from the phone does not reset it. */
     val weight: Double = 0.0,
+    /** Who the picture is of: "self" for the character, "other" for anyone or
+        anything else. Only pictures of her are sent as selfies. Set by the scanner at
+        upload and from the web client's Images panel; carried here for the same
+        reason as [weight]. */
+    val subject: String = "",
 )
 
 @Serializable
@@ -672,6 +684,10 @@ data class ChatImageUpload(
     val name: String,
     val imageData: String,
     val tags: List<String> = emptyList(),
+    /** Who the picture is of, when the uploader knows: "self" or "other". Empty
+        lets the scanner decide from the tags. A picture added to her gallery on
+        purpose is her; a photo shared into a conversation is whatever it is. */
+    val subject: String = "",
 )
 
 // ── image generation ─────────────────────────────────────────────────────────

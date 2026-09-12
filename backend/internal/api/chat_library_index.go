@@ -71,7 +71,12 @@ type libraryEntry struct {
 	link  libbyLink
 	title string   // lowercased, for the substring ranking in bestLibraryMatchAbove
 	tags  []string // lowercased
-	at    int64    // created_at, the tie-break when a lookup overflows its cap
+	// weights is how much of the item each tag describes, keyed like tags, holding only
+	// the tags that were measured as less than the whole item. Absent reads as 1. Kept
+	// sparse because most tags on most items are unmeasured, and a map per entry that
+	// said "1" a dozen times would be the index's largest allocation for no information.
+	weights map[string]float64
+	at      int64 // created_at, the tie-break when a lookup overflows its cap
 }
 
 // libraryIndex is the whole library, searchable by word.
@@ -191,7 +196,7 @@ func (s *Server) rebuildLibraryIndex(ctx context.Context, idx *libraryIndex) err
 		// Tags are half the searchable text but not all of it: a title index with no
 		// tags still finds things, so this is a warning rather than a failed build.
 		s.log.Warn("library index: tags", "err", err)
-		tagsByID = map[int64][]string{}
+		tagsByID = map[int64][]db.TagName{}
 	}
 
 	size := int(stamp.Count)
@@ -244,9 +249,9 @@ func (s *Server) growLibraryIndex(ctx context.Context, idx *libraryIndex, stamp 
 		}
 		for i := range briefs {
 			cursor = briefs[i].ID
-			names := make([]string, 0, len(tagsByID[briefs[i].ID]))
+			names := make([]db.TagName, 0, len(tagsByID[briefs[i].ID]))
 			for _, tag := range tagsByID[briefs[i].ID] {
-				names = append(names, tag.Name)
+				names = append(names, db.TagName{Name: tag.Name, Weight: tag.Weight})
 			}
 			s.addLibraryEntry(idx.entries, idx.words, &briefs[i], names)
 		}
@@ -259,7 +264,7 @@ func (s *Server) growLibraryIndex(ctx context.Context, idx *libraryIndex, stamp 
 }
 
 // addLibraryEntry decrypts one row and files it under every word it can be found by.
-func (s *Server) addLibraryEntry(entries map[int64]*libraryEntry, words map[string][]int64, brief *db.MediaBrief, tagNames []string) {
+func (s *Server) addLibraryEntry(entries map[int64]*libraryEntry, words map[string][]int64, brief *db.MediaBrief, tagNames []db.TagName) {
 	title := s.decrypt(brief.TitleEnc, "title")
 	if title == "" {
 		title = "Untitled"
@@ -269,8 +274,15 @@ func (s *Server) addLibraryEntry(entries map[int64]*libraryEntry, words map[stri
 		title: strings.ToLower(title),
 		at:    brief.CreatedAt,
 	}
-	for _, name := range tagNames {
-		entry.tags = append(entry.tags, strings.ToLower(name))
+	for _, tag := range tagNames {
+		name := strings.ToLower(tag.Name)
+		entry.tags = append(entry.tags, name)
+		if tag.Weight > 0 && tag.Weight < 1 {
+			if entry.weights == nil {
+				entry.weights = map[string]float64{}
+			}
+			entry.weights[name] = tag.Weight
+		}
 	}
 	entries[brief.ID] = entry
 
@@ -343,7 +355,7 @@ func (s *Server) lookupLibrary(ctx context.Context, queryWords []string) []libra
 		if entry == nil {
 			continue
 		}
-		out = append(out, libraryCandidate{link: entry.link, title: entry.title, tags: entry.tags, at: entry.at})
+		out = append(out, libraryCandidate{link: entry.link, title: entry.title, tags: entry.tags, weights: entry.weights, at: entry.at})
 	}
 	// Newest first, so the cap below keeps the end of the collection rather than an
 	// arbitrary slice of a map.

@@ -347,9 +347,26 @@ func userAskedForPhoto(text string) bool { return photoRequestWords.MatchString(
 // be simpler and is wrong: asked for "that one from earlier" she needs to still know
 // it exists, and a model that cannot see a picture it remembers sending will happily
 // invent one instead.
-func photoCatalogue(ws chatWorkspace, characterID string, sent map[string]bool, selfPics []selfPicture, sentMedia map[int64]bool) string {
+//
+// asked is the user's latest message. Each picture shows only a handful of its tags,
+// and which handful used to be whichever came first — so a picture tagged thirty
+// things had "red dress" in the list or not by luck, and a model that could not see it
+// concluded she had no such picture and offered to generate one. The tags the message
+// names are listed first now, then the rarer ones. See catalogueTags.
+func photoCatalogue(ws chatWorkspace, characterID string, sent map[string]bool, selfPics []selfPicture, sentMedia map[int64]bool, asked string) string {
 	lines := make([]string, 0, maxCataloguePhotos)
 	example, repeats := "", false
+	// The pictures of her, both pools, for the frequency count that orders the tags.
+	var pools [][]string
+	for _, img := range ws.Images {
+		if img.CharacterID == characterID && isSelfPicture(img) {
+			pools = append(pools, img.Tags)
+		}
+	}
+	for _, pic := range selfPics {
+		pools = append(pools, pic.tags)
+	}
+	wanted, frequency := requestWords(asked), tagFrequency(pools)
 	// One line per picture, tags only. Which pool it came from — her chat gallery, or a
 	// library item recognised as her (chat_attachments.go) — is deliberately not said.
 	// It changes nothing about how she asks for one, and a model told there are two
@@ -360,6 +377,7 @@ func photoCatalogue(ws chatWorkspace, characterID string, sent map[string]bool, 
 		if len(lines) >= maxCataloguePhotos || len(tags) == 0 {
 			return
 		}
+		tags = catalogueTags(tags, wanted, frequency)
 		if len(tags) > 8 {
 			tags = tags[:8]
 		}
@@ -372,8 +390,21 @@ func photoCatalogue(ws chatWorkspace, characterID string, sent map[string]bool, 
 		}
 		lines = append(lines, line)
 	}
+	// Photos of other people and things, shared with her. Listed apart, so she knows
+	// what was shown to her without ever taking one for a picture of herself.
+	var shared []string
 	for _, img := range ws.Images {
 		if img.CharacterID != characterID {
+			continue
+		}
+		if !isSelfPicture(img) {
+			if len(shared) < maxSharedPhotoLines && len(img.Tags) > 0 {
+				tags := img.Tags
+				if len(tags) > 6 {
+					tags = tags[:6]
+				}
+				shared = append(shared, "- "+strings.Join(tags, ", "))
+			}
 			continue
 		}
 		entry(img.Tags, sent[img.ID])
@@ -382,7 +413,10 @@ func photoCatalogue(ws chatWorkspace, characterID string, sent map[string]bool, 
 		entry(pic.tags, sentMedia[pic.link.ID])
 	}
 	if len(lines) == 0 {
-		return ""
+		if len(shared) == 0 {
+			return ""
+		}
+		return sharedPhotosBlock(shared)
 	}
 	if example == "" {
 		example = "lingerie, bed"
@@ -397,7 +431,20 @@ func photoCatalogue(ws chatWorkspace, characterID string, sent map[string]bool, 
 		out += "\nPictures marked [already sent] are ones you have shown in this conversation. " +
 			"Do not send those again unless the user asks you for that picture specifically — pick a different one, or send nothing."
 	}
+	if len(shared) > 0 {
+		out += "\n" + sharedPhotosBlock(shared)
+	}
 	return out
+}
+
+// maxSharedPhotoLines bounds the shared-photo list in the catalogue. Context, not a
+// menu: a few lines so she remembers what she was shown, never a second catalogue.
+const maxSharedPhotoLines = 6
+
+// sharedPhotosBlock frames the photos of other people and things the user has shared.
+func sharedPhotosBlock(lines []string) string {
+	return "Photos they have shared with you of other people or things — not you, and never something you can send as a selfie:\n" +
+		strings.Join(lines, "\n")
 }
 
 // sendTag captures the picture request described above. Same shape and the same
@@ -869,8 +916,20 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// The catalogue is wanted when they asked to see her, when the scene has warmed
 	// enough that she might offer, or when pictures are already going back and forth.
 	// A message about the weather at heat 1 has no use for it.
-	addDeferred("her photos", rankPhotoCatalogue, "\n\n"+photoCatalogue(ws, character.ID, sentPhotos, selfPics, sentMedia),
+	addDeferred("her photos", rankPhotoCatalogue, "\n\n"+photoCatalogue(ws, character.ID, sentPhotos, selfPics, sentMedia, latestUser),
 		signals.photo || in.Intensity >= 3 || len(sentPhotos) > 0)
+	// When they asked to see her, the picture is chosen now, from their words, and she
+	// is told what it shows before she writes a word about it. See chat_photo_pick.go.
+	var ready readyPicture
+	readyOK := false
+	if askedToSeeHer(latestUser) {
+		ready, readyOK = pickReadyPicture(ws, character.ID, selfPics, latestUser, in.PhotoImageID, lastPhoto, sentPhotos, sentMedia)
+		if readyOK {
+			// Ranked well above the catalogue it belongs beside: one line, and the line
+			// that keeps her description and the picture the same picture.
+			add("the picture ready to send", rankReadyPicture, "\n\n"+readyPictureDirective(ready, latestUser))
+		}
+	}
 	// Libby alone gets her self-grounding and the library snapshot. She is this
 	// server's librarian, so knowing who she is, what she can do, and what is on the
 	// shelves is in character; an imported card is somebody else's character and has
@@ -992,6 +1051,8 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// is: she is this server's librarian, and an imported character is somebody else's
 	// character with no business offering to write to the user's collection.
 	caps := libbyCapabilities(cur)
+	caps.KnownURLs = knownURLs(in)
+	caps.SelfieReady = readyOK && ready.fit > 0
 	actionable := character.ID == "libby"
 	if actionable {
 		// The action directive is the one shed-able piece of protocol: without it she simply
@@ -1434,6 +1495,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	imageID := ""
+	report := photoPickReport{}
 	// A turn she decided not to speak on does not attach a picture either. The
 	// inference below reads her words, and with none of them it would be matching on
 	// the user's message alone — which is how a silent thought would end up answered
@@ -1443,35 +1505,61 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// the library items recognised as her. They are scored on one scale, weighted by
 	// the user's preferences, and drawn from at random in proportion — so which of the
 	// two a picture happens to live in is invisible, and the same request reaches a
-	// different picture each time. See chat_send_weights.go.
+	// different picture each time. See chat_send_weights.go and chat_photo_pick.go.
 	if !silent && len(attachments) == 0 {
-		text, floor := latestUser+" "+reply, unpromptedPhotoFloor
-		if photoAsked {
-			text, floor = photoRequest, 1
-		}
-		gallery := galleryCandidates(ws, character.ID, text, in.PhotoImageID, skip, sentPhotos)
-		self := selfPictureCandidates(ws, selfPics, text, skipMedia, sentMedia)
-		// The better-fitting pool draws; a tie goes to the gallery, whose pictures were
-		// put there for this and nothing else.
-		galleryBest, selfBest := bestScore(gallery), bestScore(self)
-		pickFrom := func(floor int) {
-			if galleryBest >= floor && galleryBest >= selfBest {
-				imageID, _ = drawWeighted(gallery, floor, nil)
+		var chosen pictureRef
+		chosenOK := false
+		switch {
+		case photoAsked && readyOK:
+			// They asked, it was chosen before she wrote, and she described it. Whatever
+			// tags she put in the tag, this is the picture her words are about.
+			chosen, chosenOK = ready.pic, true
+			report = photoPickReport{Source: "ready", Request: latestUser, Fit: ready.fit, Candidates: 1}
+		case photoAsked:
+			// Her own tags, plus the user's words when they asked: "[send: dress]" for a
+			// request that said "red" should not lose the colour.
+			text := photoRequest
+			if pictureWanted {
+				text += " " + latestUser
 			}
-			if imageID == "" && selfBest >= floor {
-				if pic, ok := drawWeighted(self, floor, nil); ok {
-					attachments = append(attachments, libbyAttachment{libbyLink: pic.link, Self: true})
-				}
+			candidates := pictureCandidates(ws, character.ID, selfPics, text, in.PhotoImageID, skip, sentPhotos, skipMedia, sentMedia)
+			floor := 1
+			if best := bestScore(candidates); pictureWanted && best > floor {
+				// They named something: only the pictures that fit it best are in the
+				// draw. Preferences decide among those, never over them.
+				floor = best
+			}
+			chosen, chosenOK = drawWeighted(candidates, floor, nil)
+			report = photoPickReport{Source: "model", Request: text, Fit: bestScore(candidates), Candidates: len(candidates)}
+			// She said she was sending one and nothing fitted the tags she wrote — the
+			// commonest way "here you go" arrives with no picture under it. Her words
+			// stand, so a picture has to: anything she has, weighted, not only what matched.
+			if !chosenOK {
+				chosen, chosenOK = drawWeighted(candidates, 0, nil)
+				report.Source, report.Fit = "rescue", 0
+			}
+		default:
+			text := latestUser + " " + reply
+			candidates := pictureCandidates(ws, character.ID, selfPics, text, in.PhotoImageID, skip, sentPhotos, skipMedia, sentMedia)
+			chosen, chosenOK = drawWeighted(candidates, unpromptedPhotoFloor, nil)
+			if chosenOK {
+				report = photoPickReport{Source: "inferred", Request: text, Fit: bestScore(candidates), Candidates: len(candidates)}
 			}
 		}
-		pickFrom(floor)
-		// She said she was sending one and nothing fitted the tags she wrote — the
-		// commonest way "here you go" arrives with no picture under it. Her words
-		// stand, so a picture has to: anything she has, weighted, not only what matched.
-		if photoAsked && imageID == "" && len(attachments) == 0 {
-			pickFrom(0)
+		if chosenOK {
+			report.Tags = chosen.tags
+			if chosen.isSelf {
+				attachments = append(attachments, libbyAttachment{libbyLink: chosen.self.link, Self: true})
+			} else {
+				imageID = chosen.imageID
+			}
+		} else {
+			report = photoPickReport{}
 		}
 	}
+	// Whatever she wrote, an address she wrote is one she made up: she cannot browse, and
+	// nothing in the prompt hands her URLs to repeat. See chat_hallucinations.go.
+	reply = scrubInventedURLs(reply, knownURLs(in))
 	// A snap is a picture sent to be seen once. It is only a snap if a picture came.
 	snap = snap && (imageID != "" || len(attachments) > 0)
 	// The reaction, landing on their latest message.
@@ -1499,6 +1587,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		// it answers the latest one, which is the ordinary case. See chat_replies.go.
 		"replyTo": replyTo,
 		"imageId": imageID,
+		// Why that picture, or why none: which path chose it, what it was matched
+		// against, how well it fitted. For the conversation log. See chat_photo_pick.go.
+		"photo": report,
 		// That the picture is a snap: tap to open, seen once, then gone. See chat_snaps.go.
 		"snap": snap,
 		// The emoji she put on their message, if she did. Null otherwise. See chat_reactions.go.

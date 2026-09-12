@@ -102,6 +102,12 @@ func Open(path string) (*DB, error) {
 	if err := ensureColumn(sqldb, "sessions", "last_seen", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return nil, err
 	}
+	// How much of an item a tag describes (see media_tags.weight in the schema). Rows
+	// tagged before the column existed read as NULL, which every reader treats as "the
+	// whole item" — the only honest answer for a tag whose spread was never measured.
+	if err := ensureColumn(sqldb, "media_tags", "weight", "REAL"); err != nil {
+		return nil, err
+	}
 	return &DB{sql: sqldb, wal: wal}, nil
 }
 

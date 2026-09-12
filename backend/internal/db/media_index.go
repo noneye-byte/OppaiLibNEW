@@ -56,29 +56,37 @@ func (d *DB) BriefsAfter(ctx context.Context, afterID int64, limit int) ([]Media
 	return scanBriefs(rows)
 }
 
+// TagName is one tag on one row as the library index reads it: the name, and how
+// much of the item it describes (0 = unmeasured, which reads as all of it).
+type TagName struct {
+	Name   string
+	Weight float64
+}
+
 // AllTagNames returns every media row's tag names, keyed by media id.
 //
 // One sweep of the join rather than TagsForMediaBatch's bounded IN clause, because
 // the caller here wants the lot: batching it would be thousands of round trips and
-// a placeholder list SQLite would refuse. Names only — the index ranks on words, and
-// category, source and score are nothing it can use.
-func (d *DB) AllTagNames(ctx context.Context) (map[int64][]string, error) {
+// a placeholder list SQLite would refuse. Names and weights only — the index ranks
+// on words and tilts on how much of an item a word describes; category, source and
+// score are nothing it can use.
+func (d *DB) AllTagNames(ctx context.Context) (map[int64][]TagName, error) {
 	rows, err := d.sql.QueryContext(ctx, `
-		SELECT mt.media_id, t.name
+		SELECT mt.media_id, t.name, COALESCE(mt.weight, 0)
 		FROM media_tags mt JOIN tags t ON t.id = mt.tag_id
 		ORDER BY mt.media_id`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := map[int64][]string{}
+	out := map[int64][]TagName{}
 	for rows.Next() {
 		var id int64
-		var name string
-		if err := rows.Scan(&id, &name); err != nil {
+		var tag TagName
+		if err := rows.Scan(&id, &tag.Name, &tag.Weight); err != nil {
 			return nil, err
 		}
-		out[id] = append(out[id], name)
+		out[id] = append(out[id], tag)
 	}
 	return out, rows.Err()
 }

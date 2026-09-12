@@ -163,6 +163,12 @@ CREATE TABLE IF NOT EXISTS media_tags (
     tag_id   INTEGER NOT NULL REFERENCES tags(id)  ON DELETE CASCADE,
     source   TEXT NOT NULL DEFAULT 'manual',       -- manual|ai|scrape
     score    REAL,                                  -- ai confidence
+    -- How much of the item this tag describes, 0..1. For a video or an animation it
+    -- is the share of sampled frames the tag was seen in, so a clip that is mostly
+    -- one thing with a moment of another carries both tags but says which is which.
+    -- NULL means unmeasured (a manual tag, a scrape, an older run) and reads as 1:
+    -- a tag someone wrote on an item is true of the whole item until proven otherwise.
+    weight   REAL,
     PRIMARY KEY (media_id, tag_id)
 );
 CREATE INDEX IF NOT EXISTS idx_media_tags_tag ON media_tags(tag_id);

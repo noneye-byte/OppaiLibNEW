@@ -227,6 +227,11 @@ func galleryCandidates(ws chatWorkspace, characterID, text, excludeID string, sk
 		if img.CharacterID != characterID || (excludeID != "" && img.ID == excludeID) || skip[img.ID] {
 			continue
 		}
+		// A photo the user shared of something else is in her gallery so she can
+		// remember it, not so she can send it as herself. See chat_image_subjects.go.
+		if !isSelfPicture(img) {
+			continue
+		}
 		w := pictureWeight(img.Weight) * tagWeight(ws.SendWeights, img.Tags)
 		if w <= 0 {
 			continue

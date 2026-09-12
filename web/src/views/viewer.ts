@@ -374,6 +374,14 @@ export class OppaiViewer extends LitElement {
         background: var(--oppai-surface-2);
         color: var(--oppai-text-dim);
       }
+      /* How much of a clip a tag describes, when it is less than all of it. */
+      .chip-share {
+        margin-left: 6px;
+        font-size: 10px;
+        font-weight: 600;
+        opacity: 0.7;
+        letter-spacing: 0.02em;
+      }
       /* A tag whose detections can be shown on the timeline. */
       button.chip {
         border: none;
@@ -1762,7 +1770,12 @@ export class OppaiViewer extends LitElement {
   }
 
   private renderTags(m: Media) {
-    const tags = m.tags ?? [];
+    // Most of the item first. The auto-tagger measures how much of a clip each tag
+    // describes (the share of sampled frames it was seen in), so a video that is
+    // mostly one thing with a moment of another lists them in that order rather than
+    // alphabetically. Unmeasured tags — manual, scraped, older runs — read as the
+    // whole item and keep their place at the front.
+    const tags = [...(m.tags ?? [])].sort((a, b) => tagShare(b) - tagShare(a));
     if (tags.length === 0) {
       return html`<div class="meta-note" style="margin-top:14px;">
         No tags yet — use the ✨ auto-tag button.
@@ -1782,9 +1795,14 @@ export class OppaiViewer extends LitElement {
   }
 
   private renderTagChip(t: MediaTag) {
-    const detail = `${t.category}${t.source ? " · " + t.source : ""}`;
+    // A measured share under the whole item is worth showing: "beach 30%" says the
+    // beach is a scene, not the video.
+    const share = tagShare(t);
+    const partial = share < 1;
+    const percent = partial ? `${Math.max(1, Math.round(share * 100))}%` : "";
+    const detail = `${t.category}${t.source ? " · " + t.source : ""}${partial ? ` · in about ${percent} of the sampled frames` : ""}`;
     if (!this.hasTimeline(t)) {
-      return html`<span class="chip chip-muted" title=${detail}>${t.name}</span>`;
+      return html`<span class="chip chip-muted" title=${detail}>${t.name}${partial ? html`<span class="chip-share">${percent}</span>` : nothing}</span>`;
     }
     const on = this.activeTag === t.id;
     const n = t.moments!.length;
@@ -1795,9 +1813,14 @@ export class OppaiViewer extends LitElement {
       @click=${() => this.toggleTagTimeline(t)}
     >
       <span class="material-symbols-rounded" style="font-size:14px;">auto_awesome</span>
-      ${t.name}
+      ${t.name}${partial ? html`<span class="chip-share">${percent}</span>` : nothing}
     </button>`;
   }
+}
+
+/** How much of the item a tag describes, 0..1. Unmeasured reads as the whole item. */
+function tagShare(t: MediaTag): number {
+  return t.weight && t.weight > 0 ? Math.min(1, t.weight) : 1;
 }
 
 /** Timestamps arrive as unix seconds. Saves are picked from a list by "which one is

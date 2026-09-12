@@ -5,7 +5,10 @@ import (
 	"testing"
 )
 
-var allCaps = actionCapabilities{Generate: true, Library: true}
+// allCaps has one address on record: the one the well-formed import below points at.
+// An import may only point where the user pointed, so a test that offers one has to
+// have the user write it first.
+var allCaps = actionCapabilities{Generate: true, Library: true, KnownURLs: map[string]bool{urlKey("https://example.com/thread/1"): true}}
 
 // buildLibbyAction is the whole trust boundary for what a reply may propose, so its
 // rejections matter more than its acceptances.

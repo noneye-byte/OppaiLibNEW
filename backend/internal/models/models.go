@@ -43,6 +43,10 @@ type Tag struct {
 	Category string  `json:"category"`
 	Source   string  `json:"source,omitempty"`
 	Score    float64 `json:"score,omitempty"`
+	// Weight is how much of the item this tag describes, 0..1: for a video or an
+	// animation, the share of sampled frames it was seen in. Zero means unmeasured —
+	// a manual tag, a scrape, an older tagging run — and reads as the whole item.
+	Weight float64 `json:"weight,omitempty"`
 	// Moments are the timestamps (seconds) at which the AI saw this tag in a
 	// time-based item, ascending. Only populated for single-item fetches of
 	// videos; list responses omit them.

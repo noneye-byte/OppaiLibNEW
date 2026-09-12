@@ -48,7 +48,7 @@ const (
 type libbyAction struct {
 	// ID is unique within the reply, so a client can track which card is in flight.
 	ID string `json:"id"`
-	// Kind is what will happen: "generate", "import", "tag", "favorite".
+	// Kind is what will happen: "generate", "import", "tag", "favorite", "rename".
 	Kind string `json:"kind"`
 	// Label is the button-height summary — "Generate a picture".
 	Label string `json:"label"`
@@ -65,6 +65,8 @@ type libbyAction struct {
 	MediaTitle string `json:"mediaTitle,omitempty"`
 	// Tags carries a tag action's additions.
 	Tags []string `json:"tags,omitempty"`
+	// Title carries a rename action's new title.
+	Title string `json:"title,omitempty"`
 }
 
 // actionTag captures a request to do something. Same tolerance as the other protocol
@@ -76,6 +78,14 @@ var actionTag = regexp.MustCompile(`(?i)\[\s*(?:do|action)\s*[:=-]?\s*([a-z]+)\s
 type actionCapabilities struct {
 	Generate bool // image generation is configured
 	Library  bool // there is a library to import into and tag
+	// KnownURLs are the addresses the conversation actually contains. An import may
+	// only point at one of these: the model has no addresses of its own, so anything
+	// else it writes into an import tag is invented, and an Allow button on an
+	// invented address is a request to fetch a made-up host. See chat_hallucinations.go.
+	KnownURLs map[string]bool
+	// SelfieReady says a picture of her fitting this turn's request already exists, so
+	// offering to generate one instead is the wrong answer. See chat_photo_pick.go.
+	SelfieReady bool
 }
 
 func libbyCapabilities(cur settings.Settings) actionCapabilities {
@@ -95,15 +105,22 @@ func libbyCapabilities(cur settings.Settings) actionCapabilities {
 func actionDirective(caps actionCapabilities) string {
 	var lines []string
 	if caps.Generate {
-		lines = append(lines,
-			"- [do: generate <what the picture shows>] — offer to make a picture. Describe the subject and setting in plain words; "+
-				"the generator's model, style, and your own likeness are already configured, so do not write model names or settings.")
+		line := "- [do: generate <what the picture shows>] — offer to make a picture. Describe the subject and setting in plain words; " +
+			"the generator's model, style, and your own likeness are already configured, so do not write model names or settings."
+		if caps.SelfieReady {
+			// The failure this answers: asked for a picture she already has, she offered
+			// to make one. The catalogue is the first answer to "show me"; generating
+			// is for what it does not hold.
+			line += " Never offer this when a picture of you in the list above already fits what they asked for — send that one."
+		}
+		lines = append(lines, line)
 	}
 	if caps.Library {
 		lines = append(lines,
-			"- [do: import <url>] — offer to add something at a web address to their library. Only a URL the user gave you.",
+			"- [do: import <url>] — offer to add something at a web address to their library. Only a URL the user themselves wrote in this conversation, copied exactly; you have no addresses of your own and must never make one up.",
 			"- [do: tag <title> | <tag, tag>] — offer to add tags to something in the library, named by its title.",
-			"- [do: favorite <title>] — offer to favourite something in the library.")
+			"- [do: favorite <title>] — offer to favourite something in the library.",
+			"- [do: rename <title> | <new title>] — offer to rename something in the library. Only when they asked for a better name or the current one is plainly a filename or a number.")
 	}
 	if len(lines) == 0 {
 		return ""
@@ -137,7 +154,8 @@ func (s *Server) parseLibbyActions(ctx context.Context, reply string, caps actio
 	// the words from every action first and look the whole set up once.
 	var words []string
 	for _, match := range matches {
-		if verb := strings.ToLower(match[1]); verb == "tag" || verb == "favorite" || verb == "favourite" {
+		switch strings.ToLower(match[1]) {
+		case "tag", "favorite", "favourite", "fav", "rename", "retitle", "call":
 			words = append(words, normalizeLookupWords(actionTitle(match[2]))...)
 		}
 	}
@@ -205,6 +223,12 @@ func (s *Server) buildLibbyAction(verb, argument string, caps actionCapabilities
 		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
 			return libbyAction{}, false
 		}
+		// An address the user never wrote is one she made up, however plausible it
+		// looks. Dropped rather than shown: the card would be a button whose only
+		// outcome is fetching a made-up host, and her sentence reads fine without it.
+		if !caps.KnownURLs[urlKey(fields[0])] {
+			return libbyAction{}, false
+		}
 		return libbyAction{
 			Kind:   "import",
 			Label:  "Add to your library",
@@ -257,8 +281,48 @@ func (s *Server) buildLibbyAction(verb, argument string, caps actionCapabilities
 			MediaID:    link.ID,
 			MediaTitle: link.Title,
 		}, true
+
+	case "rename", "retitle", "call":
+		if !caps.Library {
+			return libbyAction{}, false
+		}
+		title, rest, found := strings.Cut(argument, "|")
+		if !found {
+			return libbyAction{}, false
+		}
+		link, matched := bestLibraryMatch(candidates, strings.TrimSpace(title))
+		if !matched {
+			return libbyAction{}, false
+		}
+		newTitle, ok := cleanActionTitle(rest)
+		if !ok || strings.EqualFold(newTitle, link.Title) {
+			return libbyAction{}, false
+		}
+		return libbyAction{
+			Kind:       "rename",
+			Label:      "Rename",
+			Detail:     link.Title + " → " + newTitle,
+			MediaID:    link.ID,
+			MediaTitle: link.Title,
+			Title:      newTitle,
+		}, true
 	}
 	return libbyAction{}, false
+}
+
+// maxRenameTitle bounds a title she proposes. The library's own title field is far
+// longer, but a name she writes is a name for a grid tile, not a description.
+const maxRenameTitle = 120
+
+// cleanActionTitle takes the new-name half of a rename tag: quotes she wrapped it in
+// come off, whitespace collapses, and an empty or absurd result is refused.
+func cleanActionTitle(raw string) (string, bool) {
+	title := strings.Trim(strings.TrimSpace(raw), wrappingQuotes)
+	title = strings.Join(strings.Fields(title), " ")
+	if title == "" || len(title) > maxRenameTitle {
+		return "", false
+	}
+	return title, true
 }
 
 // ── performing an approved action ───────────────────────────────────────────
@@ -276,6 +340,7 @@ type actRequest struct {
 	URL     string   `json:"url,omitempty"`
 	MediaID int64    `json:"mediaId,omitempty"`
 	Tags    []string `json:"tags,omitempty"`
+	Title   string   `json:"title,omitempty"`
 }
 
 // handleLibbyAct performs one action the user has approved.
@@ -300,6 +365,8 @@ func (s *Server) handleLibbyAct(w http.ResponseWriter, r *http.Request) {
 		s.actTag(w, r, req)
 	case "favorite", "favourite":
 		s.actFavorite(w, r, req)
+	case "rename":
+		s.actRename(w, r, req)
 	default:
 		writeErr(w, http.StatusBadRequest, "unknown action")
 	}
@@ -466,6 +533,22 @@ func (s *Server) actFavorite(w http.ResponseWriter, r *http.Request, req actRequ
 	}
 	favorite := true
 	s.applyMediaPatch(w, r, req.MediaID, mediaPatchReq{Favorite: &favorite})
+}
+
+// actRename retitles one item, on the same path the viewer's title field uses. The
+// title is re-validated here rather than trusted from the card: the card was built
+// from a model's words, and the request from a client's, and neither is this server.
+func (s *Server) actRename(w http.ResponseWriter, r *http.Request, req actRequest) {
+	if req.MediaID <= 0 {
+		writeErr(w, http.StatusBadRequest, "no item to rename")
+		return
+	}
+	title, ok := cleanActionTitle(req.Title)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "that isn't a usable title")
+		return
+	}
+	s.applyMediaPatch(w, r, req.MediaID, mediaPatchReq{Title: &title})
 }
 
 // applyMediaPatch edits one item on the same code path the PATCH endpoint uses.

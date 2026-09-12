@@ -8,6 +8,12 @@ export interface MediaTag {
   source?: string;
   score?: number;
   /**
+   * How much of the item this tag describes, 0..1: for a video or an animation,
+   * the share of sampled frames it was seen in. Absent means unmeasured — a manual
+   * tag, a scrape, an older tagging run — and reads as the whole item.
+   */
+  weight?: number;
+  /**
    * Timestamps (seconds, ascending) where the AI saw this tag in a video.
    * Only present on single-item fetches; list responses omit them.
    */
@@ -515,6 +521,22 @@ export interface ChatResponse {
       meant to be shown, because the alternative is it happening invisibly.
       Absent from older servers. */
   context?: ChatContextReport;
+  /** Why the reply carries the picture it does, or none: which path chose it, what
+      it was matched against, how well it fitted. Diagnostics for the advanced
+      panel. Absent from older servers. */
+  photo?: ChatPhotoReport;
+}
+
+/** How the reply's picture was chosen. */
+export interface ChatPhotoReport {
+  /** "ready" — chosen from your words before she wrote; "model" — from the tags she
+      wrote; "rescue" — she said she was sending one and nothing fitted; "inferred" —
+      unprompted, her words matched a picture; "" — nothing was sent. */
+  source: string;
+  request?: string;
+  fit: number;
+  tags?: string[];
+  candidates: number;
 }
 
 /** What the server chose for this generation, and what the caller overrode. */
@@ -783,6 +805,11 @@ export interface ChatImage {
   /** How readily she reaches for this picture: -1 never, 0.35 rarely, absent or 1
       normal, 2.5 often. See SEND_WEIGHTS. */
   weight?: number;
+  /** Who the picture is of: "self" for the character, "other" for anyone or anything
+      else. Only pictures of her are ever sent as selfies; the rest she knows as photos
+      she was shown. Decided by the scanner at upload, overridable here. Absent from
+      older servers, which treated everything as her. */
+  subject?: "self" | "other" | string;
 }
 
 /** The send-weight scale, as the server understands it. Zero is unset and means
@@ -1255,6 +1282,8 @@ export interface LibbyAction {
   mediaId?: number;
   mediaTitle?: string;
   tags?: string[];
+  /** A rename action's new title. */
+  title?: string;
 }
 
 /** One durable fact Libby has kept, carried between conversations. */
@@ -1998,7 +2027,9 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(workspace),
     }, 30_000),
-  uploadChatImage: (body: { characterId: string; name: string; imageData: string; tags?: string[] }) =>
+  /** `subject` says who the picture is of when the uploader knows ("self" or
+      "other"); left out, the scanner decides from the tags. */
+  uploadChatImage: (body: { characterId: string; name: string; imageData: string; tags?: string[]; subject?: string }) =>
     request<ChatImage>("/api/chat/images", { method: "POST", body: JSON.stringify(body) }, 120_000),
   deleteChatImage: (id: string) =>
     request<{ status: string }>(`/api/chat/images/${encodeURIComponent(id)}`, { method: "DELETE" }),
@@ -2238,7 +2269,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify({
         kind: action.kind, prompt: action.prompt, url: action.url,
-        mediaId: action.mediaId, tags: action.tags,
+        mediaId: action.mediaId, tags: action.tags, title: action.title,
       }),
     }),
 

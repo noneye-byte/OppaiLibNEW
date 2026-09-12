@@ -124,6 +124,22 @@ func tagCounts(frames []framed) map[tagKey]int {
 	return counts
 }
 
+// prevalence turns sighting counts into the share of the clip each tag describes:
+// seen in every sampled frame is 1, seen in one of ten is 0.1. This is the number the
+// library stores as a tag's weight — the difference between a video that is *about*
+// something and one where it appears for a moment, which "seen at all" cannot say.
+// Nil when nothing was sampled, so a caller stores nothing rather than a division.
+func prevalence(counts map[tagKey]int, sampled int) map[tagKey]float64 {
+	if sampled <= 0 || len(counts) == 0 {
+		return nil
+	}
+	out := make(map[tagKey]float64, len(counts))
+	for k, n := range counts {
+		out[k] = float64(n) / float64(sampled)
+	}
+	return out
+}
+
 // pruneTransient drops one-frame flukes from a densely sampled clip. Once enough
 // frames were taken for prevalence to mean anything, a general tag seen in a single
 // frame at middling confidence is far more likely a compression or seek artefact

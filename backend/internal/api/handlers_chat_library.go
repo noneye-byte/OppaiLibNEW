@@ -121,6 +121,9 @@ type libraryCandidate struct {
 	link  libbyLink
 	title string
 	tags  []string
+	// weights is how much of the item each tag describes, for the tags measured as less
+	// than all of it; absent is 1. See libraryEntry.weights.
+	weights map[string]float64
 	// at is the row's created_at, which the index uses to decide what survives when a
 	// very common word matches more of the collection than one turn can rank.
 	at int64
@@ -180,6 +183,11 @@ type libraryMatch struct {
 	link  libbyLink
 	tags  []string
 	score int
+	// share is how much of the item the tags that matched describe, averaged: an item
+	// that is entirely about the thing asked for scores 1, one where it flickers by
+	// scores near 0, and a title match — the whole item by definition — scores 1.
+	// Ranking is on score; the draw among ties is tilted by this. See tagShare.
+	share float64
 }
 
 // normalizedTitle reduces a title to the words a lookup would be made of, so
@@ -213,6 +221,7 @@ func scoreLibraryMatches(candidates []libraryCandidate, query string) []libraryM
 	var out []libraryMatch
 	for _, candidate := range candidates {
 		score := 0
+		var matched []string
 		if norm == normalizedTitle(candidate.title) {
 			// Word for word, or equal only once the short words are dropped: "Summer at
 			// the Coast II" normalises to the same thing as "Summer at the Coast", and
@@ -233,15 +242,36 @@ func scoreLibraryMatches(candidates []libraryCandidate, query string) []libraryM
 			for _, tag := range candidate.tags {
 				if strings.Contains(tag, word) {
 					score++
+					matched = append(matched, tag)
 					break
 				}
 			}
 		}
 		if score > 0 {
-			out = append(out, libraryMatch{link: candidate.link, tags: candidate.tags, score: score})
+			out = append(out, libraryMatch{link: candidate.link, tags: candidate.tags, score: score, share: tagShare(candidate.weights, matched)})
 		}
 	}
 	return out
+}
+
+// tagShare is how much of an item the tags that matched a request describe, averaged
+// over them. A request that matched no tag — a title hit — is the whole item, 1.
+// This is what the auto-tagger's per-item weights are *for* in her hands: asked for
+// "the beach one" against a clip that is all beach and a clip with one beach shot, both
+// rank the same on words, and this is the difference between them.
+func tagShare(weights map[string]float64, matched []string) float64 {
+	if len(matched) == 0 || len(weights) == 0 {
+		return 1
+	}
+	total := 0.0
+	for _, tag := range matched {
+		if w, ok := weights[tag]; ok {
+			total += w
+		} else {
+			total += 1
+		}
+	}
+	return total / float64(len(matched))
 }
 
 // isExactTitle reports whether a span of her prose is, word for word, the title of
@@ -353,34 +383,9 @@ func (t libbyTaste) score(tags []string) int {
 //
 // pick is the die, injected so a test can load it.
 func pickLibraryMatch(candidates []libraryCandidate, query string, floor int, taste libbyTaste, skip map[int64]bool, pick func(n int) int) (libbyLink, bool) {
-	var tied []libraryMatch
-	best := 0
-	for _, match := range scoreLibraryMatches(candidates, query) {
-		if skip[match.link.ID] {
-			continue
-		}
-		switch {
-		case match.score > best:
-			best, tied = match.score, []libraryMatch{match}
-		case match.score == best:
-			tied = append(tied, match)
-		}
-	}
-	if best < floor || len(tied) == 0 {
+	tied := tiedLibraryMatches(candidates, query, floor, taste, skip)
+	if len(tied) == 0 {
 		return libbyLink{}, false
-	}
-	if len(tied) > 1 && len(taste) > 0 {
-		var liked []libraryMatch
-		most := 0
-		for _, match := range tied {
-			switch t := taste.score(match.tags); {
-			case t > most:
-				most, liked = t, []libraryMatch{match}
-			case t == most:
-				liked = append(liked, match)
-			}
-		}
-		tied = liked
 	}
 	if len(tied) == 1 || pick == nil {
 		return tied[0].link, true
@@ -453,7 +458,40 @@ func tiedLibraryMatches(candidates []libraryCandidate, query string, floor int, 
 		}
 		tied = liked
 	}
-	return tied
+	return dominantShare(tied)
+}
+
+// shareTier is how far below the best-matching item's share another item may sit and
+// still be in the running. A quarter of the clip: asked for the beach one, a video
+// that is 90% beach and one that is 70% beach are both the beach one; one where the
+// beach is a single shot among ten is not, and it only comes up when nothing better
+// fits. Wide enough that the auto-tagger's sampling noise never decides on its own.
+const shareTier = 0.25
+
+// dominantShare narrows a tied set to the items where the requested thing is most
+// of what they are. Word-for-word the ties were equal; this is the per-item weight
+// the auto-tagger measured — "this video has more of this than that" — deciding
+// between them. Order is preserved, so the draw after it stays newest-first fair.
+func dominantShare(tied []libraryMatch) []libraryMatch {
+	if len(tied) < 2 {
+		return tied
+	}
+	best := 0.0
+	for _, match := range tied {
+		if match.share > best {
+			best = match.share
+		}
+	}
+	if best <= 0 {
+		return tied
+	}
+	out := tied[:0:0]
+	for _, match := range tied {
+		if match.share >= best-shareTier {
+			out = append(out, match)
+		}
+	}
+	return out
 }
 
 // rollIndex is the die the chat path uses: a uniform pick over n.

@@ -124,7 +124,7 @@ export type ActionState = "pending" | "running" | "done" | "declined" | "failed"
 /** Icon per action kind. Falls back to a generic mark, so a kind this build has
     never heard of still renders as a card the user can read and refuse. */
 const ACTION_ICONS: Record<string, string> = {
-  generate: "auto_awesome", import: "download", tag: "sell", favorite: "favorite",
+  generate: "auto_awesome", import: "download", tag: "sell", favorite: "favorite", rename: "edit",
 };
 
 export const actionCardStyles = css`
@@ -239,6 +239,7 @@ const SUCCESS_STATUS: Record<string, string> = {
   import: "Added to your library.",
   tag: "Tags added.",
   favorite: "Favorited.",
+  rename: "Renamed.",
 };
 
 const DEFAULT_STATUS: Record<ActionState, string> = {
