@@ -289,17 +289,9 @@ func TestSplitPhotoRequestAndResolution(t *testing.T) {
 		if text != "Here, look." {
 			t.Fatalf("directive left in prose: %q", text)
 		}
-		if got := requestedChatImage(ws, "libby", request, "", nil); got != "b" {
+		if got := drawGallery(ws, "libby", request, "", nil, nil, 1); got != "b" {
 			t.Fatalf("resolved to %q, want b", got)
 		}
-	}
-
-	// Another character's gallery is not hers to send from.
-	if got := requestedChatImage(ws, "libby", "nothing like this at all", "", nil); got != "" {
-		t.Fatalf("unmatched request resolved to %q", got)
-	}
-	if got := requestedChatImage(ws, "libby", "beach bikini", "a", nil); got != "" {
-		t.Fatalf("excluded image was returned: %q", got)
 	}
 }
 

@@ -257,6 +257,22 @@ export interface ChatMessage {
   imageId?: string;
   /** Library items this message attached, by id, for the same reason. */
   mediaIds?: number[];
+  /** The emoji either of them put on this message, so she knows a heart was put on
+      what she said. */
+  reactions?: ChatReaction[];
+}
+
+/** One emoji on one message, and whose it is. */
+export interface ChatReaction {
+  emoji: string;
+  by: "user" | "assistant";
+}
+
+/** What a reply carries when she reacted: the emoji and the message it goes on. */
+export interface LibbyReaction {
+  emoji: string;
+  /** The id of the message reacted to; absent means the latest one of yours. */
+  to?: string;
 }
 
 /** What a quoted reply points at: enough to draw the quote, and the id to jump to. */
@@ -483,6 +499,12 @@ export interface ChatResponse {
   /** The earlier message this reply answers, drawn as a quote above it. Null when it
       answers the latest one, which is the ordinary case. */
   replyTo?: ChatReplyRef | null;
+  /** That the picture on this reply is a snap: tap to open, seen once, then gone.
+      Absent from older servers. */
+  snap?: boolean;
+  /** The emoji she put on one of your messages, if she did. Null otherwise. Absent
+      from older servers. */
+  reaction?: LibbyReaction | null;
   /** How this turn was sampled. The server classifies what the turn is for and
       picks bounded settings to match, so the client no longer ships a fixed set;
       these come back so the advanced panel can show what was actually used and
@@ -719,6 +741,15 @@ export interface StoredChatMessage extends ChatMessage {
   /** The heat this reply sat at, kept beside the mood for the same reason: the next
       turn reports how long the number has not moved. See recentHeat. */
   heat?: number;
+  /** A picture sent to be seen once. Drawn as a tile that opens on tap; once
+      `opened`, it is drawn as gone. The image itself stays in the gallery. */
+  snap?: boolean;
+  opened?: boolean;
+  /** When she read this message of yours, for the receipt under it. Absent means
+      sent but not yet read. Only ever set on your own messages. */
+  readAt?: number;
+  /** The emoji on this message, from either side. */
+  reactions?: ChatReaction[];
 }
 
 export interface ChatConversation {
@@ -749,7 +780,19 @@ export interface ChatImage {
   tags: string[];
   mime: string;
   createdAt: number;
+  /** How readily she reaches for this picture: -1 never, 0.35 rarely, absent or 1
+      normal, 2.5 often. See SEND_WEIGHTS. */
+  weight?: number;
 }
+
+/** The send-weight scale, as the server understands it. Zero is unset and means
+    normal; "never" is stored as -1 so it survives a JSON omitempty. */
+export const SEND_WEIGHTS: { value: number; label: string; hint: string }[] = [
+  { value: -1, label: "Never", hint: "Kept, but never sent." },
+  { value: 0.35, label: "Rarely", hint: "Sent now and then." },
+  { value: 1, label: "Normal", hint: "The usual odds." },
+  { value: 2.5, label: "Often", hint: "Reached for first." },
+];
 
 export interface ChatWorkspace {
   profile: ChatProfile;
@@ -758,6 +801,10 @@ export interface ChatWorkspace {
   characters: ChatCharacter[];
   conversations: ChatConversation[];
   images: ChatImage[];
+  /** Tag preferences for what she sends and hands over: tag → weight, applying to
+      every picture and library item carrying that tag. "More of this, less of
+      that." Absent entries are normal. */
+  sendWeights?: Record<string, number>;
 }
 
 /** Owner id for the user's own avatar, kept out of every character's gallery. */

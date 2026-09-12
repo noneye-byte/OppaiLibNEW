@@ -30,7 +30,7 @@ android {
         // Overridable by CI so a tagged build gets a monotonically increasing
         // code — Android rejects an update whose versionCode isn't higher.
         versionCode = (System.getenv("ANDROID_VERSION_CODE") ?: "45").toInt()
-        versionName = System.getenv("ANDROID_VERSION_NAME") ?: "0.33.0"
+        versionName = System.getenv("ANDROID_VERSION_NAME") ?: "0.34.0"
     }
 
     signingConfigs {

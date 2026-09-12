@@ -121,6 +121,21 @@ type storedChatMessage struct {
 	// ReplyTo is the earlier message this one answers, drawn as a quote above it.
 	// See chat_replies.go.
 	ReplyTo *chatReplyRef `json:"replyTo,omitempty"`
+	// Heat is the intensity this reply sat at, kept beside Mood for the same reason and
+	// dropped here for the same reason Mood used to be: the heat run reset on reload.
+	// Zero means unknown. See chat_heat.go.
+	Heat int `json:"heat,omitempty"`
+	// Snap marks a picture sent to be seen once; Opened records that it has been. The
+	// image itself stays in the gallery — a snap is a way of sending, not a way of
+	// deleting — but a client draws an opened snap as gone. See chat_snaps.go.
+	Snap   bool `json:"snap,omitempty"`
+	Opened bool `json:"opened,omitempty"`
+	// ReadAt is when she read this message of theirs, UnixMilli. Zero is unread — sent,
+	// but not yet looked at. Only the client that drew the receipt writes it; the
+	// server keeps it so a reload does not turn every "Read" back into "Sent".
+	ReadAt int64 `json:"readAt,omitempty"`
+	// Reactions are the emoji put on this message, by either of them. See chat_reactions.go.
+	Reactions []chatReaction `json:"reactions,omitempty"`
 }
 
 type chatConversation struct {
@@ -150,6 +165,10 @@ type chatImage struct {
 	Tags        []string `json:"tags"`
 	MIME        string   `json:"mime"`
 	CreatedAt   int64    `json:"createdAt"`
+	// Weight is how readily she reaches for this picture: sendWeightNever (stored as -1
+	// so an unset zero still means normal), rarely, normal or often. The user's dial on
+	// each picture. See chat_send_weights.go.
+	Weight float64 `json:"weight,omitempty"`
 }
 
 type chatWorkspace struct {
@@ -161,6 +180,11 @@ type chatWorkspace struct {
 	Characters    []chatCharacter    `json:"characters"`
 	Conversations []chatConversation `json:"conversations"`
 	Images        []chatImage        `json:"images"`
+	// SendWeights are the user's tag preferences for what she sends and hands over:
+	// tag → weight, applying to every picture and library item carrying that tag.
+	// "More of this, less of that", in the vocabulary the collection already uses.
+	// See chat_send_weights.go.
+	SendWeights map[string]float64 `json:"sendWeights,omitempty"`
 }
 
 var chatObjectID = regexp.MustCompile(`^[0-9a-f]{32}$`)
@@ -560,6 +584,15 @@ func validateChatWorkspace(ws *chatWorkspace) error {
 	if len(ws.Defaults) > 64 {
 		return errors.New("too many default generation options")
 	}
+	ws.SendWeights = normalizeSendWeights(ws.SendWeights)
+	for i := range ws.Images {
+		// -1 is how "never" survives omitempty; anything else is clamped to the scale.
+		if w := ws.Images[i].Weight; w < 0 {
+			ws.Images[i].Weight = -1
+		} else if w > maxSendWeight {
+			ws.Images[i].Weight = maxSendWeight
+		}
+	}
 	characters := make(map[string]bool, len(ws.Characters))
 	for i := range ws.Characters {
 		c := &ws.Characters[i]
@@ -678,9 +711,28 @@ func validateChatWorkspace(ws *chatWorkspace) error {
 			}
 			if m.Role != "assistant" {
 				m.Mood = ""
+				m.Heat = 0
+				// A snap is only ever hers; theirs is an ordinary photo.
+				m.Snap, m.Opened = false, false
 			} else if m.Mood = strings.ToLower(strings.TrimSpace(m.Mood)); !supportedLibbyEmotions[m.Mood] {
 				m.Mood = ""
 			}
+			if m.Heat < 0 || m.Heat > 5 {
+				m.Heat = 0
+			}
+			// A snap with no picture is nothing; an opened flag on something that was
+			// never a snap is noise.
+			if m.ImageID == "" && len(m.Attachments) == 0 {
+				m.Snap = false
+			}
+			if !m.Snap {
+				m.Opened = false
+			}
+			// Only their messages get read; hers arrive read by definition.
+			if m.Role != "user" || m.ReadAt < 0 {
+				m.ReadAt = 0
+			}
+			m.Reactions = normalizeReactions(m.Reactions)
 			if len(m.Actions) > maxLibbyActions {
 				m.Actions = m.Actions[:maxLibbyActions]
 			}
@@ -968,19 +1020,3 @@ func findChatCharacter(ws chatWorkspace, id string) (chatCharacter, bool) {
 // picture that genuinely fits the moment and one that merely shares vocabulary with it.
 const unpromptedPhotoFloor = 3
 
-// matchingChatImage picks the character's picture whose tags best fit the exchange,
-// so a reply can carry an image without one being asked for.
-//
-// excludeID drops a candidate from consideration. That is what keeps a photo the
-// user has just shared from being handed straight back to them: its tags were fed
-// into the prompt, so the reply echoes them and it would otherwise always outscore
-// every other picture in the gallery. skip does the same for every picture already
-// sent this conversation, which is what stops the best-scoring image in a gallery
-// from becoming the only one the user ever sees.
-func matchingChatImage(ws chatWorkspace, characterID, text, excludeID string, skip map[string]bool) string {
-	bestID, best := bestGalleryImage(ws, characterID, text, excludeID, skip)
-	if best >= unpromptedPhotoFloor {
-		return bestID
-	}
-	return ""
-}

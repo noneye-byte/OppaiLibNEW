@@ -39,6 +39,9 @@ type chatMessage struct {
 	// MediaIDs are the library items this message attached, theirs or hers, resolved to
 	// titles the same way.
 	MediaIDs []int64 `json:"mediaIds,omitempty"`
+	// Reactions are the emoji on this message, so she knows a heart was put on what she
+	// said. See chat_reactions.go.
+	Reactions []chatReaction `json:"reactions,omitempty"`
 }
 
 type chatRequest struct {
@@ -388,7 +391,8 @@ func photoCatalogue(ws chatWorkspace, characterID string, sent map[string]bool, 
 		strings.Join(lines, "\n") +
 		"\nTo send one, end your reply with [send: <tags>] naming tags from the picture you mean — for example [send: " + example + "]. " +
 		"A selfie is a deliberate thing now and then, never decoration: most replies have none, and never more than one. " +
-		"Send one when they ask to see you, or when you would genuinely stop and take one for them. Never describe, promise or refer to a picture you have not actually sent."
+		"Send one when they ask to see you, or when you would genuinely stop and take one for them. Never describe, promise or refer to a picture you have not actually sent.\n" +
+		snapDirective
 	if repeats {
 		out += "\nPictures marked [already sent] are ones you have shown in this conversation. " +
 			"Do not send those again unless the user asks you for that picture specifically — pick a different one, or send nothing."
@@ -419,40 +423,6 @@ func splitPhotoRequest(reply string) (text, request string, ok bool) {
 		return reply, "", false
 	}
 	return text, strings.TrimSpace(match[1]), true
-}
-
-// requestedChatImage resolves what the character asked for to one of her pictures,
-// scoring the requested words against each picture's tags. It returns "" when nothing
-// overlaps, which leaves the caller free to fall back to its own guess.
-//
-// skip holds pictures that must not be chosen however well they score — the ones
-// already sent in this conversation. A model that has just described a picture will
-// describe it again, so its request scores highest against the very picture the user
-// has already seen; without this the same file comes back every turn.
-func requestedChatImage(ws chatWorkspace, characterID, request, excludeID string, skip map[string]bool) string {
-	id, _ := bestGalleryImage(ws, characterID, request, excludeID, skip)
-	return id
-}
-
-// bestGalleryImage is the scoring half of the two matchers above, with the score it
-// won by. Split out because her gallery is no longer the only place her pictures live:
-// a library picture of her competes for the same slot (chat_attachments.go), and two
-// pools can only be compared if both report how well they actually fit.
-func bestGalleryImage(ws chatWorkspace, characterID, text, excludeID string, skip map[string]bool) (string, int) {
-	words := requestWords(text)
-	if len(words) == 0 {
-		return "", 0
-	}
-	bestID, best := "", 0
-	for _, img := range ws.Images {
-		if img.CharacterID != characterID || (excludeID != "" && img.ID == excludeID) || skip[img.ID] {
-			continue
-		}
-		if score := scoreTags(words, img.Tags); score > best {
-			best, bestID = score, img.ID
-		}
-	}
-	return bestID, best
 }
 
 // cardMacro matches the placeholder syntax character cards are authored in.
@@ -771,11 +741,18 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "chat history must contain 1 to 80 messages")
 		return
 	}
-	latestUser := in.Messages[len(in.Messages)-1].Content
+	// The latest thing they said is the whole trailing run of their messages, not the
+	// last bubble: a person sends "wait" / "actually" / "send me one" as three texts
+	// while she is still reading, and the turn answers all of them. See mergeTurns.
+	latestUser := trailingUserText(in.Messages)
 	// What this turn is about, read once. It decides which library sections are fed
 	// and which optional sections can sit the turn out. See chat_context_feed.go.
 	previousUser := ""
-	for i := len(in.Messages) - 2; i >= 0; i-- {
+	runStart := len(in.Messages) - 1
+	for runStart > 0 && strings.EqualFold(strings.TrimSpace(in.Messages[runStart-1].Role), "user") {
+		runStart--
+	}
+	for i := runStart - 1; i >= 0; i-- {
 		if strings.EqualFold(strings.TrimSpace(in.Messages[i].Role), "user") {
 			previousUser = in.Messages[i].Content
 			break
@@ -1066,6 +1043,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// Replying to a particular earlier message. Everyone gets it — an imported card has
 	// threads to pick up too, and it asserts nothing about who the character is.
 	tail.WriteString("\n\n" + replyDirective)
+	// Reacting instead of, or as well as, replying. Everyone gets it, like the reply
+	// tag: it asserts nothing about who the character is. See chat_reactions.go.
+	tail.WriteString("\n\n" + reactDirective)
 	tail.WriteString("\n\n" + moodDirective)
 	// How a feeling moves over a conversation, and whether this one has stopped moving.
 	// Beside the tag rather than with the rest of her temperament in chat_feelings.go,
@@ -1100,6 +1080,10 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		// stay out of the payload. See chat_replies.go and chat_history.go.
 		history = append(history, chatMessage{Role: m.Role, Content: historyContent(m, describer)})
 	}
+	// Two texts in a row from the same side are one turn to the model. Chat templates
+	// alternate roles, and a local backend handed user/user/assistant either folds them
+	// itself (badly) or answers only the last. See mergeTurns.
+	history = mergeTurns(history)
 
 	probeCtx, probeCancel := context.WithTimeout(r.Context(), 5*time.Second)
 	probe := s.probeChatBackend(probeCtx)
@@ -1191,7 +1175,13 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// of the mood tag: models emit them in whichever order they please regardless of
 	// the order the prompt asked for, and a directive left in the prose is a bug the
 	// user reads.
-	reply, photoRequest, photoAsked := splitPhotoRequest(reply)
+	// A snap first: it is a picture request with one extra bit, and it has to come out
+	// before the ordinary send parser so it is never read as both. See chat_snaps.go.
+	reply, photoRequest, photoAsked := splitSnapRequest(reply)
+	snap := photoAsked
+	if !photoAsked {
+		reply, photoRequest, photoAsked = splitPhotoRequest(reply)
+	}
 	// What the character says it feels wins over what keywords suggest it feels: the
 	// heuristic only exists for models that drop the tag.
 	reply, declared, declaredLevel, selfDeclared := splitMood(reply)
@@ -1238,7 +1228,19 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// Consent is enforced here as well as in the directive above. The directive is a
 	// request to a model, which is never a guarantee; this is the part that holds.
 	if actionable && ws.Profile.MayRemember() {
-		if facts := findRememberTags(reply); len(facts) > 0 {
+		facts := findRememberTags(reply)
+		// And what they stated outright, whether or not she thought to file it. Hers
+		// first, so a turn where she did notice keeps its cap; this fills the silence.
+		// See chat_memory_capture.go.
+		if len(facts) < maxRememberedPerReply {
+			for _, fact := range captureUserFacts(latestUser, ws.Profile.DisplayName) {
+				if len(facts) >= maxRememberedPerReply {
+					break
+				}
+				facts = append(facts, fact)
+			}
+		}
+		if len(facts) > 0 {
 			if u, userOK := s.chatUser(r); userOK {
 				s.chatMu.Lock()
 				if _, err := s.appendLibbyMemories(u.ID, facts); err != nil {
@@ -1268,6 +1270,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		callRequested, callEnded = findCallTags(reply)
 	}
 	replyQuote, replyAsked := findReplyTag(reply)
+	// The reaction she put on their message, read before scrubbing deletes the tag.
+	// See chat_reactions.go.
+	reactionEmoji, reacted := findReactTag(reply)
 	// What she asked to hand over, read before scrubbing deletes those tags as well.
 	// Resolved further down, once the prose is clean: an attachment stands beside the
 	// message rather than in a sentence, so unlike a link it has nothing to substitute.
@@ -1292,11 +1297,17 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// Scrubbing runs last of the readers so they still see the tags, and before link
 	// resolution so a substituted title cannot be mistaken for one.
 	reply = scrubDirectives(reply)
+	// A reaction alone is an answer, the way a thought alone is: she read it and put
+	// a heart on it. So is a picture alone. Only a reply that did none of those things
+	// and said nothing is the backend failing.
 	if silent {
 		reply = ""
 	} else if strings.TrimSpace(reply) == "" {
-		writeErr(w, http.StatusBadGateway, "local LLM returned no message")
-		return
+		if !reacted && !photoAsked {
+			writeErr(w, http.StatusBadGateway, "local LLM returned no message")
+			return
+		}
+		reply = ""
 	}
 	if selfDeclared {
 		emotion = declared
@@ -1392,12 +1403,21 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// has asked to see something, only the very last picture is withheld: "send that
 	// one again" is a request this should honour, but answering it with the file
 	// already on screen is not an answer.
+	// Every picture already shown this conversation is penalised in the draw, and the
+	// very last one is withheld outright: "send me another" should reach for something
+	// new while there is something new, and answering with the file already on screen a
+	// message ago is never an answer. Unprompted, everything already sent is withheld —
+	// sending the same one again unasked is the behaviour this exists to stop.
+	// See chat_send_weights.go.
+	pictureWanted := userAskedForPhoto(latestUser) || photoAsked
 	skip := sentPhotos
-	if userAskedForPhoto(in.Messages[len(in.Messages)-1].Content) {
+	skipMedia := sentMedia
+	if pictureWanted {
 		skip = map[string]bool{}
 		if lastPhoto != "" {
 			skip[lastPhoto] = true
 		}
+		skipMedia = map[int64]bool{}
 	}
 	// Things she handed over. Never nil, for the same reason links and actions are not.
 	//
@@ -1407,7 +1427,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// does not own, and reading it that way is free.
 	attachments := []libbyAttachment{}
 	if len(attachRequests) > 0 && !silent {
-		if resolved := s.resolveLibraryAttachments(r.Context(), attachRequests, latestUser, sentMedia, taste); len(resolved) > 0 {
+		if resolved := s.resolveLibraryAttachments(r.Context(), attachRequests, latestUser, sentMedia, taste, ws.SendWeights); len(resolved) > 0 {
 			attachments = resolved
 		} else if !photoAsked {
 			photoRequest, photoAsked = attachRequests[0], true
@@ -1420,34 +1440,44 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// with a selfie.
 	//
 	// Two pools are in the running: the pictures uploaded into her chat gallery, and
-	// the library items recognised as her. They are scored on one scale and the better
-	// fit wins, so which of the two a picture happens to live in is invisible — a tie
-	// goes to the gallery, whose pictures were put there for this and nothing else.
-	if !silent {
-		exchange := in.Messages[len(in.Messages)-1].Content + " " + reply
-		galleryText, floor := exchange, unpromptedPhotoFloor
+	// the library items recognised as her. They are scored on one scale, weighted by
+	// the user's preferences, and drawn from at random in proportion — so which of the
+	// two a picture happens to live in is invisible, and the same request reaches a
+	// different picture each time. See chat_send_weights.go.
+	if !silent && len(attachments) == 0 {
+		text, floor := latestUser+" "+reply, unpromptedPhotoFloor
 		if photoAsked {
-			galleryText, floor = photoRequest, 1
+			text, floor = photoRequest, 1
 		}
-		var galleryScore int
-		if photoAsked {
-			imageID = requestedChatImage(ws, character.ID, photoRequest, in.PhotoImageID, skip)
-		}
-		if imageID == "" {
-			imageID = matchingChatImage(ws, character.ID, exchange, in.PhotoImageID, skip)
-		}
-		if imageID != "" {
-			_, galleryScore = bestGalleryImage(ws, character.ID, galleryText, in.PhotoImageID, skip)
-		}
-		// Only when she has not already attached something: one picture per reply holds
-		// however it was chosen, and a selfie stapled to a video she just handed over is
-		// two attachments pretending to be one message.
-		if len(attachments) == 0 {
-			if pic, score := bestSelfPicture(selfPics, galleryText, sentMedia, floor); score > galleryScore {
-				imageID = ""
-				attachments = append(attachments, libbyAttachment{libbyLink: pic.link, Self: true})
+		gallery := galleryCandidates(ws, character.ID, text, in.PhotoImageID, skip, sentPhotos)
+		self := selfPictureCandidates(ws, selfPics, text, skipMedia, sentMedia)
+		// The better-fitting pool draws; a tie goes to the gallery, whose pictures were
+		// put there for this and nothing else.
+		galleryBest, selfBest := bestScore(gallery), bestScore(self)
+		pickFrom := func(floor int) {
+			if galleryBest >= floor && galleryBest >= selfBest {
+				imageID, _ = drawWeighted(gallery, floor, nil)
+			}
+			if imageID == "" && selfBest >= floor {
+				if pic, ok := drawWeighted(self, floor, nil); ok {
+					attachments = append(attachments, libbyAttachment{libbyLink: pic.link, Self: true})
+				}
 			}
 		}
+		pickFrom(floor)
+		// She said she was sending one and nothing fitted the tags she wrote — the
+		// commonest way "here you go" arrives with no picture under it. Her words
+		// stand, so a picture has to: anything she has, weighted, not only what matched.
+		if photoAsked && imageID == "" && len(attachments) == 0 {
+			pickFrom(0)
+		}
+	}
+	// A snap is a picture sent to be seen once. It is only a snap if a picture came.
+	snap = snap && (imageID != "" || len(attachments) > 0)
+	// The reaction, landing on their latest message.
+	var reaction *libbyReaction
+	if reacted {
+		reaction = &libbyReaction{Emoji: reactionEmoji, To: latestUserMessageID(in.Messages)}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"message":   reply,
@@ -1469,6 +1499,10 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		// it answers the latest one, which is the ordinary case. See chat_replies.go.
 		"replyTo": replyTo,
 		"imageId": imageID,
+		// That the picture is a snap: tap to open, seen once, then gone. See chat_snaps.go.
+		"snap": snap,
+		// The emoji she put on their message, if she did. Null otherwise. See chat_reactions.go.
+		"reaction": reaction,
 		"links":   links,
 		// Library items she put in front of them: something she decided to show, or a
 		// picture of her that lives in the library rather than in her chat gallery. Drawn

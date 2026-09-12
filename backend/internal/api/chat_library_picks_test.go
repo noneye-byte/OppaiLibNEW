@@ -160,7 +160,7 @@ func TestHerTasteBreaksTiesAndNothingElse(t *testing.T) {
 
 	// The whole path, through the attachment resolver, with the newest items already
 	// shown: she reaches past them rather than repeating herself.
-	got := s.resolveLibraryAttachments(ctx, []string{"a girl with brown hair"}, "", map[int64]bool{skirt: true}, taste)
+	got := s.resolveLibraryAttachments(ctx, []string{"a girl with brown hair"}, "", map[int64]bool{skirt: true}, taste, nil)
 	if len(got) != 1 || got[0].ID == skirt {
 		t.Fatalf("attachments = %+v, want one of the unshown brown-haired items", got)
 	}

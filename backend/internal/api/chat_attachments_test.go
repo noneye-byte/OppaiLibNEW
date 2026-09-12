@@ -92,27 +92,6 @@ func TestCatalogueListsLibraryPicturesOfHer(t *testing.T) {
 	}
 }
 
-// Picking one: an explicit request takes the best fit, an unrequested one has to clear
-// the same floor the gallery does, and nothing already sent comes back.
-func TestLibraryPictureOfHerIsChosenByTags(t *testing.T) {
-	pics := libbySelfies()
-	pic, score := bestSelfPicture(pics, "rooftop sunset", nil, 1)
-	if score == 0 || pic.link.ID != 11 {
-		t.Fatalf("asked-for picture resolved to %d (score %d), want 11", pic.link.ID, score)
-	}
-	if _, score := bestSelfPicture(pics, "rooftop sunset", map[int64]bool{11: true}, 1); score != 0 {
-		t.Fatal("a picture already sent was offered again")
-	}
-	// Riding along with a reply is held to unpromptedPhotoFloor, so one shared word is
-	// not enough — the same rule that stopped her flinging a selfie at every keyword.
-	if _, score := bestSelfPicture(pics, "the kitchen was cold", nil, unpromptedPhotoFloor); score != 0 {
-		t.Fatal("one incidental word attached a picture of her")
-	}
-	if _, score := bestSelfPicture(pics, "you on the rooftop at sunset in that red dress", nil, unpromptedPhotoFloor); score == 0 {
-		t.Fatal("three matching words should attach a picture of her")
-	}
-}
-
 // The client owns the log, so what has already been handed over rides in with the
 // request — bounded, because an item ruled out forever is an item she can never show.
 func TestRecentlyAttachedIsBounded(t *testing.T) {
@@ -180,7 +159,7 @@ func TestADirectedAttachResolvesOnOneTagWord(t *testing.T) {
 	id := seedTitledMedia(t, s, "Untitled import 4192", "video", "beach")
 	ctx := context.Background()
 
-	got := s.resolveLibraryAttachments(ctx, []string{"the beach one"}, "", nil, nil)
+	got := s.resolveLibraryAttachments(ctx, []string{"the beach one"}, "", nil, nil, nil)
 	if len(got) != 1 || got[0].ID != id {
 		t.Fatalf("attachments = %+v, want the beach video", got)
 	}
@@ -201,15 +180,15 @@ func TestAFailedAttachFallsBackToWhatTheUserAsked(t *testing.T) {
 	ctx := context.Background()
 
 	// Nothing in the library answers to this, so her own tag resolves to nothing.
-	if got := s.resolveLibraryAttachments(ctx, []string{"that thing from last week"}, "", nil, nil); len(got) != 0 {
+	if got := s.resolveLibraryAttachments(ctx, []string{"that thing from last week"}, "", nil, nil, nil); len(got) != 0 {
 		t.Fatalf("an invented description resolved to %+v", got)
 	}
-	got := s.resolveLibraryAttachments(ctx, []string{"that thing from last week"}, "put on Summer at the Coast", nil, nil)
+	got := s.resolveLibraryAttachments(ctx, []string{"that thing from last week"}, "put on Summer at the Coast", nil, nil, nil)
 	if len(got) != 1 || got[0].ID != id {
 		t.Fatalf("fallback attachments = %+v, want the seeded video", got)
 	}
 	// The rescue never adds to a reply that already worked.
-	both := s.resolveLibraryAttachments(ctx, []string{"Summer at the Coast"}, "put on Summer at the Coast", nil, nil)
+	both := s.resolveLibraryAttachments(ctx, []string{"Summer at the Coast"}, "put on Summer at the Coast", nil, nil, nil)
 	if len(both) != 1 {
 		t.Fatalf("a working request grew a second item: %+v", both)
 	}

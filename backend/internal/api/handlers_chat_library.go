@@ -189,6 +189,14 @@ func normalizedTitle(title string) string {
 	return strings.Join(normalizeLookupWords(title), " ")
 }
 
+// plainTitle is a title reduced to its lower-case words with punctuation removed and
+// nothing dropped — the comparison normalizedTitle is too forgiving for.
+func plainTitle(title string) string {
+	return strings.Join(strings.FieldsFunc(strings.ToLower(title), func(r rune) bool {
+		return !(r >= 'a' && r <= 'z') && !(r >= '0' && r <= '9')
+	}), " ")
+}
+
 // scoreLibraryMatches ranks every candidate against a query, keeping those that
 // scored at all, in the order the candidates came (newest first).
 //
@@ -206,7 +214,14 @@ func scoreLibraryMatches(candidates []libraryCandidate, query string) []libraryM
 	for _, candidate := range candidates {
 		score := 0
 		if norm == normalizedTitle(candidate.title) {
-			score += 30
+			// Word for word, or equal only once the short words are dropped: "Summer at
+			// the Coast II" normalises to the same thing as "Summer at the Coast", and
+			// must not tie with it — the sequel is a near miss, not the title.
+			if plainTitle(candidate.title) == plainTitle(query) {
+				score += 30
+			} else {
+				score += 20
+			}
 		} else if len(phrase) >= 4 && (strings.Contains(candidate.title, phrase) ||
 			(len(norm) >= 4 && strings.Contains(normalizedTitle(candidate.title), norm))) {
 			score += 12
@@ -371,6 +386,74 @@ func pickLibraryMatch(candidates []libraryCandidate, query string, floor int, ta
 		return tied[0].link, true
 	}
 	return tied[pick(len(tied))].link, true
+}
+
+// pickWeightedLibraryMatch is pickLibraryMatch with the user's tag weights applied to
+// the final draw: among the items that fit the request equally well and that she would
+// equally like, something tagged "often" is drawn more, "rarely" less, "never" not at
+// all. With no weights it is exactly pickLibraryMatch. See chat_send_weights.go.
+func pickWeightedLibraryMatch(candidates []libraryCandidate, query string, floor int, taste libbyTaste, skip map[int64]bool, weights map[string]float64, pick func(n int) int) (libbyLink, bool) {
+	if len(weights) == 0 {
+		return pickLibraryMatch(candidates, query, floor, taste, skip, pick)
+	}
+	// Anything the user has ruled out is ruled out before the ranking, so a "never"
+	// item that fits best does not win the tie and then vanish — the next-best gets
+	// its turn instead.
+	exclude := make(map[int64]bool, len(skip))
+	for id := range skip {
+		exclude[id] = true
+	}
+	kept := make([]libraryCandidate, 0, len(candidates))
+	for _, c := range candidates {
+		if tagWeight(weights, c.tags) <= 0 {
+			continue
+		}
+		kept = append(kept, c)
+	}
+	tied := tiedLibraryMatches(kept, query, floor, taste, exclude)
+	if len(tied) == 0 {
+		return libbyLink{}, false
+	}
+	draw := make([]weightedCandidate[libbyLink], 0, len(tied))
+	for _, match := range tied {
+		draw = append(draw, weightedCandidate[libbyLink]{item: match.link, score: 1, weight: tagWeight(weights, match.tags)})
+	}
+	return drawWeighted(draw, 0, nil)
+}
+
+// tiedLibraryMatches is the ranking half of pickLibraryMatch: everything that fits the
+// query best, narrowed by taste, in candidate order. The draw is the caller's.
+func tiedLibraryMatches(candidates []libraryCandidate, query string, floor int, taste libbyTaste, skip map[int64]bool) []libraryMatch {
+	var tied []libraryMatch
+	best := 0
+	for _, match := range scoreLibraryMatches(candidates, query) {
+		if skip[match.link.ID] {
+			continue
+		}
+		switch {
+		case match.score > best:
+			best, tied = match.score, []libraryMatch{match}
+		case match.score == best:
+			tied = append(tied, match)
+		}
+	}
+	if best < floor || len(tied) == 0 {
+		return nil
+	}
+	if len(tied) > 1 && len(taste) > 0 {
+		var liked []libraryMatch
+		most := 0
+		for _, match := range tied {
+			switch t := taste.score(match.tags); {
+			case t > most:
+				most, liked = t, []libraryMatch{match}
+			case t == most:
+				liked = append(liked, match)
+			}
+		}
+		tied = liked
+	}
+	return tied
 }
 
 // rollIndex is the die the chat path uses: a uniform pick over n.

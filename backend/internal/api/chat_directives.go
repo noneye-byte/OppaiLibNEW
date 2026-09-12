@@ -39,6 +39,10 @@ var strayTag = regexp.MustCompile(`(?i)[*_~` + "`" + `]{0,2}\[\s*(?:(?:` +
 	`|remember|remembers|remembering|memory|note|noting|noted` +
 	`|want|wants|wanting|craving|cravings|crave|craves|desire|desires` +
 	`|petname|petnames|nickname|nicknames|endearment` +
+	// Snaps (chat_snaps.go) and reactions (chat_reactions.go), read before deletion.
+	`|snap|snaps|snapping|snapchat|react|reacts|reacting|reaction` +
+	// Snaps (chat_snaps.go) and reactions (chat_reactions.go), read before deletion.
+	`|snap|snaps|snapping|snapchat|react|reacts|reacting|reaction` +
 	// The MISC state tag, deleted after findLooseActivity has read it: she is doing
 	// the thing, not announcing it. See libby_activities.go.
 	`|doing|does|activity|activities|action|state` +

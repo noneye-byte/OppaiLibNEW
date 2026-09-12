@@ -7,6 +7,7 @@ import {
   type LibbyAutoDecision, type LibbyAutoSettings, type LibbyAutoState, type LibbyBond, type LibbyContext,
   type DiscordPlace, type DiscordState, type LibbyIdentity, type LibbyMemory, type LibbyThought, type LibbyWant, type SharedLink,
   type StoredChatMessage, type User, type ChatReplyRef, type LibbyAttachment, type LibbyBackground, type LibbyLink, type Media,
+  SEND_WEIGHTS,
 } from "../api.js";
 import { iconStyles, motionStyles } from "../theme.js";
 import { formatBytes } from "../media-meta.js";
@@ -90,14 +91,18 @@ function findLinkInText(text: string): string {
 /** How long an incoming call rings before it counts as missed. */
 const RING_MS = 40_000;
 
-const MAX_BUBBLES = 3;
+const MAX_BUBBLES = 5;
 function splitIntoBubbles(text: string): string[] {
   const trimmed = text.trim();
-  // Below this a reply is a single thought; splitting it only fragments.
-  if (trimmed.length < 160) return [trimmed];
-  // A blank line is an intended break: honour it first.
+  if (!trimmed) return [trimmed];
+  // A blank line is an intended break and is honoured whatever the length: she is
+  // told to text in short separate messages, and "oh hey\n\nyou've been gone three
+  // days" arriving as one bubble with a paragraph gap in it was the bug. The length
+  // floor below only guards the *sentence* splitting, which is a guess.
   let parts = trimmed.split(/\n{2,}/).map((part) => part.trim()).filter(Boolean);
   if (parts.length < 2) {
+    // Below this a reply is a single thought; splitting it only fragments.
+    if (trimmed.length < 160) return [trimmed];
     // No paragraph seam — fall back to grouping sentences into message-sized runs.
     const sentences = trimmed.match(/[^.!?…]+[.!?…]+["')\]]*\s*|[^.!?…]+$/g)?.map((s) => s.trim()).filter(Boolean);
     if (!sentences || sentences.length < 2) return [trimmed];
@@ -121,6 +126,28 @@ function splitIntoBubbles(text: string): string[] {
   return [...parts.slice(0, MAX_BUBBLES - 1), parts.slice(MAX_BUBBLES - 1).join("\n\n")];
 }
 
+/** The emoji offered when you react to one of her messages. A short row, like a
+    phone's: the point of a reaction is that it is quicker than words. */
+const REACTIONS = ["❤️", "😂", "😮", "😢", "🔥", "👍", "👀", "😘"];
+
+/** How far a message has to be dragged sideways before letting go replies to it, and
+    how far the bubble follows the finger at most. */
+const SWIPE_REPLY_PX = 56;
+const SWIPE_MAX_PX = 72;
+
+/** How long she takes to pick the phone up and read what you sent, before the
+    receipt turns to "Read" and the dots start. Scales with how much there is to
+    read; a burst of texts resets it, so she reads them together. Capped, because a
+    read receipt that takes ten seconds reads as her ignoring you. */
+function readingDelay(chars: number, quietMs: number): number {
+  const jitter = (base: number) => base * (0.7 + Math.random() * 0.6);
+  // A beat to notice it, then ~35 characters a second — reading, not typing.
+  let ms = jitter(700 + chars * 28);
+  // A conversation that has been quiet for a while means the phone was down.
+  if (quietMs > 10 * 60_000) ms += jitter(1500);
+  return Math.min(6500, ms);
+}
+
 /** Reserved image owner for a character's avatar, so a picture set as the face
     never joins that character's gallery nor gets attached to a reply. Mirrors
     PROFILE_IMAGE_OWNER, which does the same for the user's own picture. */
@@ -140,6 +167,15 @@ const newID = () => {
 };
 const timeOf = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 /** The date chip between runs of messages: today and yesterday by name, the rest by date. */
+/** A stored send weight as the scale reads it: absent or 0 is normal; the server
+    keeps "never" as -1 so it survives being omitted from JSON. */
+function weightOf(weight: number | undefined): number {
+  if (!weight) return 1;
+  if (weight < 0) return -1;
+  const known = SEND_WEIGHTS.map((w) => w.value).filter((v) => v > 0);
+  return known.reduce((best, v) => Math.abs(v - weight) < Math.abs(best - weight) ? v : best, 1);
+}
+
 function dayOf(ms: number): string {
   const day = new Date(ms), today = new Date();
   const startOf = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
@@ -456,6 +492,23 @@ export class OppaiChat extends LitElement {
   @state() private callCaptions = true;
   /** The message the next thing you send is a reply to. */
   @state() private replyTarget: StoredChatMessage | null = null;
+  /** Which message has its reaction row open, if any. */
+  @state() private reactionPicker: string | null = null;
+  /** The snap being looked at full-screen, if any. Closing it marks it opened. */
+  @state() private snapOpen: StoredChatMessage | null = null;
+  /** New tag for the send-weights editor. */
+  @state() private weightTagDraft = "";
+  /** Her reading time: the timer between your message landing and her picking it
+      up. Sending again while it runs restarts it, so a burst is read together. */
+  private readTimer = 0;
+  /** What the pending turn carries — the photo, the link, the attached items from
+      every message in the burst — merged until she reads them. */
+  private turnOptions: { photoTags?: string[]; photoImageID?: string; link?: string; sharedMediaIds?: number[] } = {};
+  /** Set when you sent something while she was still replying: she owes another
+      turn once this one lands. */
+  private pendingReply = false;
+  /** A drag in progress on a message, for swipe-to-reply. */
+  private swipe: { id: string; startX: number; startY: number; dx: number; live: boolean; el: HTMLElement } | null = null;
   /** Library items attached to the composer, sent with the next message. */
   @state() private pendingItems: LibbyAttachment[] = [];
   /** The library picker: its search box and what it found. */
@@ -617,6 +670,55 @@ export class OppaiChat extends LitElement {
     .msg.mine .quote { border-left-color:rgba(255,255,255,.75); background:rgba(0,0,0,.16); }
     .msg.mine .quote strong { color:rgba(255,255,255,.9); }
     .msg.flash .bubble { animation:chat-flash 1.2s ease both; }
+    /* Swipe to reply: the bubble follows the finger; the arrow behind it brightens
+       when letting go will quote the message. */
+    .msg { touch-action:pan-y; }
+    .bubble-wrap.swiping { transition:none; }
+    .bubble-wrap:not(.swiping) { transition:transform .18s var(--oppai-ease-standard,cubic-bezier(.2,0,0,1)); }
+    .swipe-hint { position:absolute; left:-30px; top:50%; transform:translateY(-50%); font-size:20px; color:var(--muted); opacity:0; transition:opacity .15s; pointer-events:none; }
+    .msg.mine .swipe-hint { left:-30px; }
+    .bubble-wrap.swiping .swipe-hint { opacity:.5; }
+    .bubble-wrap.will-reply .swipe-hint { opacity:1; color:var(--accent); }
+    /* Receipts under your latest message. */
+    .receipt { font-size:10.5px; color:var(--muted); margin:2px 6px 0; line-height:1; }
+    .receipt.read { color:var(--accent); }
+    /* Reactions: emoji tucked into the bubble's lower corner, overlapping the edge. */
+    .reactions { position:absolute; bottom:-10px; right:8px; display:flex; gap:2px; }
+    .msg.mine .reactions { right:auto; left:8px; }
+    .reaction { border:1px solid var(--line); background:var(--surface,var(--bubble)); color:inherit; border-radius:999px; font-size:13px; line-height:1; padding:2px 6px; cursor:default; box-shadow:0 1px 2px rgba(0,0,0,.18); }
+    .msg.theirs .reaction.user { cursor:pointer; }
+    .msg:has(.reactions) .bubble { margin-bottom:8px; }
+    .react-row { position:absolute; bottom:calc(100% + 6px); left:0; z-index:2; display:flex; gap:2px; padding:4px; border:1px solid var(--line); border-radius:999px; background:var(--surface,var(--bubble)); box-shadow:0 6px 18px rgba(0,0,0,.24); animation:chat-rise .18s ease both; }
+    .msg.mine .react-row { left:auto; right:0; }
+    .react-row button { border:0; background:transparent; font-size:20px; line-height:1; padding:5px 6px; border-radius:999px; cursor:pointer; transition:transform .12s; }
+    .react-row button:hover { transform:scale(1.3); background:var(--hover); }
+    .react-row button.on { background:var(--hover); }
+    .react-row button.close { color:var(--muted); display:grid; place-items:center; }
+    /* Snaps: a tile, never the picture. */
+    .snap { display:grid; grid-template-columns:auto 1fr; grid-template-rows:auto auto; column-gap:10px; align-items:center; margin-top:6px; padding:10px 14px 10px 12px; border:0; border-radius:12px; cursor:pointer; text-align:left; font:inherit; color:inherit;
+      background:linear-gradient(135deg,rgba(255,255,255,.14),rgba(255,255,255,.04)); box-shadow:inset 0 0 0 1.5px var(--accent); min-width:180px; }
+    .snap .material-symbols-rounded { grid-row:1/3; font-size:28px; color:var(--accent); }
+    .snap > span:not(.material-symbols-rounded) { font-weight:700; font-size:13px; }
+    .snap em { font-style:normal; font-size:11px; opacity:.7; }
+    .snap.opened { cursor:default; box-shadow:inset 0 0 0 1.5px var(--line); opacity:.6; grid-template-rows:auto; }
+    .snap.opened .material-symbols-rounded { color:var(--muted); grid-row:auto; }
+    .snap-viewer { position:fixed; inset:0; z-index:40; display:grid; place-items:center; background:rgba(0,0,0,.92); cursor:pointer; animation:chat-fade .2s ease both; }
+    .snap-viewer img { max-width:100vw; max-height:100vh; object-fit:contain; }
+    .snap-viewer p { color:#fff; }
+    .snap-close { position:absolute; bottom:24px; left:0; right:0; text-align:center; color:rgba(255,255,255,.7); font-size:12px; }
+    /* Send weights. */
+    .image-card .weight { display:flex; align-items:center; gap:5px; font-size:11px; color:var(--muted); }
+    .image-card .weight select { font:inherit; font-size:11px; background:var(--surface,var(--input)); color:inherit; border:1px solid var(--line); border-radius:6px; padding:2px 4px; }
+    .weights { margin-top:14px; }
+    .weight-rows { display:grid; gap:4px; }
+    .weight-row { display:grid; grid-template-columns:1fr auto auto; align-items:center; gap:8px; padding:4px 0 4px 8px; border-radius:8px; background:var(--input); }
+    .weight-tag { font-weight:600; overflow-wrap:anywhere; }
+    .weight-row select { font:inherit; background:var(--surface,var(--bubble)); color:inherit; border:1px solid var(--line); border-radius:6px; padding:3px 6px; }
+    .weight-add { display:flex; gap:6px; align-items:center; margin-top:8px; flex-wrap:wrap; }
+    .weight-add .field { flex:1 1 90px; min-width:0; }
+    .weight-suggest { display:flex; flex-wrap:wrap; gap:5px; margin-top:8px; }
+    .weight-suggest .chip { border:1px solid var(--line); background:transparent; color:var(--muted); border-radius:999px; padding:3px 9px; font:inherit; font-size:11px; cursor:pointer; }
+    .weight-suggest .chip:hover { color:inherit; background:var(--hover); }
     @keyframes chat-flash { 0%,100% { box-shadow:0 0 0 0 transparent; } 25% { box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 70%,transparent); } }
     /* Hover actions sit just above the bubble, on the side away from the edge. */
     .msg-actions { opacity:0; position:absolute; top:-14px; right:6px; z-index:1; display:flex; border:1px solid var(--line); border-radius:8px;
@@ -1061,7 +1163,7 @@ export class OppaiChat extends LitElement {
     window.clearTimeout(this.ringTimer);
     super.disconnectedCallback();
     window.clearTimeout(this.saveTimer); window.clearTimeout(this.idleTimer); window.clearTimeout(this.noticeTimer);
-    window.clearTimeout(this.autoTimer); window.clearInterval(this.callTimer);
+    window.clearTimeout(this.autoTimer); window.clearInterval(this.callTimer); window.clearTimeout(this.readTimer);
     window.removeEventListener("keydown", this.onGlobalKey);
     window.removeEventListener(SHARE_EVENT, this.onShared);
     this.resize?.disconnect();
@@ -1644,7 +1746,7 @@ export class OppaiChat extends LitElement {
     const content = this.draft.trim()
       || (photo ? `*shares a photo with you*` : "")
       || (items.length ? `*shares ${items.length === 1 ? items[0].title : `${items.length} things`} from the library*` : "");
-    if (!content || !conversation || this.busy) return;
+    if (!content || !conversation) return;
     // Everything after an await must go through liveConversation(id): this object
     // is replaced by the autosave that fires 450ms from now.
     const conversationID = conversation.id;
@@ -1660,6 +1762,10 @@ export class OppaiChat extends LitElement {
     // is actually in the message being sent.
     const link = this.pendingLink && !this.pendingLink.failed && this.pendingLinkURL ? this.pendingLinkURL : "";
     this.draft = ""; this.pendingPhoto = null; this.pendingItems = []; this.replyTarget = null; this.dropLink(); this.notice = "";
+    // Cleared on the element too: a send that lands in the same tick as the last
+    // keystroke never gets a render in between, and Lit sees "" → "" as no change.
+    const box = this.renderRoot.querySelector<HTMLTextAreaElement>("textarea");
+    if (box) box.value = "";
     this.touchWorkspace(); this.armIdle(); void this.scrollToEnd();
     // Speaking re-arms the autopilot's budget: it exists to fill your silence, so a
     // run that stopped after its last turn should start again once you rejoin.
@@ -1671,11 +1777,161 @@ export class OppaiChat extends LitElement {
     if (conversation.characterId === "libby") {
       void api.libbyAutoAnswered().catch(() => { /* Best-effort; an old server has no endpoint. */ });
     }
-    await this.generateReply(conversationID, content, {
-      photoTags: photo?.tags ?? [], photoImageID: photo?.imageId ?? "", link,
-      sharedMediaIds: items.map((item) => item.id),
+    // Everything the burst carries rides the one turn that answers it: the last photo
+    // and link win, the attached items accumulate.
+    const carried = this.turnOptions;
+    this.turnOptions = {
+      photoTags: photo ? photo.tags : carried.photoTags,
+      photoImageID: photo ? photo.imageId : carried.photoImageID,
+      link: link || carried.link,
+      sharedMediaIds: [...(carried.sharedMediaIds ?? []), ...items.map((item) => item.id)],
+    };
+    this.scheduleReply(conversationID, content.length);
+  }
+
+  // --- Her reading, and replying ------------------------------------------
+  // You can keep typing while she reads and while she replies. A message lands as
+  // "Sent"; after a moment she picks the phone up, it turns to "Read", the dots
+  // start, and she answers the whole burst at once. Anything sent while she is
+  // typing is answered by another turn straight after, so nothing is ever ignored.
+
+  /** Starts, or restarts, her reading time. Each new text in a burst pushes it back a
+      little so she reads them together rather than answering the first one alone. */
+  private scheduleReply(conversationID: string, chars: number) {
+    window.clearTimeout(this.readTimer);
+    const live = this.liveConversation(conversationID);
+    const hers = live ? [...live.messages].reverse().find((m) => m.role === "assistant") : undefined;
+    const quiet = hers ? Date.now() - hers.at : 0;
+    // While she is already typing there is no reading to simulate: the turn is owed,
+    // and runs as soon as this one lands.
+    if (this.busy) { this.pendingReply = true; return; }
+    this.readTimer = window.setTimeout(() => void this.runTurn(conversationID), readingDelay(chars, quiet));
+  }
+
+  /** Marks the burst read, pauses a beat, and answers it. */
+  private async runTurn(conversationID: string) {
+    if (this.busy) { this.pendingReply = true; return; }
+    const live = this.liveConversation(conversationID);
+    if (!live) return;
+    const now = Date.now();
+    let seed = "";
+    for (const message of live.messages) {
+      if (message.role === "user" && !message.readAt) { message.readAt = now; seed = message.content; }
+    }
+    if (!seed) return;
+    this.touchWorkspace();
+    // Read, then a beat before the dots: the gap between reading and starting to type.
+    await this.pause(250 + Math.random() * 500);
+    const options = this.turnOptions;
+    this.turnOptions = {};
+    await this.generateReply(conversationID, seed, {
+      photoTags: options.photoTags ?? [], photoImageID: options.photoImageID ?? "", link: options.link ?? "",
+      sharedMediaIds: options.sharedMediaIds ?? [],
     });
     this.scheduleAuto();
+    // Anything sent while she was typing is still unread: read it and answer it.
+    const after = this.liveConversation(conversationID);
+    const unread = after?.messages.some((m) => m.role === "user" && !m.readAt) ?? false;
+    if (this.pendingReply || unread) {
+      this.pendingReply = false;
+      if (unread) this.scheduleReply(conversationID, 40);
+    }
+  }
+
+  /** The receipt under your last message: sent, or read and when. Only the latest of
+      yours carries one — a column of "Read" under every bubble is noise. */
+  private receiptFor(message: StoredChatMessage, conversation: ChatConversation): string {
+    if (message.role !== "user") return "";
+    const mine = conversation.messages.filter((m) => m.role === "user");
+    if (mine[mine.length - 1] !== message) return "";
+    if (message.readAt) return `Read ${timeOf(message.readAt)}`;
+    // A message written before receipts existed, or answered by an older client:
+    // she replied to it, so she read it.
+    const at = conversation.messages.indexOf(message);
+    if (conversation.messages.slice(at + 1).some((m) => m.role === "assistant" && !m.thought)) return "Read";
+    return "Sent";
+  }
+
+  // --- Reactions ------------------------------------------------------------
+
+  /** Puts your emoji on one of her messages, or takes it off again if it is the same
+      one. Yours replaces yours; hers stays. She is told on the next turn. */
+  private react(message: StoredChatMessage, emoji: string) {
+    const conversation = this.activeConversation;
+    if (!conversation) return;
+    const mine = (message.reactions ?? []).find((r) => r.by === "user");
+    const others = (message.reactions ?? []).filter((r) => r.by !== "user");
+    message.reactions = mine?.emoji === emoji ? others : [...others, { emoji, by: "user" }];
+    if (!message.reactions.length) delete message.reactions;
+    this.reactionPicker = null;
+    conversation.updatedAt = Date.now();
+    this.touchWorkspace();
+  }
+
+  /** Lands her reaction on the message it was for — by id, or your latest. */
+  private applyReaction(conversation: ChatConversation, emoji: string, to?: string) {
+    const target = (to && conversation.messages.find((m) => m.id === to))
+      || [...conversation.messages].reverse().find((m) => m.role === "user");
+    if (!target) return;
+    const others = (target.reactions ?? []).filter((r) => r.by !== "assistant");
+    target.reactions = [...others, { emoji, by: "assistant" }];
+  }
+
+  // --- Snaps ----------------------------------------------------------------
+
+  /** Opens a snap full-screen. It can only be opened once: closing it marks it
+      opened, and the tile draws as gone from then on. */
+  private openSnap(message: StoredChatMessage) {
+    if (message.opened) return;
+    this.snapOpen = message;
+  }
+
+  private closeSnap() {
+    const snap = this.snapOpen;
+    this.snapOpen = null;
+    if (!snap) return;
+    snap.opened = true;
+    const conversation = this.activeConversation;
+    if (conversation) { conversation.updatedAt = Date.now(); this.touchWorkspace(); }
+  }
+
+  // --- Swipe to reply --------------------------------------------------------
+  // Touch and pen only: with a mouse, dragging selects text, and the hover buttons
+  // are right there. The bubble follows the finger a little way, and letting go past
+  // the threshold quotes the message in the composer.
+
+  private swipeStart(message: StoredChatMessage, event: PointerEvent) {
+    if (event.pointerType === "mouse" || message.thought) return;
+    const el = (event.currentTarget as HTMLElement).querySelector<HTMLElement>(".bubble-wrap");
+    if (!el) return;
+    this.swipe = { id: message.id, startX: event.clientX, startY: event.clientY, dx: 0, live: false, el };
+  }
+
+  private swipeMove(event: PointerEvent) {
+    const swipe = this.swipe;
+    if (!swipe) return;
+    const dx = event.clientX - swipe.startX, dy = event.clientY - swipe.startY;
+    if (!swipe.live) {
+      // Decide the gesture once: mostly vertical is a scroll, and the browser has it.
+      if (Math.abs(dy) > 8 && Math.abs(dy) > Math.abs(dx)) { this.swipe = null; return; }
+      if (dx < 10) return;
+      swipe.live = true;
+      swipe.el.classList.add("swiping");
+      try { (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId); } catch { /* Not every target captures. */ }
+    }
+    swipe.dx = Math.max(0, Math.min(SWIPE_MAX_PX, dx));
+    swipe.el.style.transform = `translateX(${swipe.dx}px)`;
+    swipe.el.classList.toggle("will-reply", swipe.dx >= SWIPE_REPLY_PX);
+    event.preventDefault();
+  }
+
+  private swipeEnd(message: StoredChatMessage) {
+    const swipe = this.swipe;
+    this.swipe = null;
+    if (!swipe) return;
+    swipe.el.classList.remove("swiping", "will-reply");
+    swipe.el.style.transform = "";
+    if (swipe.live && swipe.dx >= SWIPE_REPLY_PX) this.replyTo(message);
   }
 
   // --- Replying to a particular message ------------------------------------
@@ -1937,10 +2193,11 @@ export class OppaiChat extends LitElement {
       // they were sent on. Ids only; the server owns the descriptions.
       const history: ChatMessage[] = conversation.messages
         .filter((message) => !message.thought)
-        .map(({ id, role, content:text, replyTo, imageId, attachments }) => ({
+        .map(({ id, role, content:text, replyTo, imageId, attachments, reactions }) => ({
           id, role, content:text, replyTo,
           imageId: imageId || undefined,
           mediaIds: attachments?.length ? attachments.map((item) => item.id) : undefined,
+          reactions: reactions?.length ? reactions : undefined,
         }));
       // A nudge, not a message: it steers this one request and is never stored, so
       // the log stays a record of what was actually said.
@@ -2014,19 +2271,28 @@ export class OppaiChat extends LitElement {
       // Anything she thought rather than said lands first and on its own, because that
       // is the order it happened in: she looked, reacted, and then decided what to say.
       if (!this.pushThoughts(conversationID, result.thoughts)) return false;
+      // Her emoji on your message goes on before she says anything — a reaction is the
+      // quick thing, the words come after.
+      if (result.reaction?.emoji) { this.applyReaction(live, result.reaction.emoji, result.reaction.to); this.touchWorkspace(); }
+      const picture = !!(result.imageId || result.attachments?.length);
       // An empty message with a thought attached is her deciding to say nothing at all.
-      // That is a turn, not a failure — the thought above is what she did with it.
-      if (!result.message.trim()) return (result.thoughts?.length ?? 0) > 0;
+      // That is a turn, not a failure — the thought above is what she did with it. A
+      // reaction alone is the same. A picture alone still lands, as a bubble of its own.
+      if (!result.message.trim() && !picture) return (result.thoughts?.length ?? 0) > 0 || !!result.reaction;
       // A long reply lands as the few short texts a person would send back to back,
       // each taking its own turn through the typing indicator. The picture, link chips,
       // and action cards ride the last bubble. Whatever the model already spent counts
       // as time she was "writing" on that first bubble, so a slow model never pays twice.
-      return await this.typeAndPushBubbles(conversationID, splitIntoBubbles(result.message), Date.now() - startedAt, {
+      // A picture with no words still needs a line in the log — the store refuses an
+      // empty message — so it gets the same stage direction your own photo share does.
+      const said = result.message.trim() || (result.snap ? "*sends a snap*" : "*sends a picture*");
+      return await this.typeAndPushBubbles(conversationID, splitIntoBubbles(said), Date.now() - startedAt, {
         // On the last bubble, so one reply contributes one mood to the run the next
         // turn reports. See recentMoods.
         mood: live.emotion,
         heat: live.intensity,
         imageId: result.imageId || undefined,
+        snap: result.snap && picture ? true : undefined,
         links: result.links?.length ? result.links : undefined,
         attachments: result.attachments?.length ? result.attachments : undefined,
         actions: result.actions?.length ? result.actions : undefined,
@@ -2975,13 +3241,68 @@ export class OppaiChat extends LitElement {
           <div class="card-body">
             <span class="card-name">${image.name}</span>
             <span class="card-tags">${image.tags.join(", ") || "No tags"}</span>
+            <label class="weight">Sends<select aria-label=${`How often to send ${image.name}`} .value=${String(image.weight || 1)} @change=${(event:Event) => this.setImageWeight(image, Number((event.target as HTMLSelectElement).value))}>
+              ${SEND_WEIGHTS.map((w) => html`<option value=${String(w.value)} ?selected=${(image.weight || 1) === w.value}>${w.label}</option>`)}
+            </select></label>
             ${character.avatarImageId === image.id
               ? html`<span class="badge">Avatar</span>`
               : html`<button @click=${() => this.updateCharacter("avatarImageId", image.id)}>Use as avatar</button>`}
           </div>
         </article>`)}</div>
       ${images.length ? nothing : html`<div class="empty">No images for ${character.name} yet.</div>`}
+      ${character.id === "libby" ? this.renderWeightsPanel(images) : nothing}
     </div>`;
+  }
+
+  /** Sets how readily she reaches for one gallery picture. Normal is stored as
+      absent, so a workspace that never touched this looks exactly as it did. */
+  private setImageWeight(image: ChatImage, weight: number) {
+    const live = this.workspace.images.find((it) => it.id === image.id);
+    if (!live) return;
+    if (weight === 1) delete live.weight; else live.weight = weight;
+    this.touchWorkspace();
+  }
+
+  /** The tag weights: more of this, less of that, none of the other — for everything
+      she sends or hands over that carries the tag, pictures and library items alike. */
+  private renderWeightsPanel(images: ChatImage[]) {
+    const weights = this.workspace.sendWeights ?? {};
+    const tags = Object.keys(weights).sort();
+    // The tags her pictures actually carry, offered as one-tap suggestions.
+    const seen = new Map<string, number>();
+    for (const image of images) for (const tag of image.tags) seen.set(tag.toLowerCase(), (seen.get(tag.toLowerCase()) ?? 0) + 1);
+    const suggestions = [...seen.entries()].filter(([tag]) => !(tag in weights)).sort((a, b) => b[1] - a[1]).slice(0, 14).map(([tag]) => tag);
+    return html`<section class="group weights">
+      <h3>What she reaches for<span>Weight a tag and it applies to every picture and library item carrying it — more of this, less of that, none of the other. It steers her choice; it never overrides what you actually asked for.</span></h3>
+      ${tags.length ? html`<div class="weight-rows">${tags.map((tag) => html`<div class="weight-row">
+        <span class="weight-tag">${tag}</span>
+        <select aria-label=${`Weight for ${tag}`} @change=${(event:Event) => this.setTagWeight(tag, Number((event.target as HTMLSelectElement).value))}>
+          ${SEND_WEIGHTS.map((w) => html`<option value=${String(w.value)} ?selected=${weightOf(weights[tag]) === w.value}>${w.label}</option>`)}
+        </select>
+        <button type="button" class="icon-btn" title=${`Forget the weight for ${tag}`} aria-label=${`Forget the weight for ${tag}`} @click=${() => this.setTagWeight(tag, 1)}><span class="material-symbols-rounded" style="font-size:18px">close</span></button>
+      </div>`)}</div>` : html`<div class="empty">No tag weights yet. Everything is at normal odds.</div>`}
+      <form class="weight-add" @submit=${(event:Event) => { event.preventDefault(); this.addTagWeight(this.weightTagDraft, 2.5); }}>
+        <input class="field" placeholder="tag, e.g. lingerie" .value=${this.weightTagDraft} @input=${(event:Event) => (this.weightTagDraft = (event.target as HTMLInputElement).value)}/>
+        <button type="button" class="secondary" ?disabled=${!this.weightTagDraft.trim()} @click=${() => this.addTagWeight(this.weightTagDraft, 2.5)}>More</button>
+        <button type="button" class="secondary" ?disabled=${!this.weightTagDraft.trim()} @click=${() => this.addTagWeight(this.weightTagDraft, 0.35)}>Less</button>
+        <button type="button" class="secondary" ?disabled=${!this.weightTagDraft.trim()} @click=${() => this.addTagWeight(this.weightTagDraft, -1)}>Never</button>
+      </form>
+      ${suggestions.length ? html`<div class="weight-suggest">${suggestions.map((tag) => html`<button type="button" class="chip" title=${`Weight ${tag}`} @click=${() => { this.weightTagDraft = tag; }}>${tag}</button>`)}</div>` : nothing}
+    </section>`;
+  }
+
+  private addTagWeight(tag: string, weight: number) {
+    const key = tag.trim().toLowerCase().replace(/\s+/g, " ");
+    if (!key) return;
+    this.setTagWeight(key, weight);
+    this.weightTagDraft = "";
+  }
+
+  private setTagWeight(tag: string, weight: number) {
+    const weights = { ...(this.workspace.sendWeights ?? {}) };
+    if (weight === 1) delete weights[tag]; else weights[tag] = weight;
+    this.workspace.sendWeights = Object.keys(weights).length ? weights : undefined;
+    this.touchWorkspace();
   }
 
   private renderProfilePanel() {
@@ -3561,6 +3882,7 @@ export class OppaiChat extends LitElement {
     const redo = this.canRedo(message);
     const items: MenuItem[] = [
       ...(message.thought ? [] : [{ label:"Reply", icon:"reply", run:() => this.replyTo(message) }]),
+      ...(message.thought || message.role !== "assistant" ? [] : [{ label:"React…", icon:"add_reaction", run:() => (this.reactionPicker = message.id) }]),
       { label:"Copy text", icon:"content_copy", run:() => void navigator.clipboard.writeText(message.content) },
       { label:"Edit message", icon:"edit", run:() => this.editMessage(message) },
       ...(redo ? [
@@ -3603,28 +3925,64 @@ export class OppaiChat extends LitElement {
   }
 
   private renderEntry(message: StoredChatMessage, previous?: StoredChatMessage, next?: StoredChatMessage) {
-    const character = this.activeCharacter; if (!character) return nothing;
+    const character = this.activeCharacter, conversation = this.activeConversation; if (!character || !conversation) return nothing;
     const day = !previous || dayOf(previous.at) !== dayOf(message.at) ? html`<div class="day">${dayOf(message.at)}</div>` : nothing;
     if (message.thought) return html`${day}${this.renderThought(message, character)}`;
     const first = !this.sameRun(previous, message) || day !== nothing, last = !this.sameRun(message, next);
     const friend = message.role === "assistant", name = friend ? character.name : (this.workspace.profile.displayName || this.user?.username || "You");
-    return html`${day}<article class="msg ${friend ? "theirs" : "mine"} ${first ? "first" : ""} ${last ? "last" : ""}" data-message-id=${message.id} @contextmenu=${(event:MouseEvent) => this.messageMenu(message, event)}>
+    const receipt = last ? this.receiptFor(message, conversation) : "";
+    const reactions = message.reactions ?? [];
+    const picking = this.reactionPicker === message.id;
+    const mine = reactions.find((r) => r.by === "user")?.emoji;
+    return html`${day}<article class="msg ${friend ? "theirs" : "mine"} ${first ? "first" : ""} ${last ? "last" : ""}" data-message-id=${message.id}
+      @contextmenu=${(event:MouseEvent) => this.messageMenu(message, event)}
+      @pointerdown=${(event:PointerEvent) => this.swipeStart(message, event)}
+      @pointermove=${(event:PointerEvent) => this.swipeMove(event)}
+      @pointerup=${() => this.swipeEnd(message)} @pointercancel=${() => this.swipeEnd(message)}>
       ${friend ? this.avatar(character, "avatar") : nothing}
       <div class="bubble-wrap">
-        <div class="bubble">
+        <span class="swipe-hint material-symbols-rounded" aria-hidden="true">reply</span>
+        ${picking ? html`<div class="react-row" role="menu" aria-label="React">${REACTIONS.map((emoji) => html`<button type="button" class=${mine === emoji ? "on" : ""} @click=${() => this.react(message, emoji)}>${emoji}</button>`)}<button type="button" class="close" title="Close" aria-label="Close" @click=${() => (this.reactionPicker = null)}><span class="material-symbols-rounded" style="font-size:16px">close</span></button></div>` : nothing}
+        <div class="bubble ${message.snap ? "has-snap" : ""}">
           ${message.replyTo ? html`<button type="button" class="quote" title="Go to that message" @click=${() => this.jumpTo(message.replyTo)}>
             <strong>${message.replyTo.role === "assistant" ? character.name : (this.workspace.profile.displayName || this.user?.username || "You")}</strong>
             <span>${message.replyTo.excerpt}</span></button>` : nothing}
           ${message.content.trim() ? html`<div class="text">${formatted(message.content, message.links, (id) => requestOpenMedia(this, id))}</div>` : nothing}
-          ${message.imageId ? html`<img class="sent-image" src=${api.chatImageURL(message.imageId)} alt="Image sent by ${name}"/>` : nothing}
-          ${renderAttachments(message.attachments, (id) => requestOpenMedia(this, id), name)}
+          ${message.snap ? this.renderSnapTile(message, name) : html`
+            ${message.imageId ? html`<img class="sent-image" src=${api.chatImageURL(message.imageId)} alt="Image sent by ${name}"/>` : nothing}
+            ${renderAttachments(message.attachments, (id) => requestOpenMedia(this, id), name)}`}
           ${renderLinkChips(message.links, (id) => requestOpenMedia(this, id))}
           ${renderActionCards(message.actions, this.approvals.stateOf, this.approvals.decide)}
           <div class="meta"><span>${timeOf(message.at)}</span></div>
+          ${reactions.length ? html`<div class="reactions">${reactions.map((r) => html`<button type="button" class="reaction ${r.by}" title=${r.by === "assistant" ? `${character.name} reacted ${r.emoji}` : `You reacted ${r.emoji}`}
+            @click=${() => friend && r.by === "user" ? this.react(message, r.emoji) : undefined}>${r.emoji}</button>`)}</div>` : nothing}
         </div>
-        <span class="msg-actions"><button title="Reply" aria-label="Reply to this message" @click=${() => this.replyTo(message)}><span class="material-symbols-rounded" style="font-size:16px">reply</span></button>${this.canRedo(message) ? html`<button title="Retry" aria-label="Ask for a different reply" ?disabled=${this.busy} @click=${() => void this.regenerate()}><span class="material-symbols-rounded" style="font-size:16px">refresh</span></button>` : nothing}${message.role === "user" ? html`<button title="Retry from here" aria-label="Retry from this message" ?disabled=${this.busy} @click=${() => void this.retryFrom(message)}><span class="material-symbols-rounded" style="font-size:16px">replay</span></button>` : nothing}<button title="Copy" @click=${() => void navigator.clipboard.writeText(message.content)}><span class="material-symbols-rounded" style="font-size:16px">content_copy</span></button><button title="Edit" @click=${() => this.editMessage(message)}><span class="material-symbols-rounded" style="font-size:16px">edit</span></button><button title="Delete" @click=${() => this.deleteMessage(message.id)}><span class="material-symbols-rounded" style="font-size:16px">delete</span></button></span>
+        ${receipt ? html`<span class="receipt ${message.readAt ? "read" : ""}">${receipt}</span>` : nothing}
+        <span class="msg-actions"><button title="Reply" aria-label="Reply to this message" @click=${() => this.replyTo(message)}><span class="material-symbols-rounded" style="font-size:16px">reply</span></button>${friend ? html`<button title="React" aria-label="React to this message" @click=${() => (this.reactionPicker = picking ? null : message.id)}><span class="material-symbols-rounded" style="font-size:16px">add_reaction</span></button>` : nothing}${this.canRedo(message) ? html`<button title="Retry" aria-label="Ask for a different reply" ?disabled=${this.busy} @click=${() => void this.regenerate()}><span class="material-symbols-rounded" style="font-size:16px">refresh</span></button>` : nothing}${message.role === "user" ? html`<button title="Retry from here" aria-label="Retry from this message" ?disabled=${this.busy} @click=${() => void this.retryFrom(message)}><span class="material-symbols-rounded" style="font-size:16px">replay</span></button>` : nothing}<button title="Copy" @click=${() => void navigator.clipboard.writeText(message.content)}><span class="material-symbols-rounded" style="font-size:16px">content_copy</span></button><button title="Edit" @click=${() => this.editMessage(message)}><span class="material-symbols-rounded" style="font-size:16px">edit</span></button><button title="Delete" @click=${() => this.deleteMessage(message.id)}><span class="material-symbols-rounded" style="font-size:16px">delete</span></button></span>
       </div>
     </article>`;
+  }
+
+  /** A snap in the log: a tile to tap while it is unopened, and "Opened" after. The
+      picture is never drawn inline — that is the whole difference from a photo. */
+  private renderSnapTile(message: StoredChatMessage, name: string) {
+    if (message.opened) {
+      return html`<div class="snap opened" aria-label="Snap from ${name}, opened"><span class="material-symbols-rounded">check_box_outline_blank</span><span>Opened</span></div>`;
+    }
+    return html`<button type="button" class="snap" title="Tap to view — you only get to see it once" @click=${() => this.openSnap(message)}>
+      <span class="material-symbols-rounded">photo_camera</span><span>Tap to view</span><em>Snap from ${name}</em>
+    </button>`;
+  }
+
+  /** The snap, full-screen, until you tap it away. */
+  private renderSnapViewer() {
+    const snap = this.snapOpen;
+    if (!snap) return nothing;
+    const src = snap.imageId ? api.chatImageURL(snap.imageId) : snap.attachments?.[0] ? api.streamURL(snap.attachments[0].id) : "";
+    return html`<div class="snap-viewer" role="dialog" aria-modal="true" aria-label="Snap" @click=${() => this.closeSnap()}>
+      ${src ? html`<img src=${src} alt="Snap"/>` : html`<p>This snap is gone.</p>`}
+      <span class="snap-close">Tap anywhere to close — it won't open again</span>
+    </div>`;
   }
 
   /**
@@ -3696,13 +4054,13 @@ export class OppaiChat extends LitElement {
           </span>`)}</div>` : nothing}
           <div class="composer">
             <div class="box">
-              <span class="attach-btn ${this.busy?"off":""}" title="Share a photo"><span class="material-symbols-rounded">add_photo_alternate</span><input type="file" accept="image/png,image/jpeg,image/webp,image/gif" aria-label="Share a photo" ?disabled=${this.busy} @change=${(event:Event)=>void this.attachPhoto(event)}/></span>
-              <button type="button" class="attach-btn ${this.busy?"off":""}" style="border:0;background:transparent" title="Attach from the library" aria-label="Attach from the library" ?disabled=${this.busy} @click=${()=>this.openPicker()}><span class="material-symbols-rounded">collections_bookmark</span></button>
-              <textarea rows="1" aria-label=${`Message ${character.name}`} placeholder=${this.busy?`${character.name} is replying — keep typing…`:`Message ${character.name}…`} .value=${this.draft} @input=${(event:Event)=>{this.draft=(event.target as HTMLTextAreaElement).value;this.noticeLink();}} @keydown=${this.onKey}></textarea>
+              <span class="attach-btn" title="Share a photo"><span class="material-symbols-rounded">add_photo_alternate</span><input type="file" accept="image/png,image/jpeg,image/webp,image/gif" aria-label="Share a photo" @change=${(event:Event)=>void this.attachPhoto(event)}/></span>
+              <button type="button" class="attach-btn" style="border:0;background:transparent" title="Attach from the library" aria-label="Attach from the library" @click=${()=>this.openPicker()}><span class="material-symbols-rounded">collections_bookmark</span></button>
+              <textarea rows="1" aria-label=${`Message ${character.name}`} placeholder=${this.busy?`${character.name} is replying — you can keep going…`:`Message ${character.name}…`} .value=${this.draft} @input=${(event:Event)=>{this.draft=(event.target as HTMLTextAreaElement).value;this.noticeLink();}} @keydown=${this.onKey}></textarea>
             </div>
-            <button class="send" type="submit" title="Send message" aria-label="Send message" ?disabled=${(!this.draft.trim()&&!this.pendingPhoto)||this.busy}><span class="material-symbols-rounded">send</span></button>
+            <button class="send" type="submit" title="Send message" aria-label="Send message" ?disabled=${!this.draft.trim()&&!this.pendingPhoto&&!this.pendingItems.length}><span class="material-symbols-rounded">send</span></button>
           </div><div class="format-help"><span>"speech" · **action** · *emphasis* · ~~strike~~ · &#96;code&#96;</span><span class="send-help"></span></div></form>
-      </main>${stage}${this.renderPicker2()}${this.renderIncomingCall(character)}${this.renderCall(character,conversation)}
+      </main>${stage}${this.renderPicker2()}${this.renderIncomingCall(character)}${this.renderCall(character,conversation)}${this.renderSnapViewer()}
     </div>`;
   }
 

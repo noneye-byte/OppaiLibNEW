@@ -251,6 +251,38 @@ unprompted follow-up to pick it back up: exactly once per lull, not a loop. (Tha
 is separate from **autopilot**, the toggle that lets her keep the conversation
 going continuously — this is just her not wanting to be left on read.)
 
+### Reading, reacting, and what she reaches for
+
+You can keep sending while she reads and while she replies. A text lands as
+**Sent**; after a moment she picks the phone up, the receipt under your latest one
+turns to **Read**, the dots start, and she answers the whole burst at once — the
+server folds a run of your texts into one turn, so "wait" / "actually the beach one"
+/ "and send a pic" is one request in three bubbles. Anything you send while she is
+typing is answered by another turn straight after. Her replies split on the blank
+lines she is told to text with, whatever their length, so a two-line text is two
+bubbles.
+
+She can **react** to a message — a heart, a laugh, eyes — instead of, or as well as,
+replying, and a reaction alone is a legal turn. You can react to hers (hover or
+long-press), and she is told about it on the next turn. **Swipe** a message sideways
+on a phone to quote it in your reply. A **snap** is a selfie sent to be seen once: a
+tile you tap, full-screen until you tap it away, and then "Opened" — the picture
+stays in her gallery, but the log never shows it again.
+
+Which picture she sends is a weighted draw, not the best match: everything already
+shown this conversation is penalised (and the one on screen a message ago is
+withheld outright), so "send me another" reaches for something new until the
+gallery is spent, and a declared send always finds *something* rather than arriving
+as "here you go" with nothing under it. **Chat → settings → Images** sets how readily
+she reaches for each picture (never / rarely / normal / often) and weights **tags** —
+more of this, less of that, none of the other — which apply to every picture and
+library item carrying the tag, so a video collection can be steered the same way.
+
+Her memory no longer depends entirely on the model thinking to file a note: when you
+state something about yourself in so many words — your name, where you live, what
+you do, what you love or hate, a line not to cross — it is kept whether or not she
+wrote the tag, and if you ask what she remembers about you, she tells you.
+
 ## Image generation
 
 The Create tab drives a local image generator, configured by URL under

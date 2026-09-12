@@ -141,6 +141,16 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.foundation.layout.offset
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material.icons.filled.CheckBoxOutlineBlank
+import androidx.compose.animation.core.animateIntAsState
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import net.fourbakers.oppailib.data.ChatReaction
 import coil.compose.AsyncImage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -291,6 +301,38 @@ private suspend fun typeLikeAPerson(text: String, spentMs: Long, phase: (TypingP
 }
 
 /**
+ * Splits a finished reply into the short texts a person would send back to back. A
+ * blank line is an intended break — she is told to text that way — and is honoured
+ * whatever the length; nothing else is split, since a sentence guess on a phone is
+ * worse than one bubble. Capped so a long reply is a few texts, not a wall.
+ */
+private const val MAX_BUBBLES = 5
+private fun splitIntoBubbles(text: String): List<String> {
+    val trimmed = text.trim()
+    if (trimmed.isEmpty()) return listOf(trimmed)
+    val parts = trimmed.split(Regex("\\n{2,}")).map { it.trim() }.filter { it.isNotEmpty() }
+    if (parts.size <= 1) return listOf(trimmed)
+    if (parts.size <= MAX_BUBBLES) return parts
+    return parts.take(MAX_BUBBLES - 1) + parts.drop(MAX_BUBBLES - 1).joinToString("\n\n")
+}
+
+/**
+ * How long she takes to pick the phone up and read what you sent, before the receipt
+ * turns to "Read" and the dots start. Scales with how much there is to read; a burst
+ * resets it so she reads the texts together. Capped, because a receipt that takes ten
+ * seconds reads as being ignored.
+ */
+private fun readingDelay(chars: Int, quietMs: Long): Long {
+    fun jitter(base: Double) = base * (0.7 + Math.random() * 0.6)
+    var ms = jitter(700.0 + chars * 28.0)
+    if (quietMs > 10 * 60_000L) ms += jitter(1500.0)
+    return minOf(6500.0, ms).toLong()
+}
+
+/** The emoji offered when you react to one of her messages. */
+private val REACTIONS = listOf("❤️", "😂", "😮", "😢", "🔥", "👍", "👀", "😘")
+
+/**
  * Opens a library item a reply pointed at.
  *
  * Chat does not own the viewer — the library screen does — so a chip tap is a request
@@ -339,6 +381,17 @@ fun ChatScreen(
     var pickerOpen by remember { mutableStateOf(false) }
     /** A message held for its menu. */
     var holdMessage by remember { mutableStateOf<StoredChatMessage?>(null) }
+    /** The snap being looked at full-screen. Closing it marks it opened. */
+    var snapOpen by remember { mutableStateOf<StoredChatMessage?>(null) }
+    /** Her reading time: the wait between your text landing and her picking it up.
+        Sending again restarts it, so a burst is read together. */
+    var readJob by remember { mutableStateOf<Job?>(null) }
+    /** Set when you sent something while she was still typing: another turn is owed. */
+    var pendingReply by remember { mutableStateOf(false) }
+    /** What the pending turn carries: the last photo, and every attached item, from
+        the burst it answers. */
+    var turnPhoto by remember { mutableStateOf<ChatImage?>(null) }
+    var turnItems by remember { mutableStateOf<List<Long>>(emptyList()) }
     var retryNoteOpen by remember { mutableStateOf(false) }
     var retryNote by remember { mutableStateOf("") }
     val clipboard = LocalClipboardManager.current
@@ -586,7 +639,7 @@ fun ChatScreen(
             // belongs inline. Continuity is carried by her memory and the bond instead.
             // Ids and quoted replies ride along so she can point at an earlier message.
             val history = pending.messages.filter { it.thought.isBlank() }.map {
-                ChatMessage(it.role, it.content, it.id, it.replyTo, imageId = it.imageId, mediaIds = it.attachments.map { a -> a.id })
+                ChatMessage(it.role, it.content, it.id, it.replyTo, imageId = it.imageId, mediaIds = it.attachments.map { a -> a.id }, reactions = it.reactions)
             } +
                 if (nudge.isBlank()) emptyList() else listOf(ChatMessage("user", "(Try that reply again. $nudge Do not mention this note.)"))
             val startedAt = System.currentTimeMillis()
@@ -636,14 +689,6 @@ fun ChatScreen(
                     // call; a hang-up ends one that is open, with a line saying so.
                     if (reply.callRequest && !callOpen && !repo.prefs.hideLibby) incomingCall = true
                     if (reply.callEnd && callOpen) { callOpen = false; message = "${char.name} ended the call." }
-                    // Whatever the model already spent counts as time she was "writing", so
-                    // this only ever tops the wait up to something human — never adds a full
-                    // delay on top of a slow generation.
-                    // Nothing she said means she had a thought and decided to keep it, so
-                    // there is no typing to simulate — thinking is not typing, and an
-                    // indicator in front of a thought would claim she was composing it
-                    // for you.
-                    if (reply.message.isNotBlank()) typeLikeAPerson(reply.message, System.currentTimeMillis() - startedAt) { typingPhase = it }
                     // A mood the character named is a decision, not drift, so it lands
                     // where it asked. Running it through the progression multiplier is what
                     // used to halve every deliberate swing: a jump from 1 to 5 arrived as a
@@ -655,37 +700,126 @@ fun ChatScreen(
                         LibbyMeter.applyProgression(pending.progress, reply.intensity - pending.intensity)
                     }
                     LibbyMeter.set(level)
+                    // Everything lands on the conversation as it is *now*, not the snapshot
+                    // this turn started from: you may have sent more while she typed, and
+                    // those texts must not be lost under her reply.
+                    fun live(): ChatConversation = (workspace ?: ws).conversations.firstOrNull { it.id == pending.id } ?: pending
+                    fun commit(convo: ChatConversation) {
+                        val latest = workspace ?: ws
+                        save(latest.copy(conversations = latest.conversations.map { if (it.id == convo.id) convo else it }))
+                    }
+                    // Her emoji on your message goes on first — a reaction is the quick
+                    // thing, the words come after.
+                    reply.reaction?.takeIf { it.emoji.isNotBlank() }?.let { reaction ->
+                        val convo = live()
+                        val target = convo.messages.firstOrNull { it.id == reaction.to && reaction.to.isNotBlank() }
+                            ?: convo.messages.lastOrNull { it.role == "user" }
+                        if (target != null) commit(convo.copy(messages = convo.messages.map {
+                            if (it.id == target.id) it.copy(reactions = it.reactions.filter { r -> r.by != "assistant" } + ChatReaction(reaction.emoji, "assistant")) else it
+                        }))
+                    }
                     // Anything she thought rather than said lands first and on its own,
                     // because that is the order it happened in: she looked, reacted, and
-                    // then decided what to say.
+                    // then decided what to say. No typing for a thought.
                     val thoughtLines = reply.thoughts.filter { it.text.isNotBlank() }.map {
                         StoredChatMessage(chatID(), "assistant", it.text, System.currentTimeMillis(), thought = it.kind)
                     }
-                    val spoken = if (reply.message.isBlank()) emptyList()
-                    else listOf(StoredChatMessage(
-                        chatID(), "assistant", reply.message, System.currentTimeMillis(),
-                        imageId = reply.imageId, links = reply.links,
-                        attachments = reply.attachments, actions = reply.actions,
-                        // What she looked like saying it, for the run the next turn reports.
-                        mood = reply.emotion, heat = level,
-                        // The earlier message she answered, when she quoted one.
-                        replyTo = reply.replyTo,
-                    ))
-                    val done = pending.copy(
-                        emotion = reply.emotion, intensity = level, progress = progress,
-                        // Blank is a real answer here — it means she is doing nothing in
-                        // particular, or is nowhere in particular — so these are assigned.
-                        activity = reply.activity,
-                        background = reply.background,
-                        messages = pending.messages + thoughtLines + spoken, updatedAt = System.currentTimeMillis(),
-                    )
-                    val latest = workspace ?: ws; save(latest.copy(conversations = latest.conversations.map { if (it.id == done.id) done else it }))
+                    if (thoughtLines.isNotEmpty()) commit(live().let { it.copy(messages = it.messages + thoughtLines, updatedAt = System.currentTimeMillis()) })
+                    val picture = reply.imageId.isNotBlank() || reply.attachments.isNotEmpty()
+                    // A picture with no words still needs a line — the store refuses an
+                    // empty message — so it gets the stage direction your own share does.
+                    val said = reply.message.trim().ifBlank { if (picture) (if (reply.snap) "*sends a snap*" else "*sends a picture*") else "" }
+                    if (said.isNotBlank()) {
+                        // A long reply lands as the few short texts a person would send back
+                        // to back, each taking its own turn through the typing indicator.
+                        // The picture, chips and cards ride the last bubble. Whatever the
+                        // model already spent counts as writing time on the first one.
+                        val bubbles = splitIntoBubbles(said)
+                        bubbles.forEachIndexed { i, text ->
+                            typeLikeAPerson(text, if (i == 0) System.currentTimeMillis() - startedAt else 0L) { typingPhase = it }
+                            val last = i == bubbles.lastIndex
+                            val line = StoredChatMessage(
+                                chatID(), "assistant", text, System.currentTimeMillis(),
+                                imageId = if (last) reply.imageId else "",
+                                snap = last && reply.snap && picture,
+                                links = if (last) reply.links else emptyList(),
+                                attachments = if (last) reply.attachments else emptyList(),
+                                actions = if (last) reply.actions else emptyList(),
+                                // What she looked like saying it, for the run the next turn reports.
+                                mood = if (last) reply.emotion else "", heat = if (last) level else 0,
+                                // The quote rides the first bubble: it is what the reply starts by answering.
+                                replyTo = if (i == 0) reply.replyTo else null,
+                            )
+                            val convo = live()
+                            commit(convo.copy(
+                                emotion = reply.emotion, intensity = level, progress = progress,
+                                // Blank is a real answer here — it means she is doing nothing in
+                                // particular, or is nowhere in particular — so these are assigned.
+                                activity = reply.activity, background = reply.background,
+                                messages = convo.messages + line, updatedAt = System.currentTimeMillis(),
+                            ))
+                        }
+                    } else {
+                        val convo = live()
+                        commit(convo.copy(emotion = reply.emotion, intensity = level, progress = progress, activity = reply.activity, background = reply.background, updatedAt = System.currentTimeMillis()))
+                    }
                 }.onFailure { error ->
                     status = runCatching { repo.api.chatStatus() }.getOrNull() ?: status
                     message = status?.takeIf { !it.enabled }?.message?.ifBlank { null } ?: error.message ?: "Chat failed"
                 }
             typingPhase = TypingPhase.IDLE
             busy = false
+        }
+    }
+
+    /**
+     * Her reading time, then the turn. You can keep sending while it runs: each new text
+     * restarts the timer so the burst is read together, and marks every unread text of
+     * yours "Read" at the same moment before the dots start. While she is already
+     * typing, the turn is simply owed, and runs when this one lands.
+     */
+    fun readThenReply(convoId: String, chars: Int) {
+        readJob?.cancel()
+        if (busy) { pendingReply = true; return }
+        val hers = currentConversation(workspace)?.messages?.lastOrNull { it.role == "assistant" }
+        val quiet = hers?.let { System.currentTimeMillis() - it.at } ?: 0L
+        readJob = scope.launch {
+            delay(readingDelay(chars, quiet))
+            if (busy) { pendingReply = true; return@launch }
+            val ws = workspace ?: return@launch
+            val convo = ws.conversations.firstOrNull { it.id == convoId } ?: return@launch
+            val char = ws.characters.firstOrNull { it.id == convo.characterId } ?: return@launch
+            val now = System.currentTimeMillis()
+            var seed = ""
+            val read = convo.copy(messages = convo.messages.map {
+                if (it.role == "user" && it.readAt == 0L) { seed = it.content; it.copy(readAt = now) } else it
+            })
+            if (seed.isBlank()) return@launch
+            workspace = ws.copy(conversations = ws.conversations.map { if (it.id == convoId) read else it })
+            // Read, then a beat before the dots: the gap between reading and starting to type.
+            delay(250 + (Math.random() * 500).toLong())
+            val photo = turnPhoto; val items = turnItems
+            turnPhoto = null; turnItems = emptyList()
+            generate(read, char, seed, photo, items, "")
+        }
+    }
+
+    /** Your texts since she last spoke that she has not read yet. */
+    fun unreadIn(convo: ChatConversation): Boolean {
+        val lastHers = convo.messages.indexOfLast { it.role == "assistant" && it.thought.isBlank() }
+        return convo.messages.drop(lastHers + 1).any { it.role == "user" && it.readAt == 0L }
+    }
+
+    // Anything you sent while she was typing is still unread once her reply lands:
+    // she reads it and answers it, straight after. Also what answers a text that was
+    // sent just before the app was closed.
+    LaunchedEffect(busy, conversationId) {
+        if (busy) return@LaunchedEffect
+        val convo = currentConversation(workspace) ?: return@LaunchedEffect
+        val unread = unreadIn(convo)
+        if (pendingReply || unread) {
+            pendingReply = false
+            if (unread) readThenReply(convo.id, 40)
         }
     }
 
@@ -701,7 +835,7 @@ fun ChatScreen(
                 else -> ""
             }
         }
-        if (text.isBlank() || busy) return
+        if (text.isBlank()) return
         val now = System.currentTimeMillis()
         val reply = replyTarget
         val userLine = StoredChatMessage(
@@ -711,7 +845,32 @@ fun ChatScreen(
         val pending = convo.copy(title = if (convo.title == "New conversation") text.take(42) else convo.title, messages = convo.messages + userLine, updatedAt = now)
         workspace = ws.copy(conversations = ws.conversations.map { if (it.id == convo.id) pending else it })
         draft = ""; pendingPhoto = null; pendingItems = emptyList(); replyTarget = null
-        generate(pending, char, text, photo, items.map { it.id }, "")
+        // Everything the burst carries rides the one turn that answers it: the last
+        // photo wins, the attached items accumulate.
+        if (photo != null) turnPhoto = photo
+        turnItems = turnItems + items.map { it.id }
+        readThenReply(convo.id, text.length)
+    }
+
+    /** Puts your emoji on one of her messages, or takes it off again if it is the same
+        one. Yours replaces yours; hers stays. She is told on the next turn. */
+    fun react(entry: StoredChatMessage, emoji: String) {
+        updateConversation { convo ->
+            convo.copy(messages = convo.messages.map {
+                if (it.id != entry.id) it else {
+                    val mine = it.reactions.firstOrNull { r -> r.by == "user" }
+                    val others = it.reactions.filter { r -> r.by != "user" }
+                    it.copy(reactions = if (mine?.emoji == emoji) others else others + ChatReaction(emoji, "user"))
+                }
+            })
+        }
+    }
+
+    /** Closes the snap being looked at, and marks it opened for good. */
+    fun closeSnap() {
+        val snap = snapOpen ?: return
+        snapOpen = null
+        updateConversation { convo -> convo.copy(messages = convo.messages.map { if (it.id == snap.id) it.copy(opened = true) else it }) }
     }
 
     /**
@@ -747,6 +906,19 @@ fun ChatScreen(
 
     fun deleteMessage(entry: StoredChatMessage) {
         updateConversation { it.copy(messages = it.messages.filterNot { m -> m.id == entry.id }) }
+    }
+
+    /** The receipt under your last message: sent, or read and when. Only the latest of
+        yours carries one — a column of "Read" under every bubble is noise. */
+    fun receiptFor(entry: StoredChatMessage, convo: ChatConversation): String {
+        if (entry.role != "user") return ""
+        if (convo.messages.lastOrNull { it.role == "user" }?.id != entry.id) return ""
+        if (entry.readAt > 0) return "Read ${timeOf(entry.readAt)}"
+        // Written before receipts existed, or answered by an older client: she replied
+        // to it, so she read it.
+        val at = convo.messages.indexOfFirst { it.id == entry.id }
+        if (convo.messages.drop(at + 1).any { it.role == "assistant" && it.thought.isBlank() }) return "Read"
+        return "Sent"
     }
 
     /** Whether retrying would redo this message: only the last assistant run can be. */
@@ -962,7 +1134,12 @@ fun ChatScreen(
                             // never showed: a conversation picked up a week later ran
                             // straight on from the one before it with nothing to say so.
                             if (previous == null || !sameChatDay(previous.at, item.at)) ChatDaySeparator(item.at)
-                            ChatMessageRow(repo, ws, char, item, previous, convo.messages.getOrNull(index + 1), onOpenMedia, onHold = { holdMessage = it })
+                            ChatMessageRow(
+                                repo, ws, char, item, previous, convo.messages.getOrNull(index + 1), onOpenMedia,
+                                onHold = { holdMessage = it }, onReply = { replyTarget = it },
+                                onReact = { m, emoji -> react(m, emoji) }, onOpenSnap = { snapOpen = it },
+                                receipt = receiptFor(item, convo),
+                            )
                         }
                     }
                     if (busy && typingPhase == TypingPhase.TYPING) item { ChatTypingBubble(repo, char) }
@@ -1087,6 +1264,25 @@ fun ChatScreen(
         }
     }
 
+    // A snap, full-screen, until you tap it away. It only opens once: closing marks it.
+    snapOpen?.let { snap ->
+        Dialog(onDismissRequest = { closeSnap() }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+            val src = when {
+                snap.imageId.isNotBlank() -> repo.chatImageUrl(snap.imageId)
+                snap.attachments.isNotEmpty() -> repo.streamUrl(snap.attachments[0].id)
+                else -> ""
+            }
+            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = .94f)).clickable { closeSnap() }, contentAlignment = Alignment.Center) {
+                if (src.isNotBlank()) AsyncImage(src, "Snap", imageLoader = repo.imageLoader, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
+                else Text("This snap is gone.", color = Color.White)
+                Text(
+                    "Tap anywhere to close — it won't open again", color = Color.White.copy(alpha = .7f), fontSize = 12.sp,
+                    modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 28.dp),
+                )
+            }
+        }
+    }
+
     // She is ringing. A card over whichever pane is up, with answer and decline; it
     // rings out on its own (see the LaunchedEffect above).
     if (incomingCall && char != null) {
@@ -1108,6 +1304,17 @@ fun ChatScreen(
                 leadingContent = { Icon(Icons.AutoMirrored.Filled.Reply, null) },
                 modifier = Modifier.clickable { replyTarget = held; holdMessage = null },
             )
+            if (held.role == "assistant" && held.thought.isBlank()) {
+                val mine = held.reactions.firstOrNull { it.by == "user" }?.emoji
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    REACTIONS.forEach { emoji ->
+                        Box(
+                            Modifier.clip(CircleShape).background(if (mine == emoji) ChatColors.accent.copy(alpha = .25f) else Color.Transparent)
+                                .clickable { react(held, emoji); holdMessage = null }.padding(horizontal = 10.dp, vertical = 8.dp),
+                        ) { Text(emoji, fontSize = 24.sp) }
+                    }
+                }
+            }
             ListItem(
                 headlineContent = { Text("Copy text") },
                 leadingContent = { Icon(Icons.Filled.ContentCopy, null) },
@@ -2048,6 +2255,10 @@ private fun ChatMessageRow(
     next: StoredChatMessage?,
     onOpenMedia: OpenMedia,
     onHold: (StoredChatMessage) -> Unit = {},
+    onReply: (StoredChatMessage) -> Unit = {},
+    onReact: (StoredChatMessage, String) -> Unit = { _, _ -> },
+    onOpenSnap: (StoredChatMessage) -> Unit = {},
+    receipt: String = "",
 ) {
     if (entry.thought.isNotBlank()) { ChatThoughtRow(char, entry); return }
     val friend = entry.role == "assistant"
@@ -2075,8 +2286,29 @@ private fun ChatMessageRow(
         )
     }
 
+    // Swipe to reply: the bubble follows the finger a little way, and letting go past
+    // the threshold quotes the message in the composer. Vertical drags are the list's.
+    var drag by remember(entry.id) { mutableStateOf(0f) }
+    val shown by animateIntAsState(drag.toInt(), label = "swipe")
+    val replyPx = 56 * 3f
+    Box(Modifier.fillMaxWidth()) {
+        if (shown > 12) Icon(
+            Icons.AutoMirrored.Filled.Reply, null,
+            tint = if (drag >= replyPx) ChatColors.accent else ChatColors.muted,
+            modifier = Modifier.align(if (friend) Alignment.CenterStart else Alignment.CenterEnd).padding(horizontal = 14.dp).size(20.dp),
+        )
     Row(
-        Modifier.fillMaxWidth().padding(start = 10.dp, end = 10.dp, top = if (first) 10.dp else 2.dp),
+        Modifier.fillMaxWidth().offset { IntOffset(shown, 0) }
+            .pointerInput(entry.id) {
+                detectHorizontalDragGestures(
+                    onDragEnd = { if (drag >= replyPx) onReply(entry); drag = 0f },
+                    onDragCancel = { drag = 0f },
+                ) { change, dx ->
+                    val next = (drag + dx).coerceIn(0f, 72 * 3f)
+                    if (next != drag) { drag = next; change.consume() }
+                }
+            }
+            .padding(start = 10.dp, end = 10.dp, top = if (first) 10.dp else 2.dp),
         horizontalArrangement = if (friend) Arrangement.Start else Arrangement.End,
         verticalAlignment = Alignment.Bottom,
     ) {
@@ -2085,11 +2317,14 @@ private fun ChatMessageRow(
                 if (last) ChatAvatar(repo, char, Modifier.size(32.dp).clip(CircleShape))
             }
         }
+        Column(horizontalAlignment = if (friend) Alignment.Start else Alignment.End) {
+        Box {
         Column(
             Modifier.widthIn(max = 320.dp).clip(shape)
                 .background(if (friend) ChatColors.side else MaterialTheme.colorScheme.primaryContainer)
                 .combinedClickable(onClick = {}, onLongClick = { onHold(entry) })
-                .padding(horizontal = 13.dp, vertical = 8.dp),
+                .padding(horizontal = 13.dp, vertical = 8.dp, )
+                .padding(bottom = if (entry.reactions.isNotEmpty()) 8.dp else 0.dp),
         ) {
             val ink = if (friend) ChatColors.text else MaterialTheme.colorScheme.onPrimaryContainer
             // A quoted reply: the earlier line above the new one, on a bar.
@@ -2109,6 +2344,26 @@ private fun ChatMessageRow(
                 }
             }
             Text(richChatText(entry.content, entry.links, onOpenMedia, if (friend) ChatColors.accent else ink), color = ink, fontSize = 15.sp)
+            if (entry.snap) {
+                // A snap is a tile, never the picture: tap to open while unopened, and
+                // "Opened" after. That is the whole difference from a photo.
+                Row(
+                    Modifier.padding(top = 7.dp).clip(RoundedCornerShape(12.dp))
+                        .background(ink.copy(alpha = if (entry.opened) .06f else .1f))
+                        .then(if (entry.opened) Modifier else Modifier.clickable { onOpenSnap(entry) })
+                        .padding(horizontal = 12.dp, vertical = 10.dp).widthIn(min = 170.dp),
+                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Icon(
+                        if (entry.opened) Icons.Filled.CheckBoxOutlineBlank else Icons.Filled.PhotoCamera, null,
+                        tint = if (entry.opened) ink.copy(alpha = .5f) else ChatColors.accent, modifier = Modifier.size(26.dp),
+                    )
+                    Column {
+                        Text(if (entry.opened) "Opened" else "Tap to view", color = ink.copy(alpha = if (entry.opened) .6f else 1f), fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        if (!entry.opened) Text("Snap from ${char.name}", color = ink.copy(alpha = .7f), fontSize = 11.sp)
+                    }
+                }
+            } else {
             if (entry.imageId.isNotBlank()) {
                 AsyncImage(
                     repo.chatImageUrl(entry.imageId),
@@ -2119,6 +2374,7 @@ private fun ChatMessageRow(
                 )
             }
             ChatAttachments(repo, char, entry.attachments, onOpenMedia)
+            }
             ChatLinkChips(repo, entry.links, onOpenMedia)
             ChatActionCards(repo, entry.actions)
             // One stamp per run, at its foot, so a burst of four texts is marked once
@@ -2135,7 +2391,27 @@ private fun ChatMessageRow(
                 }
             }
         }
+        // Reactions: emoji tucked into the bubble's lower corner, overlapping the edge.
+        if (entry.reactions.isNotEmpty()) Row(
+            Modifier.align(if (friend) Alignment.BottomEnd else Alignment.BottomStart).offset(y = 8.dp).padding(horizontal = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            entry.reactions.forEach { reaction ->
+                Box(
+                    Modifier.clip(CircleShape).background(ChatColors.side)
+                        .then(if (friend && reaction.by == "user") Modifier.clickable { onReact(entry, reaction.emoji) } else Modifier)
+                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                ) { Text(reaction.emoji, fontSize = 13.sp) }
+            }
+        }
+        } // Box
+        if (receipt.isNotBlank()) Text(
+            receipt, color = if (receipt.startsWith("Read")) ChatColors.accent else ChatColors.muted, fontSize = 10.5.sp,
+            modifier = Modifier.padding(top = if (entry.reactions.isNotEmpty()) 10.dp else 3.dp, end = 6.dp),
+        )
+        } // Column
     }
+    } // Box
 }
 
 /**

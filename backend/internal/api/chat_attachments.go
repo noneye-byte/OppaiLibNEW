@@ -136,8 +136,10 @@ func findAttachRequests(reply string) []string {
 //
 // taste is what she would rather look at, and decides between items that fit a request
 // equally well — with a random draw after that, so "a girl with brown hair" does not
-// hand over the newest such item every single time. See pickLibraryMatch.
-func (s *Server) resolveLibraryAttachments(ctx context.Context, requests []string, asked string, skip map[int64]bool, taste libbyTaste) []libbyAttachment {
+// hand over the newest such item every single time. weights are the user's own tag
+// preferences, which tilt that draw: more of this, less of that, none of the other.
+// See pickLibraryMatch and chat_send_weights.go.
+func (s *Server) resolveLibraryAttachments(ctx context.Context, requests []string, asked string, skip map[int64]bool, taste libbyTaste, weights map[string]float64) []libbyAttachment {
 	if len(requests) == 0 {
 		return nil
 	}
@@ -169,7 +171,7 @@ func (s *Server) resolveLibraryAttachments(ctx context.Context, requests []strin
 		for id := range picked {
 			exclude[id] = true
 		}
-		link, found := pickLibraryMatch(candidates, query, minAttachMatchScore, taste, exclude, rollIndex)
+		link, found := pickWeightedLibraryMatch(candidates, query, minAttachMatchScore, taste, exclude, weights, rollIndex)
 		if !found {
 			return
 		}
@@ -283,32 +285,6 @@ func requestWords(text string) map[string]bool {
 		}
 	}
 	return words
-}
-
-// bestSelfPicture picks the library picture of her that best fits some text, with the
-// score it won by so the caller can weigh it against the chat gallery's best.
-//
-// floor is what an unasked-for picture has to clear: the caller passes 1 when she has
-// explicitly asked for a picture and unpromptedPhotoFloor when it is only riding along
-// with a reply, which is the same distinction matchingChatImage draws for the gallery.
-func bestSelfPicture(pics []selfPicture, text string, skip map[int64]bool, floor int) (selfPicture, int) {
-	words := requestWords(text)
-	if len(words) == 0 {
-		return selfPicture{}, 0
-	}
-	best, bestScore := selfPicture{}, 0
-	for _, pic := range pics {
-		if skip[pic.link.ID] {
-			continue
-		}
-		if score := scoreTags(words, pic.tags); score > bestScore {
-			best, bestScore = pic, score
-		}
-	}
-	if bestScore < floor {
-		return selfPicture{}, 0
-	}
-	return best, bestScore
 }
 
 // recentlyAttached is the set of library items already handed over in this

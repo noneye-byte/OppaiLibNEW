@@ -367,6 +367,7 @@ func (s *Server) discordReply(ctx context.Context, settings discordSettings, cha
 	// Her mood tag is read and dropped rather than applied: the face it moves is beside
 	// the chat screen, and there is nothing over here for it to move.
 	reply, _, _, _ := splitMood(raw)
+	reply, _, _ = splitSnapRequest(reply)
 	reply, _, _ = splitPhotoRequest(reply)
 	// Memory capture, when the two surfaces share one. This is the "shared memory rules"
 	// the brief asks for made concrete: with "shared" she can learn from Discord exactly

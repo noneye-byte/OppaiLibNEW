@@ -163,6 +163,10 @@ func historyContent(m chatMessage, d historyDescriber) string {
 	if carried := d.carried(m); carried != "" {
 		text += "\n" + carried
 	}
+	// And the emoji either of them put on it. See chat_reactions.go.
+	if note := reactionsNote(m); note != "" {
+		text += "\n" + note
+	}
 	return text
 }
 

@@ -380,8 +380,8 @@ func forgetWeakest(memories []libbyMemory, now time.Time) []libbyMemory {
 // what she notices, which is the half of the job the classifier cannot do. Hedging is asked
 // for explicitly because it is the only signal that distinguishes a half-memory from a fact,
 // and the alternative is her recording guesses as certainties.
-const memoryDirective = "Silently keep a durable fact with [remember: <fact in your own words>] when it will matter next time: identity, preference, boundary, shared event, or feeling. " +
-	"Keep no small talk; hedge uncertain notes. At most two, usually none, and never announce saving it."
+const memoryDirective = "File what a friend would keep — their name, home, work, likes, dislikes, limits, moments between you, feelings — in that same reply with [remember: <fact, your words>]. " +
+	"Most messages have none; hedge if unsure; at most two; never announce it."
 
 // memoryPromptBlock renders what she already knows into the system prompt.
 //
@@ -421,7 +421,7 @@ func memoryPromptBlock(store libbyMemoryStore) string {
 	var b strings.Builder
 	b.WriteString("\n\nWhat you already know about them from before, carried over from past conversations. " +
 		"This is real and it is yours — let it shape how you talk to them, what you bring up, and what you already understand about them. " +
-		"Never recite it back or announce that you remember; just know it.\n")
+		"Do not recite it unprompted or announce that you remember; just know it. If they ask what you remember about them, tell them, plainly and warmly.\n")
 	uncertain := false
 	for _, kind := range memoryKinds {
 		group := byKind[kind]

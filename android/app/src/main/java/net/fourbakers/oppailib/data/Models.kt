@@ -276,6 +276,24 @@ data class ChatMessage(
     val imageId: String = "",
     /** Library items this message attached, by id, for the same reason. */
     val mediaIds: List<Long> = emptyList(),
+    /** The emoji either of them put on this message, so she knows a heart was put on
+        what she said. */
+    val reactions: List<ChatReaction> = emptyList(),
+)
+
+/** One emoji on one message, and whose it is: "user" or "assistant". */
+@Serializable
+data class ChatReaction(
+    val emoji: String,
+    val by: String = "user",
+)
+
+/** What a reply carries when she reacted: the emoji and the message it goes on. */
+@Serializable
+data class LibbyReaction(
+    val emoji: String = "",
+    /** The id of the message reacted to; blank means the latest one of yours. */
+    val to: String = "",
 )
 
 /**
@@ -471,6 +489,10 @@ data class ChatResponse(
         answers the latest one, which is the ordinary case. */
     val replyTo: ChatReplyRef? = null,
     val imageId: String = "",
+    /** That the picture on this reply is a snap: tap to open, seen once, then gone. */
+    val snap: Boolean = false,
+    /** The emoji she put on one of your messages, if she did. */
+    val reaction: LibbyReaction? = null,
     /** Library items this reply points at. The titles are already substituted into
         the prose server-side, so a client that does not draw chips still reads right. */
     val links: List<LibbyLink> = emptyList(),
@@ -583,6 +605,15 @@ data class StoredChatMessage(
     val heat: Int = 0,
     /** The earlier message this one answers, drawn as a quote above it. */
     val replyTo: ChatReplyRef? = null,
+    /** A picture sent to be seen once. Drawn as a tile that opens on tap; once
+        [opened], drawn as gone. The image itself stays in the gallery. */
+    val snap: Boolean = false,
+    val opened: Boolean = false,
+    /** When she read this message of yours, for the receipt under it. Zero is sent
+        but not yet read. Only ever set on your own messages. */
+    val readAt: Long = 0,
+    /** The emoji on this message, from either side. */
+    val reactions: List<ChatReaction> = emptyList(),
 )
 
 @Serializable
@@ -616,6 +647,10 @@ data class ChatImage(
     val tags: List<String> = emptyList(),
     val mime: String = "image/jpeg",
     val createdAt: Long = 0,
+    /** How readily she reaches for this picture: -1 never, 0.35 rarely, 0 or 1
+        normal, 2.5 often. Set from the web client's Images panel; carried here so a
+        save from the phone does not reset it. */
+    val weight: Double = 0.0,
 )
 
 @Serializable
@@ -624,6 +659,11 @@ data class ChatWorkspace(
     val characters: List<ChatCharacter> = emptyList(),
     val conversations: List<ChatConversation> = emptyList(),
     val images: List<ChatImage> = emptyList(),
+    /** Tag preferences for what she sends: tag → weight. Edited on the web client;
+        carried here so a save from the phone does not erase them. */
+    val sendWeights: Map<String, Double> = emptyMap(),
+    /** Generation settings new conversations start from. Carried for the same reason. */
+    val defaults: JsonObject? = null,
 )
 
 @Serializable

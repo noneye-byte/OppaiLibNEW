@@ -15,50 +15,6 @@ func libbyGallery() chatWorkspace {
 	}}
 }
 
-// The repeat this exists to stop: she asks for "bedroom lingerie" turn after turn,
-// and without a memory of what she has already sent the same file wins every time.
-func TestSentPicturesAreNotOfferedAgain(t *testing.T) {
-	ws := libbyGallery()
-	first := requestedChatImage(ws, "libby", "bedroom lingerie", "", nil)
-	if first == "" {
-		t.Fatal("first request resolved to nothing")
-	}
-	sent, last := recentlySentPhotos([]string{first})
-	if last != first {
-		t.Fatalf("last sent = %q, want %q", last, first)
-	}
-	second := requestedChatImage(ws, "libby", "bedroom lingerie", "", sent)
-	if second == first {
-		t.Fatalf("the same picture came back: %q", second)
-	}
-	if second == "" {
-		t.Fatal("a second bedroom picture exists and should have been offered")
-	}
-	// Both bedroom pictures spent: rather than repeat, she is left with nothing to
-	// send, which is the correct outcome — the fallback is silence, not a rerun.
-	sent, _ = recentlySentPhotos([]string{first, second})
-	if third := requestedChatImage(ws, "libby", "bedroom lingerie", "", sent); third != "" {
-		t.Fatalf("exhausted gallery still produced %q", third)
-	}
-}
-
-// An unrequested picture needs real overlap — three independent words, not one or two.
-// One or two shared words is the whole reason a gallery's best-scoring image used to
-// ride along with nearly every reply.
-func TestUnpromptedPictureNeedsRealOverlap(t *testing.T) {
-	ws := libbyGallery()
-	if got := matchingChatImage(ws, "libby", "the bedroom was cold", "", nil); got != "" {
-		t.Fatalf("one incidental word attached %q", got)
-	}
-	// Two words used to be enough, and fired far too often; now it is not.
-	if got := matchingChatImage(ws, "libby", "you in that lingerie, in the bedroom", "", nil); got != "" {
-		t.Fatalf("two incidental words attached %q", got)
-	}
-	if got := matchingChatImage(ws, "libby", "you in that lingerie in the bedroom, lying down", "", nil); got == "" {
-		t.Fatal("three matching words should still attach a picture")
-	}
-}
-
 // Asking for one relaxes the rule — except for the picture already on screen.
 func TestAskingForAPictureIsRecognised(t *testing.T) {
 	for _, asked := range []string{"send me a pic", "show me you", "another one?", "got any photos"} {
