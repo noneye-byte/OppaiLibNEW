@@ -981,6 +981,8 @@ data class DetailerRequest(
 
 @Serializable
 data class GenerateRequest(
+    /** Names the run so it can be watched and cancelled while in flight. */
+    val jobId: String = "",
     val prompt: String,
     val negativePrompt: String = "",
     val checkpoint: String = "",
@@ -998,8 +1000,26 @@ data class GenerateRequest(
     val detailer: DetailerRequest? = null,
 )
 
+/** One line for the server to read aloud; see LibbySpeech. */
+@Serializable
+data class SpeakRequest(val text: String)
+
 @Serializable
 data class GenPreview(val id: String, val seed: Long = 0)
+
+/** One progress report on a running generation: the step count and, when the
+ * generator published one, a small preview as a data: URL. */
+@Serializable
+data class GenProgress(
+    val index: Int = 0,
+    val step: Int = 0,
+    val total: Int = 0,
+    val percent: Double = 0.0,
+    val image: String? = null,
+    val seq: Long = 0,
+    val done: Boolean = false,
+    val cancelled: Boolean = false,
+)
 
 @Serializable
 data class GenerateResponse(val images: List<GenPreview> = emptyList(), val prompt: String = "")

@@ -116,8 +116,19 @@ func (c *Client) a1111Generate(ctx context.Context, base string, req GenerateReq
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
+	// The previews are polled beside the request, which blocks until the last image
+	// is decoded. The watch ends with the request, and a cancelled context also
+	// tells the generator to stop — a txt2img call abandoned by its client keeps
+	// the GPU busy to the end otherwise.
+	watchCtx, stopWatch := context.WithCancel(ctx)
+	go c.a1111WatchProgress(watchCtx, base, req)
 	resp, err := c.hc.Do(httpReq)
+	stopWatch()
 	if err != nil {
+		if ctx.Err() != nil {
+			c.a1111Interrupt(base)
+			return nil, ctx.Err()
+		}
 		return nil, fmt.Errorf("image generator unreachable: %w", err)
 	}
 	defer resp.Body.Close()

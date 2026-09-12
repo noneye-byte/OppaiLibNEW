@@ -9,6 +9,7 @@ import {
   type GenModel,
   type GenModelMeta,
   type GenPreview,
+  type GenProgress,
   type GenTemplate,
   type GenVae,
   type GalleryBoard,
@@ -280,6 +281,13 @@ interface CharDraft {
   imageData?: string;
 }
 
+/** A run's name for the progress endpoints: random, URL-safe, unique enough. */
+function newJobId(): string {
+  const bytes = new Uint8Array(12);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 /**
  * The image-generation studio: pick a checkpoint (and LoRAs, VAE, templates,
  * characters) in the sidebar, speak or type a prompt, generate, and — only on an
@@ -464,6 +472,12 @@ export class OppaiImageGen extends LitElement {
   @state() private detailerMaskBlur = 4;
 
   @state() private generating = false;
+  /** The run in flight, named so it can be watched and cancelled; see genProgress. */
+  private jobId = "";
+  /** What the generator has drawn so far of the current run. */
+  @state() private progress: GenProgress | null = null;
+  private progressTimer = 0;
+  private progressSeen = 0;
   @state() private shots: Shot[] = [];
   @state() private activeNodeId: string | null = null;
   private draggingNode: { id: string; pointerId: number; clientX: number; clientY: number; x: number; y: number } | null = null;
@@ -2135,17 +2149,39 @@ export class OppaiImageGen extends LitElement {
         backdrop-filter: blur(2px);
       }
       .generating-card {
-        display: flex;
-        align-items: center;
+        display: grid;
         gap: 10px;
         padding: 12px 16px;
         border: 1px solid var(--oppai-border-strong);
-        border-radius: 10px;
+        border-radius: 12px;
         background: var(--oppai-surface-2);
         box-shadow: 0 10px 30px rgba(0,0,0,.3);
         font-size: 13px;
         font-weight: 600;
+        max-width: min(92%, 420px);
       }
+      .generating-card.with-preview { padding: 10px; }
+      .progress-preview {
+        display: block;
+        width: 100%;
+        max-height: 52vh;
+        object-fit: contain;
+        border-radius: 8px;
+        background: #000;
+        image-rendering: auto;
+      }
+      .progress-row { display: flex; align-items: center; gap: 10px; }
+      .progress-label { flex: 1; min-width: 0; }
+      .progress-cancel {
+        display: inline-flex; align-items: center; gap: 4px;
+        border: 1px solid var(--oppai-border-strong); border-radius: 999px;
+        padding: 5px 12px 5px 8px; background: transparent; color: inherit;
+        font: inherit; font-size: 12px; cursor: pointer;
+      }
+      .progress-cancel:hover:not(:disabled) { background: color-mix(in srgb, var(--oppai-error, #f66) 18%, transparent); }
+      .progress-cancel:disabled { opacity: .5; cursor: default; }
+      .progress-bar { height: 4px; border-radius: 2px; background: var(--oppai-border); overflow: hidden; }
+      .progress-bar span { display: block; height: 100%; background: var(--oppai-primary); transition: width .4s ease; }
       .prompt-dock {
         flex: 0 0 auto;
         padding: 10px 12px 12px;
@@ -2212,6 +2248,7 @@ export class OppaiImageGen extends LitElement {
         font-size: 11px;
         white-space: nowrap;
       }
+      .prompt-footer .generate.cancel { background: var(--oppai-surface-3, var(--oppai-surface-2)); color: var(--oppai-text); border: 1px solid var(--oppai-border-strong); }
       .prompt-footer .generate {
         width: auto;
         min-width: 142px;
@@ -3175,6 +3212,35 @@ export class OppaiImageGen extends LitElement {
     }
   }
 
+  /**
+   * The overlay while a run is in flight: the picture forming, as the generator
+   * publishes it every few steps, with the step count under it and a way to stop a
+   * run that is plainly going wrong before it has cost the whole wait.
+   */
+  private renderGenerating(invoke: boolean) {
+    const p = this.progress;
+    const total = p?.total ?? 0;
+    const percent = p ? Math.max(0, Math.min(1, p.percent)) : 0;
+    const label = p?.cancelled ? "Stopping…"
+      : total > 0 ? `Step ${p!.step} of ${total}`
+      : invoke ? "Invoking generation…" : "Generating image…";
+    return html`<div class="generating-overlay">
+      <div class="generating-card ${p?.image ? "with-preview" : ""}">
+        ${p?.image ? html`<img class="progress-preview" src=${p.image} alt="The picture so far" />` : nothing}
+        <div class="progress-row">
+          <md-circular-progress indeterminate style="--md-circular-progress-size:22px;"></md-circular-progress>
+          <span class="progress-label">${label}</span>
+          <button class="progress-cancel" type="button" ?disabled=${p?.cancelled} title="Stop this generation" @click=${() => void this.cancelGeneration()}>
+            <span class="material-symbols-rounded" style="font-size:18px;">close</span>Cancel
+          </button>
+        </div>
+        <div class="progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow=${Math.round(percent * 100)}>
+          <span style=${`width:${Math.round(percent * 100)}%`}></span>
+        </div>
+      </div>
+    </div>`;
+  }
+
   /** Makes one request using a snapshot of the selected outfit square. */
   private async generateOne(appendOutfit: boolean): Promise<number> {
     const { prompt, negative } = this.assemblePrompts();
@@ -3223,7 +3289,15 @@ export class OppaiImageGen extends LitElement {
             }
           : undefined,
     };
-    const res = await api.generate(params);
+    // Named, so the overlay can watch the picture form and the user can stop it.
+    params.jobId = newJobId();
+    this.startProgressWatch(params.jobId, params.count ?? 1);
+    let res: { images: GenPreview[]; prompt: string };
+    try {
+      res = await api.generate(params);
+    } finally {
+      this.stopProgressWatch();
+    }
     const seconds = (performance.now() - startedAt) / 1000;
     const made: Shot[] = res.images.map((g: GenPreview, index: number) => ({
         ...g,
@@ -3288,6 +3362,51 @@ export class OppaiImageGen extends LitElement {
     return made.length;
   }
 
+  /**
+   * Polls the run's progress while the generate call is in flight. A second a poll:
+   * the generator publishes a preview every few steps, and the poll is a few bytes
+   * when nothing has changed (the server withholds an unchanged preview).
+   */
+  private startProgressWatch(jobId: string, count: number) {
+    this.stopProgressWatch();
+    this.jobId = jobId;
+    this.progress = { index: 0, step: 0, total: 0, percent: 0, seq: 0, done: false, cancelled: false };
+    this.progressSeen = 0;
+    const tick = async () => {
+      if (this.jobId !== jobId) return;
+      try {
+        const next = await api.genProgress(jobId, this.progressSeen);
+        if (this.jobId !== jobId) return;
+        // An unchanged preview is withheld by the server; keep the one on screen.
+        const image = next.image ?? (next.seq === this.progressSeen ? this.progress?.image : undefined);
+        this.progress = { ...next, image, total: next.total || this.progress?.total || 0 };
+        this.progressSeen = next.seq;
+        if (next.done) return;
+      } catch {
+        // A 404 before the server has registered the job, or a blip: keep polling.
+      }
+      this.progressTimer = window.setTimeout(() => void tick(), 1000);
+    };
+    this.progressTimer = window.setTimeout(() => void tick(), 600);
+    void count;
+  }
+
+  private stopProgressWatch() {
+    window.clearTimeout(this.progressTimer);
+    this.progressTimer = 0;
+    this.jobId = "";
+    this.progress = null;
+  }
+
+  /** Stops the run in flight. The generate call rejects as cancelled, not failed. */
+  private async cancelGeneration() {
+    const jobId = this.jobId;
+    if (!jobId) return;
+    if (this.progress) this.progress = { ...this.progress, cancelled: true };
+    try { await api.cancelGenerate(jobId); }
+    catch (e) { this.showToast(`Couldn't cancel: ${(e as Error).message}`); }
+  }
+
   private async generate() {
     // The outfit helper can carry the whole prompt on its own, so what matters is
     // whether anything assembles — not whether the box itself has text in it.
@@ -3297,7 +3416,9 @@ export class OppaiImageGen extends LitElement {
     try {
       await this.generateOne(this.outfitOn);
     } catch (e) {
-      this.error = (e as Error).message;
+      // Stopped from the overlay: not an error, and nothing to show but the toast.
+      if (/cancelled/i.test((e as Error).message)) this.showToast("Generation cancelled.");
+      else this.error = (e as Error).message;
     } finally {
       this.generating = false;
       // A finished run is worth persisting immediately rather than on the next
@@ -4113,12 +4234,7 @@ export class OppaiImageGen extends LitElement {
             <div class="canvas-stage">
               ${this.renderResults()}
               ${this.error ? html`<div class="banner">${this.error}</div>` : nothing}
-              ${this.generating ? html`<div class="generating-overlay">
-                <div class="generating-card">
-                  <md-circular-progress indeterminate style="--md-circular-progress-size:22px;"></md-circular-progress>
-                  ${invoke ? "Invoking generation…" : "Generating image…"}
-                </div>
-              </div>` : nothing}
+              ${this.generating ? this.renderGenerating(invoke) : nothing}
             </div>
             <div class="prompt-dock">${this.renderPrompt()}</div>
           </section>
@@ -5685,13 +5801,15 @@ export class OppaiImageGen extends LitElement {
             ${this.showOptions ? "Hide size" : "Size"}
           </button>
           <span class="prompt-summary">${this.steps} steps · CFG ${this.cfg} · ${outputCount} image${outputCount === 1 ? "" : "s"}</span>
-          <button class="generate" ?disabled=${this.generating || !this.assemblePrompts().prompt.trim()} @click=${() => this.generate()}>
-            ${this.generating
-              ? html`<md-circular-progress indeterminate style="--md-circular-progress-size:20px;"></md-circular-progress>
-                  ${this.status?.backend === "invokeai" ? "Invoking…" : "Generating…"}`
-              : html`<span class="material-symbols-rounded" style="font-size:19px;">auto_awesome</span>
-                  ${this.status?.backend === "invokeai" ? "Invoke" : "Generate"}`}
-          </button>
+          ${this.generating
+            ? html`<button class="generate cancel" type="button" ?disabled=${this.progress?.cancelled} title="Stop this generation" @click=${() => void this.cancelGeneration()}>
+                <span class="material-symbols-rounded" style="font-size:19px;">close</span>
+                ${this.progress?.cancelled ? "Stopping…" : this.progress?.total ? `Cancel · ${this.progress.step}/${this.progress.total}` : "Cancel"}
+              </button>`
+            : html`<button class="generate" ?disabled=${!this.assemblePrompts().prompt.trim()} @click=${() => this.generate()}>
+                <span class="material-symbols-rounded" style="font-size:19px;">auto_awesome</span>
+                ${this.status?.backend === "invokeai" ? "Invoke" : "Generate"}
+              </button>`}
         </div>
       </div>
     `;

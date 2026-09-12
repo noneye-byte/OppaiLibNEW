@@ -209,6 +209,9 @@ func (s *Server) handleImageGenPrompt(w http.ResponseWriter, r *http.Request) {
 // ── generate ─────────────────────────────────────────────────────────────────
 
 type generateReq struct {
+	// JobID names the run so the studio can watch and cancel it while this request
+	// is in flight. Client-made; optional. See imagegen_jobs.go.
+	JobID          string      `json:"jobId"`
 	Prompt         string      `json:"prompt"`
 	NegativePrompt string      `json:"negativePrompt"`
 	Checkpoint     string      `json:"checkpoint"`
@@ -321,8 +324,20 @@ func (s *Server) handleImageGenGenerate(w http.ResponseWriter, r *http.Request) 
 			MaskBlur: req.Detailer.MaskBlur,
 		},
 	}
-	res, err := s.imagegen.Generate(r.Context(), set.ImageGenURL, gen)
+	ctx := r.Context()
+	if genJobIDPattern.MatchString(req.JobID) {
+		var job *genJob
+		ctx, job = s.genJobs.start(ctx, req.JobID)
+		gen.Progress = job.report
+		defer s.genJobs.finish(req.JobID, job)
+	}
+	res, err := s.imagegen.Generate(ctx, set.ImageGenURL, gen)
 	if err != nil {
+		if ctx.Err() != nil && r.Context().Err() == nil {
+			// Stopped from the studio, not failed: the cancel endpoint ended it.
+			writeErr(w, http.StatusConflict, "generation cancelled")
+			return
+		}
 		s.log.Warn("image generate", "err", err)
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return

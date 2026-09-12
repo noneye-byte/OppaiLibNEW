@@ -14,7 +14,7 @@ func TestLibraryFeedMatchesWhatTheMessageNames(t *testing.T) {
 	seedTitledMedia(t, s, "Kitchen Timer", "video", "cooking")
 
 	sig := readTurnSignals("do i have anything with a lighthouse in it?", "")
-	sections := s.libraryFeed(context.Background(), sig)
+	sections := s.libraryFeed(context.Background(), sig, feedChoice{})
 	var matches, facts string
 	for _, section := range sections {
 		switch section.Name {
@@ -34,7 +34,7 @@ func TestLibraryFeedMatchesWhatTheMessageNames(t *testing.T) {
 		t.Fatalf("an unrelated item was fed: %q", matches)
 	}
 	// Small talk names nothing and is fed nothing but the facts.
-	if sections := s.libraryFeed(context.Background(), readTurnSignals("morning, sleep ok?", "")); len(sections) != 1 {
+	if sections := s.libraryFeed(context.Background(), readTurnSignals("morning, sleep ok?", ""), feedChoice{}); len(sections) != 1 {
 		t.Fatalf("small talk fed %d sections, want just the facts", len(sections))
 	}
 }
@@ -48,7 +48,7 @@ func TestLibraryFeedListsOnlyWhenAsked(t *testing.T) {
 
 	names := func(text string) []string {
 		var out []string
-		for _, section := range s.libraryFeed(context.Background(), readTurnSignals(text, "")) {
+		for _, section := range s.libraryFeed(context.Background(), readTurnSignals(text, ""), feedChoice{}) {
 			out = append(out, section.Name)
 		}
 		return out

@@ -468,8 +468,9 @@ export class OppaiOutfitWardrobe extends LitElement {
       <div class="wardrobe-intro">
         An outfit swaps Libby's artwork: one sprite per expression, per heat tier —
         ${TOTAL_SLOTS} in all for a complete wardrobe — plus one picture for each of the
-        optional Misc states she can put herself into. Anything left empty falls back to
-        the calmer art, then to her expression, then to the bundled default. Which outfit
+        optional Misc states she can put herself into. An empty expression falls back to
+        the calmer art, then to the bundled default; an empty Misc state falls back to
+        the bundled Libby doing the same thing, then to her expression. Which outfit
         she wears is per-device. Click a card to wear it; Build opens it on the board.
       </div>
       ${this.outfitError ? html`<div class="wardrobe-error" role="alert">${this.outfitError}</div>` : nothing}

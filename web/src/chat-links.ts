@@ -33,8 +33,12 @@ export function recentlySent(messages: StoredChatMessage[], limit = 12): string[
  * The counterpart of recentlySent, and there for the same reason: she can now attach
  * things from the collection, and a picture of her that lives in the library is one of
  * them, so "you have already shown me this" has to cover both kinds of id.
+ *
+ * A wider window than the pictures get, matching the server's maxRecentMediaMemory:
+ * the library is large enough that ruling forty things out costs nothing, and a long
+ * evening of "what else" was coming back round to the thirteenth item.
  */
-export function recentlyAttached(messages: StoredChatMessage[], limit = 12): number[] {
+export function recentlyAttached(messages: StoredChatMessage[], limit = 40): number[] {
   const ids: number[] = [];
   for (const message of messages) {
     for (const item of message.attachments ?? []) if (!ids.includes(item.id)) ids.push(item.id);

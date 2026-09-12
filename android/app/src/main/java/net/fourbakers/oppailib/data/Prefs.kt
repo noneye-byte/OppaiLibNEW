@@ -61,6 +61,12 @@ class Prefs(context: Context) {
         get() = sp.getString(KEY_LIBBY_OUTFIT, "") ?: ""
         set(v) = sp.edit().putString(KEY_LIBBY_OUTFIT, v).apply()
 
+    /** Whether her replies are read aloud on this device. Off by default: a phone in a
+     * quiet room should not start talking because a server setting changed. */
+    var libbySpeak: Boolean
+        get() = sp.getBoolean(KEY_LIBBY_SPEAK, false)
+        set(v) = sp.edit().putBoolean(KEY_LIBBY_SPEAK, v).apply()
+
     var libbyProgressionMultiplier: Float
         get() = sp.getFloat(KEY_LIBBY_PROGRESSION, .5f).takeIf(LibbyMeter.MULTIPLIERS::contains) ?: .5f
         set(v) = sp.edit().putFloat(KEY_LIBBY_PROGRESSION, v.takeIf(LibbyMeter.MULTIPLIERS::contains) ?: .5f).apply()
@@ -285,6 +291,7 @@ class Prefs(context: Context) {
         private const val KEY_BIOMETRIC = "biometric_lock"
         private const val KEY_HIDE_LIBBY = "hide_libby"
         private const val KEY_LIBBY_OUTFIT = "libby_outfit"
+        private const val KEY_LIBBY_SPEAK = "libby_speak"
         private const val KEY_LIBBY_PROGRESSION = "libby_progression_multiplier"
         private const val KEY_UPLOAD_QUEUE = "upload_queue"
         private const val KEY_DOWNLOAD_QUEUE = "download_queue"

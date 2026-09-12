@@ -1,3 +1,4 @@
+import { speak, stopSpeaking, ttsStatus, type TTSStatus } from "../speech.js";
 import { LitElement, html, css, nothing } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { api, mascotSay, type APKInfo, type Diagnostics, type Passkey, type PasskeyList, type Settings, type ReadOnlyInfo, type Stats, type StorageReport, type Timing, type User } from "../api.js";
@@ -287,6 +288,19 @@ export class OppaiSettings extends LitElement {
       .field.stack .field-control {
         margin-top: 10px;
       }
+      /* Libby's voices: one row per voice, installed first. */
+      .voice-list {
+        list-style: none; margin: 0; padding: 0; width: 100%;
+        display: grid; gap: 6px;
+      }
+      .voice-list li {
+        display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+        padding: 8px 10px; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 10px;
+        font-size: 13px;
+      }
+      .voice-list li > span:first-child { flex: 1; min-width: 0; display: grid; }
+      .voice-list small, .voice-list .hint { color: var(--md-sys-color-on-surface-variant); font-size: 11px; }
+      .voice-list .voice-error { flex-basis: 100%; color: var(--md-sys-color-error); font-size: 11px; font-style: normal; }
 
       input[type="text"],
       input[type="number"],
@@ -629,6 +643,7 @@ export class OppaiSettings extends LitElement {
     profileUpdates(this, "settings");
     this.load();
     void this.loadGenLists();
+    void this.loadTTS();
   }
 
   private async load() {
@@ -648,6 +663,10 @@ export class OppaiSettings extends LitElement {
       this.apk = { available: false };
     }
   }
+
+  /** The server's speech status; undefined until asked, null when it did not answer. */
+  @state() private tts: TTSStatus | null | undefined = undefined;
+  @state() private ttsErrors: Record<string, string> = {};
 
   private get canEdit(): boolean {
     return !!this.user?.isAdmin;
@@ -689,6 +708,7 @@ export class OppaiSettings extends LitElement {
       // is so the switch does something visible when you flip it: the tab's title and
       // icon change immediately, and the signed-out disguise is ready for the next logout.
       setIncognito(!!res.settings.incognito);
+      void this.loadTTS(true);
     } catch (e) {
       this.loadError = (e as Error).message;
     } finally {
@@ -1063,8 +1083,140 @@ export class OppaiSettings extends LitElement {
           </div>
         </div>
       </section>
+      ${this.renderLibbyVoice()}
       ${this.renderLibbyImageGen()}
     `;
+  }
+
+  /**
+   * Libby's voice: which engine reads her lines, in what voice, how fast.
+   *
+   * Server-side, like her image generation, and for the same reason: the phone and
+   * the browser should sound the same. Whether a given device *plays* her is the
+   * toggle in the chat header. The bundled piper voice speaks out of the box; more
+   * can be downloaded here, and an OpenAI-compatible speech server can stand in.
+   */
+  private renderLibbyVoice() {
+    const s = this.settings;
+    if (!s) return nothing;
+    const st = this.tts;
+    const voices = st?.voices ?? [];
+    const installed = voices.filter((v) => v.installed);
+    const catalogue = voices.filter((v) => !v.installed);
+    const downloading = new Set(st?.downloading ?? []);
+    return html`<section class="card">
+      <h3><span class="material-symbols-rounded">record_voice_over</span>Libby’s voice</h3>
+      <p class="card-sub">
+        ${st === undefined ? "Checking the server…"
+          : !st ? "The server did not answer about speech."
+          : st.engine === "piper" && st.ready ? html`Speaking with <strong>piper</strong> on the server’s CPU. Turn playback on per device with the speaker button in Chat.`
+          : st.engine === "openai" && st.ready ? html`Speaking through the speech server at <code>${s.ttsUrl}</code>.`
+          : html`Not speaking from the server${st.detail ? html` — ${st.detail}` : nothing}. Devices fall back to their own voices.`}
+      </p>
+
+      <div class="field">
+        <div class="field-text">
+          <div class="field-label">Engine</div>
+          <div class="field-help">Auto prefers piper on the server and falls back to the speech server. Off leaves devices to their own voices.</div>
+        </div>
+        <div class="field-control">
+          <select ?disabled=${!this.canEdit} @change=${(e: Event) => this.edit({ ttsEngine: (e.target as HTMLSelectElement).value })}>
+            ${[["auto", "Auto"], ["piper", `Piper on the server${st && !st.piperInstalled ? " (not installed)" : ""}`], ["openai", "Speech server"], ["off", "Off"]].map(([id, label]) =>
+              html`<option value=${id} ?selected=${s.ttsEngine === id}>${label}</option>`)}
+          </select>
+        </div>
+      </div>
+
+      <div class="field">
+        <div class="field-text">
+          <div class="field-label">Voice</div>
+          <div class="field-help">${installed.length ? "Installed voices. Downloaded ones can be removed below." : "No voice is installed yet — download one below."}</div>
+        </div>
+        <div class="field-control" style="display:flex; gap:8px; align-items:center;">
+          <select ?disabled=${!this.canEdit} @change=${(e: Event) => this.edit({ ttsVoice: (e.target as HTMLSelectElement).value })}>
+            <option value="" ?selected=${!s.ttsVoice}>Engine’s default</option>
+            ${installed.map((v) => html`<option value=${v.id} ?selected=${v.id === s.ttsVoice}>${v.label}${v.bundled ? " · bundled" : ""}</option>`)}
+            ${s.ttsVoice && !installed.some((v) => v.id === s.ttsVoice) ? html`<option value=${s.ttsVoice} selected>${s.ttsVoice} (not installed)</option>` : nothing}
+          </select>
+          <button class="btn" ?disabled=${!st?.ready} title="Hear the current voice" @click=${() => void this.testVoice()}>Test</button>
+        </div>
+      </div>
+
+      <div class="field">
+        <div class="field-text">
+          <div class="field-label">Pace</div>
+          <div class="field-help">${s.ttsSpeed.toFixed(2)}× — under 1 is slower, over 1 quicker.</div>
+        </div>
+        <div class="field-control">
+          <input type="range" min="0.5" max="2" step="0.05" .value=${String(s.ttsSpeed)} ?disabled=${!this.canEdit}
+            @input=${(e: Event) => this.edit({ ttsSpeed: Number((e.target as HTMLInputElement).value) })} />
+        </div>
+      </div>
+
+      ${st?.piperInstalled ? html`<div class="field stack">
+        <div class="field-text">
+          <div class="field-label">Piper voices</div>
+          <div class="field-help">A curated handful from piper’s voice set, fetched from Hugging Face onto the server (20–110 MB each). Any other piper voice dropped into <code>/config/tts</code> is listed too.</div>
+        </div>
+        <div class="field-control">
+          <ul class="voice-list">
+            ${installed.map((v) => html`<li><span>${v.label}<small>${v.quality ?? ""}${v.bundled ? " · bundled" : ""}</small></span>
+              ${!v.bundled && this.canEdit ? html`<button class="btn" @click=${() => void this.deleteVoice(v.id)}>Remove</button>` : nothing}</li>`)}
+            ${catalogue.map((v) => html`<li><span>${v.label}<small>${v.quality ?? ""}${v.bytes ? ` · ${Math.round(v.bytes / 1_000_000)} MB` : ""}</small></span>
+              ${this.ttsErrors[v.id] ? html`<em class="voice-error">${this.ttsErrors[v.id]}</em>` : nothing}
+              ${downloading.has(v.id) ? html`<span class="hint">Downloading…</span>`
+                : this.canEdit ? html`<button class="btn" @click=${() => void this.downloadVoice(v.id)}>Download</button>` : nothing}</li>`)}
+          </ul>
+        </div>
+      </div>` : nothing}
+
+      <div class="field stack">
+        <div class="field-text">
+          <div class="field-label">Speech server (optional)</div>
+          <div class="field-help">An OpenAI-compatible <code>/v1/audio/speech</code> server — Kokoro-FastAPI, openedai-speech — such as <code>http://host:8880</code>. Model and key as the server wants them.</div>
+        </div>
+        <div class="field-control">
+          <input type="text" autocomplete="off" placeholder="http://host:8880" .value=${s.ttsUrl} ?disabled=${!this.canEdit}
+            @change=${(e: Event) => this.edit({ ttsUrl: (e.target as HTMLInputElement).value })} />
+        </div>
+        <div class="field-control">
+          <input type="text" autocomplete="off" placeholder="Model (default tts-1)" .value=${s.ttsModel} ?disabled=${!this.canEdit}
+            @change=${(e: Event) => this.edit({ ttsModel: (e.target as HTMLInputElement).value })} />
+        </div>
+        <div class="field-control">
+          <input type="password" autocomplete="new-password" placeholder=${s.ttsApiKeySet ? "API key saved — enter to replace" : "API key (optional)"}
+            .value=${s.ttsApiKey} ?disabled=${!this.canEdit}
+            @change=${(e: Event) => this.edit({ ttsApiKey: (e.target as HTMLInputElement).value })} />
+        </div>
+      </div>
+    </section>`;
+  }
+
+  private async loadTTS(force = false) {
+    this.tts = await ttsStatus(force);
+    try { this.ttsErrors = await api.ttsVoiceErrors(); } catch { /* optional */ }
+    // A download in flight: check back until it lands.
+    if (this.tts?.downloading?.length) window.setTimeout(() => void this.loadTTS(true), 4000);
+  }
+
+  private async testVoice() {
+    stopSpeaking();
+    await speak("Hi. This is what I sound like. Saved to your library, by the way — nice pick.");
+  }
+
+  private async downloadVoice(id: string) {
+    try {
+      await api.downloadTTSVoice(id);
+      await this.loadTTS(true);
+    } catch (e) { this.loadError = (e as Error).message; }
+  }
+
+  private async deleteVoice(id: string) {
+    if (!confirm(`Remove the ${id} voice from the server?`)) return;
+    try {
+      await api.deleteTTSVoice(id);
+      await this.loadTTS(true);
+    } catch (e) { this.loadError = (e as Error).message; }
   }
 
   /**

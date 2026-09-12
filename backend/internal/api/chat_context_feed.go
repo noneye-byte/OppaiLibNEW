@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"regexp"
-	"sort"
 	"strings"
 )
 
@@ -115,25 +114,36 @@ func readTurnSignals(latest, previous string) turnSignals {
 	return sig
 }
 
+// feedChoice is what shapes which items reach the prompt when more fit than there is
+// room for: what has already gone out this conversation (never fed again), her taste
+// and the user's tag weights (tilt the draw). See chat_library_sample.go.
+type feedChoice struct {
+	shown   map[int64]bool
+	taste   libbyTaste
+	weights map[string]float64
+	// pick is the die; nil rolls for real. Injected so a test can load it.
+	pick func(total float64) float64
+}
+
 // libraryFeed builds the turn's library sections.
 //
 // Each is its own promptSection with its own rank, so the budget can keep the facts
 // and the matches while shedding a shortlist, rather than the old all-or-nothing block.
 // Failures are absorbed section by section: a stats query that errors costs the numbers,
 // not the matches, and never the reply.
-func (s *Server) libraryFeed(ctx context.Context, sig turnSignals) []promptSection {
+func (s *Server) libraryFeed(ctx context.Context, sig turnSignals, choice feedChoice) []promptSection {
 	var out []promptSection
 	facts := s.buildLibbyFacts(ctx)
 	out = append(out, promptSection{Name: "your library", Rank: rankLibraryFacts, Text: facts.promptBlock()})
 
-	if block := s.libraryMatchesBlock(ctx, sig.words); block != "" {
+	if block := s.libraryMatchesBlock(ctx, sig.words, choice); block != "" {
 		out = append(out, promptSection{Name: "the items they mentioned", Rank: rankLibraryMatches, Text: block})
 	}
 	// The shortlists and the recent list are read only when asked for. Not merely
 	// deferred: they cost a handful of queries and a few hundred tokens, and on the
 	// turns that do not want them the queries are waste before the tokens are.
 	if sig.recommend {
-		if block := s.librarySuggestBlock(ctx); block != "" {
+		if block := s.librarySuggestBlock(ctx, choice); block != "" {
 			out = append(out, promptSection{Name: "things you could suggest", Rank: rankLibraryShortlist, Text: block})
 		}
 	}
@@ -207,8 +217,11 @@ func (f libbyFacts) promptBlock() string {
 // The lookup is the link resolver's, run in the other direction: instead of resolving
 // a title she wrote, it finds the items their words could mean, and hands them to her
 // before she answers. Scored by the same ranking so that what she is fed is what a
-// link of hers would resolve to; ties go to the newest, as everywhere else.
-func (s *Server) libraryMatchesBlock(ctx context.Context, words []string) string {
+// link of hers would resolve to. Ties used to go to the newest, which meant the same
+// eight items whenever the words were common; they are now drawn, taste and weights
+// applied, and anything already shown this conversation is left off the shelf and
+// named as such — see orderLibraryMatchesForFeed.
+func (s *Server) libraryMatchesBlock(ctx context.Context, words []string, choice feedChoice) string {
 	if len(words) == 0 {
 		return ""
 	}
@@ -217,7 +230,13 @@ func (s *Server) libraryMatchesBlock(ctx context.Context, words []string) string
 		return ""
 	}
 	matches := scoreLibraryMatches(candidates, strings.Join(words, " "))
-	sort.SliceStable(matches, func(a, b int) bool { return matches[a].score > matches[b].score })
+	var shown []string
+	for _, match := range matches {
+		if match.score >= libraryFeedFloor && choice.shown[match.link.ID] && len(shown) < libraryFeedMax {
+			shown = append(shown, fmt.Sprintf("%q", match.link.Title))
+		}
+	}
+	matches = orderLibraryMatchesForFeed(matches, choice.shown, choice.taste, choice.weights, choice.pick)
 	lines := make([]string, 0, libraryFeedMax)
 	for _, match := range matches {
 		if match.score < libraryFeedFloor {
@@ -226,41 +245,55 @@ func (s *Server) libraryMatchesBlock(ctx context.Context, words []string) string
 		if len(lines) >= libraryFeedMax {
 			break
 		}
-		line := fmt.Sprintf("%q (%s", match.link.Title, match.link.Kind)
-		if len(match.tags) > 0 {
-			tags := match.tags
-			if len(tags) > libraryFeedTags {
-				tags = tags[:libraryFeedTags]
-			}
-			line += "; " + strings.Join(tags, ", ")
-		}
-		lines = append(lines, line+")")
+		lines = append(lines, feedItemLine(match.link, match.tags))
 	}
-	if len(lines) == 0 {
+	if len(lines) == 0 && len(shown) == 0 {
 		return ""
 	}
-	return "\n\nItems on these shelves that their message might be about — real titles, found by matching their words: " +
-		strings.Join(lines, "; ") + ". " +
-		"If they mean one of these, talk about it by name and [link: <title>] it; if none fits what they meant, say you don't have it rather than inventing one."
+	var b strings.Builder
+	if len(lines) > 0 {
+		b.WriteString("\n\nItems on these shelves that their message might be about — real titles, found by matching their words: " +
+			strings.Join(lines, "; ") + ". " +
+			"If they mean one of these, talk about it by name and [link: <title>] it — or [attach: <title>] it when they asked to watch, play or read it; " +
+			"if none fits what they meant, say you don't have it rather than inventing one.")
+	}
+	if len(shown) > 0 {
+		b.WriteString("\n\nAlready shown them in this conversation, so not again unless they ask for it by name: " + strings.Join(shown, ", ") + ".")
+	}
+	return b.String()
+}
+
+// feedItemLine renders one item the way every feed section does: the title, the kind,
+// a few tags.
+func feedItemLine(link libbyLink, tags []string) string {
+	line := fmt.Sprintf("%q (%s", link.Title, link.Kind)
+	if len(tags) > 0 {
+		if len(tags) > libraryFeedTags {
+			tags = tags[:libraryFeedTags]
+		}
+		line += "; " + strings.Join(tags, ", ")
+	}
+	return line + ")"
 }
 
 // librarySuggestBlock is the per-kind shortlist, fed only when they asked to be
 // pointed at something.
-func (s *Server) librarySuggestBlock(ctx context.Context) string {
-	full := s.buildLibbyContext(ctx, true)
-	if len(full.Suggest) == 0 {
-		return ""
-	}
+//
+// Drawn fresh each turn from the whole collection rather than read off the end of it
+// — see chat_library_sample.go for why. What she has already handed over this
+// conversation is never on it.
+func (s *Server) librarySuggestBlock(ctx context.Context, choice feedChoice) string {
 	var b strings.Builder
-	b.WriteString("\n\nWhen they ask what to play, watch or read, recommend one of these by name — really here, so name a real one and [link: <title>] it. " +
-		"Suggest, don't list: pick what fits their mood and say why.\n")
-	for _, pick := range full.Suggest {
-		fmt.Fprintf(&b, "- %s: ", suggestKindLabel(pick.Kind))
-		parts := make([]string, 0, len(pick.Items))
-		for _, item := range pick.Items {
-			part := fmt.Sprintf("%q", item.Title)
-			if len(item.Tags) > 0 {
-				tags := item.Tags
+	for _, kind := range libbySuggestKinds {
+		shelf := s.drawLibraryShelf(ctx, kind, libbySuggestPerKind, choice.shown, choice.taste, choice.weights, choice.pick)
+		if len(shelf) == 0 {
+			continue
+		}
+		parts := make([]string, 0, len(shelf))
+		for _, item := range shelf {
+			part := fmt.Sprintf("%q", item.link.Title)
+			if len(item.tags) > 0 {
+				tags := item.tags
 				if len(tags) > libraryFeedTags {
 					tags = tags[:libraryFeedTags]
 				}
@@ -268,9 +301,13 @@ func (s *Server) librarySuggestBlock(ctx context.Context) string {
 			}
 			parts = append(parts, part)
 		}
-		b.WriteString(strings.Join(parts, "; ") + "\n")
+		fmt.Fprintf(&b, "- %s: %s\n", suggestKindLabel(kind), strings.Join(parts, "; "))
 	}
-	return b.String()
+	if b.Len() == 0 {
+		return ""
+	}
+	return "\n\nWhen they ask what to play, watch or read, recommend one of these by name — really here, a fresh handful off the shelves, so name a real one and [link: <title>] it, or [attach: <title>] it to put it in front of them. " +
+		"Suggest, don't list: pick what fits their mood and say why. Nothing already shown this conversation is on this list.\n" + b.String()
 }
 
 // libraryRecentBlock is the newest additions, fed only when they asked what is new.

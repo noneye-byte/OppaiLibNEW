@@ -247,6 +247,11 @@ type GenerateRequest struct {
 	Count          int    // how many images to produce
 	Loras          []LoraWeight
 	Detailer       Detailer
+	// Progress, when set, is called as the generator reports on the run: the step
+	// count and, every few steps, a preview of the picture so far. Called from a
+	// goroutine beside the request, so it must be safe to call concurrently with the
+	// caller and cheap. See progress.go.
+	Progress func(Progress)
 }
 
 // Detailer configures either the ADetailer Automatic1111 extension or InvokeAI's

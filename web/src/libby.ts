@@ -97,6 +97,18 @@ export function defaultLibbyArt(emotion: string, intensity = 1): string {
 }
 
 /**
+ * The bundled wardrobe's MISC art: one picture per state, whatever the heat.
+ *
+ * The bundled set draws every state in the server's vocabulary (libby_activities.go),
+ * under the "misc" tier name the outfit generator exports them with. A state the
+ * server adds later has no file here until the art is regenerated, which is why
+ * every caller keeps the emotion art after it in the chain.
+ */
+export function defaultLibbyActivityArt(activity: LibbyActivity): string {
+  return `/Libby_Default/default-libby-misc-${activity.trim().toLowerCase()}.png`;
+}
+
+/**
  * The hottest tier Libby is drawn at outside a conversation.
  *
  * The heat meter is a *chat* thing — it belongs to a conversation you chose to
@@ -219,10 +231,12 @@ export function libbyAssetCandidates(
   // picture of her typing says more about the moment than a picture of her looking
   // pleased, and the state is the rarer, more deliberate thing to have set.
   //
-  // Outfit art only, and that is not a limitation to fix later — the bundled wardrobe
-  // draws twelve expressions and no activities, so there is nothing to fall back to
-  // within it. The chain simply continues into the emotion art below, which is why
-  // declaring a state never costs the user a broken sprite.
+  // The worn outfit's state art first, then the bundled wardrobe's. The bundled set
+  // draws every state, so a worn outfit that never drew "reading" falls to the default
+  // Libby reading rather than to the outfit's expression — what she is doing is the
+  // more deliberate fact, and it survives a wardrobe change. The chain still continues
+  // into the emotion art below, so a state the art has not caught up with never costs
+  // the user a broken sprite.
   //
   // One picture per state, whatever the heat: what she is doing does not change with
   // the meter the way her face does, so a MISC slot has no tiers to walk. The server
@@ -230,6 +244,7 @@ export function libbyAssetCandidates(
   if (activity && outfit && outfit !== "default") {
     paths.push(`/api/libby/outfits/${encodeURIComponent(outfit)}/emotions/${encodeURIComponent(activity)}`);
   }
+  if (activity) paths.push(defaultLibbyActivityArt(activity));
   if (outfit && outfit !== "default") {
     // Outfits can carry a separate image per horniness tier (server levels 0..4,
     // where level = intensity-1). Try the tier for this intensity and every calmer

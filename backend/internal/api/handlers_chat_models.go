@@ -184,6 +184,12 @@ type loadModelRequest struct {
 	// (gpu_split, n_gpu_layers, load_in_4bit, ...). The backend owns their
 	// meaning; validating them here would only go stale as loaders change.
 	Args map[string]any `json:"args,omitempty"`
+	// Settings are the backend's generation defaults to apply with the load
+	// (truncation_length, instruction_template, ...). Passed through the same way.
+	Settings map[string]any `json:"settings,omitempty"`
+	// Remember says to keep Args and Settings as this model's defaults, so the next
+	// load — from any device — starts from them. See handlers_chat_textgen.go.
+	Remember bool `json:"remember,omitempty"`
 }
 
 // handleLoadChatModel loads a model in text-generation-webui.
@@ -219,7 +225,11 @@ func (s *Server) handleLoadChatModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	payload, _ := json.Marshal(map[string]any{"model_name": in.Model, "args": in.Args})
+	body := map[string]any{"model_name": in.Model, "args": in.Args}
+	if len(in.Settings) > 0 {
+		body["settings"] = in.Settings
+	}
+	payload, _ := json.Marshal(body)
 	status, raw, err := s.chatBackendRequest(ctx, http.MethodPost, "/v1/internal/model/load", payload)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, "load failed: "+err.Error())
@@ -239,6 +249,11 @@ func (s *Server) handleLoadChatModel(w http.ResponseWriter, r *http.Request) {
 	if !probe.Ready {
 		writeErr(w, http.StatusBadGateway, "the backend accepted the load but reports no model: "+probe.Detail)
 		return
+	}
+	// Remembered only once the load is known to have worked: arguments that failed
+	// are not the ones to start the next attempt from.
+	if in.Remember {
+		s.rememberTextgenLoad(in.Model, in.Args, in.Settings)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"loaded": probe.Loaded})
 }

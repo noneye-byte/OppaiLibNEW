@@ -969,7 +969,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			signals.past || len(in.Messages) <= 2,
 		)
 		// The library, fed for the turn rather than as one block. See chat_context_feed.go.
-		sections = append(sections, s.libraryFeed(r.Context(), signals)...)
+		sections = append(sections, s.libraryFeed(r.Context(), signals, feedChoice{shown: sentMedia, taste: taste, weights: ws.SendWeights})...)
 	}
 	// What is on screen is a different matter: browsing together is the user holding
 	// something up and saying "look at this", so any character they chose to do it

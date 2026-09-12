@@ -100,12 +100,42 @@ RUN printf '%s\n' \
     '  "category": "general"' \
     '}' > /out/models/model.json
 
+# --- Stage 2d: Libby's voice -------------------------------------------
+# piper is a single C++ binary that synthesises a VITS voice on the CPU faster than
+# the words would be spoken; the tarball carries its own espeak-ng data and a
+# private ONNX Runtime, so it needs nothing from the system but libstdc++. One
+# voice is baked in so she speaks out of the box; more can be downloaded from
+# Settings into /config/tts. See backend/internal/tts.
+FROM debian:bookworm-slim AS piperdeps
+ARG PIPER_VERSION=2023.11.14-2
+ARG PIPER_VOICE=en_US-hfc_female-medium
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+RUN mkdir -p /out/voices \
+    && curl -fL --retry 8 --retry-all-errors --retry-delay 3 -o /tmp/piper.tgz \
+        "https://github.com/rhasspy/piper/releases/download/${PIPER_VERSION}/piper_linux_x86_64.tar.gz" \
+    && tar -xzf /tmp/piper.tgz -C /out \
+    && rm /tmp/piper.tgz \
+    && test -x /out/piper/piper
+# The voice lives at <family>/<locale>/<name>/<quality>/<id>.onnx in rhasspy/piper-voices;
+# the path below is derived from PIPER_VOICE the way backend/internal/tts derives it.
+RUN locale="${PIPER_VOICE%%-*}"; rest="${PIPER_VOICE#*-}"; name="${rest%-*}"; quality="${rest##*-}"; family="${locale%%_*}" \
+    && base="https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/${family}/${locale}/${name}/${quality}/${PIPER_VOICE}" \
+    && curl -fL --retry 8 --retry-all-errors --retry-delay 3 -C - -o "/out/voices/${PIPER_VOICE}.onnx" "${base}.onnx" \
+    && curl -fL --retry 8 --retry-all-errors --retry-delay 3 -o "/out/voices/${PIPER_VOICE}.onnx.json" "${base}.onnx.json" \
+    && [ "$(wc -c < "/out/voices/${PIPER_VOICE}.onnx")" -gt 10000000 ] \
+    && grep -q sample_rate "/out/voices/${PIPER_VOICE}.onnx.json"
+
 # --- Stage 3: lean runtime (no AI model) --------------------------------
 FROM debian:bookworm-slim AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=backend /out/oppailib /usr/local/bin/oppailib
+# Libby's voice: the piper binary and one bundled voice. Downloaded voices go to
+# /config/tts, which is on the config volume.
+COPY --from=piperdeps /out/piper/ /opt/piper/
+COPY --from=piperdeps /out/voices/ /opt/oppailib/voices/
 # The Android client, offered for download from the server that holds the library.
 # CI drops the freshly-built APK into docker/apk/ before the image build; the
 # directory is committed (with only a .gitkeep in it) so this COPY works either way
@@ -117,7 +147,9 @@ ENV OPPAI_HTTP_ADDR=:8080 \
     OPPAI_CONFIG_DIR=/config \
     OPPAI_DB_PATH=/db/oppailib.sqlite \
     OPPAI_AI_MODEL_DIR=/config/models \
-    OPPAI_APK_PATH=/app/apk/oppailib.apk
+    OPPAI_APK_PATH=/app/apk/oppailib.apk \
+    OPPAI_TTS_PIPER=/opt/piper/piper \
+    OPPAI_TTS_BUNDLED_VOICE_DIR=/opt/oppailib/voices
 
 VOLUME ["/media", "/config", "/db"]
 EXPOSE 8080
@@ -131,6 +163,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=backend-onnx /out/oppailib-onnx /usr/local/bin/oppailib
 COPY --from=onnxdeps /out/lib/ /usr/local/lib/
+# See the lean stage: Libby's voice.
+COPY --from=piperdeps /out/piper/ /opt/piper/
+COPY --from=piperdeps /out/voices/ /opt/oppailib/voices/
 # The model lives outside /config on purpose. /config is a VOLUME, and a bind
 # mount over it (what the Unraid template does) would hide anything baked
 # underneath — the model would silently vanish and tagging would fall back to
@@ -147,6 +182,8 @@ ENV OPPAI_HTTP_ADDR=:8080 \
     OPPAI_DB_PATH=/db/oppailib.sqlite \
     OPPAI_AI_MODEL_DIR=/opt/oppailib/models \
     OPPAI_APK_PATH=/app/apk/oppailib.apk \
+    OPPAI_TTS_PIPER=/opt/piper/piper \
+    OPPAI_TTS_BUNDLED_VOICE_DIR=/opt/oppailib/voices \
     ONNXRUNTIME_LIB_PATH=/usr/local/lib/libonnxruntime.so
 
 VOLUME ["/media", "/config", "/db"]

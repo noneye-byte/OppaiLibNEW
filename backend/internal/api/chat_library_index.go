@@ -92,6 +92,9 @@ type libraryIndex struct {
 
 	entries map[int64]*libraryEntry
 	words   map[string][]int64
+	// byKind lists the ids of each kind, for drawing a shelf of games or videos without
+	// walking every entry. See drawLibraryShelf.
+	byKind map[string][]int64
 
 	// stamp is the library shape the current contents were built from.
 	stamp db.MediaStamp
@@ -105,7 +108,7 @@ type libraryIndex struct {
 }
 
 func newLibraryIndex() *libraryIndex {
-	return &libraryIndex{entries: map[int64]*libraryEntry{}, words: map[string][]int64{}}
+	return &libraryIndex{entries: map[int64]*libraryEntry{}, words: map[string][]int64{}, byKind: map[string][]int64{}}
 }
 
 // touchLibraryIndex says the library changed in a way the stamp cannot show — a
@@ -205,6 +208,7 @@ func (s *Server) rebuildLibraryIndex(ctx context.Context, idx *libraryIndex) err
 	}
 	entries := make(map[int64]*libraryEntry, size)
 	words := make(map[string][]int64, 4096)
+	byKind := make(map[string][]int64, 8)
 	for cursor := floor; ; {
 		briefs, err := s.db.BriefsAfter(ctx, cursor, libraryIndexPage)
 		if err != nil {
@@ -215,14 +219,14 @@ func (s *Server) rebuildLibraryIndex(ctx context.Context, idx *libraryIndex) err
 		}
 		for i := range briefs {
 			cursor = briefs[i].ID
-			s.addLibraryEntry(entries, words, &briefs[i], tagsByID[briefs[i].ID])
+			s.addLibraryEntry(entries, words, byKind, &briefs[i], tagsByID[briefs[i].ID])
 		}
 		if len(briefs) < libraryIndexPage {
 			break
 		}
 	}
 
-	idx.entries, idx.words, idx.stamp = entries, words, stamp
+	idx.entries, idx.words, idx.byKind, idx.stamp = entries, words, byKind, stamp
 	s.log.Debug("library index built", "items", len(entries), "words", len(words))
 	return nil
 }
@@ -253,7 +257,7 @@ func (s *Server) growLibraryIndex(ctx context.Context, idx *libraryIndex, stamp 
 			for _, tag := range tagsByID[briefs[i].ID] {
 				names = append(names, db.TagName{Name: tag.Name, Weight: tag.Weight})
 			}
-			s.addLibraryEntry(idx.entries, idx.words, &briefs[i], names)
+			s.addLibraryEntry(idx.entries, idx.words, idx.byKind, &briefs[i], names)
 		}
 		if len(briefs) < libraryIndexPage {
 			break
@@ -264,7 +268,7 @@ func (s *Server) growLibraryIndex(ctx context.Context, idx *libraryIndex, stamp 
 }
 
 // addLibraryEntry decrypts one row and files it under every word it can be found by.
-func (s *Server) addLibraryEntry(entries map[int64]*libraryEntry, words map[string][]int64, brief *db.MediaBrief, tagNames []db.TagName) {
+func (s *Server) addLibraryEntry(entries map[int64]*libraryEntry, words map[string][]int64, byKind map[string][]int64, brief *db.MediaBrief, tagNames []db.TagName) {
 	title := s.decrypt(brief.TitleEnc, "title")
 	if title == "" {
 		title = "Untitled"
@@ -285,6 +289,7 @@ func (s *Server) addLibraryEntry(entries map[int64]*libraryEntry, words map[stri
 		}
 	}
 	entries[brief.ID] = entry
+	byKind[brief.Kind] = append(byKind[brief.Kind], brief.ID)
 
 	// One posting per distinct word. The kind is filed too, because "that video you
 	// saved" is a real lookup and kind is not otherwise searchable text.
@@ -316,9 +321,9 @@ func indexWords(text string) []string {
 
 // lookupLibrary returns the entries worth ranking for a set of query words.
 //
-// Over the cap the newest matches win. A word that matches thousands of items is not
-// one the answer hinges on, and an item somebody asks about by name is nearly always
-// one they have seen lately.
+// Over the cap, the items more of the words land on win, and among those the newest.
+// A word that matches thousands of items is not one the answer hinges on; an item
+// that several of the words name is, wherever in the collection it sits.
 func (s *Server) lookupLibrary(ctx context.Context, queryWords []string) []libraryCandidate {
 	idx := s.ensureLibraryIndex(ctx)
 	if idx == nil || len(queryWords) == 0 {
@@ -334,14 +339,23 @@ func (s *Server) lookupLibrary(ctx context.Context, queryWords []string) []libra
 		return nil
 	}
 
-	hits := make(map[int64]bool, 256)
+	// hits counts how many of the query words each item answers to. That count, not
+	// recency, is what decides who survives the cap: an item three of the words land on
+	// is far more likely to be the thing meant than a newer one that one word grazes,
+	// and capping newest-first was cutting the older of those out of the running
+	// before ranking ever saw them.
+	hits := make(map[int64]int, 256)
 	for _, query := range queryWords {
+		seen := make(map[int64]bool, 64)
 		for word, ids := range idx.words {
 			if !strings.Contains(word, query) {
 				continue
 			}
 			for _, id := range ids {
-				hits[id] = true
+				if !seen[id] {
+					seen[id] = true
+					hits[id]++
+				}
 			}
 		}
 	}
@@ -357,9 +371,13 @@ func (s *Server) lookupLibrary(ctx context.Context, queryWords []string) []libra
 		}
 		out = append(out, libraryCandidate{link: entry.link, title: entry.title, tags: entry.tags, weights: entry.weights, at: entry.at})
 	}
-	// Newest first, so the cap below keeps the end of the collection rather than an
-	// arbitrary slice of a map.
+	// Most words answered first, then newest, so the cap below keeps what fits best
+	// and, among equals, the end of the collection rather than an arbitrary slice of a
+	// map.
 	sort.Slice(out, func(a, b int) bool {
+		if ha, hb := hits[out[a].link.ID], hits[out[b].link.ID]; ha != hb {
+			return ha > hb
+		}
 		if out[a].at != out[b].at {
 			return out[a].at > out[b].at
 		}

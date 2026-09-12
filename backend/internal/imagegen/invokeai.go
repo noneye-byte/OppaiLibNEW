@@ -1065,12 +1065,24 @@ func (c *Client) invokeGenerate(ctx context.Context, base string, req GenerateRe
 		return nil, fmt.Errorf("InvokeAI accepted the job but reported no queue items")
 	}
 
+	// The denoise previews arrive over socket.io beside the poll below; the watch
+	// ends with the run. A cancelled context cancels the batch on the server too —
+	// the queue would otherwise finish every item for nobody.
+	watchCtx, stopWatch := context.WithCancel(ctx)
+	defer stopWatch()
+	go c.invokeWatchProgress(watchCtx, base, enq.Batch.BatchID, itemIDs, req)
+
 	res := &GenerateResult{Seed: seeds[0]}
 	for i, id := range itemIDs {
 		name, err := c.invokeAwaitImage(ctx, base, id)
 		if err != nil {
+			if ctx.Err() != nil {
+				c.invokeCancelBatch(base, enq.Batch.BatchID, itemIDs)
+				return nil, ctx.Err()
+			}
 			return nil, err
 		}
+		req.progressReport(Progress{Index: i, Percent: 1})
 		// The gallery copy is left in place: InvokeAI keeps every finished image in
 		// its own gallery anyway, and the studio's Gallery panel browses (and prunes)
 		// it. "Save" still only refers to the library — nothing lands there until the

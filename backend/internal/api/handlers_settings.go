@@ -79,6 +79,9 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 	if next.Rule34APIKey == "" && next.Rule34APIKeySet {
 		next.Rule34APIKey = current.Rule34APIKey
 	}
+	if next.TTSAPIKey == "" && next.TTSAPIKeySet {
+		next.TTSAPIKey = current.TTSAPIKey
+	}
 	if next.ChatAPIKey == "" && next.ChatAPIKeySet {
 		next.ChatAPIKey = current.ChatAPIKey
 	}
@@ -110,6 +113,7 @@ func (s *Server) ApplySettings(cur settings.Settings) {
 	s.scraper.SetOptions(cur.ScrapeUserAgent, cur.ScrapeDelay(), cur.ScrapeRespectRobots)
 	s.scraper.SetF95Credentials(cur.F95Username, cur.F95Password)
 	s.sources.SetRule34Credentials(cur.Rule34UserID, cur.Rule34APIKey)
+	s.applyTTSSettings(cur)
 	if (!previous.Enabled || !previous.AutoTag) && cur.AIEnabled && cur.AIAutoTag {
 		go s.backfillAutoTags()
 	}

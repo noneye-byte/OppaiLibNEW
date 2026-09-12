@@ -49,6 +49,9 @@ class Repository(private val appContext: Context, val prefs: Prefs) {
     @Volatile lateinit var imageLoader: ImageLoader
         private set
 
+    /** Libby's voice; see LibbySpeech. Built on first use, since most sessions never speak. */
+    val speech: LibbySpeech by lazy { LibbySpeech(appContext, this) }
+
     /** Authenticated client the HTML5 game player fetches build files through. */
     @Volatile lateinit var gameClient: OkHttpClient
         private set

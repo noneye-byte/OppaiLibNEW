@@ -227,6 +227,14 @@ export interface Settings {
       only to delete a model — that backend exposes no delete API, so it is a filesystem
       operation. Blank means the delete control is simply absent. */
   chatModelDir: string;
+  /** Libby's voice: which engine speaks, in what voice, how fast; the remote server. */
+  ttsEngine: string;
+  ttsVoice: string;
+  ttsSpeed: number;
+  ttsUrl: string;
+  ttsModel: string;
+  ttsApiKey: string;
+  ttsApiKeySet: boolean;
 
   /** Storage housekeeping. These only ever remove what can be recreated — staged
       chunks of unfinished uploads, and scratch files from jobs that have ended. */
@@ -305,6 +313,26 @@ export interface ChatModels {
   models: string[];
   loaded: string;
   supported: boolean;
+}
+
+/** What one model was last loaded with in text-generation-webui, remembered server-side. */
+export interface TextgenLoad {
+  args?: Record<string, unknown>;
+  settings?: Record<string, unknown>;
+  at?: number;
+}
+
+/**
+ * The rest of text-generation-webui: the loader menu, every model's remembered loader
+ * arguments, and the LoRAs installed and applied. `supported` is false against a
+ * generic OpenAI-compatible server, which has none of this.
+ */
+export interface ChatBackendInfo {
+  supported: boolean;
+  loaders?: string[];
+  loads?: Record<string, TextgenLoad>;
+  loras?: { available: string[]; loaded: string[] };
+  lorasError?: string;
 }
 
 /** What deleting one text-generation model would remove. */
@@ -1107,6 +1135,18 @@ export interface ImageGenStatus {
 }
 
 /** A just-generated image, held server-side in memory until saved. `id` streams it. */
+/** One progress report on a running generation; see api.genProgress. */
+export interface GenProgress {
+  index: number;
+  step: number;
+  total: number;
+  percent: number;
+  image?: string;
+  seq: number;
+  done: boolean;
+  cancelled: boolean;
+}
+
 export interface GenPreview {
   id: string;
   seed: number;
@@ -1114,6 +1154,8 @@ export interface GenPreview {
 
 /** One txt2img job. Only `prompt` is required; the server clamps the rest to sane ranges. */
 export interface GenerateParams {
+  /** Names the run so it can be watched and cancelled while in flight; see genProgress. */
+  jobId?: string;
   prompt: string;
   negativePrompt?: string;
   checkpoint?: string;
@@ -1652,7 +1694,9 @@ async function requestOnce<T>(path: string, opts: RequestInit = {}, timeoutMs = 
     // The user navigated away; telling them their own navigation went wrong is
     // noise, and the old code reported every abort as a timeout.
     if (ctl.signal.aborted) throw new DOMException("cancelled", "AbortError");
-    if (path !== "/api/auth/login" && e instanceof Error && e.message !== "unauthorized") {
+    // Likewise a generation the user stopped from the studio: the server answers
+    // "generation cancelled" and the studio says so itself.
+    if (path !== "/api/auth/login" && e instanceof Error && e.message !== "unauthorized" && e.message !== "generation cancelled") {
       mascotSay(e.message || "Something went wrong.");
     }
     throw e;
@@ -1963,6 +2007,17 @@ export const api = {
       10 * 60_000,
     ),
 
+  /**
+   * What the generator has drawn so far of a run named by jobId: the step count and,
+   * when it published one, a small preview as a data: URL. `seen` is the last seq the
+   * caller had, so an unchanged preview is not re-sent.
+   */
+  genProgress: (jobId: string, seen: number) =>
+    request<GenProgress>(`/api/imagegen/progress/${encodeURIComponent(jobId)}?seen=${seen}`, {}, 10_000),
+  /** Stops a run named by jobId; the generate call then rejects with "cancelled". */
+  cancelGenerate: (jobId: string) =>
+    request<{ cancelled: boolean }>(`/api/imagegen/cancel/${encodeURIComponent(jobId)}`, { method: "POST" }, 10_000),
+
   // Streams an in-memory preview through its short-lived opaque id. Reads remain
   // available after a web session expires; replacing, deleting and saving stay gated.
   genPreviewURL: (id: string) => `/api/imagegen/preview/${encodeURIComponent(id)}`,
@@ -2003,11 +2058,27 @@ export const api = {
   // act on" and a view that spins forever with nothing on screen to explain it.
   chatWorkspace: () => request<ChatWorkspace>("/api/chat/workspace", {}, 30_000),
   chatModels: () => request<ChatModels>("/api/chat/models", {}, 20_000),
-  loadChatModel: (modelName: string, args: Record<string, unknown> = {}) =>
+  loadChatModel: (modelName: string, args: Record<string, unknown> = {}, settings: Record<string, unknown> = {}, remember = true) =>
     request<{ status: string; loaded: string }>("/api/chat/models/load", {
-      method: "POST", body: JSON.stringify({ modelName, args }),
+      method: "POST", body: JSON.stringify({ modelName, args, settings, remember }),
     }, 10 * 60_000),
   unloadChatModel: () => request<{ status: string }>("/api/chat/models/unload", { method: "POST" }, 130_000),
+  /** Downloads a piper voice onto the server in the background; status lists it until installed. */
+  downloadTTSVoice: (id: string) =>
+    request<{ downloading: string }>("/api/tts/voices/download", { method: "POST", body: JSON.stringify({ id }) }, 20_000),
+  deleteTTSVoice: (id: string) =>
+    request<{ deleted: string }>(`/api/tts/voices/${encodeURIComponent(id)}`, { method: "DELETE" }, 20_000),
+  ttsVoiceErrors: () => request<Record<string, string>>("/api/tts/voices/errors", {}, 10_000),
+  /** The loader menu, remembered per-model arguments and LoRAs; see ChatBackendInfo. */
+  chatBackendInfo: () => request<ChatBackendInfo>("/api/chat/backend", {}, 20_000),
+  /** Applies exactly this set of LoRAs to the loaded model; an empty list clears them. */
+  setChatLoras: (names: string[]) =>
+    request<{ available: string[]; loaded: string[] }>("/api/chat/loras", { method: "POST", body: JSON.stringify({ names }) }, 5 * 60_000),
+  /** Stops the reply text-generation-webui is writing; the turn returns what it had. */
+  stopChat: () => request<{ stopped: boolean }>("/api/chat/stop", { method: "POST" }, 12_000),
+  /** Counts tokens with the loaded model's own tokenizer, or estimates when it cannot. */
+  countChatTokens: (text: string) =>
+    request<{ tokens: number; exact: boolean }>("/api/chat/tokens", { method: "POST", body: JSON.stringify({ text }) }, 20_000),
 
   /** What deleting a model would actually remove: the path, every file, the bytes, and
       whether it is the resident model. Read before asking, so the confirmation can show

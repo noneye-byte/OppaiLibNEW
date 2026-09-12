@@ -16,6 +16,7 @@ import (
 	"github.com/youruser/oppailib/internal/config"
 	"github.com/youruser/oppailib/internal/db"
 	"github.com/youruser/oppailib/internal/imagegen"
+	"github.com/youruser/oppailib/internal/tts"
 	"github.com/youruser/oppailib/internal/obs"
 	"github.com/youruser/oppailib/internal/scraper"
 	"github.com/youruser/oppailib/internal/settings"
@@ -50,6 +51,15 @@ type Server struct {
 	// rule. Model and LoRA cover art always lives in InvokeAI itself.
 	imagegen     *imagegen.Client
 	genCache     *genCache
+	// genJobs are the generations in flight, by the id the studio gave them, so a
+	// poll can read their progress and a click can cancel one. See imagegen_jobs.go.
+	genJobs *genJobs
+	// speaker is Libby's voice: piper on this box and/or a remote speech server.
+	// Nil only in tests built without one. See handlers_tts.go.
+	speaker      *tts.Speaker
+	ttsMu        sync.Mutex
+	ttsDownloads map[string]bool
+	ttsErrors    map[string]string
 	characterDir string // encrypted character-library records + thumbnails
 	libbyDir     string // encrypted Libby outfit records + emotion art
 	chatDir      string // encrypted per-user chat workspaces + tagged character images
@@ -161,6 +171,13 @@ func NewServer(cfg *config.Config, database *db.DB, store *storage.Store, sc *sc
 
 		imagegen:     imagegen.New(),
 		genCache:     newGenCache(),
+		genJobs:      newGenJobs(),
+		speaker: tts.NewSpeaker(
+			tts.FindPiper(cfg.TTSPiper, dirOr(cfg.TTSVoiceDir, filepath.Join(cfg.ConfigDir, "tts")), cfg.TTSBundledVoiceDir),
+			nil,
+		),
+		ttsDownloads: map[string]bool{},
+		ttsErrors:    map[string]string{},
 		characterDir: dirOr(cfg.CharacterDir, filepath.Join(cfg.ConfigDir, "characters")),
 		libbyDir:     dirOr(cfg.LibbyDir, filepath.Join(cfg.ConfigDir, "libby")),
 		chatDir:      dirOr(cfg.ChatDir, filepath.Join(cfg.ConfigDir, "chat")),
@@ -320,6 +337,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/imagegen/status", s.requireAuth(s.handleImageGenStatus))
 	mux.HandleFunc("POST /api/imagegen/prompt", s.requireAuth(s.handleImageGenPrompt))
 	mux.HandleFunc("POST /api/imagegen/generate", s.requireAuth(s.handleImageGenGenerate))
+	mux.HandleFunc("GET /api/imagegen/progress/{id}", s.requireAuth(s.handleImageGenProgress))
+	mux.HandleFunc("POST /api/imagegen/cancel/{id}", s.requireAuth(s.handleImageGenCancel))
 	// Preview ids are 128-bit random capabilities and expire from memory. Keeping the
 	// read route independent of the login lets a long outfit run remain visible if the
 	// web session expires; mutation and saving still require authentication.
@@ -482,6 +501,18 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/chat/models", s.requireAuth(s.handleChatModels))
 	mux.HandleFunc("POST /api/chat/models/load", s.requireAuth(s.handleLoadChatModel))
 	mux.HandleFunc("POST /api/chat/models/unload", s.requireAuth(s.handleUnloadChatModel))
+	// The rest of text-generation-webui: loader arguments, LoRAs, stopping a reply,
+	// counting tokens. See handlers_chat_textgen.go.
+	// Libby's voice. See handlers_tts.go.
+	mux.HandleFunc("GET /api/tts/status", s.requireAuth(s.handleTTSStatus))
+	mux.HandleFunc("POST /api/tts/speak", s.requireAuth(s.handleTTSSpeak))
+	mux.HandleFunc("POST /api/tts/voices/download", s.requireAuth(s.requireAdmin(s.handleTTSDownloadVoice)))
+	mux.HandleFunc("GET /api/tts/voices/errors", s.requireAuth(s.handleTTSVoiceErrors))
+	mux.HandleFunc("DELETE /api/tts/voices/{id}", s.requireAuth(s.requireAdmin(s.handleTTSDeleteVoice)))
+	mux.HandleFunc("GET /api/chat/backend", s.requireAuth(s.handleChatBackendInfo))
+	mux.HandleFunc("POST /api/chat/loras", s.requireAuth(s.handleLoadChatLoras))
+	mux.HandleFunc("POST /api/chat/stop", s.requireAuth(s.handleStopChatGeneration))
+	mux.HandleFunc("POST /api/chat/tokens", s.requireAuth(s.handleChatTokenCount))
 	// Deleting a model is a filesystem operation on a directory shared with
 	// text-generation-webui, so it is admin-only. See handlers_chat_model_delete.go.
 	mux.HandleFunc("GET /api/chat/models/inspect", s.requireAuth(s.requireAdmin(s.handleInspectChatModel)))

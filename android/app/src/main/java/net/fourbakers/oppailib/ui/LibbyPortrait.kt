@@ -29,10 +29,10 @@ fun LibbyPortrait(
      * The MISC state she is in — what she is *doing* rather than what she is feeling.
      * Blank for none, which is the ordinary case.
      *
-     * Outfit art only, and that is not a gap to fill later: the bundled wardrobe draws
-     * twelve expressions and no activities, so there is nothing within it to fall back
-     * to. The chain simply continues into the emotion art below, which is why declaring
-     * a state never costs the user a broken sprite.
+     * The worn outfit's state art is tried first, then the bundled wardrobe's — it draws
+     * every state, so an outfit that never drew "reading" shows the default Libby
+     * reading rather than the outfit's expression. The chain still continues into the
+     * emotion art, so a state the art has not caught up with never costs a broken sprite.
      */
     activity: String = "",
     /**
@@ -63,6 +63,7 @@ fun LibbyPortrait(
                 add(repo.libbyEmotionUrl(outfit, slot, 0))
             }
         }
+        if (activity.isNotEmpty()) add("file:///android_asset/${mascotActivityAsset(activity)}")
         add("file:///android_asset/$fallbackAsset")
     }
     ChainImage(chain, repo, modifier, contentScale, alignment)
@@ -123,6 +124,14 @@ fun mascotAsset(emotion: String, tier: Int = 1): String {
     val mood = emotion.lowercase().let { if (it in libbyEmotions) it else nearestPose(it) }
     return "Libby_Default/default-libby-${mascotTiers[tier.coerceIn(1, 5) - 1]}-$mood.png"
 }
+
+/**
+ * The bundled MISC art (an android_asset filename) for a state: one picture per state,
+ * whatever the heat, under the "misc" tier name the outfit generator exports them with.
+ * Mirrors defaultLibbyActivityArt() in the web client.
+ */
+fun mascotActivityAsset(activity: String): String =
+    "Libby_Default/default-libby-misc-${activity.trim().lowercase()}.png"
 
 /** Renders the first model, falling through to the next on load error. */
 @Composable

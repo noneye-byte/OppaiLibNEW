@@ -67,6 +67,24 @@ type Settings struct {
 	// delete controls are simply absent.
 	ChatModelDir string `json:"chatModelDir"`
 
+	// Libby's voice.
+	//
+	// TTSEngine picks how her lines are turned into sound: "auto" uses the local piper
+	// when it is installed and a remote server when a URL is set (piper first), "piper"
+	// and "openai" insist on one, "off" silences the server side and leaves the clients
+	// to their own device voices. TTSVoice is a piper voice id (en_US-amy-medium) or a
+	// remote voice name; blank is the engine's default. TTSSpeed is a multiplier on her
+	// pace, 0.5–2. The URL, model and key describe an OpenAI-compatible speech server
+	// (/v1/audio/speech: Kokoro-FastAPI, openedai-speech, and the like); the key is
+	// write-only like the others.
+	TTSEngine    string  `json:"ttsEngine"`
+	TTSVoice     string  `json:"ttsVoice"`
+	TTSSpeed     float64 `json:"ttsSpeed"`
+	TTSURL       string  `json:"ttsUrl"`
+	TTSModel     string  `json:"ttsModel"`
+	TTSAPIKey    string  `json:"ttsApiKey"`
+	TTSAPIKeySet bool    `json:"ttsApiKeySet"`
+
 	// Storage housekeeping.
 	//
 	// Deliberately conservative, and deliberately narrow: the only things these ever
@@ -131,6 +149,12 @@ const (
 	keyChatModel           = "chat.model"
 	keyChatModelDir        = "chat.model_dir"
 	keyChatAPIKey          = "chat.api_key"
+	keyTTSEngine           = "tts.engine"
+	keyTTSVoice            = "tts.voice"
+	keyTTSSpeed            = "tts.speed"
+	keyTTSURL              = "tts.url"
+	keyTTSModel            = "tts.model"
+	keyTTSAPIKey           = "tts.api_key"
 
 	keyStorageWarnPercent = "storage.warn_percent"
 	keyUploadStaleHours   = "storage.upload_stale_hours"
@@ -166,6 +190,9 @@ func Defaults(cfg *config.Config) Settings {
 		ChatURL:             cfg.ChatURL,
 		ChatModel:           cfg.ChatModel,
 		ChatAPIKey:          cfg.ChatAPIKey,
+		TTSEngine:           "auto",
+		TTSSpeed:            1,
+		TTSURL:              cfg.TTSURL,
 		StorageWarnPercent:  10,
 		UploadStaleHours:    48,
 		TempStaleHours:      24,
@@ -235,6 +262,24 @@ func Merge(base Settings, stored map[string]string) Settings {
 	if v, ok := stored[keyChatAPIKey]; ok {
 		s.ChatAPIKey = v
 	}
+	if v, ok := stored[keyTTSEngine]; ok {
+		s.TTSEngine = v
+	}
+	if v, ok := stored[keyTTSVoice]; ok {
+		s.TTSVoice = v
+	}
+	if v, err := strconv.ParseFloat(stored[keyTTSSpeed], 64); err == nil {
+		s.TTSSpeed = v
+	}
+	if v, ok := stored[keyTTSURL]; ok {
+		s.TTSURL = v
+	}
+	if v, ok := stored[keyTTSModel]; ok {
+		s.TTSModel = v
+	}
+	if v, ok := stored[keyTTSAPIKey]; ok {
+		s.TTSAPIKey = v
+	}
 	if v, err := strconv.Atoi(stored[keyStorageWarnPercent]); err == nil {
 		s.StorageWarnPercent = v
 	}
@@ -292,6 +337,12 @@ func (s Settings) Map() map[string]string {
 		keyChatModel:           s.ChatModel,
 		keyChatModelDir:        s.ChatModelDir,
 		keyChatAPIKey:          s.ChatAPIKey,
+		keyTTSEngine:           s.TTSEngine,
+		keyTTSVoice:            s.TTSVoice,
+		keyTTSSpeed:            strconv.FormatFloat(s.TTSSpeed, 'f', -1, 64),
+		keyTTSURL:              s.TTSURL,
+		keyTTSModel:            s.TTSModel,
+		keyTTSAPIKey:           s.TTSAPIKey,
 
 		keyStorageWarnPercent: strconv.Itoa(s.StorageWarnPercent),
 		keyUploadStaleHours:   strconv.Itoa(s.UploadStaleHours),
@@ -320,6 +371,8 @@ func (s Settings) Redacted() Settings {
 	s.Rule34APIKey = ""
 	s.ChatAPIKeySet = s.ChatAPIKey != ""
 	s.ChatAPIKey = ""
+	s.TTSAPIKeySet = s.TTSAPIKey != ""
+	s.TTSAPIKey = ""
 	return s
 }
 
@@ -368,6 +421,24 @@ func (s *Settings) Clamp() {
 	// its OpenAI endpoint does not require OppaiLib to own that lifecycle or even
 	// send a model field. The live readiness probe decides whether Chat can run.
 	s.ChatEnabled = s.ChatURL != ""
+	switch s.TTSEngine {
+	case "auto", "piper", "openai", "off":
+	default:
+		s.TTSEngine = "auto"
+	}
+	s.TTSVoice = strings.TrimSpace(s.TTSVoice)
+	if s.TTSSpeed <= 0 {
+		s.TTSSpeed = 1
+	}
+	if s.TTSSpeed < 0.5 {
+		s.TTSSpeed = 0.5
+	}
+	if s.TTSSpeed > 2 {
+		s.TTSSpeed = 2
+	}
+	s.TTSURL = strings.TrimRight(strings.TrimSpace(s.TTSURL), "/")
+	s.TTSModel = strings.TrimSpace(s.TTSModel)
+	s.TTSAPIKey = strings.TrimSpace(s.TTSAPIKey)
 	// A warning threshold above half is not a warning, it is a permanent banner; zero
 	// switches the warning off, which is a legitimate choice on a box the operator
 	// monitors elsewhere.

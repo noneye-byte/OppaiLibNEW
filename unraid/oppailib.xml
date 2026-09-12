@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <Container version="2">
   <Name>OppaiLib</Name>
-  <Version>0.35.0</Version>
+  <Version>0.36.0</Version>
   <Repository>ghcr.io/noneye-byte/oppailib:latest</Repository>
   <Registry>https://github.com/noneye-byte/OppaiLibNEW/pkgs/container/oppailib</Registry>
   <Network>bridge</Network>
@@ -63,6 +63,8 @@
   <Config Name="Chat Model" Target="OPPAI_CHAT_MODEL" Default="" Mode="" Description="Optional fallback model name, for chat servers that require a model field in the request." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
   <Config Name="Chat API Key" Target="OPPAI_CHAT_API_KEY" Default="" Mode="" Description="Optional. Needed only when your chat server was started with an API key (e.g. text-generation-webui's --api-key)." Type="Variable" Display="advanced" Required="false" Mask="true"></Config>
   <Config Name="Text-generation models (optional)" Target="/textgen-models" Default="" Mode="rw" Description="Optional, and only needed if you want to DELETE text-generation models from OppaiLib's UI — that backend exposes no delete API, so it has to be a file operation. Point this at the same host folder text-generation-webui loads its models from, then set the matching path (/textgen-models) in Settings → Libby. Leave both blank and the delete controls simply do not appear. Deleting moves a model to a recoverable .oppailib-trash folder inside this directory unless you explicitly ask for a permanent delete, and it will never touch the model that is currently loaded." Type="Path" Display="advanced" Required="false" Mask="false"></Config>
+
+  <Config Name="Speech server URL (optional)" Target="OPPAI_TTS_URL" Default="" Mode="" Description="Optional. Libby speaks out of the box through the bundled piper voice on the CPU; set this to use an OpenAI-compatible speech server instead (Kokoro-FastAPI, openedai-speech: the /v1/audio/speech endpoint). Also settable at runtime in Settings → Libby's voice, where more piper voices can be downloaded into /config/tts." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
 
   <Config Name="Image Generation URL" Target="OPPAI_IMAGEGEN_URL" Default="" Mode="" Description="Local image generator for the Create tab: an InvokeAI server (default port 9090) or Automatic1111 / SD.Next (the /sdapi/v1 flavour, default port 7860). Which API it speaks is detected automatically. Blank disables the feature. Also settable at runtime in Settings." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
 

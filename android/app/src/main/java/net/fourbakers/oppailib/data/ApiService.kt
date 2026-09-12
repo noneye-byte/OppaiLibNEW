@@ -250,11 +250,25 @@ interface ApiService {
     // Talks to the local generator through the server; generated images live in the
     // server's memory until save() files one into the library.
 
+    /** Libby's voice: one line as audio (WAV from piper), or 503 when the server has
+     * no engine and the phone should use its own. */
+    @POST("api/tts/speak")
+    suspend fun ttsSpeak(@Body body: SpeakRequest): ResponseBody
+
     @GET("api/imagegen/status")
     suspend fun imageGenStatus(): ImageGenStatus
 
     @POST("api/imagegen/generate")
     suspend fun imageGenGenerate(@Body body: GenerateRequest): GenerateResponse
+
+    /** What the generator has drawn so far of a named run; an unchanged preview is
+     * withheld when [seen] is the last seq the caller had. */
+    @GET("api/imagegen/progress/{id}")
+    suspend fun imageGenProgress(@Path("id") id: String, @Query("seen") seen: Long): GenProgress
+
+    /** Stops a named run; the generate call then fails with "cancelled". */
+    @POST("api/imagegen/cancel/{id}")
+    suspend fun imageGenCancel(@Path("id") id: String): Map<String, Boolean>
 
     @POST("api/imagegen/save")
     suspend fun imageGenSave(@Body body: GenSaveRequest): GenSaveResponse

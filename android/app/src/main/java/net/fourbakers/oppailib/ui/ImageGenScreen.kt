@@ -30,6 +30,8 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -71,6 +73,7 @@ import net.fourbakers.oppailib.data.GenSaveRequest
 import net.fourbakers.oppailib.data.LibbyMeter
 import net.fourbakers.oppailib.data.LibbyVoice
 import net.fourbakers.oppailib.data.GenTemplate
+import net.fourbakers.oppailib.data.GenProgress
 import net.fourbakers.oppailib.data.GenerateRequest
 import net.fourbakers.oppailib.data.ImageGenStatus
 import net.fourbakers.oppailib.data.Repository
@@ -133,6 +136,10 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit) {
     var detailerMaskBlur by remember { mutableStateOf(4) }
 
     var generating by remember { mutableStateOf(false) }
+    // The run in flight, named so it can be watched and cancelled, and what the
+    // generator has drawn of it so far.
+    var jobId by remember { mutableStateOf("") }
+    var progress by remember { mutableStateOf<GenProgress?>(null) }
     var shots by remember { mutableStateOf<List<ShotState>>(emptyList()) }
     var error by remember { mutableStateOf("") }
     var tab by remember { mutableStateOf(0) }
@@ -205,15 +212,42 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit) {
         return pos to neg
     }
 
+    fun cancelGeneration() {
+        val id = jobId
+        if (id.isEmpty()) return
+        progress = (progress ?: GenProgress()).copy(cancelled = true)
+        scope.launch { runCatching { repo.api.imageGenCancel(id) } }
+    }
+
     fun generate() {
         if (generating || prompt.isBlank()) return
         generating = true
         error = ""
         val (pos, neg) = assembledPrompts()
+        val id = List(24) { "0123456789abcdef".random() }.joinToString("")
+        jobId = id
+        progress = GenProgress()
+        // Watch the run while the request is in flight: a poll a second, showing the
+        // preview the generator publishes every few steps. Ends with the request.
+        scope.launch {
+            var seen = 0L
+            kotlinx.coroutines.delay(600)
+            while (jobId == id) {
+                runCatching { repo.api.imageGenProgress(id, seen) }.onSuccess { next ->
+                    if (jobId != id) return@onSuccess
+                    val image = next.image ?: if (next.seq == seen) progress?.image else null
+                    progress = next.copy(image = image, total = if (next.total > 0) next.total else progress?.total ?: 0)
+                    seen = next.seq
+                    if (next.done) return@launch
+                }
+                kotlinx.coroutines.delay(1000)
+            }
+        }
         scope.launch {
             runCatching {
                 repo.api.imageGenGenerate(
                     GenerateRequest(
+                        jobId = id,
                         prompt = pos,
                         negativePrompt = neg,
                         checkpoint = checkpoint,
@@ -246,7 +280,13 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit) {
                 shots = res.images.map { ShotState(it, saved = false) }
                 galleryRefresh++
                 LibbyVoice.react(LibbyVoice.Event.GENERATE).let { repo.report(it.message, it.emotion) }
-            }.onFailure { error = it.message ?: "Generation failed" }
+            }.onFailure {
+                // Stopped from the button: not a failure worth a red line.
+                val cancelled = progress?.cancelled == true || it.message?.contains("cancelled", ignoreCase = true) == true
+                if (!cancelled) error = it.message ?: "Generation failed"
+            }
+            jobId = ""
+            progress = null
             generating = false
         }
     }
@@ -620,15 +660,56 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit) {
                 }
 
                 item {
-                    Button(
-                        onClick = { generate() },
-                        enabled = !generating && prompt.isNotBlank(),
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        if (generating) {
+                    if (generating) {
+                        // The picture forming, as the generator publishes it, with the
+                        // step count and a way to stop a run that is going wrong.
+                        val p = progress
+                        p?.image?.let { preview ->
+                            AsyncImage(
+                                model = preview,
+                                imageLoader = repo.imageLoader,
+                                contentDescription = "The picture so far",
+                                contentScale = ContentScale.Fit,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .aspectRatio(3f / 4f)
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                            )
+                        }
+                        val total = p?.total ?: 0
+                        if (total > 0) {
+                            LinearProgressIndicator(
+                                progress = { (p?.percent ?: 0.0).toFloat().coerceIn(0f, 1f) },
+                                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                            )
+                        }
+                        Row(
+                            Modifier.fillMaxWidth().padding(top = 8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
                             CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                            Text("  Generating…")
-                        } else {
+                            Text(
+                                when {
+                                    p?.cancelled == true -> "Stopping…"
+                                    total > 0 -> "Step ${p?.step ?: 0} of $total"
+                                    else -> "Generating…"
+                                },
+                                modifier = Modifier.weight(1f),
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                            OutlinedButton(onClick = { cancelGeneration() }, enabled = p?.cancelled != true) {
+                                Icon(Icons.Filled.Close, contentDescription = null, Modifier.size(16.dp))
+                                Text("  Cancel")
+                            }
+                        }
+                    } else {
+                        Button(
+                            onClick = { generate() },
+                            enabled = prompt.isNotBlank(),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
                             Icon(Icons.Filled.AutoAwesome, contentDescription = null, Modifier.size(18.dp))
                             Text("  Generate")
                         }

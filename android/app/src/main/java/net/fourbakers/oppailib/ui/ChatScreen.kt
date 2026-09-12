@@ -70,6 +70,8 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.CallEnd
 import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ClosedCaption
 import androidx.compose.material.icons.filled.CollectionsBookmark
@@ -102,6 +104,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
@@ -409,6 +412,9 @@ fun ChatScreen(
     val scope = rememberCoroutineScope()
     val list = rememberLazyListState()
     val context = LocalContext.current
+    // Whether her replies are read aloud on this device; see LibbySpeech.
+    var speakOn by remember { mutableStateOf(repo.prefs.libbySpeak) }
+    DisposableEffect(Unit) { onDispose { repo.speech.stop() } }
 
     fun save(next: ChatWorkspace, quiet: Boolean = true) {
         workspace = next
@@ -650,7 +656,10 @@ fun ChatScreen(
             val seenPictures = pending.messages.mapNotNull { it.imageId.ifBlank { null } }.distinct().takeLast(12)
             // The same for library items she has handed over, which is the other half of
             // "you have already shown me this" now that she can attach from the collection.
-            val seenItems = pending.messages.flatMap { entry -> entry.attachments.map { it.id } }.distinct().takeLast(12)
+            // A wider window than the pictures get, matching the server's
+            // maxRecentMediaMemory: the library is large enough that ruling forty things
+            // out costs nothing, and a shorter one came back round to the same items.
+            val seenItems = pending.messages.flatMap { entry -> entry.attachments.map { it.id } }.distinct().takeLast(40)
             val generation = runCatching {
                 repo.api.chat(
                     ChatRequest(
@@ -758,6 +767,8 @@ fun ChatScreen(
                                 activity = reply.activity, background = reply.background,
                                 messages = convo.messages + line, updatedAt = System.currentTimeMillis(),
                             ))
+                            // Read aloud as it lands; the queue keeps bubbles in order.
+                            if (speakOn) repo.speech.speak(text)
                         }
                     } else {
                         val convo = live()
@@ -1074,6 +1085,17 @@ fun ChatScreen(
                         },
                         color = if (typing || reachable) PresenceOnline else ChatColors.muted,
                         fontSize = 11.sp, maxLines = 1,
+                    )
+                }
+                IconButton(onClick = {
+                    speakOn = !speakOn
+                    repo.prefs.libbySpeak = speakOn
+                    if (!speakOn) repo.speech.stop()
+                }) {
+                    Icon(
+                        if (speakOn) Icons.AutoMirrored.Filled.VolumeUp else Icons.AutoMirrored.Filled.VolumeOff,
+                        if (speakOn) "Stop reading replies aloud" else "Read replies aloud",
+                        tint = if (speakOn) ChatColors.accent else ChatColors.muted,
                     )
                 }
                 if (char.id == "libby" && !repo.prefs.hideLibby) {

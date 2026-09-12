@@ -67,6 +67,16 @@ type Config struct {
 	F95Username string
 	F95Password string
 
+	// TTSPiper is the piper binary that gives Libby a voice on this box; blank means
+	// look on PATH and in the places the Docker image puts it. TTSVoiceDir is where
+	// downloaded voices live (writable); TTSBundledVoiceDir is where the image bakes
+	// its default voice (read-only, may not exist). TTSURL is an OpenAI-compatible
+	// speech server (/v1/audio/speech) to use instead. See internal/tts.
+	TTSPiper           string
+	TTSVoiceDir        string
+	TTSBundledVoiceDir string
+	TTSURL             string
+
 	// ImageGenURL is the base URL of a local Automatic1111 / SD.Next-compatible
 	// image-generation WebUI (the one exposing /sdapi/v1/txt2img). Empty disables the
 	// image-generation feature. It stays on the user's own network — nothing here
@@ -129,6 +139,10 @@ func Load() *Config {
 		F95Username:         env("OPPAI_F95_USERNAME", ""),
 		F95Password:         env("OPPAI_F95_PASSWORD", ""),
 		ImageGenURL:         env("OPPAI_IMAGEGEN_URL", ""),
+		TTSPiper:            env("OPPAI_TTS_PIPER", ""),
+		TTSVoiceDir:         env("OPPAI_TTS_VOICE_DIR", filepath.Join(configDir, "tts")),
+		TTSBundledVoiceDir:  env("OPPAI_TTS_BUNDLED_VOICE_DIR", "/opt/oppailib/voices"),
+		TTSURL:              env("OPPAI_TTS_URL", ""),
 		CivitaiAPIURL:       env("OPPAI_CIVITAI_API_URL", "https://civitai.red/api/v1"),
 		CivitaiAPIKey:       env("OPPAI_CIVITAI_API_KEY", ""),
 		Rule34UserID:        env("OPPAI_RULE34_USER_ID", ""),

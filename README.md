@@ -58,9 +58,21 @@ container on Unraid, with a companion Android app.
   **Allow**. Custom character cards (SillyTavern V2 / PNG) and custom outfits are
   supported. Talks to any local OpenAI-compatible LLM you point it at; nothing leaves
   the box. Works on web and Android.
+- **She speaks:** her replies can be read aloud, per device, in a voice synthesised on
+  the server's CPU by [piper](https://github.com/rhasspy/piper) — bundled in the
+  image with one voice, more downloadable from Settings, no GPU and no extra service.
+  An OpenAI-compatible speech server (`/v1/audio/speech`) can stand in, and a device
+  with neither falls back to its own voices.
+- **text-generation-webui, from inside the app:** load and unload models with the
+  loader, context length, GPU layers, cache type and the rest of the Model tab —
+  remembered per model — apply LoRAs, stop a reply mid-generation, measure a card
+  with the model's own tokenizer, and reach every sampler (min-p, DRY, XTC,
+  mirostat, dynamic temperature, grammar, stop strings) per conversation.
 - **Local image generation:** optional bridge to a self-hosted image generator
-  (auto-detects InvokeAI), with a Civitai model browser, character prompts, and a
-  one-tap path from a generated image into the library.
+  (auto-detects InvokeAI or Automatic1111), with a Civitai model browser, character
+  prompts, and a one-tap path from a generated image into the library. A run shows
+  the picture forming as the generator draws it and can be cancelled from the studio
+  — on the phone too.
 - **Material 3 everywhere:** responsive web UI (dark by default) + native Android app.
 
 Verified working end-to-end: login, encrypted upload/stream round-trip, dedup,

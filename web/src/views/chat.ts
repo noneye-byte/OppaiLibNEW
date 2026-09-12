@@ -3,7 +3,7 @@ import { customElement, property, query, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import {
   api, PROFILE_IMAGE_OWNER, type ChatCharacter, type ChatConversation, type ChatImage, type ChatMessage,
-  type ChatModelInspection, type ChatModels, type ChatOptions, type ChatPhotoReport, type ChatProfile, type ChatSampling, type ChatStatus, type ChatWorkspace,
+  type ChatBackendInfo, type ChatModelInspection, type ChatModels, type ChatOptions, type ChatPhotoReport, type ChatProfile, type ChatSampling, type ChatStatus, type ChatWorkspace,
   type LibbyAutoDecision, type LibbyAutoSettings, type LibbyAutoState, type LibbyBond, type LibbyContext,
   type DiscordPlace, type DiscordState, type LibbyIdentity, type LibbyMemory, type LibbyThought, type LibbyWant, type SharedLink,
   type StoredChatMessage, type User, type ChatReplyRef, type LibbyAttachment, type LibbyBackground, type LibbyLink, type Media,
@@ -12,6 +12,7 @@ import {
 import { iconStyles, motionStyles } from "../theme.js";
 import { formatBytes } from "../media-meta.js";
 import { markArrival } from "../motion.js";
+import { loadSpeakPref, saveSpeakPref, speak, stopSpeaking } from "../speech.js";
 import {
   activityLabel, AMBIENT_MAX_INTENSITY, DEFAULT_LIBBY_PFP, applyImageFallback, libbyAssetCandidates, libbyHidden, loadLibbyOutfit,
   EMOTION_LABELS, LIBBY_EMOTIONS, normalizeEmotion, normalizeIntensity, type LibbyEmotion,
@@ -211,6 +212,68 @@ function previewText(text: string): string {
  */
 const defaultOptions = (): ChatOptions => ({});
 
+/** A line with its markup off, for places that quote her rather than render her. */
+function plainSpeech(text: string): string {
+  return text.replace(/\[[^\]\n]{0,200}\]/g, " ").replace(/\*\*|__|~~|\*|`/g, "").replace(/\s+/g, " ").trim();
+}
+
+/** localStorage key for the portrait column's width, per device. */
+const STAGE_WIDTH_KEY = "oppai_stage_width";
+
+/**
+ * One loader argument as the panel asks for it. `keys` are the backend's own argument
+ * names, first the current one; where a name moved between text-generation-webui
+ * releases both are listed and both are sent. `loaders` limits a field to the loaders
+ * it means anything for; absent means every loader.
+ */
+interface LoaderField {
+  label: string;
+  keys: string[];
+  kind: "number" | "text" | "check" | "select";
+  hint?: string;
+  placeholder?: string;
+  options?: string[];
+  loaders?: string[];
+}
+
+const LOADER_KEY: LoaderField = { label: "Loader", keys: ["loader"], kind: "select" };
+
+const LLAMA = ["llama.cpp"];
+const EXLLAMA = ["ExLlamav3_HF", "ExLlamav3", "ExLlamav2_HF", "ExLlamav2"];
+const TRANSFORMERS = ["Transformers", "HQQ"];
+
+/** The Model tab, in argument form. Ordered as the WebUI lays them out. */
+const LOADER_FIELDS: LoaderField[] = [
+  { label: "Context length", keys: ["ctx_size", "n_ctx", "max_seq_len"], kind: "number", placeholder: "model default" },
+  { label: "GPU layers", keys: ["gpu_layers", "n_gpu_layers"], kind: "number", hint: "0 = CPU only", loaders: LLAMA },
+  { label: "Batch size", keys: ["batch_size", "n_batch"], kind: "number", loaders: LLAMA },
+  { label: "Threads", keys: ["threads"], kind: "number", loaders: LLAMA },
+  { label: "Batch threads", keys: ["threads_batch"], kind: "number", loaders: LLAMA },
+  { label: "KV cache type", keys: ["cache_type"], kind: "select", options: ["fp16", "q8_0", "q4_0", "q8", "q6", "q4"], hint: "q8_0/q4_0 for llama.cpp; q8/q6/q4 for ExLlama" },
+  { label: "Tensor split", keys: ["tensor_split"], kind: "text", placeholder: "e.g. 20,10", loaders: LLAMA },
+  { label: "GPU split (GB)", keys: ["gpu_split"], kind: "text", placeholder: "e.g. 20,7", loaders: EXLLAMA },
+  { label: "RoPE base", keys: ["rope_freq_base"], kind: "number", placeholder: "model default" },
+  { label: "Positional compression", keys: ["compress_pos_emb"], kind: "number", placeholder: "1" },
+  { label: "Experts per token", keys: ["num_experts_per_token"], kind: "number", placeholder: "model default", loaders: EXLLAMA },
+  { label: "Compute dtype", keys: ["compute_dtype"], kind: "select", options: ["float16", "bfloat16", "float32"], loaders: TRANSFORMERS },
+  { label: "Quant type", keys: ["quant_type"], kind: "select", options: ["nf4", "fp4"], loaders: TRANSFORMERS },
+  { label: "Flash attention", keys: ["flash_attn"], kind: "check" },
+  { label: "mlock", keys: ["mlock"], kind: "check", hint: "keep in RAM", loaders: LLAMA },
+  { label: "No mmap", keys: ["no_mmap"], kind: "check", loaders: LLAMA },
+  { label: "NUMA", keys: ["numa"], kind: "check", loaders: LLAMA },
+  { label: "CPU only", keys: ["cpu"], kind: "check" },
+  { label: "Load in 4-bit", keys: ["load_in_4bit"], kind: "check", loaders: TRANSFORMERS },
+  { label: "Load in 8-bit", keys: ["load_in_8bit"], kind: "check", loaders: TRANSFORMERS },
+  { label: "bf16", keys: ["bf16"], kind: "check", loaders: TRANSFORMERS },
+  { label: "Auto devices", keys: ["auto_devices"], kind: "check", loaders: TRANSFORMERS },
+  { label: "Disk offload", keys: ["disk"], kind: "check", loaders: TRANSFORMERS },
+  { label: "Trust remote code", keys: ["trust_remote_code"], kind: "check", loaders: TRANSFORMERS },
+  { label: "No flash attention", keys: ["no_flash_attn"], kind: "check", loaders: EXLLAMA },
+  { label: "CFG cache", keys: ["cfg_cache"], kind: "check", loaders: EXLLAMA },
+  { label: "Tensor parallel", keys: ["enable_tp"], kind: "check", loaders: EXLLAMA },
+  { label: "Streaming LLM", keys: ["streaming_llm"], kind: "check", loaders: LLAMA },
+];
+
 /**
  * How each memory kind is labelled in the panel.
  *
@@ -393,6 +456,8 @@ export class OppaiChat extends LitElement {
   /** Why the initial load failed, shown as a banner with a retry. */
   @state() private loadError = "";
   @state() private settingsOpen = false;
+  /** Whether her replies are read aloud on this device. See speech.ts. */
+  @state() private speakOn = loadSpeakPref();
   @state() private editorTab: EditorTab = "character";
   @state() private notice = "";
   @state() private noticeError = false;
@@ -438,6 +503,19 @@ export class OppaiChat extends LitElement {
   @state() private models: ChatModels | null = null;
   @state() private modelChoice = "";
   @state() private modelBusy = false;
+  /** The rest of text-generation-webui — loaders, remembered arguments, LoRAs. Null
+      until the model tab is opened against a backend that has them. */
+  @state() private backend: ChatBackendInfo | null = null;
+  /** The loader arguments being edited for the selected model. Keyed by the backend's
+      own argument names; see LOADER_FIELDS. */
+  @state() private loadArgs: Record<string, unknown> = {};
+  /** Extra arguments as JSON, for anything LOADER_FIELDS does not name. */
+  @state() private loadExtra = "";
+  @state() private loadSettings = "";
+  /** The LoRAs ticked for the next apply. */
+  @state() private loraPicks: string[] = [];
+  /** How many tokens the character card costs, measured by the model's tokenizer. */
+  @state() private cardTokens: { tokens: number; exact: boolean } | null = null;
 
   /** The model whose deletion is being confirmed, with what is on disk behind it.
       Deleting is a filesystem operation on a directory shared with the backend, so the
@@ -464,6 +542,9 @@ export class OppaiChat extends LitElement {
   /** Counts down the auto turns left before it waits for the user again. */
   @state() private autoTurns = 0;
   @state() private stageOpen = true;
+  /** The portrait column's width on this device, 0 for the default. See stageDragStart. */
+  @state() private stageWidth = (() => { try { return Number(localStorage.getItem(STAGE_WIDTH_KEY)) || 0; } catch { return 0; } })();
+  @state() private stageDragging = false;
   /** A picture the user has attached but not yet sent. */
   @state() private pendingPhoto: PendingPhoto | null = null;
   /**
@@ -833,37 +914,71 @@ export class OppaiChat extends LitElement {
     .autobar-btn:hover { background:var(--hover); }
 
     /* ── portrait stage ──────────────────────────────────────────────────── */
-    .stage { min-width:0; display:flex; flex-direction:column; gap:8px; padding:12px 10px 0;
-      background:var(--side); border-left:1px solid var(--line); overflow:hidden; }
-    .stage-head { display:grid; gap:1px; padding:0 4px; }
-    .stage-name { font-weight:700; font-size:14px; color:var(--accent); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .stage-status { color:var(--muted); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    /* The column is a scene, not a strip with a picture at the top of it. The room
+       she is in (the call's background, when there is one) fills it behind her, the
+       sprite stands in it as large as the column allows, and what there is to say
+       about her — who she is, what she is feeling and doing, where, how warm the
+       conversation has run — sits on a frosted card at the foot, the way a video
+       call overlays the person rather than putting a caption under a frame. */
+    .stage { position:relative; min-width:0; display:flex; flex-direction:column; background:var(--side); border-left:1px solid var(--line); overflow:hidden; }
+    .stage-scene { position:relative; flex:1; min-height:0; isolation:isolate; overflow:hidden; }
+    .stage-bg { position:absolute; inset:-3%; background-size:cover; background-position:center; z-index:0; }
+    .stage-bg.room { filter:blur(10px) saturate(1.05) brightness(.7); transform:scale(1.04); }
+    .stage-bg.plain { background:
+      radial-gradient(90% 55% at 50% 18%,color-mix(in srgb,var(--accent) 34%,transparent),transparent 70%),
+      radial-gradient(120% 40% at 50% 100%,color-mix(in srgb,var(--accent) 22%,transparent),transparent 60%),
+      linear-gradient(to bottom,color-mix(in srgb,var(--main) 60%,var(--side)),var(--side)); }
+    .stage-veil { position:absolute; inset:0; z-index:0; pointer-events:none;
+      background:linear-gradient(to bottom,rgba(0,0,0,.28),transparent 22%,transparent 58%,rgba(0,0,0,.55)); }
+    /* A soft pool of light where she stands, so she reads as *in* the room. */
+    .stage-floor { position:absolute; left:0; right:0; bottom:40px; height:46%; z-index:0; pointer-events:none;
+      background:radial-gradient(60% 70% at 50% 100%,color-mix(in srgb,var(--accent) 32%,transparent),transparent 72%); opacity:.9; }
     /* The sprite wrapper carries the idle breathing and the sprite itself carries the
-       per-line reaction, so a rock into a new message does not cancel the idle loop. */
-    /* The art is a cowboy shot — head to mid-thigh — drawn at 1024×1344. It is laid
-       out at that aspect, as wide as the column, from the top: her face is where a
-       reader's eye goes first, and it has to be at the top of the column, large,
-       rather than at the foot of a tall empty strip. A column too short for the whole
-       shot keeps it whole (contain) and simply draws it smaller, since cropping her at
-       the waist would hide the wardrobe tier the meter is about. */
-    .stage-art { width:100%; aspect-ratio:1024/1344; max-height:calc(100% - 96px); display:grid; place-items:start center; }
-    .stage-art .sprite-hold { display:grid; place-items:start center; width:100%; height:100%; transform-origin:50% 100%; }
-    .stage-art .sprite { width:100%; height:100%; object-fit:contain; object-position:top center;
-      transform-origin:50% 100%; filter:drop-shadow(0 10px 26px rgba(0,0,0,.42)); }
-    .stage-art.empty-art { place-items:center; gap:8px; align-content:center; padding:16px; text-align:center;
-      color:var(--muted); font-size:12px; }
+       per-line reaction, so a rock into a new message does not cancel the idle loop.
+       The art is a cowboy shot — head to mid-thigh, 1024×1344 — kept whole (contain)
+       and as large as the scene allows, standing on the card rather than behind it:
+       the card overlaps her thighs, which the shot ends at anyway. */
+    .stage-art { position:absolute; inset:60px 8px 100px; z-index:1; display:grid; place-items:center; }
+    .stage-art .sprite-hold { display:grid; place-items:center; width:100%; height:100%; transform-origin:50% 100%; }
+    .stage-art .sprite { width:100%; height:100%; object-fit:contain; object-position:center;
+      transform-origin:50% 100%; filter:drop-shadow(0 14px 30px rgba(0,0,0,.5)); }
+    .stage-art.empty-art { place-items:center; gap:8px; align-content:center; padding:16px; text-align:center; color:var(--muted); font-size:12px; }
     .stage-art.empty-art .material-symbols-rounded { font-size:44px; opacity:.5; }
-    /* The MISC state under the portrait. It earns its place even when the worn
-       wardrobe has no picture for the state: the art then falls back to her expression,
-       and this is the only thing on screen saying what she is actually doing. */
-    /* Her typing, shown on her rather than only in the log: the outfit's typing art
-       (when it has one) and a speech bubble of dots up by her head, with a tail. */
-    .stage-art { position:relative; }
-    .stage-bubble { position:absolute; top:10%; right:8%; padding:9px 12px; border-radius:16px; border-bottom-left-radius:4px; background:var(--bubble);
+    /* Her typing, shown on her rather than only in the log: a speech bubble of dots
+       up by her head, with a tail — and, between replies, her last line in the same
+       place, so the column reads as her talking rather than a still. */
+    .stage-bubble { position:absolute; top:10px; right:10px; max-width:70%; padding:9px 12px; border-radius:16px; border-bottom-left-radius:4px; background:var(--bubble);
       box-shadow:0 3px 10px rgba(0,0,0,.22); animation:chat-rise .2s var(--oppai-ease-standard,cubic-bezier(.2,0,0,1)) both; z-index:2; }
     .stage-bubble::after { content:""; position:absolute; left:-6px; bottom:6px; border:7px solid transparent; border-right-color:var(--bubble); border-left:0; }
-    .stage-doing { margin:0 auto; padding:3px 11px; border-radius:999px; background:var(--input);
-      font-size:11px; font-weight:650; letter-spacing:.02em; opacity:.85; }
+    .stage-bubble.quote { font-size:12px; line-height:1.35; color:var(--md-sys-color-on-surface); }
+    /* The card at the foot. */
+    .stage-glass { position:absolute; left:10px; right:10px; bottom:10px; z-index:3; display:grid; gap:7px; padding:10px 12px 11px; border-radius:16px;
+      background:color-mix(in srgb,var(--main) 72%,transparent); backdrop-filter:blur(12px) saturate(1.2); border:1px solid color-mix(in srgb,var(--line) 70%,transparent);
+      box-shadow:0 10px 30px rgba(0,0,0,.3); }
+    .stage-who { display:flex; align-items:center; gap:8px; min-width:0; }
+    .stage-name { font-weight:750; font-size:15px; color:var(--md-sys-color-on-surface); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .stage-status { flex:1; min-width:0; color:var(--muted); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .stage-chips { display:flex; flex-wrap:wrap; gap:5px; }
+    .stage-chip { display:inline-flex; align-items:center; gap:4px; padding:3px 9px 3px 7px; border-radius:999px; background:var(--input); font-size:11px; font-weight:650; letter-spacing:.01em; color:var(--md-sys-color-on-surface); }
+    .stage-chip .material-symbols-rounded { font-size:14px; color:var(--accent); }
+    .stage-chip.doing { background:color-mix(in srgb,var(--accent) 18%,var(--input)); }
+    /* The heat run: five segments, filled to the meter, warming in colour as it climbs. */
+    .stage-heat { display:flex; align-items:center; gap:6px; font-size:10.5px; color:var(--muted); text-transform:uppercase; letter-spacing:.06em; }
+    .stage-heat .segs { display:flex; gap:3px; flex:1; }
+    .stage-heat i { flex:1; height:4px; border-radius:2px; background:var(--line); transition:background .3s ease; }
+    .stage-heat i.on { background:var(--accent); }
+    .stage-heat.h4 i.on { background:color-mix(in srgb,var(--accent) 60%,#ff7a3d); }
+    .stage-heat.h5 i.on { background:color-mix(in srgb,var(--accent) 35%,#ff3d5a); }
+    /* Tools, shown on hover: the actions the column is for. */
+    .stage-tools { position:absolute; top:8px; right:8px; z-index:4; display:flex; gap:2px; padding:3px; border-radius:999px;
+      background:color-mix(in srgb,var(--main) 70%,transparent); backdrop-filter:blur(8px); opacity:0; transition:opacity .15s ease; }
+    .stage:hover .stage-tools,.stage:focus-within .stage-tools { opacity:1; }
+    .stage-tools .icon-btn { width:32px; height:32px; }
+    .stage-tools .icon-btn .material-symbols-rounded { font-size:19px; }
+    .stage .call-tray { right:10px; left:10px; bottom:118px; width:auto; }
+    /* Drag the column's edge to size it; the width is kept per device. */
+    .stage-grip { position:absolute; left:-3px; top:0; bottom:0; width:7px; cursor:col-resize; z-index:5; }
+    .stage-grip:hover,.stage-grip.dragging { background:color-mix(in srgb,var(--accent) 40%,transparent); }
     /* Under this width the column goes and the banner below takes over: same art,
        same reactions, along the top of the conversation instead of beside it. */
     @media(max-width:960px){ .client.with-stage { grid-template-columns:var(--side-w) minmax(0,1fr); } .stage { display:none; } .client.with-stage .hero { display:block; } }
@@ -881,6 +996,7 @@ export class OppaiChat extends LitElement {
     .hero-copy { position:absolute; left:16px; right:180px; bottom:12px; display:grid; gap:3px; min-width:0; }
     .hero-name { font-weight:750; font-size:16px; color:var(--accent); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .hero-status { font-size:12px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .stage-doing { margin:0 auto; padding:3px 11px; border-radius:999px; background:var(--input); font-size:11px; font-weight:650; letter-spacing:.02em; opacity:.85; }
     .hero .stage-doing { margin:0; justify-self:start; }
     .hero-bubble { position:absolute; right:168px; top:16px; padding:8px 11px; border-radius:16px; border-bottom-right-radius:4px; background:var(--bubble);
       box-shadow:0 3px 10px rgba(0,0,0,.22); animation:chat-rise .2s var(--oppai-ease-standard,cubic-bezier(.2,0,0,1)) both; z-index:2; }
@@ -1012,6 +1128,16 @@ export class OppaiChat extends LitElement {
     .inline-check { display:flex; gap:8px; align-items:flex-start; font-size:12px; text-transform:none; letter-spacing:normal; }
     .inline-check input { margin-top:2px; flex-shrink:0; }
     .empty.error { color:var(--md-sys-color-error); }
+    .send.stop { background:var(--md-sys-color-error); color:var(--md-sys-color-on-error); }
+    .loader,.samplers { border:1px solid var(--line); border-radius:12px; padding:8px 12px; display:grid; gap:10px; }
+    .loader summary,.samplers summary { cursor:pointer; font-size:12px; font-weight:650; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); display:flex; gap:8px; align-items:center; }
+    .loader summary .hint,.samplers summary .hint { margin-left:auto; text-transform:none; letter-spacing:normal; font-weight:500; }
+    .loader details { display:grid; gap:10px; }
+    .loader details summary { font-weight:600; }
+    .loader-grid { grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); }
+    .loader-check { align-self:end; padding-bottom:8px; }
+    .loader code,.samplers code { font-size:11px; }
+    .lora-list { display:grid; gap:4px; }
     .model-row { display:flex; align-items:center; gap:9px; }.model-row strong { min-width:0; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; text-transform:none; }
     @media(max-width:1000px){ :host { --side-w:300px; } }
     @media(max-width:700px){
@@ -1514,7 +1640,91 @@ export class OppaiChat extends LitElement {
       this.models = models;
       this.status = status;
       if (!quiet) this.say(status.enabled ? `Connected to ${status.model || "the loaded model"}.` : status.message || "No model is loaded.", !status.enabled);
+      // The loader menu and the LoRAs are two more round trips to the backend, and
+      // only text-generation-webui answers them; a generic server keeps its cheap panel.
+      if (models.supported) void this.refreshBackend();
+      else this.backend = null;
     } catch (error) { if (!quiet) this.say((error as Error).message, true); }
+  }
+
+  private async refreshBackend() {
+    try {
+      this.backend = await api.chatBackendInfo();
+      this.loraPicks = [...(this.backend.loras?.loaded ?? [])];
+      this.seedLoadArgs(this.modelChoice || this.models?.loaded || this.models?.models[0] || "");
+    } catch { this.backend = null; }
+  }
+
+  /**
+   * Starts the loader form from what the model was last loaded with. A model never
+   * loaded from here starts blank, which means "whatever the backend has set" — the
+   * behaviour before the form existed.
+   */
+  private seedLoadArgs(model: string) {
+    const remembered = this.backend?.loads?.[model];
+    const args = { ...(remembered?.args ?? {}) };
+    const known = new Set<string>(LOADER_FIELDS.flatMap((f) => f.keys));
+    const extra: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(args)) if (!known.has(key)) extra[key] = value;
+    for (const key of Object.keys(extra)) delete args[key];
+    this.loadArgs = args;
+    this.loadExtra = Object.keys(extra).length ? JSON.stringify(extra, null, 2) : "";
+    this.loadSettings = remembered?.settings && Object.keys(remembered.settings).length ? JSON.stringify(remembered.settings, null, 2) : "";
+  }
+
+  /** The arguments the load will send: the form, then the extra JSON on top. */
+  private composeLoadArgs(): { args: Record<string, unknown>; settings: Record<string, unknown> } {
+    const args: Record<string, unknown> = {};
+    for (const field of LOADER_FIELDS) {
+      const value = this.loadArgs[field.keys[0]];
+      if (value === undefined || value === "" || value === null) continue;
+      if (field.kind === "check" && !value) continue;
+      // The names moved between releases (n_ctx became ctx_size); the backend takes
+      // the one it knows and ignores the other, so both go.
+      for (const key of field.keys) args[key] = value;
+    }
+    if (this.loadExtra.trim()) Object.assign(args, JSON.parse(this.loadExtra) as Record<string, unknown>);
+    const settings = this.loadSettings.trim() ? JSON.parse(this.loadSettings) as Record<string, unknown> : {};
+    return { args, settings };
+  }
+
+  private setLoadArg(field: LoaderField, raw: string | boolean) {
+    const next = { ...this.loadArgs };
+    const key = field.keys[0];
+    if (field.kind === "check") { if (raw) next[key] = true; else delete next[key]; }
+    else if (field.kind === "number") { const n = Number(raw); if (raw === "" || Number.isNaN(n)) delete next[key]; else next[key] = n; }
+    else if (raw === "") delete next[key];
+    else next[key] = raw;
+    this.loadArgs = next;
+  }
+
+  private async applyLoras() {
+    if (this.modelBusy) return;
+    this.modelBusy = true;
+    try {
+      const loras = await api.setChatLoras(this.loraPicks);
+      if (this.backend) this.backend = { ...this.backend, loras };
+      this.loraPicks = [...loras.loaded];
+      this.say(loras.loaded.length ? `Applied ${loras.loaded.join(", ")}.` : "LoRAs cleared.");
+    } catch (error) { this.say((error as Error).message, true); }
+    finally { this.modelBusy = false; }
+  }
+
+  /**
+   * Stops the reply being written. The backend returns what it had so far, which the
+   * turn then delivers as the reply — so this is "that's enough", not "throw it away".
+   */
+  private async stopGeneration() {
+    try { await api.stopChat(); this.say("Stopping…"); }
+    catch (error) { this.say((error as Error).message, true); }
+  }
+
+  /** Measures the card the way the model will read it. */
+  private async measureCard(character: ChatCharacter) {
+    const text = [character.description, character.personality, character.scenario, character.kinks, character.systemPrompt, character.exampleDialogue, character.firstMessage]
+      .filter(Boolean).join("\n\n");
+    try { this.cardTokens = await api.countChatTokens(text); }
+    catch (error) { this.say((error as Error).message, true); }
   }
 
   private touchWorkspace() {
@@ -1716,8 +1926,15 @@ export class OppaiChat extends LitElement {
   }
 
   private updateOption(key: string, value: number) {
+    this.updateOptionValue(key, value);
+  }
+
+  /** Sets one API option; undefined removes it, handing the choice back to the tuner. */
+  private updateOptionValue(key: string, value: unknown) {
     const conversation = this.activeConversation; if (!conversation) return;
-    conversation.options = { ...(conversation.options ?? {}), [key]:value }; conversation.updatedAt = Date.now(); this.touchWorkspace();
+    const options = { ...(conversation.options ?? {}) };
+    if (value === undefined) delete options[key]; else options[key] = value;
+    conversation.options = options; conversation.updatedAt = Date.now(); this.touchWorkspace();
   }
 
   private onKey(event: KeyboardEvent) { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void this.send(); } }
@@ -2123,8 +2340,17 @@ export class OppaiChat extends LitElement {
       const last = i === chunks.length - 1;
       live.messages.push({ id:newID(), role:"assistant", content:chunks[i], at:Date.now(), ...(i === 0 ? first : {}), ...(last ? extra : {}) });
       live.updatedAt = Date.now(); this.touchWorkspace(); void this.scrollToEnd();
+      // Read aloud as it lands, in order; the queue in speech.ts keeps bubbles from
+      // talking over each other while the next one is still being typed.
+      if (this.speakOn && conversationID === this.conversationID) void speak(chunks[i]);
     }
     return true;
+  }
+
+  private toggleSpeak() {
+    this.speakOn = !this.speakOn;
+    saveSpeakPref(this.speakOn);
+    this.say(this.speakOn ? "She'll read her replies aloud on this device." : "Voice off.");
   }
 
   /**
@@ -2648,6 +2874,7 @@ export class OppaiChat extends LitElement {
   }
 
   private endCall() {
+    stopSpeaking();
     this.callOpen = false; this.scenePickerOpen = false;
     window.clearInterval(this.callTimer);
     this.focusComposer();
@@ -2813,22 +3040,77 @@ export class OppaiChat extends LitElement {
     if (!pose) return nothing;
     const { emotion, intensity, typing, activity, assets } = pose;
     const status = this.busy ? "Typing…" : this.autoRunning ? "Talking on their own" : this.status?.enabled ? this.status.model : "Local replies";
+    const place = this.backgrounds.find((bg) => bg.id === (conversation.background || this.defaultBackground) && bg.hasImage);
+    // Her last line, up by her head, between replies. Thoughts are not speech, and a
+    // bubble that is only a picture has nothing to quote.
+    const lastLine = typing ? undefined : [...conversation.messages].reverse().find((m) => m.role === "assistant" && !m.thought && m.content.trim());
+    const quote = lastLine ? excerptOf(plainSpeech(lastLine.content), 110) : "";
+    const online = !!this.status?.enabled;
     return html`<aside class="stage" aria-label="${character.name} portrait">
-      <div class="stage-head"><span class="stage-name">${character.name}</span><span class="stage-status">${status}</span></div>
-      <div class="stage-art">
-        <!-- Keyed on the pose *and* on how many things have been said, so the sprite
-             rocks into every new line rather than only when her mood changes — and
-             so a mood change still replaces the element, restarting the artwork
-             fallback chain for the new pose. -->
-        <span class="sprite-hold libby-breathe">${keyed(`${emotion}-${intensity}-${activity}-${this.spoken}`, html`<img
-          class="sprite ${this.busy ? "" : "libby-speak"}" src=${assets[0]} data-fallback-index="0"
-          alt=${activity ? `${character.name} ${activity}, looking ${emotion}` : `${character.name} looking ${emotion}`}
-          @error=${(event:Event) => applyImageFallback(event.target as HTMLImageElement, assets)} />`)}</span>
-        ${typing ? html`<div class="stage-bubble" aria-hidden="true"><span class="dots"><i></i><i></i><i></i></span></div>` : nothing}
+      <div class="stage-grip ${this.stageDragging ? "dragging" : ""}" title="Drag to resize" @pointerdown=${this.stageDragStart}></div>
+      <div class="stage-scene" @click=${() => { if (this.scenePickerOpen) this.scenePickerOpen = false; }}>
+        <div class="stage-bg ${place ? "room" : "plain"}" style=${place ? `background-image:url("${api.libbyBackgroundURL(place.id)}")` : ""}></div>
+        <div class="stage-veil"></div>
+        <div class="stage-floor"></div>
+        <div class="stage-art">
+          <!-- Keyed on the pose *and* on how many things have been said, so the sprite
+               rocks into every new line rather than only when her mood changes — and
+               so a mood change still replaces the element, restarting the artwork
+               fallback chain for the new pose. -->
+          <span class="sprite-hold libby-breathe">${keyed(`${emotion}-${intensity}-${activity}-${this.spoken}`, html`<img
+            class="sprite ${this.busy ? "" : "libby-speak"}" src=${assets[0]} data-fallback-index="0"
+            alt=${activity ? `${character.name} ${activity}, looking ${emotion}` : `${character.name} looking ${emotion}`}
+            @error=${(event:Event) => applyImageFallback(event.target as HTMLImageElement, assets)} />`)}</span>
+        </div>
+        ${typing ? html`<div class="stage-bubble" aria-hidden="true"><span class="dots"><i></i><i></i><i></i></span></div>`
+          : quote ? html`<div class="stage-bubble quote" aria-hidden="true">${quote}</div>` : nothing}
+        <div class="stage-tools">
+          ${character.id === "libby" ? html`<button class="icon-btn" title="Video call" aria-label="Start a video call" @click=${() => this.startCall()}><span class="material-symbols-rounded">videocam</span></button>
+          <button class="icon-btn ${this.scenePickerOpen ? "on" : ""}" title="Change where she is" aria-label="Change the background" @click=${(event:Event) => { event.stopPropagation(); this.toggleScenePicker(); }}><span class="material-symbols-rounded">wallpaper</span></button>` : nothing}
+          <button class="icon-btn ${this.speakOn ? "on" : ""}" title=${this.speakOn ? "Stop reading replies aloud" : "Read replies aloud"} aria-label="Voice" @click=${() => this.toggleSpeak()}><span class="material-symbols-rounded">${this.speakOn ? "volume_up" : "volume_off"}</span></button>
+          <button class="icon-btn" title="Hide portrait" aria-label="Hide portrait" @click=${() => (this.stageOpen = false)}><span class="material-symbols-rounded">close</span></button>
+        </div>
+        ${this.scenePickerOpen && !this.callOpen ? this.renderScenePicker(conversation) : nothing}
+        <div class="stage-glass">
+          <div class="stage-who">
+            <span class="stage-name">${character.name}</span>
+            <span class="stage-status"><span class="status-dot ${online ? "online" : ""}"></span> ${status}</span>
+          </div>
+          <div class="stage-chips">
+            <span class="stage-chip" title="How she feels"><span class="material-symbols-rounded">mood</span>${EMOTION_LABELS[emotion] ?? emotion}</span>
+            ${conversation.activity ? html`<span class="stage-chip doing" role="status" title=${`She is ${conversation.activity}`}><span class="material-symbols-rounded">directions_walk</span>${activityLabel(conversation.activity)}</span>` : nothing}
+            ${place ? html`<span class="stage-chip" title="Where she is"><span class="material-symbols-rounded">location_on</span>${place.name}</span>` : nothing}
+          </div>
+          ${character.id === "libby" ? html`<div class="stage-heat h${intensity}" title=${`Heat ${intensity} of 5`}>
+            <span>Heat</span><span class="segs">${[1, 2, 3, 4, 5].map((n) => html`<i class=${n <= intensity ? "on" : ""}></i>`)}</span>
+          </div>` : nothing}
+        </div>
       </div>
-      ${conversation.activity ? html`<div class="stage-doing" role="status">${activityLabel(conversation.activity)}</div>` : nothing}
     </aside>`;
   }
+
+  /**
+   * Resizing the column by its edge. The width is per device, like the theme, and
+   * bounded so it can neither vanish nor swallow the conversation.
+   */
+  private stageDragStart = (event: PointerEvent) => {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startW = this.stageWidth || (this.shadowRoot?.querySelector(".stage") as HTMLElement | null)?.offsetWidth || 300;
+    this.stageDragging = true;
+    const move = (e: PointerEvent) => {
+      const next = Math.round(Math.max(220, Math.min(window.innerWidth * 0.5, startW + (startX - e.clientX))));
+      this.stageWidth = next;
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      this.stageDragging = false;
+      try { localStorage.setItem(STAGE_WIDTH_KEY, String(this.stageWidth)); } catch { /* private mode */ }
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
 
   private renderAutopilotBar(character: ChatCharacter) {
     if (!this.autopilot) return nothing;
@@ -3009,9 +3291,12 @@ export class OppaiChat extends LitElement {
   private async loadModel() {
     const target = this.modelChoice || this.models?.models[0];
     if (!target || this.modelBusy) return;
+    let composed: { args: Record<string, unknown>; settings: Record<string, unknown> };
+    try { composed = this.composeLoadArgs(); }
+    catch { this.say("Extra loader arguments and settings must be valid JSON.", true); return; }
     this.modelBusy = true; this.say(`Loading ${target}… this can take a few minutes.`);
     try {
-      await api.loadChatModel(target);
+      await api.loadChatModel(target, composed.args, composed.settings, true);
       await this.refreshModels(true);
       this.say(`Loaded ${this.models?.loaded || target}.`);
     } catch (error) { this.say((error as Error).message, true); }
@@ -3044,11 +3329,12 @@ export class OppaiChat extends LitElement {
         <label>Model
           <select class="field" ?disabled=${this.modelBusy || !models.length}
             .value=${this.modelChoice || loaded}
-            @change=${(event: Event) => (this.modelChoice = (event.target as HTMLSelectElement).value)}>
+            @change=${(event: Event) => { this.modelChoice = (event.target as HTMLSelectElement).value; this.seedLoadArgs(this.modelChoice); }}>
             ${models.length ? nothing : html`<option value="">No models found</option>`}
             ${models.map((model) => html`<option value=${model} ?selected=${model === (this.modelChoice || loaded)}>${model}</option>`)}
           </select>
         </label>
+        ${this.renderLoaderForm()}
         <div class="panel-actions">
           <button class="primary" ?disabled=${this.modelBusy || !models.length} @click=${() => void this.loadModel()}>
             ${this.modelBusy ? "Working…" : "Load model"}
@@ -3062,7 +3348,68 @@ export class OppaiChat extends LitElement {
         </div>
         ${this.modelBusy ? html`<div class="empty">Loading a large model can take several minutes. Leaving this page will not cancel it.</div>` : nothing}
         ${this.deleteTarget ? this.renderDeleteModel(this.deleteTarget) : nothing}
-        ${this.deleteError ? html`<div class="empty error">${this.deleteError}</div>` : nothing}`}`;
+        ${this.deleteError ? html`<div class="empty error">${this.deleteError}</div>` : nothing}
+        ${this.renderLoras()}`}`;
+  }
+
+  /**
+   * The loader arguments: what the WebUI's Model tab asks before loading, asked here
+   * instead so the WebUI need not be open beside this one. Remembered per model on the
+   * server once a load with them has worked.
+   */
+  private renderLoaderForm() {
+    if (!this.backend?.supported) return nothing;
+    const loader = String(this.loadArgs.loader ?? "");
+    const fields = LOADER_FIELDS.filter((f) => !f.loaders || !loader || f.loaders.includes(loader));
+    return html`<details class="loader" open>
+      <summary>Loader settings<span class="hint">${Object.keys(this.loadArgs).length || this.loadExtra.trim() ? "set" : "backend defaults"}</span></summary>
+      <div class="grid loader-grid">
+        <label>Loader<select class="field" .value=${loader} ?disabled=${this.modelBusy}
+          @change=${(event:Event) => this.setLoadArg(LOADER_KEY, (event.target as HTMLSelectElement).value)}>
+          <option value="">Backend decides</option>
+          ${(this.backend.loaders ?? []).map((name) => html`<option value=${name} ?selected=${name === loader}>${name}</option>`)}
+        </select></label>
+        ${fields.map((field) => field.kind === "check"
+          ? html`<label class="inline-check loader-check"><input type="checkbox" .checked=${!!this.loadArgs[field.keys[0]]} ?disabled=${this.modelBusy}
+              @change=${(event:Event) => this.setLoadArg(field, (event.target as HTMLInputElement).checked)}/>${field.label}${field.hint ? html`<span class="hint">${field.hint}</span>` : nothing}</label>`
+          : field.kind === "select"
+          ? html`<label>${field.label}<select class="field" .value=${String(this.loadArgs[field.keys[0]] ?? "")} ?disabled=${this.modelBusy}
+              @change=${(event:Event) => this.setLoadArg(field, (event.target as HTMLSelectElement).value)}>
+              <option value="">Default</option>${(field.options ?? []).map((o) => html`<option value=${o} ?selected=${o === String(this.loadArgs[field.keys[0]] ?? "")}>${o}</option>`)}
+            </select></label>`
+          : html`<label>${field.label}${field.hint ? html`<span class="hint">${field.hint}</span>` : nothing}<input class="field" type=${field.kind === "number" ? "number" : "text"} placeholder=${field.placeholder ?? "default"}
+              .value=${String(this.loadArgs[field.keys[0]] ?? "")} ?disabled=${this.modelBusy}
+              @change=${(event:Event) => this.setLoadArg(field, (event.target as HTMLInputElement).value)}/></label>`)}
+      </div>
+      <details>
+        <summary>More arguments and generation defaults</summary>
+        <label>Extra loader arguments (JSON) — anything text-generation-webui's <code>--help</code> lists, by its argument name
+          <textarea class="field" rows="3" placeholder='{"rope_freq_base": 1000000, "numa": true}' .value=${this.loadExtra} ?disabled=${this.modelBusy}
+            @change=${(event:Event) => (this.loadExtra = (event.target as HTMLTextAreaElement).value)}></textarea></label>
+        <label>Generation defaults applied at load (JSON) — <code>truncation_length</code>, <code>instruction_template</code>, <code>custom_stopping_strings</code>…
+          <textarea class="field" rows="3" placeholder='{"instruction_template": "ChatML"}' .value=${this.loadSettings} ?disabled=${this.modelBusy}
+            @change=${(event:Event) => (this.loadSettings = (event.target as HTMLTextAreaElement).value)}></textarea></label>
+      </details>
+      <div class="empty">Names that moved between releases (<code>n_ctx</code>/<code>ctx_size</code>, <code>n_gpu_layers</code>/<code>gpu_layers</code>) are sent both ways; the backend keeps the one it knows. Settings are remembered per model once a load succeeds.</div>
+    </details>`;
+  }
+
+  /** The LoRAs installed beside the models, ticked to apply on top of the loaded one. */
+  private renderLoras() {
+    if (!this.backend?.supported) return nothing;
+    if (this.backend.lorasError) return html`<div class="empty">LoRAs: ${this.backend.lorasError}</div>`;
+    const loras = this.backend.loras;
+    if (!loras || !loras.available.length) return nothing;
+    const loaded = new Set(loras.loaded);
+    const picked = new Set(this.loraPicks);
+    const changed = loras.available.some((name) => loaded.has(name) !== picked.has(name));
+    return html`<label>LoRAs<span class="hint">${loras.loaded.length ? `${loras.loaded.length} applied` : "none applied"}</span>
+      <div class="lora-list">${loras.available.map((name) => html`<label class="inline-check"><input type="checkbox" .checked=${picked.has(name)} ?disabled=${this.modelBusy}
+        @change=${(event:Event) => { const on = (event.target as HTMLInputElement).checked; this.loraPicks = on ? [...new Set([...this.loraPicks, name])] : this.loraPicks.filter((n) => n !== name); }}/>${name}${loaded.has(name) ? html`<span class="hint">applied</span>` : nothing}</label>`)}</div>
+    </label>
+    <div class="panel-actions">
+      <button class="secondary" ?disabled=${this.modelBusy || !changed} @click=${() => void this.applyLoras()}>${this.loraPicks.length ? "Apply LoRAs" : "Clear LoRAs"}</button>
+    </div>`;
   }
 
   /**
@@ -3212,7 +3559,33 @@ export class OppaiChat extends LitElement {
         <div class="grid">
           ${range("Temperature","temperature",0,2,.05,.85)}${range("Top P","top_p",.05,1,.05,.92)}
           ${range("Repetition penalty","repetition_penalty",1,2,.05,1.1)}${range("Max reply tokens","max_tokens",64,1536,32,512)}
+          ${range("Min P","min_p",0,.5,.01,.05)}${range("Top K","top_k",0,200,1,40)}
         </div>
+        ${this.status?.modelManagement ? html`<details class="samplers">
+          <summary>All text-generation-webui samplers<span class="hint">${Object.keys(conversation.options ?? {}).length ? `${Object.keys(conversation.options ?? {}).length} set` : "auto"}</span></summary>
+          <div class="grid">
+            ${range("Typical P","typical_p",0,1,.05,1)}${range("Repetition range","repetition_penalty_range",0,4096,128,1024)}
+            ${range("Presence penalty","presence_penalty",-2,2,.05,0)}${range("Frequency penalty","frequency_penalty",-2,2,.05,0)}
+            ${range("Smoothing factor","smoothing_factor",0,5,.05,0)}${range("No-repeat n-gram","no_repeat_ngram_size",0,20,1,0)}
+            ${range("DRY multiplier","dry_multiplier",0,5,.05,0)}${range("DRY base","dry_base",1,4,.05,1.75)}${range("DRY allowed length","dry_allowed_length",1,20,1,2)}
+            ${range("XTC threshold","xtc_threshold",0,.5,.01,.1)}${range("XTC probability","xtc_probability",0,1,.05,0)}
+            ${range("Mirostat mode","mirostat_mode",0,2,1,0)}${range("Mirostat tau","mirostat_tau",0,10,.1,5)}${range("Mirostat eta","mirostat_eta",0,1,.01,.1)}
+            ${range("Dynatemp low","dynatemp_low",0,2,.05,1)}${range("Dynatemp high","dynatemp_high",0,2,.05,1)}${range("Dynatemp exponent","dynatemp_exponent",0,5,.05,1)}
+            ${range("Seed (-1 random)","seed",-1,99999,1,-1)}
+          </div>
+          <div class="grid">
+            ${(["dynamic_temperature", "temperature_last", "do_sample", "ban_eos_token", "add_bos_token", "skip_special_tokens", "auto_max_new_tokens"] as const).map((key) => html`<label class="inline-check">
+              <input type="checkbox" .checked=${conversation.options?.[key] === true} .indeterminate=${conversation.options?.[key] == null}
+                @change=${(event:Event) => this.updateOptionValue(key, (event.target as HTMLInputElement).checked)}/>${key.replace(/_/g, " ")}${conversation.options?.[key] == null ? html`<span class="hint">auto</span>` : nothing}</label>`)}
+          </div>
+          <label>Grammar (GBNF)<textarea class="field" rows="2" .value=${String(conversation.options?.grammar_string ?? "")} @change=${(event:Event) => this.updateOptionValue("grammar_string", (event.target as HTMLTextAreaElement).value || undefined)}></textarea></label>
+          <label>Custom stop strings (one per line)<textarea class="field" rows="2" .value=${Array.isArray(conversation.options?.stop) ? (conversation.options!.stop as string[]).join("\n") : ""} @change=${(event:Event) => { const lines = (event.target as HTMLTextAreaElement).value.split("\n").map((l) => l.trim()).filter(Boolean); this.updateOptionValue("stop", lines.length ? lines : undefined); }}></textarea></label>
+          <div class="panel-actions">
+            <button class="secondary" ?disabled=${!this.status?.enabled} @click=${() => void this.stopGeneration()}>Stop generating now</button>
+            <button class="secondary" @click=${() => void this.measureCard(character)}>Measure the card</button>
+            ${this.cardTokens ? html`<span class="empty">Card: ${this.cardTokens.tokens.toLocaleString()} tokens${this.cardTokens.exact ? "" : " (estimated)"}${this.status?.contextLimit ? ` of ${this.status.contextLimit.toLocaleString()}` : ""}</span>` : nothing}
+          </div>
+        </details>` : nothing}
         ${this.lastSampling ? html`<div class="sampling">
           <span>Last reply sampled as <strong>${this.lastSampling.task}</strong>${this.lastSampling.overridden?.length ? html` — you overrode ${this.lastSampling.overridden.join(", ")}` : nothing}</span>
           <button class="secondary" @click=${() => void this.copySampling()}>Copy settings</button>
@@ -3911,6 +4284,7 @@ export class OppaiChat extends LitElement {
           { label:"Attach from the library", icon:"collections_bookmark", disabled:this.busy, run:() => this.openPicker() },
           { label:this.autopilot ? "Turn off autopilot" : "Let the AI continue on its own", icon:"smart_toy", run:() => this.toggleAutopilot() },
           { label:this.stageOpen ? "Hide portrait" : "Show portrait", icon:"wallpaper", run:() => (this.stageOpen = !this.stageOpen) },
+          { label:this.speakOn ? "Stop reading aloud" : "Read replies aloud", icon:this.speakOn ? "volume_off" : "volume_up", run:() => this.toggleSpeak() },
           menuDivider,
           { label:"New conversation", icon:"add_comment", run:() => this.newConversation() },
           { label:"Chat settings", icon:"tune", run:() => { this.settingsOpen = true; this.editorTab = "character"; } },
@@ -4005,7 +4379,7 @@ export class OppaiChat extends LitElement {
             @click=${() => friend && r.by === "user" ? this.react(message, r.emoji) : undefined}>${r.emoji}</button>`)}</div>` : nothing}
         </div>
         ${receipt ? html`<span class="receipt ${message.readAt ? "read" : ""}">${receipt}</span>` : nothing}
-        <span class="msg-actions"><button title="Reply" aria-label="Reply to this message" @click=${() => this.replyTo(message)}><span class="material-symbols-rounded" style="font-size:16px">reply</span></button>${friend ? html`<button title="React" aria-label="React to this message" @click=${() => (this.reactionPicker = picking ? null : message.id)}><span class="material-symbols-rounded" style="font-size:16px">add_reaction</span></button>` : nothing}${this.canRedo(message) ? html`<button title="Retry" aria-label="Ask for a different reply" ?disabled=${this.busy} @click=${() => void this.regenerate()}><span class="material-symbols-rounded" style="font-size:16px">refresh</span></button>` : nothing}${message.role === "user" ? html`<button title="Retry from here" aria-label="Retry from this message" ?disabled=${this.busy} @click=${() => void this.retryFrom(message)}><span class="material-symbols-rounded" style="font-size:16px">replay</span></button>` : nothing}<button title="Copy" @click=${() => void navigator.clipboard.writeText(message.content)}><span class="material-symbols-rounded" style="font-size:16px">content_copy</span></button><button title="Edit" @click=${() => this.editMessage(message)}><span class="material-symbols-rounded" style="font-size:16px">edit</span></button><button title="Delete" @click=${() => this.deleteMessage(message.id)}><span class="material-symbols-rounded" style="font-size:16px">delete</span></button></span>
+        <span class="msg-actions"><button title="Reply" aria-label="Reply to this message" @click=${() => this.replyTo(message)}><span class="material-symbols-rounded" style="font-size:16px">reply</span></button>${friend ? html`<button title="React" aria-label="React to this message" @click=${() => (this.reactionPicker = picking ? null : message.id)}><span class="material-symbols-rounded" style="font-size:16px">add_reaction</span></button><button title="Read aloud" aria-label="Read this message aloud" @click=${() => { stopSpeaking(); void speak(message.content); }}><span class="material-symbols-rounded" style="font-size:16px">volume_up</span></button>` : nothing}${this.canRedo(message) ? html`<button title="Retry" aria-label="Ask for a different reply" ?disabled=${this.busy} @click=${() => void this.regenerate()}><span class="material-symbols-rounded" style="font-size:16px">refresh</span></button>` : nothing}${message.role === "user" ? html`<button title="Retry from here" aria-label="Retry from this message" ?disabled=${this.busy} @click=${() => void this.retryFrom(message)}><span class="material-symbols-rounded" style="font-size:16px">replay</span></button>` : nothing}<button title="Copy" @click=${() => void navigator.clipboard.writeText(message.content)}><span class="material-symbols-rounded" style="font-size:16px">content_copy</span></button><button title="Edit" @click=${() => this.editMessage(message)}><span class="material-symbols-rounded" style="font-size:16px">edit</span></button><button title="Delete" @click=${() => this.deleteMessage(message.id)}><span class="material-symbols-rounded" style="font-size:16px">delete</span></button></span>
       </div>
     </article>`;
   }
@@ -4067,13 +4441,13 @@ export class OppaiChat extends LitElement {
     const presence = online ? this.status!.model : character.id === "libby" ? "Local replies" : "Model offline";
     const messages = conversation.messages;
     const hero=this.stageOpen?this.renderHero(character,conversation):nothing;
-    return html`<div class="client ${this.mobileNavOpen ? "nav-open" : ""} ${stage!==nothing ? "with-stage" : ""} ${this.callOpen ? "in-call" : ""}" @pointerdown=${this.armIdle} @contextmenu=${this.chatMenu}>${this.renderSidebar()}
+    return html`<div class="client ${this.mobileNavOpen ? "nav-open" : ""} ${stage!==nothing ? "with-stage" : ""} ${this.callOpen ? "in-call" : ""}" style=${this.stageWidth ? `--stage-w:${this.stageWidth}px` : ""} @pointerdown=${this.armIdle} @contextmenu=${this.chatMenu}>${this.renderSidebar()}
       <main class="main"><header class="top">
         <button class="icon-btn mobile-nav" title="Chats" aria-label="Back to chats" @click=${() => (this.mobileNavOpen=true)}><span class="material-symbols-rounded">arrow_back</span></button>
         ${this.avatar(character,"top-avatar")}
         <span class="top-title"><span class="name">${character.name}</span><span class="presence"><span class="status-dot ${online ? "online" : ""}"></span>${presence}${character.id === "libby" ? ` · ${conversation.emotion}${conversation.activity ? `, ${conversation.activity}` : ""}` : ` · ${channel.topic}`}</span></span>
         ${character.id === "libby" ? nothing : html`<select class="quick-mode" aria-label="Conversation mode" title="Conversation mode" .value=${conversation.mode} @change=${(event:Event) => this.updateConversation({mode:(event.target as HTMLSelectElement).value})}>${MODES.map((mode)=>html`<option value=${mode.id}>${mode.label}</option>`)}</select>`}
-        <span class="top-actions"><button class="icon-btn ${this.callOpen?"on":""}" title=${this.callOpen?"End call":"Video call"} aria-label=${this.callOpen?"End call":"Video call"} @click=${()=>this.callOpen?this.endCall():this.startCall()}><span class="material-symbols-rounded">${this.callOpen?"call_end":"videocam"}</span></button><button class="icon-btn ${this.autopilot?"on":""}" title=${this.autopilot?"Turn off autopilot":"Let the AI continue on its own"} aria-label="Autopilot" aria-pressed=${this.autopilot?"true":"false"} @click=${()=>this.toggleAutopilot()}><span class="material-symbols-rounded">smart_toy</span></button><button class="icon-btn stage-toggle ${this.stageOpen?"on":""}" title=${this.stageOpen?"Hide portrait":"Show portrait"} aria-label="Portrait" aria-pressed=${this.stageOpen?"true":"false"} @click=${()=>(this.stageOpen=!this.stageOpen)}><span class="material-symbols-rounded">wallpaper</span></button><button class="icon-btn destructive-action" title="Clear messages" aria-label="Clear messages" @click=${this.clearConversation}><span class="material-symbols-rounded">delete_sweep</span></button><button class="icon-btn ${this.settingsOpen?"on":""}" title="Chat settings" aria-label="Chat settings" @click=${()=>(this.settingsOpen=!this.settingsOpen)}><span class="material-symbols-rounded">tune</span></button></span>
+        <span class="top-actions"><button class="icon-btn ${this.callOpen?"on":""}" title=${this.callOpen?"End call":"Video call"} aria-label=${this.callOpen?"End call":"Video call"} @click=${()=>this.callOpen?this.endCall():this.startCall()}><span class="material-symbols-rounded">${this.callOpen?"call_end":"videocam"}</span></button><button class="icon-btn ${this.autopilot?"on":""}" title=${this.autopilot?"Turn off autopilot":"Let the AI continue on its own"} aria-label="Autopilot" aria-pressed=${this.autopilot?"true":"false"} @click=${()=>this.toggleAutopilot()}><span class="material-symbols-rounded">smart_toy</span></button><button class="icon-btn stage-toggle ${this.stageOpen?"on":""}" title=${this.stageOpen?"Hide portrait":"Show portrait"} aria-label="Portrait" aria-pressed=${this.stageOpen?"true":"false"} @click=${()=>(this.stageOpen=!this.stageOpen)}><span class="material-symbols-rounded">wallpaper</span></button><button class="icon-btn ${this.speakOn?"on":""}" title=${this.speakOn?"Stop reading replies aloud":"Read replies aloud"} aria-label="Voice" aria-pressed=${this.speakOn?"true":"false"} @click=${()=>this.toggleSpeak()}><span class="material-symbols-rounded">${this.speakOn?"volume_up":"volume_off"}</span></button><button class="icon-btn destructive-action" title="Clear messages" aria-label="Clear messages" @click=${this.clearConversation}><span class="material-symbols-rounded">delete_sweep</span></button><button class="icon-btn ${this.settingsOpen?"on":""}" title="Chat settings" aria-label="Chat settings" @click=${()=>(this.settingsOpen=!this.settingsOpen)}><span class="material-symbols-rounded">tune</span></button></span>
       </header>
         ${this.settingsOpen?this.renderSettings():nothing}
         ${this.loadError ? html`<div class="backend-state load-error" role="alert"><strong>Chat didn't load.</strong> ${this.loadError}
@@ -4105,6 +4479,7 @@ export class OppaiChat extends LitElement {
               <button type="button" class="attach-btn" style="border:0;background:transparent" title="Attach from the library" aria-label="Attach from the library" @click=${()=>this.openPicker()}><span class="material-symbols-rounded">collections_bookmark</span></button>
               <textarea rows="1" aria-label=${`Message ${character.name}`} placeholder=${this.busy?`${character.name} is replying — you can keep going…`:`Message ${character.name}…`} .value=${this.draft} @input=${(event:Event)=>{this.draft=(event.target as HTMLTextAreaElement).value;this.noticeLink();}} @keydown=${this.onKey}></textarea>
             </div>
+            ${this.busy && this.status?.modelManagement ? html`<button class="send stop" type="button" title="Stop the reply" aria-label="Stop the reply" @click=${() => void this.stopGeneration()}><span class="material-symbols-rounded">stop</span></button>` : nothing}
             <button class="send" type="submit" title="Send message" aria-label="Send message" ?disabled=${!this.draft.trim()&&!this.pendingPhoto&&!this.pendingItems.length}><span class="material-symbols-rounded">send</span></button>
           </div><div class="format-help"><span>"speech" · **action** · *emphasis* · ~~strike~~ · &#96;code&#96;</span><span class="send-help"></span></div></form>
       </main>${stage}${this.renderPicker2()}${this.renderIncomingCall(character)}${this.renderCall(character,conversation)}${this.renderSnapViewer()}

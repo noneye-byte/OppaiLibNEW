@@ -31,9 +31,11 @@ import (
 //   - She chooses. Like the mood tag, this is hers to set and clear — nothing here is
 //     assigned by the client or inferred from keywords. A state that persists until
 //     she changes it is the point: it is what she is doing, not a reaction to a line.
-//   - It is optional art. No bundled wardrobe draws these, and an outfit is not
-//     required to either. A state with no picture falls back to the emotion art, so
-//     declaring one never costs the user a broken sprite — see libbyAssetCandidates.
+//   - It is optional art for an outfit. The bundled wardrobe draws every state here
+//     (web/public/Libby_Default/default-libby-misc-<id>.png), and the clients fall to
+//     that when a worn outfit has no picture for the state, then to the emotion art —
+//     so declaring one never costs the user a broken sprite, and adding a state here
+//     before its art exists costs only the picture. See libbyAssetCandidates.
 //   - Heat gates the intimate half. Each state carries the meter level below which she
 //     does not enter it, and the server holds that line rather than trusting the
 //     prompt to. A model that writes [doing: vibrator] into a calm conversation is

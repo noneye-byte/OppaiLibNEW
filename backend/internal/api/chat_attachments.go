@@ -45,9 +45,13 @@ const (
 	// section competing with her character card for room.
 	maxSelfPictures = 24
 	// maxRecentMediaMemory bounds how many already-attached items a client may name.
-	// Matches maxRecentPhotoMemory — an item ruled out forever is an item removed from
-	// the library as far as this feature is concerned.
-	maxRecentMediaMemory = 12
+	// Wider than maxRecentPhotoMemory on purpose: her gallery is a few dozen pictures
+	// and ruling twelve out forever would empty it, but the library is hundreds or
+	// thousands of items, and a long evening of "what else have you got" was coming
+	// back round to the thirteenth-most-recent video. An item ruled out forever is
+	// still an item removed from the library as far as this feature is concerned, so
+	// the window is bounded rather than the whole conversation.
+	maxRecentMediaMemory = 40
 )
 
 // libbyAttachment is one library item a reply hands over. It carries exactly what a
