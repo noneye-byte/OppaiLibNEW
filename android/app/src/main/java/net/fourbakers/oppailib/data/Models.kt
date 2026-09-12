@@ -271,6 +271,11 @@ data class ChatMessage(
     val id: String = "",
     /** The earlier message this one answers, when it was written as a reply. */
     val replyTo: ChatReplyRef? = null,
+    /** The chat image this message carried, so the server can say what was in it on
+        every later turn rather than only the one it was sent on. */
+    val imageId: String = "",
+    /** Library items this message attached, by id, for the same reason. */
+    val mediaIds: List<Long> = emptyList(),
 )
 
 /**
@@ -327,6 +332,9 @@ data class ChatRequest(
      * her, in the prompt, whether the face is still true.
      */
     val recentMoods: List<String> = emptyList(),
+    /** The heat her last replies sat at, oldest first — the same bookkeeping, so a
+        number that has not moved all evening can be noticed. */
+    val recentHeat: List<Int> = emptyList(),
     /**
      * Whether the user has her on the call screen rather than in the message log.
      *
@@ -570,6 +578,9 @@ data class StoredChatMessage(
         expressions the server is told about, and carried through this client so a
         workspace round-trip does not erase what the web UI recorded. */
     val mood: String = "",
+    /** The heat this reply sat at, kept beside the mood for the same reason. Zero
+        means unknown (a message from before this existed). */
+    val heat: Int = 0,
     /** The earlier message this one answers, drawn as a quote above it. */
     val replyTo: ChatReplyRef? = null,
 )

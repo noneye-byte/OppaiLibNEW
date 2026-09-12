@@ -134,8 +134,78 @@ func normalizeBackgroundTags(raw []string) []string {
 	return out
 }
 
+// ── the default room ─────────────────────────────────────────────────────────
+//
+// Where she is when nobody has said. A conversation that has never moved her used to
+// open on the plain stage, which is fine for a portrait and wrong for a call: a call
+// has a room behind the person. So one background can be marked the default, and a
+// conversation with no room of its own is in it — for her, who is told so, and for
+// the client, which draws it. Stored beside the backgrounds as one small record; the
+// id only, since the record it points at is the thing that has a name and a picture.
+
+func (s *Server) libbyDefaultBackgroundPath() string {
+	return filepath.Join(s.libbyBackgroundDir(), "default.json")
+}
+
+// defaultLibbyBackground is the default room's id, or "" when none is set or the
+// one that was set has since been deleted.
+func (s *Server) defaultLibbyBackground() string {
+	raw, err := os.ReadFile(s.libbyDefaultBackgroundPath())
+	if err != nil {
+		return ""
+	}
+	var rec struct {
+		ID string `json:"id"`
+	}
+	if json.Unmarshal(raw, &rec) != nil || !charIDPattern.MatchString(rec.ID) {
+		return ""
+	}
+	if _, err := s.readLibbyBackground(rec.ID); err != nil {
+		return ""
+	}
+	return rec.ID
+}
+
 func (s *Server) handleListLibbyBackgrounds(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"backgrounds": s.listLibbyBackgrounds()})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"backgrounds": s.listLibbyBackgrounds(),
+		"default":     s.defaultLibbyBackground(),
+	})
+}
+
+// handleSetLibbyDefaultBackground marks one background as the default, or clears it
+// with an empty id.
+func (s *Server) handleSetLibbyDefaultBackground(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	if req.ID == "" {
+		_ = os.Remove(s.libbyDefaultBackgroundPath())
+		writeJSON(w, http.StatusOK, map[string]any{"default": ""})
+		return
+	}
+	if !charIDPattern.MatchString(req.ID) {
+		writeErr(w, http.StatusBadRequest, "bad background id")
+		return
+	}
+	if _, err := s.readLibbyBackground(req.ID); err != nil {
+		writeErr(w, http.StatusNotFound, "no such background")
+		return
+	}
+	if err := os.MkdirAll(s.libbyBackgroundDir(), 0o755); err != nil {
+		writeErr(w, http.StatusInternalServerError, "storage error")
+		return
+	}
+	raw, _ := json.Marshal(map[string]string{"id": req.ID})
+	if err := os.WriteFile(s.libbyDefaultBackgroundPath(), raw, 0o600); err != nil {
+		writeErr(w, http.StatusInternalServerError, "write failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"default": req.ID})
 }
 
 type saveLibbyBackgroundReq struct {
@@ -195,6 +265,11 @@ func (s *Server) handleDeleteLibbyBackground(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	_ = os.Remove(s.libbyBackgroundImagePath(id))
+	if s.defaultLibbyBackground() == "" {
+		// Deleting the default clears it; the record reads as unset once its target
+		// is gone, so this only tidies the file.
+		_ = os.Remove(s.libbyDefaultBackgroundPath())
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 }
 
@@ -319,6 +394,11 @@ func resolveBackground(label string, backgrounds []libbyBackgroundView) (id stri
 // resolve against and teaching it would only put a tag in her prose. Written as a
 // standing fact about the place rather than a menu, for the reason the activity
 // directive is: handed a list and an instruction a model works through the list.
+//
+// The room is asked to follow the mood as well as the plot. Left as "move when you
+// move", a model moves her when the text says she walked somewhere and otherwise
+// never; what is wanted is that a conversation which has turned late, tender or
+// heated finds itself somewhere that fits, the way the mood tag finds a face.
 func backgroundDirective(backgrounds []libbyBackgroundView, current string) string {
 	var places []string
 	for _, bg := range backgrounds {
@@ -336,7 +416,8 @@ func backgroundDirective(backgrounds []libbyBackgroundView, current string) stri
 	}
 	var b strings.Builder
 	b.WriteString("Places you can be, which is what they see behind you on a call: " + strings.Join(places, "; ") + ". ")
-	b.WriteString("Write [scene: <place name>] when you move somewhere else — going to bed, taking this outside, settling on the sofa — and it stays until you move again. Not per message; never mention it.")
+	b.WriteString("Write [scene: <place name>] when you move — going to bed, taking this outside, settling on the sofa — and also when the mood has moved and the room no longer fits it: " +
+		"somewhere softer as it turns tender or late, somewhere more private as it heats, somewhere ordinary once it cools. It stays until you move again. Not per message; never mention it.")
 	for _, bg := range backgrounds {
 		if bg.ID == current {
 			b.WriteString(" Right now you are in " + bg.Name + ".")

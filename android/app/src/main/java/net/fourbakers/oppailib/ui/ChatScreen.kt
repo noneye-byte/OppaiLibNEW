@@ -585,7 +585,9 @@ fun ChatScreen(
             // lines hands the model words she did not speak and teaches it that the format
             // belongs inline. Continuity is carried by her memory and the bond instead.
             // Ids and quoted replies ride along so she can point at an earlier message.
-            val history = pending.messages.filter { it.thought.isBlank() }.map { ChatMessage(it.role, it.content, it.id, it.replyTo) } +
+            val history = pending.messages.filter { it.thought.isBlank() }.map {
+                ChatMessage(it.role, it.content, it.id, it.replyTo, imageId = it.imageId, mediaIds = it.attachments.map { a -> a.id })
+            } +
                 if (nudge.isBlank()) emptyList() else listOf(ChatMessage("user", "(Try that reply again. $nudge Do not mention this note.)"))
             val startedAt = System.currentTimeMillis()
             typingPhase = TypingPhase.TYPING
@@ -614,6 +616,7 @@ fun ChatScreen(
                         // How long she has looked the same. One entry per reply, since
                         // only a spoken message records a mood.
                         recentMoods = pending.messages.mapNotNull { it.mood.ifBlank { null } }.takeLast(8),
+                        recentHeat = pending.messages.filter { it.role == "assistant" && it.heat > 0 }.map { it.heat }.takeLast(8),
                         // That they have her full-screen and are watching her answer.
                         call = callOpen,
                         // What she is already doing, and where. States, not per-message values.
@@ -664,7 +667,7 @@ fun ChatScreen(
                         imageId = reply.imageId, links = reply.links,
                         attachments = reply.attachments, actions = reply.actions,
                         // What she looked like saying it, for the run the next turn reports.
-                        mood = reply.emotion,
+                        mood = reply.emotion, heat = level,
                         // The earlier message she answered, when she quoted one.
                         replyTo = reply.replyTo,
                     ))
@@ -1284,15 +1287,6 @@ private fun LibbyVideoCall(
                         ).joinToString(" · "),
                         color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis,
                     )
-                    Row(horizontalArrangement = Arrangement.spacedBy(3.dp), modifier = Modifier.padding(top = 2.dp)) {
-                        repeat(LibbyMeter.MAX) { index ->
-                            Box(
-                                Modifier.size(5.dp).clip(CircleShape).background(
-                                    if (index < tier) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = .28f),
-                                ),
-                            )
-                        }
-                    }
                 }
             }
             // Subtitles: the last few lines, yours tinted, hers plain, the newest brightest.
@@ -2436,11 +2430,6 @@ private fun LibbyChatBanner(
                 (if (busy) "Typing…" else status) + " · " + emotion + (if (conversation.activity.isNotBlank()) ", ${conversation.activity}" else ""),
                 color = ChatColors.muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
-            Row(Modifier.padding(top = 5.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                repeat(LibbyMeter.MAX) { step ->
-                    Box(Modifier.width(20.dp).height(4.dp).clip(RoundedCornerShape(2.dp)).background(if (step < tier) accent else ChatColors.input))
-                }
-            }
         }
         Row(
             Modifier.align(Alignment.BottomEnd).padding(end = 10.dp, bottom = 8.dp)

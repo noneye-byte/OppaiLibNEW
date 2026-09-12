@@ -223,10 +223,12 @@ export function libbyAssetCandidates(
   // draws twelve expressions and no activities, so there is nothing to fall back to
   // within it. The chain simply continues into the emotion art below, which is why
   // declaring a state never costs the user a broken sprite.
+  //
+  // One picture per state, whatever the heat: what she is doing does not change with
+  // the meter the way her face does, so a MISC slot has no tiers to walk. The server
+  // answers the plain URL with the one square it holds.
   if (activity && outfit && outfit !== "default") {
-    const base = `/api/libby/outfits/${encodeURIComponent(outfit)}/emotions/${encodeURIComponent(activity)}`;
-    for (let tier = level - 1; tier >= 1; tier--) paths.push(`${base}?level=${tier}`);
-    paths.push(base);
+    paths.push(`/api/libby/outfits/${encodeURIComponent(outfit)}/emotions/${encodeURIComponent(activity)}`);
   }
   if (outfit && outfit !== "default") {
     // Outfits can carry a separate image per horniness tier (server levels 0..4,

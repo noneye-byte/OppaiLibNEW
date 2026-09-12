@@ -57,6 +57,15 @@ func (s *Server) libbyWIPPath(id, emotion string, level int) string {
 
 func (s *Server) readLibbyWIP(id, emotion string, level int) (*libbyWIPSquare, error) {
 	blob, err := os.ReadFile(s.libbyWIPPath(id, emotion, level))
+	if err != nil && libbyActivityValid(emotion) {
+		// A MISC square is one square now; one written at a tier before that still
+		// counts as it. See slotLevel.
+		for _, l := range slotLevels(emotion, level) {
+			if blob, err = os.ReadFile(s.libbyWIPPath(id, emotion, l)); err == nil {
+				break
+			}
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -113,6 +122,15 @@ func (s *Server) handleListLibbyOutfitWIP(w http.ResponseWriter, r *http.Request
 	}
 	out := []libbyWIPSquare{}
 	for _, e := range libbySlots {
+		if libbyActivityValid(e) {
+			// One square per MISC state, reported at level 0 whatever tier it was
+			// written at, so the studio's single MISC row finds it.
+			if sq, err := s.readLibbyWIP(id, e, 0); err == nil {
+				sq.Image, sq.Level = nil, 0
+				out = append(out, *sq)
+			}
+			continue
+		}
 		for level := 0; level <= maxLibbyLevel; level++ {
 			sq, err := s.readLibbyWIP(id, e, level)
 			if err != nil {
@@ -167,7 +185,7 @@ func (s *Server) handlePutLibbyOutfitWIP(w http.ResponseWriter, r *http.Request)
 		writeErr(w, http.StatusBadRequest, "image is empty or too large")
 		return
 	}
-	level := libbyLevelParam(r)
+	level := slotLevel(emotion, libbyLevelParam(r))
 	sq := libbyWIPSquare{
 		Emotion: emotion, Level: level,
 		Filename: req.Filename, Seed: req.Seed, Reviewed: req.Reviewed, Config: req.Config,
@@ -192,6 +210,11 @@ func (s *Server) handlePutLibbyOutfitWIP(w http.ResponseWriter, r *http.Request)
 	if err := os.WriteFile(s.libbyWIPPath(id, emotion, level), blob, 0o600); err != nil {
 		writeErr(w, http.StatusInternalServerError, "write failed")
 		return
+	}
+	if libbyActivityValid(emotion) {
+		for l := 1; l <= maxLibbyLevel; l++ {
+			_ = os.Remove(s.libbyWIPPath(id, emotion, l))
+		}
 	}
 	sq.Image = nil
 	writeJSON(w, http.StatusOK, sq)
@@ -225,6 +248,8 @@ func (s *Server) handleDeleteLibbyOutfitWIP(w http.ResponseWriter, r *http.Reque
 		writeErr(w, http.StatusBadRequest, "bad outfit id or slot")
 		return
 	}
-	_ = os.Remove(s.libbyWIPPath(id, emotion, libbyLevelParam(r)))
+	for _, l := range slotLevels(emotion, libbyLevelParam(r)) {
+		_ = os.Remove(s.libbyWIPPath(id, emotion, l))
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 }

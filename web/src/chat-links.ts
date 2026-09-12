@@ -60,6 +60,16 @@ export function recentMoods(messages: StoredChatMessage[], limit = 8): string[] 
   return moods.slice(-limit);
 }
 
+/** The heat her last replies sat at, oldest first — the same bookkeeping as
+    recentMoods, so the server can notice a number that has not moved all evening. */
+export function recentHeat(messages: StoredChatMessage[], limit = 8): number[] {
+  const heat: number[] = [];
+  for (const message of messages) {
+    if (message.role === "assistant" && typeof message.heat === "number") heat.push(message.heat);
+  }
+  return heat.slice(-limit);
+}
+
 /** Asks the app shell to open a library item. Chat lives inside Library, which
     knows how to route it; nothing below here needs to know that. */
 export const OPEN_MEDIA_EVENT = "oppai-open-media";

@@ -51,7 +51,8 @@ const LIBBY_TIERS: string[] = ["Calm", "Warm", "Flirty", "Heated", "Peak"];
     exactly this many squares, and the two counts must not drift apart. */
 const TOTAL_SLOTS = LIBBY_EMOTION_SLOTS.length * LIBBY_TIERS.length;
 
-/** Key for a staged/existing (emotion, tier) slot. */
+/** Key for a staged/existing (emotion, tier) slot. A MISC state has one square, at
+    tier 0, whatever tier the editor happens to be showing. */
 const slotKey = (emotion: string, level: number) => `${emotion}:${level}`;
 
 /**
@@ -71,6 +72,9 @@ interface OutfitDraft {
   existing: string[];
   /** Newly dropped art as data URLs, keyed "emotion:level". */
   staged: Record<string, string>;
+  /** Squares whose art is to be removed on Save, keyed the same way. Staged like a
+      drop, so backing out of the editor costs nothing. */
+  removed: string[];
   /** Which tier the editor is currently showing. */
   level: number;
 }
@@ -91,6 +95,8 @@ export class OppaiOutfitWardrobe extends LitElement {
   @state() private activities: LibbyActivityDef[] = [];
   /** The places she can be on a call, managed below the wardrobes. */
   @state() private backgrounds: LibbyBackground[] = [];
+  /** Which room she is in when a conversation has not said. See libby_backgrounds.go. */
+  @state() private defaultBackground = "";
   @state() private backgroundDraft: { id?: string; name: string; tags: string; image?: string; hasImage?: boolean } | null = null;
   @state() private backgroundBusy = false;
   @state() private backgroundVersion = 0;
@@ -363,6 +369,29 @@ export class OppaiOutfitWardrobe extends LitElement {
         font-size: 11px;
         color: var(--oppai-text-muted);
       }
+      .slot { position: relative; }
+      .slot.removed img { opacity: 0.3; filter: grayscale(1); }
+      /* Edit and remove sit on the art and appear on hover, like the card's Edit:
+         the common case is dropping a picture on the square, and two permanent
+         buttons under every one of sixty squares would bury that. */
+      .slot .slot-actions {
+        position: absolute; top: 14px; right: 14px; display: flex; gap: 4px; opacity: 0; transition: opacity 0.12s;
+      }
+      .slot:hover .slot-actions, .slot:focus-within .slot-actions { opacity: 1; }
+      .slot-act {
+        width: 26px; height: 26px; border: 0; border-radius: 7px; display: grid; place-items: center; cursor: pointer;
+        background: rgba(0, 0, 0, 0.6); color: #fff; font: inherit;
+      }
+      .slot-act.danger { color: #f2b8b5; }
+      .default-badge {
+        position: absolute; top: 8px; left: 8px; background: var(--oppai-accent); color: var(--oppai-on-accent);
+        border-radius: 999px; font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; padding: 3px 8px;
+      }
+      .outfit-card .card-build {
+        position: absolute; top: 6px; right: 52px; border: 0; border-radius: 8px; background: rgba(0, 0, 0, 0.55); color: #fff;
+        font: inherit; font-size: 11px; padding: 4px 8px; cursor: pointer; opacity: 0; transition: opacity 0.12s;
+      }
+      .outfit-card:hover .card-build, .outfit-card:focus-within .card-build { opacity: 1; }
       /* The heading over the MISC grid. A heading rather than a second panel: these
          squares upload through the same endpoint and save with the same button, so
          framing them as a separate thing would be lying about how they work. */
@@ -398,8 +427,22 @@ export class OppaiOutfitWardrobe extends LitElement {
   }
 
   private async loadBackgrounds() {
-    try { this.backgrounds = (await api.libbyBackgrounds()).backgrounds; }
-    catch { /* An older server has none; the section simply shows nothing to pick. */ }
+    try {
+      const res = await api.libbyBackgrounds();
+      this.backgrounds = res.backgrounds;
+      this.defaultBackground = res.default ?? "";
+    } catch { /* An older server has none; the section simply shows nothing to pick. */ }
+  }
+
+  /** Marks a room as where she is by default, or clears it. */
+  private async setDefaultBackground(id: string) {
+    try {
+      const res = await api.setLibbyDefaultBackground(id);
+      this.defaultBackground = res.default;
+      mascotSay(id ? "That's where she'll be unless a conversation moves her." : "No default room — the plain stage until she moves.", "success");
+    } catch (e) {
+      mascotSay((e as Error).message || "Couldn't set the default background.", "error");
+    }
   }
 
   private async loadOutfits() {
@@ -424,10 +467,10 @@ export class OppaiOutfitWardrobe extends LitElement {
     return html`
       <div class="wardrobe-intro">
         An outfit swaps Libby's artwork: one sprite per expression, per heat tier —
-        ${TOTAL_SLOTS} in all for a complete wardrobe, plus the optional Misc states she
-        can put herself into. Anything left empty falls back to the calmer art, then to
-        her expression, then to the bundled default. Which outfit she wears is
-        per-device.
+        ${TOTAL_SLOTS} in all for a complete wardrobe — plus one picture for each of the
+        optional Misc states she can put herself into. Anything left empty falls back to
+        the calmer art, then to her expression, then to the bundled default. Which outfit
+        she wears is per-device. Click a card to wear it; Build opens it on the board.
       </div>
       ${this.outfitError ? html`<div class="wardrobe-error" role="alert">${this.outfitError}</div>` : nothing}
       <div class="outfit-cards">
@@ -448,7 +491,7 @@ export class OppaiOutfitWardrobe extends LitElement {
         ${this.outfits.map((o) => this.renderOutfitCard(o))}
         <button
           class="outfit-card"
-          @click=${() => (this.outfitDraft = { name: "", existing: [], staged: {}, level: 0 })}
+          @click=${() => (this.outfitDraft = { name: "", existing: [], staged: {}, removed: [], level: 0 })}
           title="Create a new outfit"
         >
           <div class="cover-empty">
@@ -476,12 +519,13 @@ export class OppaiOutfitWardrobe extends LitElement {
   private renderBackgrounds() {
     const d = this.backgroundDraft;
     return html`
-      <div class="scene-head"><h3>Backgrounds</h3><span class="wardrobe-intro" style="margin:0">Rooms for the video call. Tag them so she can choose where she is.</span></div>
+      <div class="scene-head"><h3>Backgrounds</h3><span class="wardrobe-intro" style="margin:0">Rooms for the video call. Tag them so she can choose where she is; mark one as the default and every conversation starts there. A generated picture can become one from its right-click menu.</span></div>
       <div class="scene-cards">
         ${this.backgrounds.map((bg) => html`<button class="scene-card" title="Edit ${bg.name}" @click=${() => this.openBackgroundEditor(bg)}>
           ${bg.hasImage
             ? html`<img class="cover" src=${api.libbyBackgroundURL(bg.id, this.backgroundVersion)} alt=${bg.name} loading="lazy" />`
             : html`<div class="cover-empty">No picture yet</div>`}
+          ${bg.id === this.defaultBackground ? html`<span class="default-badge">Default</span>` : nothing}
           <div class="card-body"><div class="card-name">${bg.name}</div><div class="card-meta">${bg.tags.length ? bg.tags.join(", ") : "No tags — she can only pick it by name"}</div></div>
         </button>`)}
         <button class="scene-card" title="Add a background" @click=${() => (this.backgroundDraft = { name: "", tags: "" })}>
@@ -507,6 +551,11 @@ export class OppaiOutfitWardrobe extends LitElement {
         <div class="scene-actions">
           <button class="outfit-btn on" ?disabled=${this.backgroundBusy || !d.name.trim()} @click=${() => void this.saveBackground()}>${d.id ? "Save" : "Add background"}</button>
           <button class="outfit-btn" ?disabled=${this.backgroundBusy} @click=${() => (this.backgroundDraft = null)}>Cancel</button>
+          ${d.id && d.hasImage ? html`<button class="outfit-btn ${d.id === this.defaultBackground ? "on" : ""}" ?disabled=${this.backgroundBusy}
+            title="Where she is when a conversation has not moved her"
+            @click=${() => void this.setDefaultBackground(d.id === this.defaultBackground ? "" : d.id!)}>
+            ${d.id === this.defaultBackground ? "Default room ✓" : "Make this the default"}
+          </button>` : nothing}
           ${d.id ? html`<button class="outfit-btn danger" ?disabled=${this.backgroundBusy} @click=${() => void this.deleteBackground()}>Delete</button>` : nothing}
         </div>
       </div>` : nothing}
@@ -575,7 +624,23 @@ export class OppaiOutfitWardrobe extends LitElement {
     for (const [activity, levels] of Object.entries(o.activityLevels ?? {})) {
       for (const level of levels) existing.push(slotKey(activity, level));
     }
-    this.outfitDraft = { id: o.id, name: o.name, existing, staged: {}, level: 0, hasCover: o.hasThumb !== false };
+    this.outfitDraft = { id: o.id, name: o.name, existing, staged: {}, removed: [], level: 0, hasCover: o.hasThumb !== false };
+  }
+
+  /** Whether a slot id is one of the MISC states, which have one square each. */
+  private isActivity(id: string): boolean {
+    return this.activities.some((activity) => activity.id === id);
+  }
+
+  /** Stages a square's art for removal on Save, or un-stages it. */
+  private toggleRemove(key: string) {
+    const d = this.outfitDraft;
+    if (!d) return;
+    const removed = d.removed.includes(key) ? d.removed.filter((k) => k !== key) : [...d.removed, key];
+    // Removing wins over a drop staged for the same square: the drop is discarded.
+    const staged = { ...d.staged };
+    if (!d.removed.includes(key)) delete staged[key];
+    this.outfitDraft = { ...d, removed, staged };
   }
 
   /**
@@ -587,12 +652,14 @@ export class OppaiOutfitWardrobe extends LitElement {
    * quietly stopped behaving the same way.
    */
   private renderSlot(d: OutfitDraft, id: string, label: string, hint: string) {
-    const key = slotKey(id, d.level);
+    const level = this.isActivity(id) ? 0 : d.level;
+    const key = slotKey(id, level);
     const staged = d.staged[key];
-    const existing = !staged && d.id && d.existing.includes(key) ? api.libbyEmotionURL(d.id, id, d.level) : "";
+    const removed = d.removed.includes(key);
+    const existing = !staged && d.id && d.existing.includes(key) ? api.libbyEmotionURL(d.id, id, level, this.outfitCoverVersion) : "";
     return html`
       <label
-        class="slot"
+        class="slot ${removed ? "removed" : ""}"
         @dragover=${(e: DragEvent) => { e.preventDefault(); (e.currentTarget as HTMLElement).classList.add("dragover"); }}
         @dragleave=${(e: DragEvent) => (e.currentTarget as HTMLElement).classList.remove("dragover")}
         @drop=${(e: DragEvent) => {
@@ -606,7 +673,15 @@ export class OppaiOutfitWardrobe extends LitElement {
           : existing
             ? html`<img src=${existing} alt=${label} />`
             : html`<div class="drop-hint">Drop an image here<br />or click to browse</div>`}
-        <div class="slot-label">${label}</div>
+        ${existing || staged ? html`<span class="slot-actions">
+          ${existing && d.id ? html`<button type="button" class="slot-act" title="Edit this sprite in the studio — adjust the cutout, redo it, or replace it"
+            @click=${(e: Event) => { e.preventDefault(); e.stopPropagation(); this.requestEdit(d.id!, id, level); }}>
+            <span class="material-symbols-rounded" style="font-size:16px;">edit</span></button>` : nothing}
+          <button type="button" class="slot-act danger" title=${removed ? "Keep this sprite after all" : staged ? "Discard the dropped picture" : "Remove this sprite on save"}
+            @click=${(e: Event) => { e.preventDefault(); e.stopPropagation(); staged ? this.unstage(key) : this.toggleRemove(key); }}>
+            <span class="material-symbols-rounded" style="font-size:16px;">${removed ? "undo" : "delete"}</span></button>
+        </span>` : nothing}
+        <div class="slot-label">${label}${removed ? " — removing" : ""}</div>
         <div class="slot-hint">${hint}</div>
         <input
           type="file"
@@ -696,19 +771,43 @@ export class OppaiOutfitWardrobe extends LitElement {
   }
 
   /** Reads a dropped/picked image file into the draft's staging area for the given
-      emotion at the tier currently open in the editor. */
+      slot at the tier currently open in the editor (a MISC state is always tier 0). */
   private stageEmotion(emotion: string, file: File | undefined) {
     if (!file || !file.type.startsWith("image/") || !this.outfitDraft) return;
-    const key = slotKey(emotion, this.outfitDraft.level);
+    const key = slotKey(emotion, this.isActivity(emotion) ? 0 : this.outfitDraft.level);
     const reader = new FileReader();
     reader.onload = () => {
       if (!this.outfitDraft) return;
       this.outfitDraft = {
         ...this.outfitDraft,
         staged: { ...this.outfitDraft.staged, [key]: String(reader.result) },
+        removed: this.outfitDraft.removed.filter((k) => k !== key),
       };
     };
     reader.readAsDataURL(file);
+  }
+
+  /** Drops a staged picture without touching what the server has. */
+  private unstage(key: string) {
+    const d = this.outfitDraft;
+    if (!d) return;
+    const staged = { ...d.staged };
+    delete staged[key];
+    this.outfitDraft = { ...d, staged };
+  }
+
+  /**
+   * Asks the studio to open a finished sprite for editing.
+   *
+   * The wardrobe editor can replace a square but cannot adjust one — the cutout
+   * editor and the generator live on the board — so it hands the square over. The
+   * editor closes; the studio, if it is listening, takes it from here.
+   */
+  private requestEdit(outfitId: string, slot: string, level: number) {
+    this.outfitDraft = null;
+    this.dispatchEvent(new CustomEvent("edit-slot", {
+      detail: { outfitId, slot, level }, bubbles: true, composed: true,
+    }));
   }
 
   private async saveOutfit() {
@@ -718,10 +817,17 @@ export class OppaiOutfitWardrobe extends LitElement {
     try {
       // Create (or rename) first so the emotion uploads have an id to hang off.
       const saved = await api.saveLibbyOutfit({ id: d.id, name: d.name.trim() });
+      for (const key of d.removed) {
+        const [emotion, level] = key.split(":");
+        await api.deleteLibbyEmotion(saved.id, emotion, Number(level)).catch(() => undefined);
+      }
       for (const [key, dataUrl] of Object.entries(d.staged)) {
         const [emotion, level] = key.split(":");
         await api.setLibbyEmotion(saved.id, emotion, dataUrl, Number(level));
       }
+      // Sprite URLs are stable, so a replaced square would keep showing the picture
+      // the browser already has. Bumping the version is what makes the save visible.
+      this.outfitCoverVersion = Date.now();
       if (d.cover) {
         await api.setLibbyOutfitThumb(saved.id, d.cover);
         // The cover URL is otherwise stable, so a card would keep showing the picture
@@ -797,6 +903,19 @@ export class OppaiOutfitWardrobe extends LitElement {
           />`}
       ${worn ? html`<span class="worn-badge">Wearing</span>` : nothing}
       <span
+        class="card-build"
+        role="button"
+        tabindex="0"
+        title=${`Open “${o.name}” on the board to generate or fix its squares`}
+        @click=${(e: Event) => { e.stopPropagation(); this.requestBuild(o.id); }}
+        @keydown=${(e: KeyboardEvent) => {
+          if (e.key !== "Enter" && e.key !== " ") return;
+          e.preventDefault();
+          e.stopPropagation();
+          this.requestBuild(o.id);
+        }}
+      >Build</span>
+      <span
         class="card-edit"
         role="button"
         tabindex="0"
@@ -821,6 +940,11 @@ export class OppaiOutfitWardrobe extends LitElement {
         </div>
       </div>
     </button>`;
+  }
+
+  /** Asks the studio to open this wardrobe on its board. */
+  private requestBuild(outfitId: string) {
+    this.dispatchEvent(new CustomEvent("build-outfit", { detail: { outfitId }, bubbles: true, composed: true }));
   }
 
   private renderOutfitEditor(d: OutfitDraft) {
@@ -857,11 +981,12 @@ export class OppaiOutfitWardrobe extends LitElement {
             <h4 class="slot-group">Misc — what she is doing</h4>
             <p class="tier-note">
               Optional, and separate from her expressions: these are the states she can
-              put herself into — curled up reading, dozing, or a good deal less idle. She
-              chooses one to fit the scene, and a state you have not drawn simply falls
-              back to her expression, so there is no wrong number to leave empty. The
-              intimate ones only become available to her as the heat climbs. Typing is
-              the exception: the app shows it while she is writing you a reply.
+              put herself into — curled up reading, dozing, or a good deal less idle. One
+              picture each, whatever the heat tier above says. She chooses one to fit the
+              scene, and a state you have not drawn simply falls back to her expression,
+              so there is no wrong number to leave empty. The intimate ones only become
+              available to her as the heat climbs. Typing is the exception: the app shows
+              it while she is writing you a reply.
             </p>
             <div class="slots">
               ${this.activities.map((activity) => this.renderSlot(d, activity.id, activity.auto ? `${activity.label} — while she writes` : activity.label,

@@ -86,6 +86,42 @@ func libbyLevelParam(r *http.Request) int {
 	return n
 }
 
+// slotLevel is the tier a slot actually stores art at.
+//
+// The expressions are drawn once per heat tier, because a face changes with the
+// heat. The MISC states are not: what she is doing is one picture, and drawing
+// "reading" five times over was a hundred and twenty squares of busywork that no
+// wardrobe ever finished. So a MISC slot has exactly one square, at level 0, and a
+// request naming any other tier for one lands there. Legacy files written at higher
+// tiers before this are still read (see slotLevels) so nothing already drawn is lost.
+func slotLevel(slot string, level int) int {
+	if libbyActivityValid(slot) {
+		return 0
+	}
+	return level
+}
+
+// slotLevels is every tier a slot may have art at, the preferred one first. An
+// expression answers with the requested tier only; a MISC slot answers with its one
+// square and then any tier a pre-consolidation client wrote it at.
+func slotLevels(slot string, level int) []int {
+	if !libbyActivityValid(slot) {
+		return []int{level}
+	}
+	return []int{0, 1, 2, 3, 4}
+}
+
+// libbySlotArtPath is where a slot's art is read from: the first tier that has it.
+func (s *Server) libbySlotArtPath(id, slot string, level int) (string, bool) {
+	for _, l := range slotLevels(slot, level) {
+		path := s.libbyEmotionPath(id, slot, l)
+		if _, err := os.Stat(path); err == nil {
+			return path, true
+		}
+	}
+	return s.libbyEmotionPath(id, slot, slotLevel(slot, level)), false
+}
+
 type libbyOutfit struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
@@ -160,13 +196,16 @@ func (s *Server) libbyOutfitView(o *libbyOutfit) libbyOutfitView {
 		EmotionLevels: map[string][]int{}, ActivityLevels: map[string][]int{},
 	}
 	for _, slot := range libbySlots {
+		if libbyActivityValid(slot) {
+			// One square per MISC state, whichever tier it was written at.
+			if _, ok := s.libbySlotArtPath(o.ID, slot, 0); ok {
+				v.ActivityLevels[slot] = []int{0}
+				v.ActivitySlots++
+			}
+			continue
+		}
 		for level := 0; level <= maxLibbyLevel; level++ {
 			if _, err := os.Stat(s.libbyEmotionPath(o.ID, slot, level)); err != nil {
-				continue
-			}
-			if libbyActivityValid(slot) {
-				v.ActivityLevels[slot] = append(v.ActivityLevels[slot], level)
-				v.ActivitySlots++
 				continue
 			}
 			v.Slots++
@@ -423,9 +462,17 @@ func (s *Server) handleSetLibbyEmotion(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "encrypt failed")
 		return
 	}
-	if err := os.WriteFile(s.libbyEmotionPath(id, emotion, libbyLevelParam(r)), blob, 0o600); err != nil {
+	level := slotLevel(emotion, libbyLevelParam(r))
+	if err := os.WriteFile(s.libbyEmotionPath(id, emotion, level), blob, 0o600); err != nil {
 		writeErr(w, http.StatusInternalServerError, "write failed")
 		return
+	}
+	// A MISC square written now supersedes any tiered copies from before there was
+	// only one, so the outfit does not keep serving an older take from a higher tier.
+	if libbyActivityValid(emotion) {
+		for l := 1; l <= maxLibbyLevel; l++ {
+			_ = os.Remove(s.libbyEmotionPath(id, emotion, l))
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 }
@@ -436,7 +483,8 @@ func (s *Server) handleGetLibbyEmotion(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad outfit id or slot")
 		return
 	}
-	blob, err := os.ReadFile(s.libbyEmotionPath(id, emotion, libbyLevelParam(r)))
+	path, _ := s.libbySlotArtPath(id, emotion, libbyLevelParam(r))
+	blob, err := os.ReadFile(path)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, "this outfit has no art for that emotion")
 		return
@@ -458,7 +506,13 @@ func (s *Server) handleDeleteLibbyEmotion(w http.ResponseWriter, r *http.Request
 		writeErr(w, http.StatusBadRequest, "bad outfit id or slot")
 		return
 	}
-	if err := os.Remove(s.libbyEmotionPath(id, emotion, libbyLevelParam(r))); err != nil {
+	removed := false
+	for _, l := range slotLevels(emotion, libbyLevelParam(r)) {
+		if os.Remove(s.libbyEmotionPath(id, emotion, l)) == nil {
+			removed = true
+		}
+	}
+	if !removed {
 		writeErr(w, http.StatusNotFound, "this outfit has no art for that emotion")
 		return
 	}

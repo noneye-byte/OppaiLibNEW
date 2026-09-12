@@ -428,6 +428,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/libby/backgrounds", s.requireAuth(s.handleListLibbyBackgrounds))
 	mux.HandleFunc("POST /api/libby/backgrounds", s.requireAuth(s.handleSaveLibbyBackground))
 	mux.HandleFunc("DELETE /api/libby/backgrounds/{id}", s.requireAuth(s.handleDeleteLibbyBackground))
+	mux.HandleFunc("PUT /api/libby/backgrounds/default", s.requireAuth(s.handleSetLibbyDefaultBackground))
 	mux.HandleFunc("GET /api/libby/backgrounds/{id}/image", s.requireAuth(s.handleGetLibbyBackgroundImage))
 	mux.HandleFunc("PUT /api/libby/backgrounds/{id}/image", s.requireAuth(s.handleSetLibbyBackgroundImage))
 	mux.HandleFunc("GET /api/libby/outfits", s.requireAuth(s.handleListLibbyOutfits))

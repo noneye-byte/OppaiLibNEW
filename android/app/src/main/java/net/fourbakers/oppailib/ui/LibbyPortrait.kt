@@ -50,7 +50,7 @@ fun LibbyPortrait(
             // What she is doing outranks what she is feeling where there is art for it:
             // a picture of her at a keyboard says more about the moment than a picture
             // of her looking pleased, and the state is the rarer, deliberate thing.
-            for (level in tier downTo 1) add(repo.libbyEmotionUrl(outfit, activity, level))
+            // One picture per state, whatever the heat: a MISC slot has no tiers.
             add(repo.libbyEmotionUrl(outfit, activity, 0))
         }
         if (outfit.isNotEmpty()) {

@@ -144,7 +144,11 @@ type libbyContext struct {
 // Failures are absorbed rather than propagated: a stats query that errors should
 // cost her the numbers, not the whole conversation. Every field is independently
 // optional for that reason.
-func (s *Server) buildLibbyContext(ctx context.Context) libbyContext {
+//
+// withLists says whether the shortlists and the recent additions are wanted. The
+// client endpoint always wants them; the chat prompt reads them only on the turns
+// that ask (chat_context_feed.go), and the queries behind them are the expensive half.
+func (s *Server) buildLibbyContext(ctx context.Context, withLists bool) libbyContext {
 	cur := s.settings.Get()
 	out := libbyContext{
 		Version:   buildinfo.String(),
@@ -173,6 +177,9 @@ func (s *Server) buildLibbyContext(ctx context.Context) libbyContext {
 		}
 	}
 	out.Gaps = libbyGaps(countByKind, out.Items, out.Tags)
+	if !withLists {
+		return out
+	}
 
 	// Per-kind recommendation shortlists. Queried per kind rather than sliced out of
 	// the recent list, because the recent list is whatever was added last — a library
@@ -311,6 +318,14 @@ func humanBytes(n int64) string {
 	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTP"[exp])
 }
 
+// secondsSince is how long ago a unix timestamp was, never negative.
+func secondsSince(unix int64) int64 {
+	if d := int64(time.Since(time.Unix(unix, 0)).Seconds()); d > 0 {
+		return d
+	}
+	return 0
+}
+
 func humanDuration(seconds int64) string {
 	switch d := time.Duration(seconds) * time.Second; {
 	case d < time.Minute:
@@ -324,80 +339,8 @@ func humanDuration(seconds int64) string {
 	}
 }
 
-// promptBlock renders the snapshot as instructions for the model.
-//
-// It is written as facts plus a rule about how to use them, because a model handed
-// a bare table will recite it. Libby should know this the way a librarian knows her
-// own shelves — available when asked, not announced unprompted.
-func (c libbyContext) promptBlock() string {
-	var b strings.Builder
-	b.WriteString("\n\nWhat you know about this library and the server it runs on. " +
-		"This is real, current information about the user's own collection. " +
-		"Use it when they ask about their library, their recent additions, or how the server is doing. " +
-		"Answer in your own voice and never dump it as a list or recite it unprompted.\n")
-
-	fmt.Fprintf(&b, "- The library holds %d items totalling %s, across %d distinct tags.\n",
-		c.Items, humanBytes(c.Bytes), c.Tags)
-	if len(c.Kinds) > 0 {
-		parts := make([]string, 0, len(c.Kinds))
-		for _, k := range c.Kinds {
-			parts = append(parts, fmt.Sprintf("%d %s", k.Count, k.Kind))
-		}
-		fmt.Fprintf(&b, "- By kind: %s.\n", strings.Join(parts, ", "))
-	}
-	fmt.Fprintf(&b, "- The server is running OppaiLib %s and has been up for %s.\n",
-		c.Version, humanDuration(c.UptimeSec))
-	if c.AIEnabled {
-		fmt.Fprintf(&b, "- Automatic tagging is on, using %s.\n", c.AITagger)
-	} else {
-		b.WriteString("- Automatic tagging is switched off.\n")
-	}
-	if c.ImageGen {
-		b.WriteString("- Image generation is connected, so you can suggest making something.\n")
-	}
-
-	if len(c.Gaps) > 0 {
-		b.WriteString("- Where this collection is thin, in case it feeds something you find yourself wanting — " +
-			"a hole here is a fair reason to crave what would fill it, but this is only for you to notice, never to read out as a chore list:\n")
-		for _, gap := range c.Gaps {
-			fmt.Fprintf(&b, "  - %s\n", gap)
-		}
-	}
-
-	if len(c.Suggest) > 0 {
-		b.WriteString("- When they ask what to play, watch, or read — or ask you to pick something — recommend one of these by name. " +
-			"These are really here, so name a real one and point at it with a [link: <title>] rather than inventing a title. " +
-			"Suggest, don't list: pick the one that fits their mood and say why it, not read the shortlist back.\n")
-		for _, pick := range c.Suggest {
-			fmt.Fprintf(&b, "  - %s you can suggest:\n", suggestKindLabel(pick.Kind))
-			for _, item := range pick.Items {
-				fmt.Fprintf(&b, "    - %q", item.Title)
-				if len(item.Tags) > 0 {
-					fmt.Fprintf(&b, " (%s)", strings.Join(item.Tags, ", "))
-				}
-				b.WriteString("\n")
-			}
-		}
-	}
-
-	if len(c.Recent) == 0 {
-		b.WriteString("- Nothing has been added yet. The shelves are empty.\n")
-		return b.String()
-	}
-	b.WriteString("- Most recently added, newest first:\n")
-	for _, item := range c.Recent {
-		fmt.Fprintf(&b, "  - %q (%s, added %s)", item.Title, item.Kind, humanDuration(
-			int64(time.Since(time.Unix(item.At, 0)).Seconds()))+" ago")
-		if len(item.Tags) > 0 {
-			fmt.Fprintf(&b, " tagged %s", strings.Join(item.Tags, ", "))
-		}
-		b.WriteString("\n")
-	}
-	return b.String()
-}
-
 // handleLibbyContext serves the same snapshot to the client, so Libby's built-in
 // replies can answer library questions when no model is loaded.
 func (s *Server) handleLibbyContext(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, s.buildLibbyContext(r.Context()))
+	writeJSON(w, http.StatusOK, s.buildLibbyContext(r.Context(), true))
 }

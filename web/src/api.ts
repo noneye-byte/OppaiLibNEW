@@ -251,6 +251,12 @@ export interface ChatMessage {
   id?: string;
   /** The earlier message this one answers, when it was written as a reply. */
   replyTo?: ChatReplyRef;
+  /** The chat image this message carried — a photo shared, or a selfie she sent —
+      so the server can say what was in it on every later turn, not just the one it
+      was sent on. */
+  imageId?: string;
+  /** Library items this message attached, by id, for the same reason. */
+  mediaIds?: number[];
 }
 
 /** What a quoted reply points at: enough to draw the quote, and the id to jump to. */
@@ -409,6 +415,8 @@ export interface ChatTurn {
       as recentImageIds: the server keeps no per-conversation state, so how long she
       has been wearing one expression has to arrive with the turn. */
   recentMoods?: string[];
+  /** The heat her last replies sat at, oldest first, for the same reason. */
+  recentHeat?: number[];
   /** Whether the user has her on the call screen rather than in the message log.
       A call changes what they are doing — watching her rather than reading her — and
       the server has no other way to know it was opened. */
@@ -512,6 +520,9 @@ export interface ChatContextReport {
   digested?: boolean;
   /** Parts of what Libby knows that did not fit, named. */
   droppedSections?: string[];
+  /** Parts the turn had no use for and that were cleared to make room — her selfie
+      catalogue on a message about the weather. Housekeeping, not a loss. */
+  clearedSections?: string[];
   /** Whether her reply length had to be cut. */
   squeezed?: boolean;
   /** The user-facing explanation, empty when everything fitted. */
@@ -705,6 +716,9 @@ export interface StoredChatMessage extends ChatMessage {
    * Absent on every message written before this existed, which reads as "unknown"
    * rather than as a run. See recentMoods. */
   mood?: string;
+  /** The heat this reply sat at, kept beside the mood for the same reason: the next
+      turn reports how long the number has not moved. See recentHeat. */
+  heat?: number;
 }
 
 export interface ChatConversation {
@@ -1343,6 +1357,12 @@ export interface LibbyBackground {
   name: string;
   tags: string[];
   hasImage: boolean;
+}
+
+/** The backgrounds, plus which one a conversation is in when nobody has said. */
+export interface LibbyBackgrounds {
+  backgrounds: LibbyBackground[];
+  default?: string;
 }
 
 export interface LibbyOutfit {
@@ -2177,7 +2197,10 @@ export const api = {
 
   libbyOutfits: () => request<{ outfits: LibbyOutfit[]; activities?: LibbyActivityDef[] }>("/api/libby/outfits"),
   // The places she can be on the call screen. See libby_backgrounds.go.
-  libbyBackgrounds: () => request<{ backgrounds: LibbyBackground[] }>("/api/libby/backgrounds"),
+  libbyBackgrounds: () => request<LibbyBackgrounds>("/api/libby/backgrounds"),
+  /** Marks one background as where she is by default; an empty id clears it. */
+  setLibbyDefaultBackground: (id: string) =>
+    request<{ default: string }>("/api/libby/backgrounds/default", { method: "PUT", body: JSON.stringify({ id }) }),
   saveLibbyBackground: (body: { id?: string; name: string; tags: string[] }) =>
     request<LibbyBackground>("/api/libby/backgrounds", { method: "POST", body: JSON.stringify(body) }),
   deleteLibbyBackground: (id: string) =>
@@ -2202,8 +2225,10 @@ export const api = {
       `/api/libby/outfits/${encodeURIComponent(id)}/emotions/${encodeURIComponent(emotion)}${level ? `?level=${level}` : ""}`,
       { method: "DELETE" },
     ),
-  libbyEmotionURL: (id: string, emotion: string, level = 0) =>
-    `/api/libby/outfits/${encodeURIComponent(id)}/emotions/${encodeURIComponent(emotion)}${level ? `?level=${level}` : ""}`,
+  libbyEmotionURL: (id: string, emotion: string, level = 0, v?: number) => {
+    const query = [level ? `level=${level}` : "", v ? `v=${v}` : ""].filter(Boolean).join("&");
+    return `/api/libby/outfits/${encodeURIComponent(id)}/emotions/${encodeURIComponent(emotion)}${query ? `?${query}` : ""}`;
+  },
   /** An outfit's cover art. `v` busts the browser cache after a cover is changed —
       the URL is otherwise stable, and a card that keeps showing the old picture is
       indistinguishable from a save that did not work. */

@@ -167,13 +167,21 @@ type promptSection struct {
 	Name string
 	Text string
 	Rank int
+	// Deferred marks a section the turn has no particular use for — her selfie
+	// catalogue on a message that asked nothing of the kind, the action vocabulary on
+	// small talk. Still offered, so a roomy window keeps everything, but offered after
+	// every section that is wanted, whatever its rank: a tight window spends its tokens
+	// on what the message is about. See chat_context_feed.go.
+	Deferred bool
 }
 
 // Shed ranks. Spaced so a section can be slotted between two without renumbering, and
 // ordered by what a reply loses without it: a recommendation shortlist is a nicety, whereas
 // what she remembers about the person she is talking to is most of why she is not a chatbot.
 const (
-	rankLibrarySnapshot = 10 // the shelves, the shortlists, the recent additions
+	// The library's own sections rank themselves in chat_context_feed.go: the facts sit
+	// at 12, the shortlists and recent additions below, and the items a message named
+	// well above the wants.
 	rankPhotoCatalogue  = 20 // which selfies she could send
 	rankThoughts        = 25 // that she may think something instead of saying it
 	rankActivity        = 27 // the MISC states she can put herself into
@@ -193,24 +201,37 @@ const (
 //
 // Sections are offered the budget most-valuable first, and one that does not fit is skipped
 // rather than ending the walk — so a bulky library snapshot cannot squeeze out three small
-// high-value blocks ranked below it.
+// high-value blocks ranked below it. Deferred sections are offered after every wanted
+// one, so what the turn is about is bought before what it is not.
 // budget is what the sections may spend between them; head and tail are already paid for
 // by the caller and are always written.
-func assembleSystemPrompt(head string, optional []promptSection, tail string, budget int) (string, []string) {
+//
+// Two lists come back: what was wanted and did not fit, and what was deferred and did
+// not fit. The first is a loss the user can act on; the second is the budget clearing
+// context the turn had no use for, and is reported as housekeeping rather than as a cut.
+func assembleSystemPrompt(head string, optional []promptSection, tail string, budget int) (prompt string, dropped, cleared []string) {
 	ordered := make([]promptSection, len(optional))
 	copy(ordered, optional)
-	sort.SliceStable(ordered, func(a, b int) bool { return ordered[a].Rank > ordered[b].Rank })
+	sort.SliceStable(ordered, func(a, b int) bool {
+		if ordered[a].Deferred != ordered[b].Deferred {
+			return !ordered[a].Deferred
+		}
+		return ordered[a].Rank > ordered[b].Rank
+	})
 
 	spent := 0
 	kept := make([]promptSection, 0, len(ordered))
-	var dropped []string
 	for _, section := range ordered {
 		if strings.TrimSpace(section.Text) == "" {
 			continue
 		}
 		cost := estimateTokens(section.Text)
 		if spent+cost > budget {
-			dropped = append(dropped, section.Name)
+			if section.Deferred {
+				cleared = append(cleared, section.Name)
+			} else {
+				dropped = append(dropped, section.Name)
+			}
 			continue
 		}
 		spent += cost
@@ -227,7 +248,8 @@ func assembleSystemPrompt(head string, optional []promptSection, tail string, bu
 	}
 	b.WriteString(tail)
 	sort.Strings(dropped)
-	return b.String(), dropped
+	sort.Strings(cleared)
+	return b.String(), dropped, cleared
 }
 
 // chatBudgetReport is what the client is told about the fit.
@@ -256,6 +278,12 @@ type chatBudgetReport struct {
 	// wants, the library shortlist, the picture catalogue. Named rather than counted because
 	// "Libby couldn't see your library this turn" is actionable and "1 section dropped" is not.
 	DroppedSections []string `json:"droppedSections,omitempty"`
+	// ClearedSections names the parts that were deferred for this turn — offered last
+	// because the message had no use for them — and then did not fit. Kept apart from
+	// DroppedSections because it is the budget working as intended, not a loss: her
+	// selfie catalogue being cleared from a message about the weather is not something
+	// to warn anyone about. See chat_context_feed.go.
+	ClearedSections []string `json:"clearedSections,omitempty"`
 	// Digested says whether a summary of those messages was inserted in their place.
 	Digested bool `json:"digested"`
 	// Squeezed says whether the reply allowance had to be cut below the preset's.
@@ -349,8 +377,9 @@ func fitChatTurn(head string, optional []promptSection, tail string, history []c
 	}
 	report.ReplyTokens = reply
 
-	systemPrompt, droppedSections := assembleSystemPrompt(head, optional, tail, spare-reply-historyFloor)
+	systemPrompt, droppedSections, clearedSections := assembleSystemPrompt(head, optional, tail, spare-reply-historyFloor)
 	report.DroppedSections = droppedSections
+	report.ClearedSections = clearedSections
 	system := chatMessage{Role: "system", Content: systemPrompt}
 	report.SystemTokens = estimateTokens(systemPrompt) + messageOverhead
 

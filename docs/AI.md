@@ -35,6 +35,20 @@ think: every request carries `enable_thinking: false` (text-generation-webui) an
 loader-side switch is required. Libby's Sweet, Playful, Bold, and Roleplay modes change
 the local system prompt; the latter modes permit consensual adult NSFW chat.
 
+**How the window is spent.** The prompt is built for the turn, not copied from a
+template. Her card and the tag protocol are fixed; everything else is a ranked,
+optional section, and the library is fed by what the message says rather than as one
+block — the collection's shape is always offered, the items your words match are
+looked up through the same index that resolves her links, and the recommendation
+shortlists and recent additions arrive only when you ask for something to watch or
+what is new. Sections the turn has no use for (her selfie catalogue on a message
+about the weather, the action vocabulary on small talk, the rooms she can move to
+when nobody is on a call) are offered last and cleared first, and the reply's budget
+report names what was cleared apart from what genuinely did not fit. Every message in
+the history carries what it attached — a photo's tags, a library item's title — so
+she can talk about a picture from earlier in the evening, and a quoted reply is
+resolved back to the whole message it points at.
+
 Prefer OppaiLib without the mascot? **Settings → Libby → Hide Libby** (per-device;
 the Android app has the same switch in its settings) removes the artwork from the
 login screen, error popups, and Chat. The features stay — errors show as plain

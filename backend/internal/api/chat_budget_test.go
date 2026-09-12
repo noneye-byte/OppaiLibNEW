@@ -49,7 +49,7 @@ func TestLibbyFixedPromptLeavesRoomAtFourK(t *testing.T) {
 		libbyAutonomousStyle, card.Description, card.Appearance, card.Personality, card.Kinks,
 		card.Scenario, card.ExampleDialogue, card.SystemPrompt,
 		(&Server{}).libbySelfDirective(settings.Settings{}), linkDirective, memoryDirective,
-		wantsDirective, bondDirective, feelingsPromptBlock("hello"), moodDirective, silenceDirective,
+		wantsDirective, bondDirective, feelingsPromptBlock("hello"), moodDirective, heatScaleDirective, silenceDirective,
 	}
 	tokens := estimateTokens(strings.Join(parts, "\n"))
 	t.Logf("Libby's fixed prompt estimate: %d tokens", tokens)
@@ -78,11 +78,11 @@ func TestAssembleSystemPromptShedsByRank(t *testing.T) {
 	sections := []promptSection{
 		// Deliberately the cheapest to lose *and* the biggest, which is the real shape of
 		// the problem: the library snapshot is what actually crowds out everything else.
-		{Name: "your library", Rank: rankLibrarySnapshot, Text: words(400)},
+		{Name: "your library", Rank: rankLibraryFacts, Text: words(400)},
 		{Name: "what she remembers about you", Rank: rankMemoryList, Text: words(40)},
 		{Name: "her own wants", Rank: rankWantsList, Text: words(30)},
 	}
-	got, dropped := assembleSystemPrompt(head, sections, tail, 100)
+	got, dropped, _ := assembleSystemPrompt(head, sections, tail, 100)
 
 	// Both fixed halves survive any budget, and in that order.
 	if !strings.HasPrefix(got, head) || !strings.HasSuffix(got, tail) {
@@ -98,7 +98,7 @@ func TestAssembleSystemPromptShedsByRank(t *testing.T) {
 	}
 
 	// A budget that covers everything drops nothing.
-	if _, dropped := assembleSystemPrompt(head, sections, tail, 10_000); len(dropped) != 0 {
+	if _, dropped, _ := assembleSystemPrompt(head, sections, tail, 10_000); len(dropped) != 0 {
 		t.Errorf("a roomy budget dropped %v", dropped)
 	}
 }
@@ -109,7 +109,7 @@ func TestFitChatTurnKeepsCoreAndReportsWhatGave(t *testing.T) {
 		history = append(history, chatMessage{Role: "user", Content: words(60)}, chatMessage{Role: "assistant", Content: words(60)})
 	}
 	sections := []promptSection{
-		{Name: "your library", Rank: rankLibrarySnapshot, Text: words(300)},
+		{Name: "your library", Rank: rankLibraryFacts, Text: words(300)},
 		{Name: "what she remembers about you", Rank: rankMemoryList, Text: words(60)},
 	}
 	core := words(300)

@@ -25,6 +25,17 @@ export type OutfitGearKey = typeof OUTFIT_GEAR_SLOTS[number]["key"];
 export interface GearPiece {
   color: string;
   item: string;
+  /**
+   * Switched off without being cleared. A piece that is described but not worn: the
+   * jacket kept in the recipe for the next wardrobe, the hat tried without. Absent
+   * means worn, so every loadout saved before this existed reads as fully equipped.
+   */
+  off?: boolean;
+}
+
+/** Whether a piece is actually worn: described, and not switched off. */
+export function gearWorn(piece: GearPiece): boolean {
+  return !!piece.item.trim() && !piece.off;
 }
 
 export type OutfitGear = Record<OutfitGearKey, GearPiece>;
@@ -115,7 +126,7 @@ export function gearPhrase(
   lockColors: boolean,
 ): string {
   const item = piece.item.trim();
-  if (!item) return "";
+  if (!item || piece.off) return "";
   const color = piece.color.trim();
   if (!color) return `${slot.prompt}: ${item}`;
   const described = `${color} ${item}`;
@@ -135,7 +146,7 @@ export function gearColorNegatives(
   piece: GearPiece,
 ): string[] {
   const color = piece.color.trim();
-  if (!piece.item.trim() || !color) return [];
+  if (!gearWorn(piece) || !color) return [];
   const named = new Set(colorFamilies(color));
   if (!named.size) return [];
   return GEAR_COLOR_FAMILIES
@@ -246,7 +257,7 @@ export function normalizeOutfitGear(value: unknown): OutfitGear {
   return Object.fromEntries(OUTFIT_GEAR_SLOTS.map(({ key }) => {
     const piece = raw[key];
     if (typeof piece === "string") return [key, { color: "", item: piece }];
-    if (isGearPiece(piece)) return [key, { color: piece.color, item: piece.item }];
+    if (isGearPiece(piece)) return [key, { color: piece.color, item: piece.item, ...(piece.off ? { off: true } : {}) }];
     return [key, { color: "", item: "" }];
   })) as OutfitGear;
 }
@@ -254,8 +265,10 @@ export function normalizeOutfitGear(value: unknown): OutfitGear {
 /** Whether two loadouts describe the same clothes, for deciding if generated squares
  * still belong to what is on screen. Case- and whitespace-insensitive. */
 export function gearKey(gear: OutfitGear): string {
+  // A piece switched off is, to the generator, not there: it keys the same as an
+  // empty slot, so toggling it off and clearing it describe the same clothes.
   return JSON.stringify(Object.fromEntries(OUTFIT_GEAR_SLOTS.map(({ key }) => [
     key,
-    `${gear[key].color.trim().toLowerCase()}|${gear[key].item.trim().toLowerCase()}`,
+    gearWorn(gear[key]) ? `${gear[key].color.trim().toLowerCase()}|${gear[key].item.trim().toLowerCase()}` : "|",
   ])));
 }

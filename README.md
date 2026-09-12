@@ -41,10 +41,11 @@ container on Unraid, with a companion Android app.
   herself, and shift expression and mood as you talk. She names things from anywhere in
   the collection, not just the last few imports. Put her on **video** — or let her
   **ring you** with an incoming-call popup — and she knows she is on camera, in a
-  **background** you added and tagged that she picks herself as the scene moves. She
-  puts herself into **Misc states** — curled up reading, dozing, and a good deal less
-  idle — which an outfit can draw its own art for, and her outfit's *typing* art shows
-  with a speech bubble while she writes. Her sprite is in the conversation, not only
+  **background** you added and tagged that she picks herself as the scene — or the
+  mood — moves, with one room markable as the **default** every conversation starts
+  in. She puts herself into **Misc states** — curled up reading, dozing, and a good
+  deal less idle — which an outfit can draw one picture each for, and her outfit's
+  *typing* art shows with a speech bubble while she writes. Her sprite is in the conversation, not only
   on the call: a portrait column beside the chat, or a banner along the top of it where
   the column does not fit, on web and phone alike, and on a wide screen the call takes
   the main pane with the chat in a sidebar. What she names from the library is a real

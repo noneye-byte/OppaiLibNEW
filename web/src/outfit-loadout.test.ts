@@ -10,6 +10,7 @@ import {
   gearColorNegatives,
   gearKey,
   gearPhrase,
+  gearWorn,
   isOutfitGear,
   normalizeOutfitGear,
   rollOutfitExposure,
@@ -128,4 +129,17 @@ test("the gear key ignores case and whitespace but not the colour", () => {
   const c = { ...EMPTY_OUTFIT_GEAR, top: { color: "navy", item: "fitted top" } };
   assert.equal(gearKey(a), gearKey(b));
   assert.notEqual(gearKey(b), gearKey(c));
+});
+
+test("a piece switched off is kept in the recipe but not worn", () => {
+  const gear = normalizeOutfitGear({ ...DEFAULT_OUTFIT_GEAR, top: { color: "red", item: "jacket", off: true } });
+  assert.equal(gear.top.off, true);
+  assert.equal(gearWorn(gear.top), false);
+  assert.equal(gearPhrase(OUTFIT_GEAR_SLOTS[1], gear.top, "a1111", true), "");
+  assert.deepEqual(gearColorNegatives(OUTFIT_GEAR_SLOTS[1], gear.top), []);
+  // Off keys the same as empty: the generator sees the same clothes either way.
+  const cleared = normalizeOutfitGear({ ...DEFAULT_OUTFIT_GEAR, top: { color: "", item: "" } });
+  assert.equal(gearKey(gear), gearKey(cleared));
+  // Loadouts saved before the switch existed read as worn.
+  assert.equal(gearWorn(normalizeOutfitGear({ top: "fitted top" }).top), true);
 });

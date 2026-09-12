@@ -132,22 +132,6 @@ func resolveReplyTarget(quote string, messages []chatMessage) *chatReplyRef {
 	return best
 }
 
-// userReplyDirective tells her which earlier message their latest one answers.
-//
-// Only the latest is framed this way; earlier replies in the history are folded into
-// the message text itself by quotedHistoryContent, which is enough for continuity and
-// costs no directive.
-func userReplyDirective(ref *chatReplyRef) string {
-	if ref == nil || strings.TrimSpace(ref.Excerpt) == "" {
-		return ""
-	}
-	whose := "an earlier message of theirs"
-	if ref.Role == "assistant" {
-		whose = "something you said earlier"
-	}
-	return "\n\nTheir latest message is a direct reply to " + whose + ": \"" + excerptOf(ref.Excerpt) + "\". Answer that specifically."
-}
-
 // quotedHistoryContent is how a replied-to message reads in the history the model is
 // given: the quote above the text, the way a chat app draws it and the way a model has
 // seen ten million times. Plain, not a tag — nothing here is protocol for her to copy.

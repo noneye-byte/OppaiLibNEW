@@ -49,6 +49,7 @@ import {
   gearColorNegatives,
   gearKey,
   gearPhrase,
+  gearWorn,
   normalizeOutfitGear,
   rollOutfitExposure,
   type OutfitExposure,
@@ -187,32 +188,34 @@ const OUTFIT_FACES: { id: LibbyEmotion; label: string; face: string; pose: strin
  * carries a `face` of its own rather than borrowing the expression picker's — a pose
  * this specific reads wrong with an unrelated expression stapled to it.
  */
-const OUTFIT_ACTIVITIES: { id: string; label: string; face: string; pose: string }[] = [
-  { id: "typing", label: "Typing", face: "focused expression, eyes on a screen, faint smile", pose: "sitting at a desk, both hands on a keyboard, leaning slightly toward the monitor" },
-  { id: "reading", label: "Reading", face: "absorbed expression, eyes lowered to the page", pose: "curled up holding an open book, one leg tucked under her" },
-  { id: "gaming", label: "Gaming", face: "intent expression, eyes wide on the screen, tongue at the corner of her mouth", pose: "sitting cross-legged holding a game controller in both hands" },
-  { id: "lounging", label: "Lounging", face: "relaxed expression, eyes half closed, easy smile", pose: "sprawled back across a sofa, arms loose, one knee raised" },
-  { id: "drinking", label: "Drinking", face: "contented expression, eyes closed over the rim", pose: "holding a steaming mug in both hands near her chest" },
-  { id: "eating", label: "Eating", face: "cheeks slightly full, pleased expression", pose: "holding food up to her mouth mid-bite, other hand cupped beneath it" },
-  { id: "stretching", label: "Stretching", face: "eyes shut, mouth open in a small yawn", pose: "arms stretched overhead, back arched, rising onto her toes" },
-  { id: "napping", label: "Napping", face: "sleeping, eyes closed, lips parted, peaceful", pose: "curled on her side asleep, hands tucked under her cheek" },
-  { id: "dancing", label: "Dancing", face: "eyes closed, delighted open smile", pose: "mid-step with hips turned, one arm raised loosely, hair in motion" },
-  { id: "tidying", label: "Tidying", face: "mildly absorbed expression, glancing at what she is holding", pose: "reaching to shelve something, weight on one foot" },
-  { id: "drawing", label: "Drawing", face: "concentrating, brow faintly furrowed, tongue between her teeth", pose: "hunched over a sketchbook, pencil in hand, other arm steadying the page" },
-  { id: "waving", label: "Waving", face: "bright welcoming smile, eyes on the viewer", pose: "one arm raised waving at the viewer, weight on one hip" },
+const OUTFIT_ACTIVITIES: { id: string; label: string; face: string; pose: string; heat: number; intimate?: boolean }[] = [
+  { id: "typing", label: "Typing", heat: 0, face: "focused expression, eyes on a screen, faint smile", pose: "sitting at a desk, both hands on a keyboard, leaning slightly toward the monitor" },
+  { id: "reading", label: "Reading", heat: 0, face: "absorbed expression, eyes lowered to the page", pose: "curled up holding an open book, one leg tucked under her" },
+  { id: "gaming", label: "Gaming", heat: 0, face: "intent expression, eyes wide on the screen, tongue at the corner of her mouth", pose: "sitting cross-legged holding a game controller in both hands" },
+  { id: "lounging", label: "Lounging", heat: 0, face: "relaxed expression, eyes half closed, easy smile", pose: "sprawled back across a sofa, arms loose, one knee raised" },
+  { id: "drinking", label: "Drinking", heat: 0, face: "contented expression, eyes closed over the rim", pose: "holding a steaming mug in both hands near her chest" },
+  { id: "eating", label: "Eating", heat: 0, face: "cheeks slightly full, pleased expression", pose: "holding food up to her mouth mid-bite, other hand cupped beneath it" },
+  { id: "stretching", label: "Stretching", heat: 0, face: "eyes shut, mouth open in a small yawn", pose: "arms stretched overhead, back arched, rising onto her toes" },
+  { id: "napping", label: "Napping", heat: 0, face: "sleeping, eyes closed, lips parted, peaceful", pose: "curled on her side asleep, hands tucked under her cheek" },
+  { id: "dancing", label: "Dancing", heat: 0, face: "eyes closed, delighted open smile", pose: "mid-step with hips turned, one arm raised loosely, hair in motion" },
+  { id: "tidying", label: "Tidying", heat: 0, face: "mildly absorbed expression, glancing at what she is holding", pose: "reaching to shelve something, weight on one foot" },
+  { id: "drawing", label: "Drawing", heat: 0, face: "concentrating, brow faintly furrowed, tongue between her teeth", pose: "hunched over a sketchbook, pencil in hand, other arm steadying the page" },
+  { id: "waving", label: "Waving", heat: 0, face: "bright welcoming smile, eyes on the viewer", pose: "one arm raised waving at the viewer, weight on one hip" },
 
-  { id: "undressing", label: "Undressing", face: "half-lidded eyes, small knowing smile, watching the viewer", pose: "peeling clothing off one shoulder, other hand at her waistband" },
-  { id: "teasing", label: "Teasing", face: "smirking, heavy-lidded eyes locked on the viewer", pose: "posing for the viewer, back arched, hands framing her hips" },
-  { id: "touching", label: "Touching herself", face: "flushed, lips parted, eyes on the viewer", pose: "one hand pressed between her thighs over her clothes, other hand at her chest" },
-  { id: "rubbing", label: "Rubbing", face: "deep blush, mouth open, eyes unfocused", pose: "reclining with one hand rubbing between her spread thighs" },
-  { id: "fingering", label: "Fingering", face: "flushed, head tipped back, brow drawn, panting", pose: "lying back with her fingers inside herself, knees fallen open" },
-  { id: "spread", label: "Spread", face: "flushed, watching the viewer, mouth open", pose: "lying back holding herself open with both hands, legs spread wide" },
-  { id: "vibrator", label: "Vibrator", face: "eyes squeezed shut, mouth open, deep blush", pose: "holding a vibrator against herself, thighs tensed together" },
-  { id: "dildo", label: "Dildo", face: "flushed, half-lidded, biting her lip", pose: "using a dildo on herself, one hand braced behind her" },
-  { id: "riding", label: "Riding", face: "flushed, head thrown back, mouth open", pose: "straddling and riding a toy, hands braced on her thighs, back arched" },
-  { id: "grinding", label: "Grinding", face: "flushed, eyes shut, teeth in her lip", pose: "straddling a pillow, hips rolling forward, hands gripping it" },
-  { id: "climax", label: "Climax", face: "eyes rolled up, mouth wide open, whole face flushed", pose: "body arched taut mid-orgasm, toes curled, hands fisted" },
-  { id: "afterglow", label: "Afterglow", face: "dazed exhausted smile, heavy-lidded eyes, deep blush", pose: "collapsed limp on her back, limbs loose, chest heaving" },
+  // The intimate states carry the heat their picture is drawn at, since a MISC square
+  // has no tier of its own: "spread" with every stitch neatly on is not the picture.
+  { id: "undressing", label: "Undressing", heat: 2, intimate: true, face: "half-lidded eyes, small knowing smile, watching the viewer", pose: "peeling clothing off one shoulder, other hand at her waistband" },
+  { id: "teasing", label: "Teasing", heat: 2, intimate: true, face: "smirking, heavy-lidded eyes locked on the viewer", pose: "posing for the viewer, back arched, hands framing her hips" },
+  { id: "touching", label: "Touching herself", heat: 2, intimate: true, face: "flushed, lips parted, eyes on the viewer", pose: "one hand pressed between her thighs over her clothes, other hand at her chest" },
+  { id: "rubbing", label: "Rubbing", heat: 3, intimate: true, face: "deep blush, mouth open, eyes unfocused", pose: "reclining with one hand rubbing between her spread thighs" },
+  { id: "fingering", label: "Fingering", heat: 4, intimate: true, face: "flushed, head tipped back, brow drawn, panting", pose: "lying back with her fingers inside herself, knees fallen open" },
+  { id: "spread", label: "Spread", heat: 4, intimate: true, face: "flushed, watching the viewer, mouth open", pose: "lying back holding herself open with both hands, legs spread wide" },
+  { id: "vibrator", label: "Vibrator", heat: 3, intimate: true, face: "eyes squeezed shut, mouth open, deep blush", pose: "holding a vibrator against herself, thighs tensed together" },
+  { id: "dildo", label: "Dildo", heat: 4, intimate: true, face: "flushed, half-lidded, biting her lip", pose: "using a dildo on herself, one hand braced behind her" },
+  { id: "riding", label: "Riding", heat: 4, intimate: true, face: "flushed, head thrown back, mouth open", pose: "straddling and riding a toy, hands braced on her thighs, back arched" },
+  { id: "grinding", label: "Grinding", heat: 3, intimate: true, face: "flushed, eyes shut, teeth in her lip", pose: "straddling a pillow, hips rolling forward, hands gripping it" },
+  { id: "climax", label: "Climax", heat: 4, intimate: true, face: "eyes rolled up, mouth wide open, whole face flushed", pose: "body arched taut mid-orgasm, toes curled, hands fisted" },
+  { id: "afterglow", label: "Afterglow", heat: 3, intimate: true, face: "dazed exhausted smile, heavy-lidded eyes, deep blush", pose: "collapsed limp on her back, limbs loose, chest heaving" },
 ];
 
 /** Heat still owns the emotional performance. Clothing exposure is rolled separately
@@ -230,23 +233,21 @@ const OUTFIT_TIERS: { label: string; mood: string }[] = [
  *
  * The sixty expression squares come first — face-major within a tier, which is the
  * order the wardrobe editor lays them out in — and the MISC squares follow as a second
- * block, state-major within a tier. Keeping both in one integer is what lets the batch
- * runner, the sheet, the draft and "aim the generator here" share a single
- * selectOutfitSlot without any of them knowing which kind of square they are holding.
+ * block, one per state. A MISC state is a single picture whatever the heat (what she is
+ * doing does not change with the meter the way her face does), so the block is
+ * twenty-four squares, not a hundred and twenty. Keeping both in one integer is what
+ * lets the batch runner, the sheet, the draft and "aim the generator here" share a
+ * single selectOutfitSlot without any of them knowing which kind of square they hold.
  */
 const EXPRESSION_SQUARES = OUTFIT_FACES.length * OUTFIT_TIERS.length;
-const MISC_SQUARES = OUTFIT_ACTIVITIES.length * OUTFIT_TIERS.length;
+const MISC_SQUARES = OUTFIT_ACTIVITIES.length;
 
 /** Decodes a square index into the tier, the expression, and the MISC state ("" for an
  * expression square). Out-of-range indexes clamp to the last square of their block. */
 function squareAddress(index: number): { tier: number; face: number; misc: string } {
   if (index >= EXPRESSION_SQUARES) {
     const offset = Math.min(index - EXPRESSION_SQUARES, MISC_SQUARES - 1);
-    return {
-      tier: Math.floor(offset / OUTFIT_ACTIVITIES.length),
-      face: 0,
-      misc: OUTFIT_ACTIVITIES[offset % OUTFIT_ACTIVITIES.length].id,
-    };
+    return { tier: 0, face: 0, misc: OUTFIT_ACTIVITIES[offset].id };
   }
   const clamped = Math.max(0, Math.min(index, EXPRESSION_SQUARES - 1));
   return { tier: Math.floor(clamped / OUTFIT_FACES.length), face: clamped % OUTFIT_FACES.length, misc: "" };
@@ -255,9 +256,19 @@ function squareAddress(index: number): { tier: number; face: number; misc: strin
 /** The inverse: where a (tier, face | misc) square sits in the index space. */
 function squareIndex(tier: number, face: number, misc: string): number {
   const miscIndex = misc ? OUTFIT_ACTIVITIES.findIndex((item) => item.id === misc) : -1;
-  if (miscIndex >= 0) return EXPRESSION_SQUARES + miscIndex + tier * OUTFIT_ACTIVITIES.length;
+  if (miscIndex >= 0) return EXPRESSION_SQUARES + miscIndex;
   return face + tier * OUTFIT_FACES.length;
 }
+
+/** The key one square is matched by: its slot, not its filename. A filename carries
+ * the theme text, so renaming the outfit used to orphan every square on the board. */
+function slotKeyOf(slot: Pick<DraftOutfitSlot, "emotion" | "tier">): string {
+  return `${slot.emotion}:${slot.tier}`;
+}
+
+/** The studio's cell sizes, as the width of one square. 0 means fit the row to the
+ * stage, however narrow that makes a square; the others are fixed and scroll. */
+const SHEET_ZOOMS = [0, 96, 128] as const;
 
 // A character being edited (or created — id undefined until saved).
 interface CharDraft {
@@ -354,6 +365,16 @@ export class OppaiImageGen extends LitElement {
   @state() private outfitWardrobeId = "";
   /** Set once the studio's own lists have been fetched, so entering it does it once. */
   private studioLoaded = false;
+  /** Which of the studio's two screens is up: the build board, or the wardrobes and
+      rooms she actually wears and stands in. */
+  @state() private studioView: "build" | "wardrobe" = "build";
+  /** Which block of the sheet is open. Follows the selection: aiming at a MISC square
+      opens the MISC tab, and the other way round. */
+  @state() private sheetTab: "faces" | "misc" = "faces";
+  /** How big the sheet's squares are drawn, as an index into SHEET_ZOOMS. */
+  @state() private sheetZoom = 1;
+  /** Whether the assembled prompt is unfolded in the focus panel. */
+  @state() private showSquarePrompt = false;
   /** Camera and shot composition. Compiled into terms, negatives and a frame size rather
       than appended as text — see camera.ts. */
   @state() private camera: CameraSpec = { ...DEFAULT_CAMERA };
@@ -1494,6 +1515,124 @@ export class OppaiImageGen extends LitElement {
         cursor: default;
       }
 
+      /* ── The studio ───────────────────────────────────────────────────────── */
+      .studio-views { display: flex; gap: 4px; margin-left: 4px; }
+      .studio-view {
+        display: inline-flex; align-items: center; gap: 6px;
+        border: 1px solid transparent; border-radius: 999px; padding: 5px 12px;
+        background: transparent; color: var(--oppai-text-muted); font: inherit; font-size: 12px; font-weight: 650; cursor: pointer;
+      }
+      .studio-view:hover { color: var(--oppai-text); }
+      .studio-view.on { background: var(--oppai-surface); border-color: var(--oppai-border-strong); color: var(--oppai-text); }
+      .studio-view-sub { font-weight: 500; color: var(--oppai-text-muted); }
+      .studio-wardrobe { flex: 1; min-height: 0; overflow: auto; padding: 18px 22px 40px; }
+      .side-divider {
+        display: flex; align-items: center; gap: 8px; padding: 14px 12px 4px;
+        color: var(--oppai-text-muted); font-size: 10px; font-weight: 700; letter-spacing: 0.7px; text-transform: uppercase;
+      }
+      .side-divider::before, .side-divider::after { content: ""; flex: 1; height: 1px; background: var(--oppai-border); }
+      .gear-slot .gear-slot-icon { border: 0; cursor: pointer; font: inherit; font-family: "Material Symbols Rounded"; }
+      .gear-slot .gear-slot-icon.inert { cursor: default; }
+      .gear-slot.off { opacity: 0.55; }
+      .gear-slot.off input { text-decoration: line-through; }
+      textarea.num.extras { resize: vertical; min-height: 54px; font-size: 12px; line-height: 1.4; }
+      .studio-toolbar { gap: 10px; }
+      .wardrobe-pick { display: inline-flex; align-items: center; gap: 6px; min-width: 0; color: var(--oppai-text-dim); }
+      .wardrobe-pick select {
+        max-width: 220px; min-width: 0; border: 1px solid var(--oppai-border); border-radius: 8px; padding: 5px 8px;
+        background: var(--oppai-surface-2); color: var(--oppai-text); font: inherit; font-size: 12px;
+      }
+      .sheet-tabs { display: inline-flex; gap: 2px; padding: 2px; border-radius: 999px; background: var(--oppai-surface-2); }
+      .sheet-tab {
+        border: 0; border-radius: 999px; padding: 4px 12px; background: transparent; color: var(--oppai-text-muted);
+        font: inherit; font-size: 12px; font-weight: 650; cursor: pointer;
+      }
+      .sheet-tab.on { background: var(--oppai-primary); color: var(--oppai-on-primary); }
+      .sheet-tab-count { font-weight: 500; opacity: 0.8; font-variant-numeric: tabular-nums; }
+      .zoom-tabs { display: inline-flex; gap: 2px; }
+      .zoom-tab {
+        min-width: 26px; padding: 0 6px; height: 24px; border: 1px solid var(--oppai-border); border-radius: 6px; background: transparent;
+        color: var(--oppai-text-muted); font: inherit; font-size: 11px; font-weight: 700; cursor: pointer;
+      }
+      .zoom-tab.on { background: var(--oppai-surface); color: var(--oppai-text); border-color: var(--oppai-border-strong); }
+      /* The expression matrix: rows are heat tiers, columns are expressions, both
+         headers sticky so a wide sheet scrolled to the edge still says where you are. */
+      .face-matrix {
+        display: grid;
+        grid-template-columns: 92px repeat(${OUTFIT_FACES.length}, var(--cell, 88px));
+        gap: 6px;
+        align-items: stretch;
+        width: max-content;
+        min-width: 100%;
+      }
+      .face-matrix.fit { grid-template-columns: 92px repeat(${OUTFIT_FACES.length}, minmax(0, 1fr)); width: 100%; min-width: 0; }
+      .face-matrix.fit .matrix-col-head { font-size: 10px; padding: 4px 2px; }
+      .face-matrix.fit .cell-foot { padding: 3px 4px; font-size: 9px; }
+      .matrix-corner { position: sticky; top: 0; left: 0; z-index: 3; background: color-mix(in srgb, var(--oppai-bg) 82%, #000); }
+      .matrix-col-head {
+        position: sticky; top: 0; z-index: 2; padding: 6px 4px; text-align: center;
+        background: color-mix(in srgb, var(--oppai-bg) 82%, #000);
+        color: var(--oppai-text-dim); font-size: 11px; font-weight: 700; letter-spacing: 0.3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      }
+      .matrix-row-head {
+        position: sticky; left: 0; z-index: 2; display: flex; flex-direction: column; justify-content: center; gap: 2px; padding: 8px;
+        border-radius: 10px; background: var(--oppai-surface); border: 1px solid var(--oppai-border);
+        color: var(--oppai-text-dim); font-size: 11px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase;
+      }
+      .matrix-row-count { color: var(--oppai-text-muted); font-weight: 600; font-variant-numeric: tabular-nums; text-transform: none; }
+      .sheet-note { margin: 0; padding: 8px 12px 0; color: var(--oppai-text-muted); font-size: 12px; }
+      .sheet-cell.empty .art-empty { color: var(--oppai-text-muted); }
+      .sheet-cell.current .art-empty { color: var(--oppai-primary-bright); }
+      .sheet-cell .cell-foot { display: flex; align-items: center; gap: 4px; padding: 4px 6px; font-size: 10px; font-weight: 650; }
+      .sheet-cell .cell-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .cell-state.stale { background: #d9a441; }
+      .sheet-grid { grid-template-columns: repeat(auto-fill, minmax(calc(var(--cell, 88px) + 30px), 1fr)); }
+      /* The focus panel. */
+      .studio-focus { display: flex; flex-direction: column; }
+      .focus-scroll { padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+      .focus-art {
+        flex: 0 0 auto; width: 100%; aspect-ratio: 3 / 4; box-sizing: border-box; border-radius: 12px; overflow: hidden; display: grid; place-items: center;
+        border: 1px solid var(--oppai-border); background-color: #6b6b6b;
+        background-image: linear-gradient(45deg, #5a5a5a 25%, transparent 25%), linear-gradient(-45deg, #5a5a5a 25%, transparent 25%),
+          linear-gradient(45deg, transparent 75%, #5a5a5a 75%), linear-gradient(-45deg, transparent 75%, #5a5a5a 75%);
+        background-size: 16px 16px; background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+      }
+      .focus-art img { width: 100%; height: 100%; object-fit: contain; display: block; }
+      .focus-empty { display: grid; place-items: center; gap: 6px; color: rgba(255,255,255,.7); font-size: 12px; text-align: center; }
+      .focus-empty .material-symbols-rounded { font-size: 30px; }
+      .focus-title { display: grid; gap: 3px; }
+      .focus-title strong { font-size: 14px; }
+      .focus-status { font-size: 12px; color: var(--oppai-text-muted); }
+      .focus-status.ready { color: #6fcf8a; }
+      .focus-status.needs { color: #d9a441; }
+      .focus-status.stale { color: #d9a441; }
+      .focus-actions { display: grid; gap: 6px; }
+      .focus-actions .btn { justify-content: flex-start; width: 100%; box-sizing: border-box; }
+      .focus-actions .btn.danger { color: var(--oppai-error, #f2b8b5); }
+      .focus-actions label.btn.disabled { opacity: 0.55; pointer-events: none; }
+      .focus-meta { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; color: var(--oppai-text-muted); font-size: 11px; }
+      .focus-meta span { display: inline-flex; align-items: center; gap: 3px; }
+      .link-btn { border: 0; background: none; padding: 0; color: var(--oppai-primary-bright); font: inherit; font-size: 11px; cursor: pointer; }
+      .link-btn:disabled { opacity: 0.5; cursor: default; }
+      .focus-prompt { display: grid; gap: 6px; }
+      .focus-tag { font-size: 10px; font-weight: 700; letter-spacing: .55px; text-transform: uppercase; color: var(--oppai-text-muted); }
+      .focus-tag.negative { color: var(--oppai-error, #f2b8b5); }
+      .focus-prompt pre { margin: 0; padding: 8px; border-radius: 8px; background: var(--oppai-surface); font-size: 11px; line-height: 1.4; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow: auto; }
+      /* The batch bar. */
+      .batch-bar {
+        flex: 0 0 auto; display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; padding: 10px 12px;
+        background: var(--oppai-surface-2); border-top: 1px solid var(--oppai-border-strong);
+      }
+      .batch-progress { flex: 1 1 260px; min-width: 200px; display: grid; gap: 4px; }
+      .batch-track { position: relative; height: 6px; border-radius: 3px; background: var(--oppai-surface); overflow: hidden; }
+      .batch-fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px; transition: width .3s ease; }
+      .batch-fill.made { background: color-mix(in srgb, var(--oppai-primary) 45%, transparent); }
+      .batch-fill.reviewed { background: var(--oppai-primary); z-index: 1; }
+      .batch-count { color: var(--oppai-text-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+      .batch-count em { font-style: normal; color: #d9a441; }
+      .batch-note { flex-basis: 100%; color: var(--oppai-text-muted); font-size: 11px; }
+      .switch.compact { margin: 0; font-size: 12px; white-space: nowrap; }
+
       /* ── The outfit contact sheet ──────────────────────────────────────────
          Sixty squares are a set, not sixty independent pictures, so the studio
          lays them out as the wardrobe grid they will become: one row per heat
@@ -1825,8 +1964,7 @@ export class OppaiImageGen extends LitElement {
       /* The studio's panels carry more than the Create screen's: ten equipment rows
          with two fields each on the left, and a gallery being picked over on the
          right. Both get room here rather than being asked to wrap inside 296px. */
-      .layout.studio { grid-template-columns: 368px minmax(380px, 1fr) 360px; }
-      .layout.studio.no-gallery { grid-template-columns: 368px minmax(380px, 1fr); }
+      .layout.studio { grid-template-columns: 350px minmax(380px, 1fr) 300px; }
       .side,
       .right {
         min-width: 0;
@@ -2186,8 +2324,7 @@ export class OppaiImageGen extends LitElement {
         /* Still wider than the Create screen's, but the workbench keeps a usable
            middle: the equipment rows tolerate 330px, a 20-square grid does not
            tolerate 300. */
-        .layout.studio { grid-template-columns: 330px minmax(340px, 1fr) 300px; }
-        .layout.studio.no-gallery { grid-template-columns: 330px minmax(340px, 1fr); }
+        .layout.studio { grid-template-columns: 320px minmax(340px, 1fr) 270px; }
         .model-pill { display: none; }
       }
       @media (max-width: 1020px) {
@@ -2195,8 +2332,7 @@ export class OppaiImageGen extends LitElement {
         .workspace { height: auto; min-height: 100%; }
         .layout,
         .layout.no-gallery,
-        .layout.studio,
-        .layout.studio.no-gallery {
+        .layout.studio {
           min-height: 0;
           grid-template-columns: 280px minmax(0, 1fr);
         }
@@ -2215,8 +2351,10 @@ export class OppaiImageGen extends LitElement {
         .workspace-bar .ghost span:last-child { display: none; }
         .layout,
         .layout.no-gallery,
-        .layout.studio,
-        .layout.studio.no-gallery { display: flex; flex-direction: column; }
+        .layout.studio { display: flex; flex-direction: column; }
+        .studio-views { margin-left: 0; }
+        .studio-view { padding: 5px 8px; }
+        .studio-view-sub { display: none; }
         .side,
         .workbench,
         .right { min-height: 0; border: 0; }
@@ -2285,7 +2423,7 @@ export class OppaiImageGen extends LitElement {
     "seamlessX", "seamlessY", "vaePrecision", "cpuNoise", "count", "seed", "board",
     "selectedLoras", "selectedTriggers", "selectedChars",
     "outfitOn", "outfitText", "outfitGear", "outfitFace", "outfitMisc", "outfitMiscBatch", "outfitTier", "outfitBackground",
-    "outfitLockColors", "outfitLoadoutId", "outfitWardrobeId",
+    "outfitLockColors", "outfitLoadoutId", "outfitWardrobeId", "sheetZoom",
     "outfitUnderwearColor", "outfitPubicHair", "outfitPubicHairColor", "camera",
     "detailerEnabled", "detailerModel", "detailerPrompt", "detailerNegative",
     "detailerConfidence", "detailerDenoise", "detailerMaskBlur",
@@ -2620,8 +2758,11 @@ export class OppaiImageGen extends LitElement {
    * so the common case — a matching set — stays one field. Typing a colour into either
    * slot overrides it, which is how a mismatched set is expressed.
    */
-  private pieceFor(key: OutfitGearKey) {
+  private pieceFor(key: OutfitGearKey): GearPiece {
     const piece = this.outfitGear[key];
+    // Switched off reads as not there, to every consumer: the prompt, the negatives,
+    // the exposure clauses and the fingerprint.
+    if (piece.off) return { color: "", item: "" };
     if (piece.color.trim() || (key !== "bra" && key !== "panties")) return piece;
     return { color: this.outfitUnderwearColor.trim() || "black", item: piece.item };
   }
@@ -2643,10 +2784,10 @@ export class OppaiImageGen extends LitElement {
     // given different colours stay different in the exposure clauses too.
     const braColor = this.pieceFor("bra").color;
     const pantyColor = this.pieceFor("panties").color;
-    const hasTop = !!this.outfitGear.top.item.trim();
-    const hasBottoms = !!this.outfitGear.bottoms.item.trim();
-    const hasBra = !!this.outfitGear.bra.item.trim();
-    const hasPanties = !!this.outfitGear.panties.item.trim();
+    const hasTop = gearWorn(this.outfitGear.top);
+    const hasBottoms = gearWorn(this.outfitGear.bottoms);
+    const hasBra = gearWorn(this.outfitGear.bra);
+    const hasPanties = gearWorn(this.outfitGear.panties);
     const parts: string[] = [];
 
     if (!hasTop && !hasBottoms) {
@@ -2692,23 +2833,24 @@ export class OppaiImageGen extends LitElement {
   private outfitFragment(): { prompt: string; negative: string } {
     if (!this.outfitOn) return { prompt: "", negative: "" };
     const face = OUTFIT_FACES[this.outfitFace];
-    const tier = OUTFIT_TIERS[this.outfitTier];
-    const exposure = rollOutfitExposure(this.outfitTier);
+    // A MISC state replaces both halves of the expression: these poses carry their own
+    // face because "collapsed limp on her back" with a cheerful smile stapled on is not
+    // the picture anybody asked for. It also brings its own heat, since it has no tier.
+    const misc = OUTFIT_ACTIVITIES.find((item) => item.id === this.outfitMisc);
+    const heat = misc ? misc.heat : this.outfitTier;
+    const tier = OUTFIT_TIERS[heat];
+    const exposure = rollOutfitExposure(heat);
     const background = this.outfitBackground === "black"
       ? "perfectly solid pure black studio background, seamless black backdrop, background evenly lit with no texture"
       : "perfectly solid pure white studio background, seamless white backdrop, background evenly lit with no texture";
-    const lowerBodyCovered = !!this.outfitGear.bottoms.item.trim() && exposure.clothes === "on";
-    const pubic = this.outfitTier === OUTFIT_TIERS.length - 1
+    const lowerBodyCovered = gearWorn(this.outfitGear.bottoms) && exposure.clothes === "on";
+    const pubic = heat === OUTFIT_TIERS.length - 1
       ? this.outfitPubicHair
         ? lowerBodyCovered
           ? `${this.outfitPubicHairColor.trim() || "dark brown"} pubic hair present beneath the bottoms`
           : `${this.outfitPubicHairColor.trim() || "dark brown"} pubic hair visible`
         : "clean-shaven pubic area, no pubic hair"
       : "";
-    // A MISC state replaces both halves of the expression: these poses carry their own
-    // face because "collapsed limp on her back" with a cheerful smile stapled on is not
-    // the picture anybody asked for.
-    const misc = OUTFIT_ACTIVITIES.find((item) => item.id === this.outfitMisc);
     const parts = [
       "solo, one person, single subject",
       outfitShotPrompt(this.camera.shot),
@@ -2761,12 +2903,9 @@ export class OppaiImageGen extends LitElement {
    */
   private nextOutfitPose() {
     if (this.outfitMisc) {
-      // Through the MISC states, then on to the next tier of them — the same loop the
-      // expressions take, on the block that is open.
+      // Through the MISC states and round again: one square each, no tiers.
       const at = OUTFIT_ACTIVITIES.findIndex((item) => item.id === this.outfitMisc) + 1;
-      if (at < OUTFIT_ACTIVITIES.length) { this.outfitMisc = OUTFIT_ACTIVITIES[at].id; return; }
-      this.outfitMisc = OUTFIT_ACTIVITIES[0].id;
-      this.outfitTier = (this.outfitTier + 1) % OUTFIT_TIERS.length;
+      this.outfitMisc = OUTFIT_ACTIVITIES[at % OUTFIT_ACTIVITIES.length].id;
       return;
     }
     const face = this.outfitFace + 1;
@@ -2803,18 +2942,19 @@ export class OppaiImageGen extends LitElement {
 
   // ── generate / save ─────────────────────────────────────────────────────────
   private outfitSlot(tier = this.outfitTier, face = this.outfitFace, miscId = this.outfitMisc) {
-    const heat = OUTFIT_TIERS[tier];
     // A MISC square is filed by its state name, which is also what keeps its filename
-    // and previews apart from an expression's. Its index lives in the block after the
-    // sixty expression squares — see squareAddress.
+    // and previews apart from an expression's. It has one tier — level 0 — and its
+    // index lives in the block after the sixty expression squares; see squareAddress.
     const misc = OUTFIT_ACTIVITIES.find((item) => item.id === miscId);
     const expression = misc ?? OUTFIT_FACES[face];
+    const level = misc ? 0 : tier;
+    const heat = misc ? { label: "Misc" } : OUTFIT_TIERS[tier];
     const slot: DraftOutfitSlot = {
       emotion: expression.id,
       emotionLabel: expression.label,
-      tier,
+      tier: level,
       tierLabel: heat.label,
-      index: squareIndex(tier, face, misc ? misc.id : ""),
+      index: squareIndex(level, face, misc ? misc.id : ""),
     };
     return {
       slot,
@@ -2822,15 +2962,34 @@ export class OppaiImageGen extends LitElement {
     };
   }
 
-  /** Results belonging to the outfit currently described, ordered exactly like the
-   * wardrobe grid. A map makes a regenerated square replace its earlier take. */
+  /** The square on the board at one slot, if any. Matched by slot, never by name. */
+  private shotAt(slot: Pick<DraftOutfitSlot, "emotion" | "tier">): Shot | undefined {
+    const key = slotKeyOf(slot);
+    return this.shots.find((shot) => shot.outfitSlot && slotKeyOf(shot.outfitSlot) === key);
+  }
+
+  /** Squares generated under a different recipe than the one on the board. They stay
+   * on the sheet — a set is not thrown away because a colour changed — but they are
+   * marked, and can be redone together. */
+  private staleShots(): Shot[] {
+    return this.currentOutfitShots().filter((shot) => !this.shotMatchesCurrentOutfit(shot));
+  }
+
+  /** Every square on the board, ordered exactly like the wardrobe grid. One per slot:
+   * a regenerated square replaces its earlier take rather than sitting beside it.
+   *
+   * Squares from an older recipe are included. The board used to hide them the moment
+   * a colour changed, which read as sixty squares vanishing; now they stay, marked
+   * stale (see staleShots), until they are redone or deleted. */
   private currentOutfitShots(): Shot[] {
-    const byName = new Map(this.shots.filter((shot) => shot.outfitFilename && this.shotMatchesCurrentOutfit(shot))
-      .map((shot) => [shot.outfitFilename!, shot]));
+    const bySlot = new Map<string, Shot>();
+    for (const shot of this.shots) {
+      if (shot.outfitSlot) bySlot.set(slotKeyOf(shot.outfitSlot), shot);
+    }
     const ordered: Shot[] = [];
     for (let index = 0; index < EXPRESSION_SQUARES + MISC_SQUARES; index++) {
       const { tier, face, misc } = squareAddress(index);
-      const shot = byName.get(this.outfitSlot(tier, face, misc).filename);
+      const shot = bySlot.get(slotKeyOf(this.outfitSlot(tier, face, misc).slot));
       if (shot) ordered.push(shot);
     }
     return ordered;
@@ -2966,7 +3125,7 @@ export class OppaiImageGen extends LitElement {
     const restored: Shot[] = squares.map((square) => {
       const face = OUTFIT_FACES.findIndex((f) => f.id === square.emotion);
       const misc = OUTFIT_ACTIVITIES.some((item) => item.id === square.emotion) ? square.emotion : "";
-      const tier = Math.max(0, Math.min(OUTFIT_TIERS.length - 1, square.level));
+      const tier = misc ? 0 : Math.max(0, Math.min(OUTFIT_TIERS.length - 1, square.level));
       const slot = this.outfitSlot(tier, Math.max(0, face), misc);
       return {
         // No live preview stands behind a restored square; the id only has to be
@@ -3006,9 +3165,14 @@ export class OppaiImageGen extends LitElement {
 
   private selectOutfitSlot(index: number) {
     const { tier, face, misc } = squareAddress(index);
-    this.outfitTier = tier;
     this.outfitMisc = misc;
-    if (!misc) this.outfitFace = face;
+    if (misc) {
+      this.sheetTab = "misc";
+    } else {
+      this.outfitTier = tier;
+      this.outfitFace = face;
+      this.sheetTab = "faces";
+    }
   }
 
   /** Makes one request using a snapshot of the selected outfit square. */
@@ -3017,9 +3181,7 @@ export class OppaiImageGen extends LitElement {
     const capturedOutfitText = this.outfitText.trim();
     const outfit = this.outfitOn ? this.outfitSlot() : undefined;
     const capturedOutfitConfig = outfit ? this.outfitConfigKey() : undefined;
-    const superseded = outfit
-      ? this.shots.find((shot) => shot.outfitFilename === outfit.filename)
-      : undefined;
+    const superseded = outfit ? this.shotAt(outfit.slot) : undefined;
     const supersededPosition = superseded
       ? this.nodePosition(superseded, this.shots.indexOf(superseded))
       : undefined;
@@ -3112,8 +3274,9 @@ export class OppaiImageGen extends LitElement {
       if (superseded && made.length && !superseded.id.startsWith("wip-")) {
         await api.deleteGenPreview(superseded.id);
       }
+      const key = slotKeyOf(outfit.slot);
       this.shots = [
-        ...this.shots.filter((shot) => shot.outfitFilename !== outfit.filename),
+        ...this.shots.filter((shot) => !shot.outfitSlot || slotKeyOf(shot.outfitSlot) !== key),
         ...made,
       ];
     } else {
@@ -3172,8 +3335,10 @@ export class OppaiImageGen extends LitElement {
       for (let index = 0; index < total; index++) {
         if (this.stopOutfitBatch) break;
         this.selectOutfitSlot(index);
-        const { slot, filename: expected } = this.outfitSlot();
-        if (this.shots.some((shot) => shot.outfitFilename === expected && this.shotMatchesCurrentOutfit(shot))) continue;
+        const { slot } = this.outfitSlot();
+        // Missing means missing. A square from an older recipe is kept and marked, and
+        // is redone through regenerateStale rather than swept up here.
+        if (this.shotAt(slot)) continue;
         this.outfitProgress = `Generating ${index + 1} of ${total} · ${slot.tierLabel} · ${slot.emotionLabel}`;
         await this.generateOne(true);
         this.persistDraft();
@@ -3185,6 +3350,35 @@ export class OppaiImageGen extends LitElement {
     } catch (e) {
       this.error = (e as Error).message;
       this.outfitProgress = `Paused with ${this.currentOutfitShots().length} of ${total} ready. Run missing images to resume.`;
+    } finally {
+      this.generating = false;
+      this.outfitBatchRunning = false;
+      this.persistDraft();
+    }
+  }
+
+  /** Redoes every square generated under an older recipe, in board order. */
+  private async regenerateStale() {
+    if (this.generating || !this.outfitOn || !this.assemblePrompts().prompt.trim()) return;
+    const stale = this.staleShots();
+    if (!stale.length) return;
+    this.generating = true;
+    this.outfitBatchRunning = true;
+    this.stopOutfitBatch = false;
+    this.error = "";
+    try {
+      for (let n = 0; n < stale.length; n++) {
+        if (this.stopOutfitBatch) break;
+        const slot = stale[n].outfitSlot!;
+        this.selectOutfitSlot(slot.index);
+        this.outfitProgress = `Redoing ${n + 1} of ${stale.length} · ${slot.tierLabel} · ${slot.emotionLabel}`;
+        await this.generateOne(true);
+        this.persistDraft();
+      }
+      const left = this.staleShots().length;
+      this.outfitProgress = left ? `Stopped with ${left} square${left === 1 ? "" : "s"} still on the old recipe.` : "Every square is on the current recipe.";
+    } catch (e) {
+      this.error = (e as Error).message;
     } finally {
       this.generating = false;
       this.outfitBatchRunning = false;
@@ -3357,8 +3551,43 @@ export class OppaiImageGen extends LitElement {
           run: () => { if (shot.info) this.reuseGenInfo(shot.info); } },
         { label: "Export PNG for Civitai", icon: "download", disabled: !shot.info,
           run: () => void this.exportShot(shot) },
+        { label: "Use as a Libby background", icon: "wallpaper",
+          run: () => void this.useAsBackground(shot) },
       ],
     });
+  }
+
+  /**
+   * Makes a generated picture one of the rooms she can be in on a call.
+   *
+   * A background is a picture plus a name and a few tags — the tags are what let her
+   * choose it herself — so the prompt that made the picture is mined for both: its
+   * first few words name the room, and its nouns tag it. Both are shown for editing
+   * before anything is saved, because a prompt's first words are often a quality
+   * incantation rather than a place.
+   */
+  private async useAsBackground(shot: Shot) {
+    const prompt = shot.info?.prompt ?? this.prompt;
+    const words = prompt.split(/[,\n]/).map((part) => part.trim()).filter(Boolean);
+    const suggestedName = (words.find((part) => /^[a-z][a-z ]{2,40}$/i.test(part) && !/masterpiece|quality|detailed|resolution|score_/i.test(part)) ?? "Generated room")
+      .replace(/\b\w/g, (c) => c.toUpperCase()).slice(0, 60);
+    const name = window.prompt("Name this background", suggestedName)?.trim();
+    if (!name) return;
+    const stop = new Set(["masterpiece", "best", "quality", "detailed", "highly", "ultra", "high", "resolution", "the", "and", "with", "very", "background", "scenery", "score", "absurdres"]);
+    const suggestedTags = [...new Set(prompt.toLowerCase().match(/[a-z]{4,}/g) ?? [])].filter((word) => !stop.has(word)).slice(0, 8);
+    const tags = window.prompt("Tags — what it is, comma separated (she reads these to pick a room)", suggestedTags.join(", "));
+    if (tags === null) return;
+    try {
+      const response = await fetch(this.previewURL(shot), { credentials: "same-origin" });
+      if (!response.ok) throw new Error(`preview returned ${response.status}`);
+      const dataURL = await blobToDataURL(await response.blob());
+      const saved = await api.saveLibbyBackground({ name, tags: tags.split(",").map((t) => t.trim()).filter(Boolean) });
+      await api.setLibbyBackgroundImage(saved.id, dataURL);
+      this.showToast(`Added “${name}” to the rooms Libby can be in.`);
+      void this.renderRoot.querySelector("oppai-outfit-wardrobe")?.refresh();
+    } catch (e) {
+      this.showToast(`Couldn't add that background: ${(e as Error).message}`);
+    }
   }
 
   private async save(shot: Shot) {
@@ -3840,17 +4069,15 @@ export class OppaiImageGen extends LitElement {
     }
 
     const invoke = st.backend === "invokeai";
-    // The studio shows the wardrobe as a sheet; the Create screen shows a free canvas.
-    const sheet = this.studio && this.outfitOn;
     const activeModel = (st.models ?? []).find((model) => model.title === this.checkpoint);
     const modelName = activeModel?.model_name || this.checkpoint || "Choose a model";
+    if (this.studio) return this.renderStudio(st, invoke, modelName);
     return html`
       <div class="workspace">
         <div class="workspace-bar">
           <div class="workspace-tab">
-            <span class="material-symbols-rounded" style="font-size:18px;"
-              >${this.studio ? "checkroom" : "auto_awesome"}</span>
-            ${this.studio ? "Outfit studio" : "Generate"}
+            <span class="material-symbols-rounded" style="font-size:18px;">auto_awesome</span>
+            Generate
           </div>
           <div class="workspace-context">
             <div class="backend-pill" title="Connected generation backend">
@@ -3867,23 +4094,13 @@ export class OppaiImageGen extends LitElement {
             </button>` : nothing}
           </div>
         </div>
-        <div class="layout ${this.studio ? "studio" : ""} ${invoke ? "" : "no-gallery"}">
+        <div class="layout ${invoke ? "" : "no-gallery"}">
           <aside class="side">
             <div class="panel-heading">
-              <span class="material-symbols-rounded" style="font-size:16px;"
-                >${this.studio ? "checkroom" : "tune"}</span>
-              ${this.studio ? "Outfit setup" : "Generation setup"}
+              <span class="material-symbols-rounded" style="font-size:16px;">tune</span>
+              Generation setup
             </div>
-            <!-- Order is the mode. In the studio the outfit work comes first and the
-                 model plumbing sits beneath it; on the Create screen the outfit
-                 sections are not rendered at all — the studio is the only place they
-                 exist now, which is the point of having a studio. -->
             <div class="panel-scroll">
-              ${this.studio ? html`
-                ${this.renderOutfitSection()}
-                ${this.renderLoadoutSection()}
-                ${this.renderWardrobeSection()}
-              ` : nothing}
               ${this.renderModelSection(st.models ?? [])}
               ${this.renderLoraSection(st.loras ?? [], st.loraError)}
               ${this.renderVaeSection(st.vaes ?? [])}
@@ -3892,8 +4109,8 @@ export class OppaiImageGen extends LitElement {
               ${this.renderCharacterSection()}
             </div>
           </aside>
-          <section class="workbench">${this.renderCanvasToolbar(sheet)}
-            <div class="canvas-stage ${sheet ? "sheet" : ""}">
+          <section class="workbench">${this.renderCanvasToolbar()}
+            <div class="canvas-stage">
               ${this.renderResults()}
               ${this.error ? html`<div class="banner">${this.error}</div>` : nothing}
               ${this.generating ? html`<div class="generating-overlay">
@@ -3929,49 +4146,568 @@ export class OppaiImageGen extends LitElement {
    * are the two facts you look up while working through sixty squares. On the Create
    * screen it stays what it was: the size and seed the next generation will use.
    */
-  private renderCanvasToolbar(sheet: boolean) {
-    if (!sheet) {
-      return html`<div class="canvas-toolbar">
-        <span class="canvas-name">Generation canvas</span>
-        <span class="toolbar-spacer"></span>
-        ${this.shots.length ? html`<button class="toolbar-clear" @click=${() => this.clearWorkspace()}>
-          <span class="material-symbols-rounded" style="font-size:15px;">delete_sweep</span>
-          Clear workspace
-        </button>` : nothing}
-        <span class="toolbar-stat" title="Output size">
-          <span class="material-symbols-rounded" style="font-size:14px;">aspect_ratio</span>
-          ${this.width} × ${this.height}
-        </span>
-        <span class="toolbar-stat" title="Seed">
-          <span class="material-symbols-rounded" style="font-size:14px;">casino</span>
-          ${this.seed < 0 ? "Random" : this.seed}
-        </span>
-      </div>`;
-    }
-    const shots = this.currentOutfitShots();
-    const reviewed = shots.filter((shot) => shot.cutoutReviewed).length;
-    // The two blocks are counted apart: "48/60" is a wardrobe nearly done, and folding
-    // twenty optional MISC squares into the denominator would make every finished
-    // wardrobe read as a third complete.
-    const expressions = shots.filter((shot) => (shot.outfitSlot?.index ?? 0) < EXPRESSION_SQUARES).length;
-    const misc = shots.length - expressions;
-    const wardrobe = this.wardrobes.find((o) => o.id === this.outfitWardrobeId);
+  private renderCanvasToolbar() {
     return html`<div class="canvas-toolbar">
-      <span class="canvas-name">${wardrobe?.name ?? (this.outfitText.trim() || "New wardrobe")}</span>
+      <span class="canvas-name">Generation canvas</span>
       <span class="toolbar-spacer"></span>
-      <span class="toolbar-stat" title="Expression squares generated, and Misc squares">
-        <span class="material-symbols-rounded" style="font-size:14px;">grid_view</span>
-        ${expressions}/${EXPRESSION_SQUARES} generated${misc ? ` · ${misc} misc` : ""}
+      ${this.shots.length ? html`<button class="toolbar-clear" @click=${() => this.clearWorkspace()}>
+        <span class="material-symbols-rounded" style="font-size:15px;">delete_sweep</span>
+        Clear workspace
+      </button>` : nothing}
+      <span class="toolbar-stat" title="Output size">
+        <span class="material-symbols-rounded" style="font-size:14px;">aspect_ratio</span>
+        ${this.width} × ${this.height}
       </span>
-      <span class="toolbar-stat" title="Squares whose cutout has been reviewed">
-        <span class="material-symbols-rounded" style="font-size:14px;">check_circle</span>
-        ${reviewed} reviewed
-      </span>
-      <span class="toolbar-stat" title="Every square is kept until you delete it">
-        <span class="material-symbols-rounded" style="font-size:14px;">save</span>
-        ${this.outfitWardrobeId ? "Saved" : "Saves on first square"}
+      <span class="toolbar-stat" title="Seed">
+        <span class="material-symbols-rounded" style="font-size:14px;">casino</span>
+        ${this.seed < 0 ? "Random" : this.seed}
       </span>
     </div>`;
+  }
+
+  // ── the studio ──────────────────────────────────────────────────────────────
+  //
+  // Two screens. "Build" is the board: the recipe down the left, the sheet of squares
+  // in the middle, and the square that is selected on the right with everything that
+  // can be done to it. "Wardrobe" is what she actually wears and where she stands —
+  // the finished outfits and the rooms — full width, because it is a gallery and was
+  // never a sidebar section.
+  //
+  // The generator's own plumbing (model, LoRAs, sampler) sits under the recipe,
+  // folded, because it is set once per wardrobe and then left alone.
+
+  private renderStudio(st: ImageGenStatus, invoke: boolean, modelName: string) {
+    const wardrobe = this.wardrobes.find((o) => o.id === this.outfitWardrobeId);
+    return html`
+      <div class="workspace">
+        <div class="workspace-bar">
+          <div class="workspace-tab">
+            <span class="material-symbols-rounded" style="font-size:18px;">checkroom</span>
+            Outfit studio
+          </div>
+          <div class="studio-views" role="tablist">
+            <button class="studio-view ${this.studioView === "build" ? "on" : ""}" role="tab" aria-selected=${this.studioView === "build" ? "true" : "false"}
+              @click=${() => (this.studioView = "build")}>
+              <span class="material-symbols-rounded" style="font-size:16px;">grid_view</span>
+              Build${wardrobe ? html` <span class="studio-view-sub">· ${wardrobe.name}</span>` : nothing}
+            </button>
+            <button class="studio-view ${this.studioView === "wardrobe" ? "on" : ""}" role="tab" aria-selected=${this.studioView === "wardrobe" ? "true" : "false"}
+              @click=${() => { this.studioView = "wardrobe"; void this.renderRoot.querySelector("oppai-outfit-wardrobe")?.refresh(); }}>
+              <span class="material-symbols-rounded" style="font-size:16px;">styler</span>
+              Wardrobe &amp; rooms
+            </button>
+          </div>
+          <div class="workspace-context">
+            <div class="backend-pill" title="Connected generation backend">
+              <span class="status-dot"></span>
+              ${invoke ? "InvokeAI" : "A1111 / SD.Next"}
+            </div>
+            <div class="model-pill" title=${modelName}>
+              <span class="material-symbols-rounded" style="font-size:15px;">deployed_code</span>
+              <span>${modelName}</span>
+            </div>
+          </div>
+        </div>
+        ${this.studioView === "wardrobe"
+          ? html`<div class="studio-wardrobe">
+              <oppai-outfit-wardrobe
+                @edit-slot=${(e: CustomEvent<{ outfitId: string; slot: string; level: number }>) =>
+                  void this.editWardrobeSlot(e.detail.outfitId, e.detail.slot, e.detail.level)}
+                @build-outfit=${(e: CustomEvent<{ outfitId: string }>) => {
+                  this.outfitWardrobeId = e.detail.outfitId;
+                  this.persistDraft();
+                  this.studioView = "build";
+                  void this.loadWipBoard(e.detail.outfitId);
+                }}
+              ></oppai-outfit-wardrobe>
+            </div>`
+          : html`<div class="layout studio">
+              <aside class="side">
+                <div class="panel-heading">
+                  <span class="material-symbols-rounded" style="font-size:16px;">checkroom</span>
+                  The recipe
+                </div>
+                <div class="panel-scroll">
+                  ${this.renderDressSection()}
+                  ${this.renderLookSection()}
+                  ${this.renderLoadoutSection()}
+                  ${this.renderPromptExtrasSection()}
+                  <div class="side-divider"><span>Generator</span></div>
+                  ${this.renderModelSection(st.models ?? [])}
+                  ${this.renderLoraSection(st.loras ?? [], st.loraError)}
+                  ${this.renderVaeSection(st.vaes ?? [])}
+                  ${this.renderSettingsSection(invoke, st.boards ?? [])}
+                  ${this.renderTemplateSection(st.templates ?? [])}
+                  ${this.renderCharacterSection()}
+                </div>
+              </aside>
+              <section class="workbench">
+                ${this.renderStudioToolbar()}
+                <div class="canvas-stage sheet">
+                  ${this.renderStudioSheet()}
+                  ${this.error ? html`<div class="banner">${this.error}</div>` : nothing}
+                </div>
+                ${this.renderBatchBar()}
+              </section>
+              <aside class="right studio-focus">${this.renderFocusPanel()}</aside>
+            </div>`}
+      </div>
+    `;
+  }
+
+  /**
+   * The strip above the sheet: which wardrobe the squares go into, which block is
+   * open, how big the squares are drawn.
+   */
+  private renderStudioToolbar() {
+    const shots = this.currentOutfitShots();
+    const expressions = shots.filter((shot) => (shot.outfitSlot?.index ?? 0) < EXPRESSION_SQUARES).length;
+    const misc = shots.length - expressions;
+    return html`<div class="canvas-toolbar studio-toolbar">
+      <label class="wardrobe-pick" title="Every square is saved into this wardrobe as it is generated">
+        <span class="material-symbols-rounded" style="font-size:16px;">inventory_2</span>
+        <select ?disabled=${this.outfitBatchRunning}
+          @change=${(e: Event) => {
+            this.outfitWardrobeId = (e.target as HTMLSelectElement).value;
+            this.persistDraft();
+            void this.loadWipBoard(this.outfitWardrobeId);
+          }}>
+          <!-- Selected per option rather than .value on the select: the list arrives
+               after the first render, and a value that has not changed is not re-applied. -->
+          <option value="" ?selected=${!this.outfitWardrobeId}>New wardrobe on first square</option>
+          ${this.wardrobes.map((o) => html`<option value=${o.id} ?selected=${o.id === this.outfitWardrobeId}>${o.name}</option>`)}
+        </select>
+      </label>
+      <button class="toolbar-clear" title="Start a new wardrobe" ?disabled=${this.outfitBatchRunning} @click=${() => void this.createWardrobe()}>
+        <span class="material-symbols-rounded" style="font-size:15px;">add</span>
+      </button>
+      <div class="sheet-tabs" role="tablist">
+        <button class="sheet-tab ${this.sheetTab === "faces" ? "on" : ""}" role="tab" @click=${() => (this.sheetTab = "faces")}>
+          Expressions <span class="sheet-tab-count">${expressions}/${EXPRESSION_SQUARES}</span>
+        </button>
+        <button class="sheet-tab ${this.sheetTab === "misc" ? "on" : ""}" role="tab" @click=${() => (this.sheetTab = "misc")}>
+          Misc <span class="sheet-tab-count">${misc}/${MISC_SQUARES}</span>
+        </button>
+      </div>
+      <span class="toolbar-spacer"></span>
+      <div class="zoom-tabs" title="Square size">
+        ${SHEET_ZOOMS.map((_, index) => html`<button class="zoom-tab ${this.sheetZoom === index ? "on" : ""}"
+          title=${["Fit the row to the screen", "Medium squares", "Large squares"][index]}
+          @click=${() => { this.sheetZoom = index; this.persistDraft(); }}>${["Fit", "M", "L"][index]}</button>`)}
+      </div>
+    </div>`;
+  }
+
+  /** The sheet: the expression matrix, or the MISC grid. */
+  private renderStudioSheet() {
+    if (!this.outfitOn) {
+      return html`<div class="canvas-empty">
+        <span class="material-symbols-rounded">checkroom</span>
+        <strong>Outfit terms are switched off</strong>
+        <span>Turn them back on in the recipe to build a wardrobe.</span>
+      </div>`;
+    }
+    const cell = SHEET_ZOOMS[this.sheetZoom];
+    const style = cell ? `--cell:${cell}px` : "";
+    return this.sheetTab === "misc" ? this.renderMiscGrid(style) : this.renderFaceMatrix(style, !cell);
+  }
+
+  /**
+   * The sixty expression squares as the matrix they are: one row per heat tier, one
+   * column per expression. A gap in a set is exactly what you need to see, and a
+   * matrix shows it in a way a wrapped list of tiles never did.
+   */
+  private renderFaceMatrix(style: string, fit: boolean) {
+    const selected = slotKeyOf(this.outfitSlot().slot);
+    return html`<div class="face-matrix ${fit ? "fit" : ""}" style=${style}>
+      <div class="matrix-corner"></div>
+      ${OUTFIT_FACES.map((face) => html`<div class="matrix-col-head" title=${face.face}>${face.label}</div>`)}
+      ${OUTFIT_TIERS.map((tier, tierIndex) => {
+        const row = OUTFIT_FACES.map((_, faceIndex) => this.outfitSlot(tierIndex, faceIndex, "").slot);
+        const made = row.filter((slot) => this.shotAt(slot)).length;
+        return html`
+          <div class="matrix-row-head">
+            <span class="material-symbols-rounded" style="font-size:14px;">local_fire_department</span>
+            <span class="matrix-row-name">${tier.label}</span>
+            <span class="matrix-row-count">${made}/${row.length}</span>
+          </div>
+          ${row.map((slot) => this.renderSheetCell(slot, slotKeyOf(slot) === selected, this.sheetTab === "faces" && !this.outfitMisc))}
+        `;
+      })}
+    </div>`;
+  }
+
+  /** The MISC block: what she is doing, one square each, the idle states first. */
+  private renderMiscGrid(style: string) {
+    const selected = slotKeyOf(this.outfitSlot().slot);
+    const group = (title: string, note: string, items: typeof OUTFIT_ACTIVITIES) => html`
+      <section class="sheet-tier misc">
+        <header class="sheet-tier-head">
+          <span class="material-symbols-rounded" style="font-size:15px;">interests</span>
+          ${title}
+          <span class="tier-count">${items.filter((item) => this.shotAt(this.outfitSlot(0, 0, item.id).slot)).length}/${items.length} generated</span>
+        </header>
+        <p class="sheet-note">${note}</p>
+        <div class="sheet-grid" style=${style}>
+          ${items.map((item) => {
+            const slot = this.outfitSlot(0, 0, item.id).slot;
+            return this.renderSheetCell(slot, slotKeyOf(slot) === selected, !!this.outfitMisc);
+          })}
+        </div>
+      </section>`;
+    return html`<div class="outfit-sheet" style=${style}>
+      ${group("Around the place", "One picture per state, whatever the heat — a state with no square falls back to her expression. Typing is shown while she writes to you.",
+        OUTFIT_ACTIVITIES.filter((item) => !item.intimate))}
+      ${group("With them", "Drawn at their own heat. She can only put herself into these once a conversation has got there.",
+        OUTFIT_ACTIVITIES.filter((item) => item.intimate))}
+    </div>`;
+  }
+
+  /**
+   * One square on the sheet. Clicking it selects it — the focus panel on the right
+   * is where things are done to it — so the cell itself carries only the picture and
+   * its state: empty, generated, reviewed, or on an older recipe.
+   */
+  private renderSheetCell(slot: DraftOutfitSlot, current: boolean, _tabActive: boolean) {
+    const shot = this.shotAt(slot);
+    const stale = shot ? !this.shotMatchesCurrentOutfit(shot) : false;
+    const label = slot.tier === 0 && slot.tierLabel === "Misc" ? slot.emotionLabel : `${slot.tierLabel} · ${slot.emotionLabel}`;
+    return html`<button
+      class="sheet-cell ${current ? "current" : ""} ${shot ? "" : "empty"}"
+      title=${shot ? `${label}${stale ? " — older recipe" : shot.cutoutReviewed ? " — reviewed" : " — needs a cutout review"}` : `${label} — not generated yet`}
+      @click=${() => this.selectOutfitSlot(slot.index)}
+      @dblclick=${() => { this.selectOutfitSlot(slot.index); void this.generateOutfitAndNext(); }}
+    >
+      ${shot
+        ? html`<img class="art" src=${this.previewURL(shot)} alt=${label} loading="lazy" />`
+        : html`<span class="art-empty"><span class="material-symbols-rounded">add_photo_alternate</span></span>`}
+      <span class="cell-foot">
+        <span class="cell-name">${slot.tierLabel === "Misc" ? slot.emotionLabel : slot.emotionLabel}</span>
+        ${shot ? html`<span class="cell-state ${stale ? "stale" : shot.cutoutReviewed ? "ready" : "needs"}"></span>` : nothing}
+      </span>
+    </button>`;
+  }
+
+  /** What state one square is in, in words, for the focus panel. */
+  private squareStatus(shot: Shot | undefined): { label: string; tone: string } {
+    if (!shot) return { label: "Not generated yet", tone: "none" };
+    if (!this.shotMatchesCurrentOutfit(shot)) return { label: "Generated with an older recipe", tone: "stale" };
+    if (shot.cutoutReviewed) return { label: "Reviewed and filed — she can wear it", tone: "ready" };
+    return { label: "Generated — the cutout needs a look", tone: "needs" };
+  }
+
+  /**
+   * The selected square, large, with everything that can be done to it.
+   *
+   * This is where the old design's twelve buttons in the sidebar went: a square's
+   * actions belong beside the square. Generate or redo, review the cutout, drop in a
+   * picture of your own, or throw it away — plus the prompt that would be sent for it,
+   * which is the thing to read when a square keeps coming out wrong.
+   */
+  private renderFocusPanel() {
+    const { slot } = this.outfitSlot();
+    const shot = this.shotAt(slot);
+    const status = this.squareStatus(shot);
+    const isMisc = slot.tierLabel === "Misc";
+    const activity = isMisc ? OUTFIT_ACTIVITIES.find((item) => item.id === slot.emotion) : undefined;
+    const face = isMisc ? undefined : OUTFIT_FACES[this.outfitFace];
+    const { prompt, negative } = this.assemblePrompts();
+    const busy = this.generating;
+    return html`
+      <div class="panel-heading">
+        <span class="material-symbols-rounded" style="font-size:16px;">crop_square</span>
+        Selected square
+      </div>
+      <div class="panel-scroll focus-scroll">
+        <div class="focus-art">
+          ${shot
+            ? html`<img src=${this.previewURL(shot)} alt=${slot.emotionLabel} style="cursor:zoom-in" title="Expand"
+                @click=${() => (this.expandedShot = shot)} @contextmenu=${(e: MouseEvent) => this.openShotMenu(shot, e)} />`
+            : html`<span class="focus-empty"><span class="material-symbols-rounded">add_photo_alternate</span>Nothing here yet</span>`}
+        </div>
+        <div class="focus-title">
+          <strong>${isMisc ? slot.emotionLabel : `${slot.tierLabel} · ${slot.emotionLabel}`}</strong>
+          <span class="focus-status ${status.tone}">${status.label}</span>
+        </div>
+        <div class="sec-note">${activity ? `${activity.face}; ${activity.pose}.` : face ? `${face.face}; ${face.pose}.` : nothing}</div>
+        <div class="focus-actions">
+          <button class="btn primary" ?disabled=${busy || !this.outfitOn || !prompt.trim()} @click=${() => void this.generateOutfitAndNext()}>
+            <span class="material-symbols-rounded" style="font-size:17px;">${shot ? "refresh" : "auto_awesome"}</span>
+            ${shot ? "Redo, then next" : "Generate, then next"}
+          </button>
+          <button class="btn" ?disabled=${busy || !this.outfitOn || !prompt.trim()} @click=${() => void this.generate()}>
+            <span class="material-symbols-rounded" style="font-size:17px;">${shot ? "replay" : "add"}</span>
+            ${shot ? "Redo, stay here" : "Generate this one"}
+          </button>
+          <button class="btn" ?disabled=${!shot || busy}
+            @click=${() => { if (shot) void this.openCutout(this.previewURL(shot), `seed-${shot.seed}`, shot.outfitFilename, shot.id); }}>
+            <span class="material-symbols-rounded" style="font-size:17px;">background_replace</span>
+            ${shot?.cutoutReviewed ? "Adjust the cutout" : "Review the cutout"}
+          </button>
+          <label class="btn ${busy ? "disabled" : ""}" title="Use a picture of your own for this square">
+            <span class="material-symbols-rounded" style="font-size:17px;">upload</span>
+            ${shot ? "Replace with my own image" : "Use my own image"}
+            <input type="file" accept="image/*" style="display:none;" ?disabled=${busy}
+              @change=${(e: Event) => { const input = e.target as HTMLInputElement; void this.uploadSquare(input.files?.[0]); input.value = ""; }} />
+          </label>
+          <button class="btn danger" ?disabled=${!shot || busy} @click=${() => { if (shot) void this.deleteOutfitSquare(shot); }}>
+            <span class="material-symbols-rounded" style="font-size:17px;">delete</span>
+            Delete this square
+          </button>
+        </div>
+        ${shot ? html`<div class="focus-meta">
+          <span title="Seed"><span class="material-symbols-rounded" style="font-size:14px;">casino</span>${shot.seed}</span>
+          ${shot.info?.model ? html`<span title="Model"><span class="material-symbols-rounded" style="font-size:14px;">deployed_code</span>${shot.info.model}</span>` : nothing}
+          <button class="link-btn" ?disabled=${!shot.info} @click=${() => void this.copyGenInfo(shot, "text")}>Copy generation data</button>
+          ${this.outfitLoadoutId ? html`<button class="link-btn" ?disabled=${this.loadoutBusy} @click=${() => void this.setLoadoutCoverFromSelection()}>Use as loadout cover</button>` : nothing}
+        </div>` : nothing}
+        <button class="adv-toggle" @click=${() => (this.showSquarePrompt = !this.showSquarePrompt)}>
+          <span class="material-symbols-rounded" style="font-size:17px;">${this.showSquarePrompt ? "expand_less" : "code"}</span>
+          ${this.showSquarePrompt ? "Hide the prompt" : "The prompt this square gets"}
+        </button>
+        ${this.showSquarePrompt ? html`<div class="focus-prompt">
+          <span class="focus-tag">Positive</span>
+          <pre>${prompt}</pre>
+          <span class="focus-tag negative">Negative</span>
+          <pre>${negative}</pre>
+          <div class="sec-note">Exposure is rolled fresh for every generation, so the undress clauses change between takes.</div>
+        </div>` : nothing}
+      </div>
+    `;
+  }
+
+  /** The bar under the sheet: the whole set's progress, and the batch controls. */
+  private renderBatchBar() {
+    const shots = this.currentOutfitShots();
+    const expressions = shots.filter((shot) => (shot.outfitSlot?.index ?? 0) < EXPRESSION_SQUARES).length;
+    const misc = shots.length - expressions;
+    const reviewed = shots.filter((shot) => shot.cutoutReviewed).length;
+    const stale = this.staleShots().length;
+    const total = EXPRESSION_SQUARES + (this.outfitMiscBatch ? MISC_SQUARES : 0);
+    const have = expressions + (this.outfitMiscBatch ? misc : 0);
+    const missing = Math.max(0, total - have);
+    const canRun = !this.generating && this.outfitOn && !!this.assemblePrompts().prompt.trim();
+    return html`<div class="batch-bar">
+      <div class="batch-progress" title=${`${reviewed} of ${shots.length} generated squares reviewed`}>
+        <div class="batch-track">
+          <div class="batch-fill reviewed" style=${`width:${total ? Math.min(100, (reviewed / total) * 100) : 0}%`}></div>
+          <div class="batch-fill made" style=${`width:${total ? Math.min(100, (have / total) * 100) : 0}%`}></div>
+        </div>
+        <span class="batch-count">${expressions}/${EXPRESSION_SQUARES} expressions · ${misc}/${MISC_SQUARES} misc · ${reviewed} reviewed${stale ? html` · <em>${stale} on an older recipe</em>` : nothing}</span>
+      </div>
+      <label class="switch compact" title="Whether Generate missing also renders the Misc states">
+        <input type="checkbox" .checked=${this.outfitMiscBatch} ?disabled=${this.outfitBatchRunning}
+          @change=${(e: Event) => { this.outfitMiscBatch = (e.target as HTMLInputElement).checked; this.persistDraft(); }} />
+        Include Misc
+      </label>
+      ${this.outfitBatchRunning
+        ? html`<button class="btn" @click=${() => this.cancelOutfitBatch()}>
+            <span class="material-symbols-rounded" style="font-size:17px;">stop_circle</span>
+            Stop after this one
+          </button>`
+        : html`<button class="btn primary" ?disabled=${!canRun || !missing} @click=${() => void this.generateAllOutfit()}>
+            <span class="material-symbols-rounded" style="font-size:17px;">auto_awesome</span>
+            Generate ${missing} missing
+          </button>
+          ${stale ? html`<button class="btn" ?disabled=${!canRun} @click=${() => void this.regenerateStale()}>
+            <span class="material-symbols-rounded" style="font-size:17px;">history</span>
+            Redo ${stale} stale
+          </button>` : nothing}`}
+      <button class="btn" ?disabled=${this.generating || this.outfitExporting || !shots.length || reviewed !== shots.length}
+        title=${reviewed !== shots.length ? "Review every cutout first" : "Every square, correctly named, in one ZIP"}
+        @click=${() => void this.exportOutfitZip()}>
+        <span class="material-symbols-rounded" style="font-size:17px;">folder_zip</span>
+        ${this.outfitExporting ? "Building ZIP…" : "Export ZIP"}
+      </button>
+      ${this.outfitProgress ? html`<span class="batch-note">${this.outfitProgress}</span>` : nothing}
+    </div>`;
+  }
+
+  /**
+   * Drops a picture of the user's own into the selected square.
+   *
+   * It goes through the same door a generated square does — stored as work in
+   * progress, then reviewed — so a hand-drawn sprite and a generated one are the same
+   * thing to the board, and the cutout editor opens on it straight away because that
+   * is what "use my own image" nearly always needs next.
+   */
+  private async uploadSquare(file: File | undefined) {
+    if (!file || !file.type.startsWith("image/") || this.generating) return;
+    const { slot, filename } = this.outfitSlot();
+    try {
+      const dataURL = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = () => reject(new Error("couldn't read that file"));
+        reader.readAsDataURL(file);
+      });
+      const wardrobeId = await this.ensureWardrobe();
+      await api.putLibbyOutfitWip(wardrobeId, slot.emotion, slot.tier, {
+        imageData: dataURL, filename, seed: -1, reviewed: false, config: this.outfitConfigKey(),
+      });
+      const previous = this.shotAt(slot);
+      if (previous && !previous.id.startsWith("wip-")) await api.deleteGenPreview(previous.id).catch(() => undefined);
+      const key = slotKeyOf(slot);
+      const shot: Shot = {
+        id: `wip-${wardrobeId}-${slot.emotion}-${slot.tier}`, seed: -1, saved: false,
+        outfitFilename: filename, outfitSlot: slot, outfitConfig: this.outfitConfigKey(),
+        cutoutReviewed: false, previewVersion: Date.now(), wipOutfitId: wardrobeId,
+      };
+      this.shots = [...this.shots.filter((s) => !s.outfitSlot || slotKeyOf(s.outfitSlot) !== key), shot];
+      this.persistDraft();
+      void this.openCutout(this.previewURL(shot), file.name, filename, shot.id);
+    } catch (e) {
+      this.showToast(`Couldn't use that image: ${(e as Error).message}`);
+    }
+  }
+
+  /**
+   * Opens a finished sprite from the wardrobe screen in the editor.
+   *
+   * A sprite already filed into an outfit is not necessarily on the board — it may
+   * have been dropped in by hand months ago — so it is pulled back through the
+   * work-in-progress store first, which makes it a square like any other: reviewable,
+   * redoable, replaceable. Then the board switches to it.
+   */
+  private async editWardrobeSlot(outfitId: string, slotName: string, level: number) {
+    const face = OUTFIT_FACES.findIndex((f) => f.id === slotName);
+    const misc = OUTFIT_ACTIVITIES.some((item) => item.id === slotName) ? slotName : "";
+    if (face < 0 && !misc) return;
+    if (this.outfitWardrobeId !== outfitId) {
+      this.outfitWardrobeId = outfitId;
+      this.persistDraft();
+      await this.loadWipBoard(outfitId);
+    }
+    this.outfitOn = true;
+    const { slot, filename } = this.outfitSlot(misc ? 0 : level, Math.max(0, face), misc);
+    this.selectOutfitSlot(slot.index);
+    this.studioView = "build";
+    let shot = this.shotAt(slot);
+    if (!shot) {
+      try {
+        const response = await fetch(api.libbyEmotionURL(outfitId, slotName, level, Date.now()), { credentials: "same-origin" });
+        if (!response.ok) throw new Error(`the sprite returned ${response.status}`);
+        const dataURL = await blobToDataURL(await response.blob());
+        await api.putLibbyOutfitWip(outfitId, slot.emotion, slot.tier, {
+          imageData: dataURL, filename, seed: -1, reviewed: true, config: this.outfitConfigKey(),
+        });
+        shot = {
+          id: `wip-${outfitId}-${slot.emotion}-${slot.tier}`, seed: -1, saved: false,
+          outfitFilename: filename, outfitSlot: slot, outfitConfig: this.outfitConfigKey(),
+          cutoutReviewed: true, previewVersion: Date.now(), wipOutfitId: outfitId,
+        };
+        this.shots = [...this.shots, shot];
+        this.persistDraft();
+      } catch (e) {
+        this.showToast(`Couldn't open that sprite: ${(e as Error).message}`);
+        return;
+      }
+    }
+    void this.openCutout(this.previewURL(shot), slotName, shot.outfitFilename, shot.id);
+  }
+
+  /** The clothes: the theme line and the equipment board, each piece with a switch. */
+  private renderDressSection() {
+    const worn = OUTFIT_GEAR_SLOTS.filter(({ key }) => gearWorn(this.outfitGear[key])).length;
+    const body = html`
+      ${this.selectedChars.length > 1 ? html`<div class="banner">
+        ${this.selectedChars.length} characters are selected. Use one character for a
+        reliable outfit set; the solo prompt will still discourage extra people.
+      </div>` : nothing}
+      <label class="switch">
+        <input type="checkbox" .checked=${this.outfitOn} ?disabled=${this.outfitBatchRunning}
+          @change=${(e: Event) => (this.outfitOn = (e.target as HTMLInputElement).checked)} />
+        Add outfit terms to the prompt
+      </label>
+      <div>
+        <label class="field">Theme</label>
+        <input class="num" type="text" .value=${this.outfitText} ?disabled=${this.outfitBatchRunning}
+          placeholder="Midnight rogue, beach date, office uniform…"
+          @input=${(e: Event) => (this.outfitText = (e.target as HTMLInputElement).value)} />
+      </div>
+      <div class="loadout-board">
+        <div class="loadout-heading">
+          <span>Equipment</span>
+          <span class="equipped-count">${worn}/${OUTFIT_GEAR_SLOTS.length} worn</span>
+          <button class="loadout-clear" ?disabled=${this.outfitBatchRunning || !worn}
+            @click=${() => this.clearOutfitLoadout()}>Unequip all</button>
+        </div>
+        <div class="sec-note">Switch a piece off to keep it in the recipe without wearing it.</div>
+        <div class="loadout-slots">
+          ${OUTFIT_GEAR_SLOTS.map((slot) => this.renderGearSlot(slot.key))}
+        </div>
+      </div>
+    `;
+    return this.section("outfit", "Clothes", `${worn} worn`, body);
+  }
+
+  /** How the squares are shot: backdrop, underwear default, colour lock, body hair,
+   * framing. Everything that is not a garment and not the generator. */
+  private renderLookSection() {
+    const body = html`
+      <div>
+        <label class="field">Solid generation background</label>
+        <div class="chips">
+          ${(["white", "black"] as const).map((background) => html`<button
+            class="chip ${this.outfitBackground === background ? "on" : ""}"
+            ?disabled=${this.outfitBatchRunning}
+            @click=${() => (this.outfitBackground = background)}>
+            ${background === "white" ? "White" : "Black"}
+          </button>`)}
+        </div>
+        <div class="sec-note">Pick whichever contrasts most with her hair and clothes — it is what the cutout removes.</div>
+      </div>
+      <div>
+        <label class="field">Default underwear colour</label>
+        <input class="num" type="text" .value=${this.outfitUnderwearColor}
+          ?disabled=${this.outfitBatchRunning} placeholder="black, red, pale pink…"
+          @input=${(e: Event) => (this.outfitUnderwearColor = (e.target as HTMLInputElement).value)} />
+        <div class="sec-note">Used for the bra and panties when those slots have no colour of their own.</div>
+      </div>
+      <label class="switch">
+        <input type="checkbox" .checked=${this.outfitLockColors} ?disabled=${this.outfitBatchRunning}
+          @change=${(e: Event) => (this.outfitLockColors = (e.target as HTMLInputElement).checked)} />
+        Lock equipped colours
+      </label>
+      <div class="sec-note">Weights each colour and names every colour the garment is <em>not</em> in the negative. Leave on unless a piece is meant to be multicoloured.</div>
+      <label class="switch">
+        <input type="checkbox" .checked=${this.outfitPubicHair} ?disabled=${this.outfitBatchRunning}
+          @change=${(e: Event) => (this.outfitPubicHair = (e.target as HTMLInputElement).checked)} />
+        Pubic hair at Peak
+      </label>
+      ${this.outfitPubicHair ? html`<div>
+        <label class="field">Pubic hair colour</label>
+        <input class="num" type="text" .value=${this.outfitPubicHairColor}
+          ?disabled=${this.outfitBatchRunning} placeholder="dark brown, blonde…"
+          @input=${(e: Event) => (this.outfitPubicHairColor = (e.target as HTMLInputElement).value)} />
+      </div>` : nothing}
+      ${this.renderCameraControls()}
+      <div>
+        <label class="field">Exposure by tier</label>
+        <div class="sec-note">${OUTFIT_TIERS.map((tier, index) => html`<div><strong>${tier.label}:</strong> ${OUTFIT_EXPOSURE_TIERS[index].description}</div>`)}</div>
+      </div>
+    `;
+    return this.section("look", "Look & framing", this.outfitBackground, body);
+  }
+
+  /** The free-text prompt and negative, which the outfit fragment is added to. On
+   * the Create screen these are the dock; here they are extras, because the recipe
+   * writes most of the prompt. */
+  private renderPromptExtrasSection() {
+    const body = html`
+      <div class="sec-note">Added to every square alongside the recipe: quality tags, a style, the character's name.</div>
+      <div>
+        <label class="field">Extra positive</label>
+        <textarea class="num extras" rows="3" .value=${this.prompt} placeholder="masterpiece, best quality, …"
+          @input=${(e: Event) => (this.prompt = (e.target as HTMLTextAreaElement).value)}></textarea>
+      </div>
+      <div>
+        <label class="field">Extra negative</label>
+        <textarea class="num extras" rows="2" .value=${this.negative} placeholder="lowres, bad anatomy, …"
+          @input=${(e: Event) => (this.negative = (e.target as HTMLTextAreaElement).value)}></textarea>
+      </div>
+    `;
+    return this.section("extras", "Prompt extras", this.prompt.trim() || this.negative.trim() ? "set" : "none", body);
   }
 
   // Closing the Civitai browser refreshes the model list: an install may have
@@ -4322,13 +5058,17 @@ export class OppaiImageGen extends LitElement {
   private renderGearSlot(key: OutfitGearKey) {
     const slot = OUTFIT_GEAR_SLOTS.find((item) => item.key === key)!;
     const piece = this.outfitGear[key];
-    const equipped = !!piece.item.trim();
+    const described = !!piece.item.trim();
+    const equipped = gearWorn(piece);
     const edit = (patch: Partial<GearPiece>) => {
       this.outfitGear = { ...this.outfitGear, [key]: { ...piece, ...patch } };
     };
-    return html`<div class="gear-slot ${equipped ? "filled" : ""}" title=${slot.hint}>
-      <span class="gear-slot-icon material-symbols-rounded" aria-hidden="true">${slot.icon}</span>
-      <span class="gear-slot-name">${slot.label}</span>
+    return html`<div class="gear-slot ${equipped ? "filled" : ""} ${piece.off ? "off" : ""}" title=${slot.hint}>
+      <button class="gear-slot-icon material-symbols-rounded ${described ? "" : "inert"}" aria-hidden=${described ? "false" : "true"}
+        title=${piece.off ? `Wear the ${slot.label.toLowerCase()} again` : described ? `Take the ${slot.label.toLowerCase()} off without clearing it` : slot.hint}
+        ?disabled=${this.outfitBatchRunning || !described}
+        @click=${() => edit({ off: !piece.off })}>${piece.off ? "visibility_off" : slot.icon}</button>
+      <span class="gear-slot-name">${slot.label}${piece.off ? " · off" : ""}</span>
       <div class="gear-slot-fields">
         <input class="gear-color" type="text" .value=${piece.color}
           ?disabled=${this.outfitBatchRunning}
@@ -4395,223 +5135,6 @@ export class OppaiImageGen extends LitElement {
       </div>
     `;
     return this.section("loadouts", "Saved loadouts", String(this.loadouts.length), body);
-  }
-
-  /**
-   * Where the work lives.
-   *
-   * A wardrobe is now the home of a set from its first square, not just the shelf its
-   * approved sprites land on: every generation is written into it as work in progress
-   * and read back from there. Leaving the picker unset no longer means "keep nothing" —
-   * it means a wardrobe is created the moment there is something to keep.
-   */
-  private renderWardrobeSection() {
-    const total = OUTFIT_FACES.length * OUTFIT_TIERS.length;
-    const target = this.wardrobes.find((o) => o.id === this.outfitWardrobeId);
-    const filled = target?.slots ?? 0;
-    const inProgress = target?.wip ?? 0;
-    const body = html`
-      <div class="sec-note">
-        Every square is saved into this wardrobe as it is generated, and stays there
-        until you delete the wardrobe — a closed tab or a restarted generator costs you
-        nothing. Approving a cutout promotes that square into the matching expression
-        and heat tier, so Libby wears it immediately.
-      </div>
-      <oppai-outfit-wardrobe></oppai-outfit-wardrobe>
-      <div>
-        <label class="field">File approved sprites into</label>
-        <select class="num" .value=${this.outfitWardrobeId}
-          @change=${(e: Event) => {
-            this.outfitWardrobeId = (e.target as HTMLSelectElement).value;
-            this.persistDraft();
-            // Switching wardrobes switches boards: the squares already generated into
-            // the chosen one come back rather than the board looking empty.
-            void this.loadWipBoard(this.outfitWardrobeId);
-          }}>
-          <option value="">Start a new wardrobe when I generate</option>
-          ${this.wardrobes.map((o) => html`<option value=${o.id}>${o.name}</option>`)}
-        </select>
-      </div>
-      ${target
-        ? html`<div class="sec-note">
-            <strong>${target.name}</strong> has ${filled} of ${total} finished sprites,
-            ${inProgress} square${inProgress === 1 ? "" : "s"} kept in progress.
-            ${filled >= total ? "This wardrobe is complete." : nothing}
-          </div>`
-        : nothing}
-      <div class="outfit-actions">
-        <button class="side-add" @click=${() => void this.createWardrobe()}>
-          <span class="material-symbols-rounded" style="font-size:17px;">add</span>
-          New wardrobe
-        </button>
-      </div>
-    `;
-    return this.section("wardrobe", "Wardrobe", target ? `${filled}/${total}` : "off", body);
-  }
-
-  private renderOutfitSection() {
-    const { slot: aimed } = this.outfitSlot();
-    const face = { label: aimed.emotionLabel }, tier = OUTFIT_TIERS[this.outfitTier];
-    // Position within its own block: "Misc 7 of 120" rather than a number past sixty
-    // that means nothing to somebody looking at the board.
-    const slot = aimed.index < EXPRESSION_SQUARES ? aimed.index + 1 : aimed.index - EXPRESSION_SQUARES + 1;
-    const total = aimed.index < EXPRESSION_SQUARES ? EXPRESSION_SQUARES : MISC_SQUARES;
-    const outfitShots = this.currentOutfitShots();
-    const completed = new Map(outfitShots.map((shot) => [shot.outfitFilename, shot]));
-    const reviewed = outfitShots.filter((shot) => shot.cutoutReviewed).length;
-    const selectedReady = completed.has(this.outfitSlot().filename);
-    const equipped = OUTFIT_GEAR_SLOTS.filter(({ key }) => this.outfitGear[key].item.trim()).length;
-    const body = html`
-      <div class="sec-note">
-        Builds one wardrobe: the same character in the same clothes, once per expression
-        and heat tier — <strong>${total} sprites</strong> for a complete set. Outfit
-        prompts explicitly ask for one person, because groups make both consistent
-        clothing and clean background cutouts unreliable.
-      </div>
-      ${this.selectedChars.length > 1 ? html`<div class="banner">
-        ${this.selectedChars.length} characters are selected. Use one character for a
-        reliable outfit set; the solo prompt will still discourage extra people.
-      </div>` : nothing}
-      <label class="switch">
-        <input type="checkbox" .checked=${this.outfitOn} ?disabled=${this.outfitBatchRunning}
-          @change=${(e: Event) => (this.outfitOn = (e.target as HTMLInputElement).checked)} />
-        Add outfit terms to the prompt
-      </label>
-      <div>
-        <label class="field">Loadout name / overall theme</label>
-        <input class="num" type="text" .value=${this.outfitText} ?disabled=${this.outfitBatchRunning}
-          placeholder="Midnight rogue, beach date, office uniform…"
-          @input=${(e: Event) => (this.outfitText = (e.target as HTMLInputElement).value)} />
-      </div>
-      <div class="loadout-board">
-        <div class="loadout-heading">
-          <span>Equipment</span>
-          <span class="equipped-count">${equipped}/${OUTFIT_GEAR_SLOTS.length}</span>
-          <button class="loadout-clear" ?disabled=${this.outfitBatchRunning || !equipped}
-            @click=${() => this.clearOutfitLoadout()}>Unequip all</button>
-        </div>
-        <!-- Head down: outerwear, then underwear, then what she is holding, then
-             anything extra. Reading order is roughly dressing order. -->
-        <div class="loadout-slots">
-          ${OUTFIT_GEAR_SLOTS.map((slot) => this.renderGearSlot(slot.key))}
-        </div>
-      </div>
-      <div>
-        <label class="field">Solid generation background</label>
-        <div class="chips">
-          ${(["white", "black"] as const).map((background) => html`<button
-            class="chip ${this.outfitBackground === background ? "on" : ""}"
-            ?disabled=${this.outfitBatchRunning}
-            @click=${() => (this.outfitBackground = background)}>
-            ${background === "white" ? "White background" : "Black background"}
-          </button>`)}
-        </div>
-        <div class="sec-note">Choose the background that contrasts most strongly with her hair and outfit.</div>
-      </div>
-      <div>
-        <label class="field">Default underwear color</label>
-        <input class="num" type="text" .value=${this.outfitUnderwearColor}
-          ?disabled=${this.outfitBatchRunning} placeholder="black, red, pale pink…"
-          @input=${(e: Event) => (this.outfitUnderwearColor = (e.target as HTMLInputElement).value)} />
-        <div class="sec-note">
-          Used for the bra and panties when those slots have no colour of their own.
-          Give either slot a colour to break up a matching set.
-        </div>
-      </div>
-      <label class="switch">
-        <input type="checkbox" .checked=${this.outfitLockColors} ?disabled=${this.outfitBatchRunning}
-          @change=${(e: Event) => (this.outfitLockColors = (e.target as HTMLInputElement).checked)} />
-        Lock equipped colours
-      </label>
-      <div class="sec-note">
-        Weights each colour in the prompt and names every colour the garment is
-        <em>not</em> in the negative prompt. Leave this on unless a piece is meant to be
-        multicoloured — that is the fix for clothes coming back the wrong colour.
-      </div>
-      <label class="switch">
-        <input type="checkbox" .checked=${this.outfitPubicHair} ?disabled=${this.outfitBatchRunning}
-          @change=${(e: Event) => (this.outfitPubicHair = (e.target as HTMLInputElement).checked)} />
-        Pubic hair at the Peak state
-      </label>
-      ${this.outfitPubicHair ? html`<div>
-        <label class="field">Pubic hair color</label>
-        <input class="num" type="text" .value=${this.outfitPubicHairColor}
-          ?disabled=${this.outfitBatchRunning} placeholder="dark brown, blonde…"
-          @input=${(e: Event) => (this.outfitPubicHairColor = (e.target as HTMLInputElement).value)} />
-      </div>` : nothing}
-      <div>
-        <label class="field">Expression</label>
-        <select class="num" .value=${String(this.outfitFace)} ?disabled=${this.outfitBatchRunning || !!this.outfitMisc}
-          @change=${(e: Event) => (this.outfitFace = Number((e.target as HTMLSelectElement).value))}>
-          ${OUTFIT_FACES.map((item, index) => html`<option value=${index}>${item.label}</option>`)}
-        </select>
-      </div>
-      <div>
-        <label class="field">Misc state</label>
-        <select class="num" .value=${this.outfitMisc} ?disabled=${this.outfitBatchRunning}
-          @change=${(e: Event) => (this.outfitMisc = (e.target as HTMLSelectElement).value)}>
-          <option value="">Off — render an expression</option>
-          ${OUTFIT_ACTIVITIES.map((item) => html`<option value=${item.id}>${item.label}</option>`)}
-        </select>
-      </div>
-      ${this.outfitMisc ? html`<div class="sec-note">
-        This square is filed into the wardrobe's Misc slot rather than an expression, and
-        the pose brings its own face — the expression picker is off while it is set.
-        Next pose steps through the Misc states. Turn this off to go back to the
-        expressions.
-      </div>` : nothing}
-      <label class="switch">
-        <input type="checkbox" .checked=${this.outfitMiscBatch} ?disabled=${this.outfitBatchRunning}
-          @change=${(e: Event) => { this.outfitMiscBatch = (e.target as HTMLInputElement).checked; this.persistDraft(); }} />
-        Include Misc states when generating all (+${MISC_SQUARES} squares)
-      </label>
-      <div>
-        <label class="field">Heat tier</label>
-        <select class="num" .value=${String(this.outfitTier)} ?disabled=${this.outfitBatchRunning}
-          @change=${(e: Event) => (this.outfitTier = Number((e.target as HTMLSelectElement).value))}>
-          ${OUTFIT_TIERS.map((item, index) => html`<option value=${index}>${index + 1} · ${item.label}</option>`)}
-        </select>
-        <div class="exposure-note">
-          <strong>${tier.label} exposure roll:</strong>
-          ${OUTFIT_EXPOSURE_TIERS[this.outfitTier].description}
-          Outer clothes, bra, and panties roll separately for every generation.
-        </div>
-      </div>
-      ${this.renderCameraControls()}
-      <!-- The completion grid used to be repeated here as sixty dots. The board in
-           the middle of the screen is that grid, at a size where the pictures are
-           visible, and picking a square there is what moves the selection. -->
-      <div class="sec-note">
-        Square ${slot} of ${total} selected: <strong>${tier.label} · ${face.label}</strong>.
-        ${completed.size} generated · ${reviewed} cutout${reviewed === 1 ? "" : "s"} reviewed.
-      </div>
-      <div class="sec-note">Every result starts with automatic background removal and must be reviewed by hand before export.</div>
-      <div class="outfit-actions">
-        <button class="side-add" ?disabled=${this.generating || !this.outfitOn}
-          @click=${() => void this.generateOutfitAndNext()}>
-          <span class="material-symbols-rounded" style="font-size:17px;">${selectedReady ? "refresh" : "skip_next"}</span>
-          ${selectedReady ? "Redo selected square + move next" : "Generate selected + move next"}
-        </button>
-        ${this.outfitBatchRunning
-          ? html`<button class="side-add" @click=${() => this.cancelOutfitBatch()}>
-              <span class="material-symbols-rounded" style="font-size:17px;">stop_circle</span>
-              Stop after current image
-            </button>`
-          : html`<button class="side-add primary" ?disabled=${this.generating || !this.outfitOn || completed.size >= total}
-              @click=${() => void this.generateAllOutfit()}>
-              <span class="material-symbols-rounded" style="font-size:17px;">auto_awesome</span>
-              Generate ${total - completed.size} missing image${total - completed.size === 1 ? "" : "s"}
-            </button>`}
-        <button class="side-add" ?disabled=${this.generating || this.outfitExporting || !completed.size || reviewed !== completed.size}
-          @click=${() => void this.exportOutfitZip()}>
-          <span class="material-symbols-rounded" style="font-size:17px;">folder_zip</span>
-          ${this.outfitExporting ? "Building ZIP…" : `Export ${completed.size} image${completed.size === 1 ? "" : "s"} as ZIP`}
-        </button>
-      </div>
-      ${this.outfitProgress ? html`<div class="sec-note">${this.outfitProgress}</div>` : nothing}
-      <div class="sec-note">A redo deletes the old preview after its replacement finishes successfully.</div>
-    `;
-    return this.section("outfit", "Outfit workflow", this.outfitOn ? `${completed.size}/${total}` : "off", body);
   }
 
   /** Outfit slots need only a shot size. The studio keeps the richer camera model in
@@ -5270,6 +5793,12 @@ export class OppaiImageGen extends LitElement {
       if (this.outfitLoadoutId && !this.loadouts.some((l) => l.id === this.outfitLoadoutId)) {
         this.outfitLoadoutId = "";
       }
+      // A fresh browser with nothing picked opens on the wardrobe that has work in it,
+      // rather than an empty board beside sixty squares nobody can see.
+      if (!this.outfitWardrobeId) {
+        const busiest = [...this.wardrobes].sort((a, b) => (b.wip ?? 0) - (a.wip ?? 0))[0];
+        if (busiest?.wip) this.outfitWardrobeId = busiest.id;
+      }
       // Whatever is on disk is the truth about what has been generated, so the board is
       // rebuilt from it rather than from a local draft whose previews may be long gone.
       await this.loadWipBoard(this.outfitWardrobeId);
@@ -5370,8 +5899,7 @@ export class OppaiImageGen extends LitElement {
   private async setLoadoutCoverFromSelection() {
     const saved = this.loadouts.find((l) => l.id === this.outfitLoadoutId);
     if (!saved || this.loadoutBusy) return;
-    const shot = this.currentOutfitShots().find((s) => s.outfitFilename === this.outfitSlot().filename)
-      ?? this.currentOutfitShots()[0];
+    const shot = this.shotAt(this.outfitSlot().slot) ?? this.currentOutfitShots()[0];
     if (!shot) {
       this.showToast("Generate a square first — its picture becomes the cover.");
       return;
@@ -5561,103 +6089,6 @@ export class OppaiImageGen extends LitElement {
    * their cutout reviewed, and which are missing — and all three are answered by
    * looking at the grid rather than by dragging nodes around to line them up.
    */
-  private renderOutfitSheet() {
-    const byName = new Map(this.currentOutfitShots().map((shot) => [shot.outfitFilename, shot]));
-    const selected = this.outfitSlot().filename;
-    return html`
-      <div class="outfit-sheet">
-        ${OUTFIT_TIERS.map((tier, tierIndex) => this.renderSheetTier(tier, tierIndex, "", byName, selected))}
-        <section class="sheet-block">
-          <header class="sheet-block-head">
-            <span class="material-symbols-rounded" style="font-size:16px;">interests</span>
-            Misc states
-            <span class="sheet-block-note">
-              What she is doing rather than what she is feeling. Optional: a state with no
-              square falls back to her expression. Click any to aim the generator at it.
-            </span>
-          </header>
-          ${OUTFIT_TIERS.map((tier, tierIndex) => this.renderSheetTier(tier, tierIndex, "misc", byName, selected))}
-        </section>
-      </div>
-    `;
-  }
-
-  /**
-   * One heat tier of the sheet: the twelve expressions, or the MISC states.
-   *
-   * The same renderer for both blocks on purpose. A square is a square to everything
-   * below this — the hit target, the preview, the review and delete actions — and the
-   * only thing the two blocks differ in is which vocabulary names the cells.
-   */
-  private renderSheetTier(
-    tier: { label: string }, tierIndex: number, block: "" | "misc",
-    byName: Map<string | undefined, Shot>, selected: string,
-  ) {
-    const cells = block === "misc"
-      ? OUTFIT_ACTIVITIES.map((item) => {
-        const state = this.outfitSlot(tierIndex, 0, item.id);
-        return { label: item.label, state, shot: byName.get(state.filename) };
-      })
-      : OUTFIT_FACES.map((face, faceIndex) => {
-        const state = this.outfitSlot(tierIndex, faceIndex, "");
-        return { label: face.label, state, shot: byName.get(state.filename) };
-      });
-    const made = cells.filter((cell) => cell.shot).length;
-    const done = cells.filter((cell) => cell.shot?.cutoutReviewed).length;
-    return html`<section class="sheet-tier ${block}">
-      <header class="sheet-tier-head">
-        <span class="material-symbols-rounded" style="font-size:15px;">local_fire_department</span>
-        ${tier.label}
-        <span class="tier-count">
-          ${made}/${cells.length} generated${made ? ` · ${done} reviewed` : ""}
-        </span>
-      </header>
-      <div class="sheet-grid">
-        ${cells.map(({ label, state, shot }) => {
-          const current = state.filename === selected;
-          return html`<div class="sheet-cell ${current ? "current" : ""}">
-            <button
-              class="sheet-hit"
-              title=${shot
-                ? `${tier.label} · ${label} — click to aim the generator here`
-                : `Not generated yet — click to aim the generator at ${tier.label} · ${label}`}
-              @click=${() => this.selectOutfitSlot(state.slot.index)}
-            >
-              ${shot
-                ? html`<img class="art" src=${this.previewURL(shot)} alt=${label} loading="lazy" />`
-                : html`<div class="art-empty">
-                    <span class="material-symbols-rounded" style="font-size:22px;">add_photo_alternate</span>
-                  </div>`}
-              <div class="cell-label">
-                <span>${label}</span>
-                ${shot
-                  ? html`<span class="cell-state ${shot.cutoutReviewed ? "ready" : "needs"}"
-                      title=${shot.cutoutReviewed ? "Cutout reviewed" : "Needs a cutout review"}></span>`
-                  : nothing}
-              </div>
-            </button>
-            ${shot ? html`<div class="sheet-actions">
-              <button class="sheet-act" title="Expand" @click=${() => (this.expandedShot = shot)}>
-                <span class="material-symbols-rounded" style="font-size:15px;">zoom_in</span>
-              </button>
-              <button class="sheet-act"
-                title=${shot.cutoutReviewed ? "Adjust this cutout again" : "Review the automatic cutout"}
-                @click=${() => void this.openCutout(
-                  this.previewURL(shot), `seed-${shot.seed}`, shot.outfitFilename, shot.id,
-                )}>
-                <span class="material-symbols-rounded" style="font-size:15px;">background_replace</span>
-              </button>
-              <button class="sheet-act danger" title="Delete this square"
-                @click=${() => void this.deleteOutfitSquare(shot)}>
-                <span class="material-symbols-rounded" style="font-size:15px;">delete</span>
-              </button>
-            </div>` : nothing}
-          </div>`;
-        })}
-      </div>
-    </section>`;
-  }
-
   /**
    * Throws one square away, on disk as well as on screen.
    *
@@ -5681,8 +6112,6 @@ export class OppaiImageGen extends LitElement {
   }
 
   private renderResults() {
-    // The studio shows the set; the Create screen shows the canvas.
-    if (this.studio && this.outfitOn) return this.renderOutfitSheet();
     if (!this.shots.length) {
       return html`<div class="canvas-empty">
         <span class="material-symbols-rounded">image</span>

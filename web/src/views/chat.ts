@@ -23,7 +23,7 @@ import { excerptOf } from "../chat-replies.js";
 import { libbyMotion } from "../libby-motion.js";
 import { profileUpdates } from "../ui-metrics.js";
 import {
-  ActionApprovals, actionCardStyles, attachmentStyles, KIND_ICONS, linkChipStyles, recentlyAttached, recentMoods, recentlySent,
+  ActionApprovals, actionCardStyles, attachmentStyles, KIND_ICONS, linkChipStyles, recentlyAttached, recentHeat, recentMoods, recentlySent,
   renderActionCards, renderAttachments, renderLinkChips, requestOpenMedia,
 } from "../chat-links.js";
 
@@ -449,6 +449,9 @@ export class OppaiChat extends LitElement {
       opens; refreshed when the picker is opened, since backgrounds are edited in the
       studio and this view has no other way to hear about it. */
   @state() private backgrounds: LibbyBackground[] = [];
+  /** Where she is when a conversation has not said: the background the user marked
+      as the default in the outfit studio. Empty means the plain stage. */
+  @state() private defaultBackground = "";
   @state() private scenePickerOpen = false;
   @state() private callCaptions = true;
   /** The message the next thing you send is a reply to. */
@@ -749,9 +752,6 @@ export class OppaiChat extends LitElement {
     .stage-bubble::after { content:""; position:absolute; left:-6px; bottom:6px; border:7px solid transparent; border-right-color:var(--bubble); border-left:0; }
     .stage-doing { margin:0 auto; padding:3px 11px; border-radius:999px; background:var(--input);
       font-size:11px; font-weight:650; letter-spacing:.02em; opacity:.85; }
-    .stage-meter { display:flex; gap:4px; justify-content:center; padding:8px 0 12px; }
-    .stage-meter .pip { width:20px; height:4px; border-radius:2px; background:var(--input); transition:background .28s ease; }
-    .stage-meter .pip.on { background:var(--accent); }
     /* Under this width the column goes and the banner below takes over: same art,
        same reactions, along the top of the conversation instead of beside it. */
     @media(max-width:960px){ .client.with-stage { grid-template-columns:var(--side-w) minmax(0,1fr); } .stage { display:none; } .client.with-stage .hero { display:block; } }
@@ -769,7 +769,6 @@ export class OppaiChat extends LitElement {
     .hero-copy { position:absolute; left:16px; right:180px; bottom:12px; display:grid; gap:3px; min-width:0; }
     .hero-name { font-weight:750; font-size:16px; color:var(--accent); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .hero-status { font-size:12px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .hero .stage-meter { padding:3px 0 0; justify-content:start; }
     .hero .stage-doing { margin:0; justify-self:start; }
     .hero-bubble { position:absolute; right:168px; top:16px; padding:8px 11px; border-radius:16px; border-bottom-right-radius:4px; background:var(--bubble);
       box-shadow:0 3px 10px rgba(0,0,0,.22); animation:chat-rise .2s var(--oppai-ease-standard,cubic-bezier(.2,0,0,1)) both; z-index:2; }
@@ -947,7 +946,13 @@ export class OppaiChat extends LitElement {
     .call-bg.blurred { filter:blur(14px) saturate(1.1) brightness(.85); }
     .call-veil { position:absolute; inset:0; background:linear-gradient(to bottom,rgba(0,0,0,.55),transparent 22%,transparent 62%,rgba(0,0,0,.6)); pointer-events:none; }
     /* Same two-layer arrangement as the stage: the hold breathes, the sprite reacts. */
-    .call-hold { position:absolute; inset:0; display:grid; place-items:end center; transform-origin:50% 100%; padding-top:52px; }
+    /* The hold's one row is sized 1fr rather than auto. That is what makes the
+       sprite's percentage max-height mean anything: a grid item's percentage
+       resolves against its grid area, and an auto row is indefinite, so
+       "max-height:100%" was being treated as none — which is why she overflowed the
+       scene and stood far too close on every screen. */
+    .call-hold { position:absolute; inset:0; display:grid; grid-template-rows:minmax(0,1fr); grid-template-columns:minmax(0,1fr);
+      place-items:end center; transform-origin:50% 100%; padding-top:52px; box-sizing:border-box; }
     .call-sprite { max-height:100%; max-width:min(100%,720px); object-fit:contain; object-position:bottom center; transform-origin:50% 100%;
       filter:drop-shadow(0 14px 26px rgba(0,0,0,.5)); animation:call-pose .32s var(--oppai-ease-standard,cubic-bezier(.2,0,0,1)) both; }
     @keyframes call-pose { from { opacity:0; transform:translateY(10px) scale(.99); } }
@@ -962,9 +967,6 @@ export class OppaiChat extends LitElement {
       background:rgba(0,0,0,.42); backdrop-filter:blur(8px); font-size:12px; font-weight:650; text-transform:capitalize; }
     .call-mood .material-symbols-rounded { font-size:16px; }
     .call-doing { padding-left:7px; border-left:1px solid rgba(255,255,255,.22); opacity:.85; font-weight:600; }
-    .call-pips { display:inline-flex; gap:3px; }
-    .call-pips i { width:5px; height:5px; border-radius:50%; background:rgba(255,255,255,.32); }
-    .call-pips i.on { background:var(--accent); }
     .call-place { font-size:11px; opacity:.85; font-weight:500; text-transform:none; padding-left:7px; border-left:1px solid rgba(255,255,255,.22); }
     /* Subtitles: the last few lines, hers and yours, newest at the bottom and
        brightest, older ones dimmer above it. Yours are tinted so a glance tells who
@@ -1020,7 +1022,12 @@ export class OppaiChat extends LitElement {
       /* The log is right there: the subtitles keep only her latest line, under her. */
       .client.in-call .call-caption.older,.client.in-call .call-caption.mine { display:none; }
       .client.in-call .call-bar { justify-content:center; }
-      .client.in-call .call-sprite { max-width:min(100%,900px); }
+      /* On a desktop the call fills a large window, and a sprite scaled to its full
+         height was a woman standing far too close to the camera. She is framed at a
+         conversational distance instead: about four fifths of the room, with air
+         above her and room either side, the way a webcam actually frames a person. */
+      .client.in-call .call-hold { padding-top:72px; }
+      .client.in-call .call-sprite { max-height:min(82%,900px); max-width:min(50%,600px); }
       .client.in-call .msg { grid-template-columns:28px minmax(0,88%); }
       .client.in-call .msg.mine { grid-template-columns:minmax(0,88%); }
       .client.in-call .msg .avatar { width:28px; height:28px; }
@@ -1925,9 +1932,16 @@ export class OppaiChat extends LitElement {
       // lines both hands the model words she did not speak and teaches it that the
       // format belongs inline. Her emotional continuity is carried by the bond and
       // her memory, which is the right place for it.
+      // Each message travels with the ids of what it carried — the photo, the library
+      // items — so the server can say what they were on every turn, not just the one
+      // they were sent on. Ids only; the server owns the descriptions.
       const history: ChatMessage[] = conversation.messages
         .filter((message) => !message.thought)
-        .map(({ id, role, content:text, replyTo }) => ({ id, role, content:text, replyTo }));
+        .map(({ id, role, content:text, replyTo, imageId, attachments }) => ({
+          id, role, content:text, replyTo,
+          imageId: imageId || undefined,
+          mediaIds: attachments?.length ? attachments.map((item) => item.id) : undefined,
+        }));
       // A nudge, not a message: it steers this one request and is never stored, so
       // the log stays a record of what was actually said.
       if (continuation) history.push({ role:"user", content:"(Continue the scene on your own. Speak or act again without waiting for a reply, and do not answer for me.)" });
@@ -1945,6 +1959,7 @@ export class OppaiChat extends LitElement {
         // between turns, so a mood stuck for a dozen replies is indistinguishable
         // from a fresh one unless the log says otherwise.
         recentMoods: recentMoods(conversation.messages),
+        recentHeat: recentHeat(conversation.messages),
         // What she is already doing, and where. The server keeps nothing between
         // turns, so a state set three replies ago only survives because this says so.
         activity: conversation.activity || undefined,
@@ -2010,6 +2025,7 @@ export class OppaiChat extends LitElement {
         // On the last bubble, so one reply contributes one mood to the run the next
         // turn reports. See recentMoods.
         mood: live.emotion,
+        heat: live.intensity,
         imageId: result.imageId || undefined,
         links: result.links?.length ? result.links : undefined,
         attachments: result.attachments?.length ? result.attachments : undefined,
@@ -2378,7 +2394,11 @@ export class OppaiChat extends LitElement {
   /** The places she can be. Best-effort: an old server has none and the call simply
       shows its plain stage. */
   private async loadBackgrounds() {
-    try { this.backgrounds = (await api.libbyBackgrounds()).backgrounds; }
+    try {
+      const res = await api.libbyBackgrounds();
+      this.backgrounds = res.backgrounds;
+      this.defaultBackground = res.default ?? "";
+    }
     catch { this.backgrounds = []; }
   }
 
@@ -2401,7 +2421,7 @@ export class OppaiChat extends LitElement {
     const pose = this.poseOf(character, conversation);
     if (!pose) return nothing;
     const { emotion, intensity, typing, activity, assets } = pose;
-    const place = this.backgrounds.find((bg) => bg.id === conversation.background && bg.hasImage);
+    const place = this.backgrounds.find((bg) => bg.id === (conversation.background || this.defaultBackground) && bg.hasImage);
     // The last few lines as subtitles, newest at the bottom. Thoughts are not speech.
     const recent = conversation.messages.filter((message) => !message.thought).slice(-3);
     const clock = `${Math.floor(this.callSeconds / 60)}:${String(this.callSeconds % 60).padStart(2, "0")}`;
@@ -2418,11 +2438,10 @@ export class OppaiChat extends LitElement {
           @error=${(event:Event) => applyImageFallback(event.target as HTMLImageElement, assets)} />`)}</span>
         <div class="call-top">
           <span class="call-who">${this.avatar(character, "avatar")}<span><strong>${character.name}</strong><span><i class="call-live"></i>${typing ? "typing…" : this.busy ? "thinking…" : clock}</span></span></span>
-          <span class="call-mood" title=${`Feeling ${emotion}, intensity ${intensity} of 5`}>
+          <span class="call-mood" title=${`Feeling ${emotion}`}>
             <span class="material-symbols-rounded">mood</span>${emotion}
             ${conversation.activity ? html`<span class="call-doing" title=${`She is ${conversation.activity}`}>${activityLabel(conversation.activity)}</span>` : nothing}
             ${place ? html`<span class="call-place" title="Where she is">${place.name}</span>` : nothing}
-            <span class="call-pips">${[1,2,3,4,5].map((step) => html`<i class=${step <= intensity ? "on" : ""}></i>`)}</span>
           </span>
         </div>
         ${this.callCaptions ? html`<div class="call-captions" aria-live="polite">
@@ -2451,11 +2470,11 @@ export class OppaiChat extends LitElement {
     return html`<div class="call-tray" @click=${(event:Event) => event.stopPropagation()}>
       <h4>Where she is</h4>
       <div class="call-scenes">
-        <button class="call-scene-btn ${!conversation.background ? "on" : ""}" title="No background" @click=${() => this.setBackground("")}>
+        ${this.defaultBackground ? nothing : html`<button class="call-scene-btn ${!conversation.background ? "on" : ""}" title="No background" @click=${() => this.setBackground("")}>
           <span class="scene-icon material-symbols-rounded">blur_on</span><span class="scene-name">Plain</span>
-        </button>
-        ${usable.map((bg) => html`<button class="call-scene-btn ${conversation.background === bg.id ? "on" : ""}" title=${bg.tags.join(", ") || bg.name} @click=${() => this.setBackground(bg.id)}>
-          <img src=${api.libbyBackgroundURL(bg.id)} alt="" loading="lazy"/><span class="scene-name">${bg.name}</span>
+        </button>`}
+        ${usable.map((bg) => html`<button class="call-scene-btn ${(conversation.background || this.defaultBackground) === bg.id ? "on" : ""}" title=${bg.tags.join(", ") || bg.name} @click=${() => this.setBackground(bg.id)}>
+          <img src=${api.libbyBackgroundURL(bg.id)} alt="" loading="lazy"/><span class="scene-name">${bg.name}${bg.id === this.defaultBackground ? " · default" : ""}</span>
         </button>`)}
       </div>
       <p>${usable.length ? "She picks a room herself when the scene moves; this overrides her until she moves again." : "No backgrounds yet — add and tag some in the outfit studio, and she'll choose between them."}</p>
@@ -2490,7 +2509,7 @@ export class OppaiChat extends LitElement {
   private renderHero(character: ChatCharacter, conversation: ChatConversation) {
     const pose = this.poseOf(character, conversation);
     if (!pose) return nothing;
-    const { emotion, intensity, typing, activity, assets, key } = pose;
+    const { emotion, typing, activity, assets, key } = pose;
     const status = this.busy ? "Typing…" : this.autoRunning ? "Talking on their own" : this.status?.enabled ? this.status.model : "Local replies";
     return html`<div class="hero" role="button" tabindex="0" aria-label=${`${character.name} — open the call`} title="Open the call"
       @click=${() => this.startCall()} @keydown=${(event:KeyboardEvent) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); this.startCall(); } }}>
@@ -2503,9 +2522,6 @@ export class OppaiChat extends LitElement {
         <span class="hero-name">${character.name}</span>
         <span class="hero-status">${status}${character.id === "libby" ? ` · ${emotion}` : ""}</span>
         ${conversation.activity ? html`<div class="stage-doing" role="status">${activityLabel(conversation.activity)}</div>` : nothing}
-        ${character.id === "libby" ? html`<div class="stage-meter" title=${`Intensity ${intensity} of 5`} aria-label=${`Intensity ${intensity} of 5`}>
-          ${[1,2,3,4,5].map((step) => html`<span class="pip ${step <= intensity ? "on" : ""}"></span>`)}
-        </div>` : nothing}
       </div>
       <span class="hero-open"><span class="material-symbols-rounded">videocam</span>Call</span>
     </div>`;
@@ -2530,9 +2546,6 @@ export class OppaiChat extends LitElement {
         ${typing ? html`<div class="stage-bubble" aria-hidden="true"><span class="dots"><i></i><i></i><i></i></span></div>` : nothing}
       </div>
       ${conversation.activity ? html`<div class="stage-doing" role="status">${activityLabel(conversation.activity)}</div>` : nothing}
-      ${character.id === "libby" ? html`<div class="stage-meter" title=${`Intensity ${intensity} of 5`} aria-label=${`Intensity ${intensity} of 5`}>
-        ${[1,2,3,4,5].map((step) => html`<span class="pip ${step <= intensity ? "on" : ""}"></span>`)}
-      </div>` : nothing}
     </aside>`;
   }
 

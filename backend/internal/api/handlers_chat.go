@@ -32,6 +32,13 @@ type chatMessage struct {
 	// ReplyTo is the earlier message this one answers, when the user quoted one. The
 	// history folds it in as a quote; the latest message's is also framed directly.
 	ReplyTo *chatReplyRef `json:"replyTo,omitempty"`
+	// ImageID is the chat image this message carried — a photo they shared, or a
+	// selfie she sent. Resolved to its tags so the history says what was in it, not
+	// just that something was. See chat_history.go.
+	ImageID string `json:"imageId,omitempty"`
+	// MediaIDs are the library items this message attached, theirs or hers, resolved to
+	// titles the same way.
+	MediaIDs []int64 `json:"mediaIds,omitempty"`
 }
 
 type chatRequest struct {
@@ -92,6 +99,10 @@ type chatRequest struct {
 	// wearing one face has to arrive with the turn. Without it a stuck expression is
 	// indistinguishable from a fresh one. See chat_mood.go.
 	RecentMoods []string `json:"recentMoods,omitempty"`
+	// RecentHeat is the heat her last replies sat at, oldest first — the same
+	// bookkeeping as RecentMoods, so a number that has not moved all evening can be
+	// noticed. See chat_heat.go.
+	RecentHeat []int `json:"recentHeat,omitempty"`
 	// Activity is the MISC state she is currently in — typing, curled up reading, or
 	// something a good deal less idle. Client-owned like the mood run and for the same
 	// reason: the state persists across turns and the server holds nothing between
@@ -159,9 +170,7 @@ var modeStyles = map[string]string{
 // stored, so it never reaches the log; a model that ignores the instruction simply
 // falls back to inferChatEmotion, which is why this is additive rather than relied on.
 var moodDirective = "End with [mood: <feeling> <1-5>] on its own line; feeling is one of " +
-	strings.Join(libbyEmotions, ", ") + ". The number is how keyed up and turned on you are, 1 calm to 5 at the edge. " +
-	"Move it whenever something earns it: up when they flirt, praise you or the scene heats, down when it cools or turns practical, by two or more for a real moment. " +
-	"Choose both yourself, and never mention the tag."
+	strings.Join(libbyEmotions, ", ") + ". Choose both yourself, and never mention the tag."
 
 // silenceDirective forbids narrating the plumbing.
 //
@@ -763,6 +772,16 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	latestUser := in.Messages[len(in.Messages)-1].Content
+	// What this turn is about, read once. It decides which library sections are fed
+	// and which optional sections can sit the turn out. See chat_context_feed.go.
+	previousUser := ""
+	for i := len(in.Messages) - 2; i >= 0; i-- {
+		if strings.EqualFold(strings.TrimSpace(in.Messages[i].Role), "user") {
+			previousUser = in.Messages[i].Content
+			break
+		}
+	}
+	signals := readTurnSignals(latestUser, previousUser)
 	var ws chatWorkspace
 	var character chatCharacter
 	if u, userOK := s.chatUser(r); userOK {
@@ -849,6 +868,13 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			sections = append(sections, promptSection{Name: name, Rank: rank, Text: text})
 		}
 	}
+	// addDeferred marks a section the turn has no particular use for: still offered,
+	// shed first. See promptSection.Deferred.
+	addDeferred := func(name string, rank int, text string, wanted bool) {
+		if strings.TrimSpace(text) != "" {
+			sections = append(sections, promptSection{Name: name, Rank: rank, Text: text, Deferred: !wanted})
+		}
+	}
 	sentPhotos, lastPhoto := recentlySentPhotos(in.RecentImageIDs)
 	sentMedia := recentlyAttached(in.RecentMediaIDs)
 	// The library pictures of her. Hers alone: character:libby says who a picture is
@@ -863,7 +889,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// equally well. Hers alone, like the wants it is partly read from; an imported card
 	// gets the plain ranking. See pickLibraryMatch.
 	var taste libbyTaste
-	add("her photos", rankPhotoCatalogue, "\n\n"+photoCatalogue(ws, character.ID, sentPhotos, selfPics, sentMedia))
+	// The catalogue is wanted when they asked to see her, when the scene has warmed
+	// enough that she might offer, or when pictures are already going back and forth.
+	// A message about the weather at heat 1 has no use for it.
+	addDeferred("her photos", rankPhotoCatalogue, "\n\n"+photoCatalogue(ws, character.ID, sentPhotos, selfPics, sentMedia),
+		signals.photo || in.Intensity >= 3 || len(sentPhotos) > 0)
 	// Libby alone gets her self-grounding and the library snapshot. She is this
 	// server's librarian, so knowing who she is, what she can do, and what is on the
 	// shelves is in character; an imported card is somebody else's character and has
@@ -894,12 +924,16 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		// The other conversations she has had with this person. Not from a store of its
 		// own: they are already here in the workspace, and the only thing that was
 		// missing was saying so. See chat_recaps.go.
-		add(
+		// Wanted when they reach back — "last time", "you said" — or when this
+		// conversation is only just starting and she is placing them.
+		addDeferred(
 			"your other conversations",
 			rankRecaps,
 			conversationRecaps(ws, character.ID, currentConversationID(ws, in), time.Now()),
+			signals.past || len(in.Messages) <= 2,
 		)
-		add("your library", rankLibrarySnapshot, s.buildLibbyContext(r.Context()).promptBlock())
+		// The library, fed for the turn rather than as one block. See chat_context_feed.go.
+		sections = append(sections, s.libraryFeed(r.Context(), signals)...)
 	}
 	// What is on screen is a different matter: browsing together is the user holding
 	// something up and saying "look at this", so any character they chose to do it
@@ -931,13 +965,20 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 	// Which earlier message their latest one answers, when they quoted one. Core: a
 	// reply that answers the wrong message is worse than no reply. See chat_replies.go.
-	modePrompt += userReplyDirective(in.Messages[len(in.Messages)-1].ReplyTo)
+	// Resolved to the whole message, and what it carried. See chat_history.go.
+	describer := s.newHistoryDescriber(r.Context(), ws, in.Messages)
+	modePrompt += replyTargetDirective(in.Messages[len(in.Messages)-1].ReplyTo, in.Messages, describer)
 	// Where she is, and where she could be — the backgrounds the user has added for the
 	// call screen. Only Libby has a place to be; only read when there is something to
 	// choose from. See libby_backgrounds.go.
 	var backgrounds []libbyBackgroundView
 	if character.ID == "libby" {
 		backgrounds = s.listLibbyBackgrounds()
+		// A conversation with no room of its own is in the default one, when there is
+		// one: that is what the client draws, so it is what she is told.
+		if in.Background == "" {
+			in.Background = s.defaultLibbyBackground()
+		}
 		if in.Background != "" {
 			known := false
 			for _, bg := range backgrounds {
@@ -978,7 +1019,10 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	if actionable {
 		// The action directive is the one shed-able piece of protocol: without it she simply
 		// does not offer to do things, which costs a feature rather than the character.
-		add("what she can do for you", rankActions, "\n\n"+actionDirective(caps))
+		// Wanted when the message asks for something done to the collection, or when
+		// they are browsing together and she has something to act on.
+		addDeferred("what she can do for you", rankActions, "\n\n"+actionDirective(caps),
+			signals.act || viewing != "" || len(in.SharedMediaIDs) > 0)
 		// Thinking, and talking to herself. Libby-only for the same reason as the rest of
 		// this block: an imported card's inner life belongs to whoever wrote it.
 		//
@@ -1000,7 +1044,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		add("what she is doing", rankActivity, "\n\n"+activityDirective(in.Intensity))
 		// Where she is. Shed-able like the activity vocabulary and for the same reason:
 		// it is a list, and without it she simply stays put. See libby_backgrounds.go.
-		add("where she is", rankActivity, "\n\n"+backgroundDirective(backgrounds, in.Background))
+		// Wanted on a call, where the room is on screen, or when the message moves her.
+		addDeferred("where she is", rankActivity, "\n\n"+backgroundDirective(backgrounds, in.Background),
+			in.Call || signals.place)
 		// Learning is Libby's alone, like the library snapshot and actions: she is the
 		// one who lives here, so she is the one who remembers the person she lives with.
 		tail.WriteString("\n\n" + memoryDirective)
@@ -1028,6 +1074,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// unlike a temperament this asserts nothing about who the character is.
 	// See chat_mood.go.
 	tail.WriteString(moodPromptBlock(in.RecentMoods, emotion))
+	// And how the number moves: a dial that turns both ways, and a nudge when it has
+	// not turned in a while. See chat_heat.go.
+	tail.WriteString(heatPromptBlock(in.RecentHeat, in.Intensity))
 	// That she *is* in a state carries on being true whether or not the vocabulary for
 	// changing it survived the budget, and it is one sentence. See libby_activities.go.
 	if character.ID == "libby" {
@@ -1046,9 +1095,10 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, "chat messages must have a valid role and content")
 			return
 		}
-		// What the model reads is the text with any quoted reply folded in; the id and
-		// the reference are ours, and stay out of the payload. See chat_replies.go.
-		history = append(history, chatMessage{Role: m.Role, Content: quotedHistoryContent(m)})
+		// What the model reads is the text with any quoted reply folded in and what the
+		// message carried described beneath it; the ids and the reference are ours, and
+		// stay out of the payload. See chat_replies.go and chat_history.go.
+		history = append(history, chatMessage{Role: m.Role, Content: historyContent(m, describer)})
 	}
 
 	probeCtx, probeCancel := context.WithTimeout(r.Context(), 5*time.Second)
@@ -1250,15 +1300,16 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 	if selfDeclared {
 		emotion = declared
-		if declaredLevel > 0 {
-			in.Intensity = declaredLevel
-		}
 	} else {
 		emotion = inferChatEmotion(in.Messages[len(in.Messages)-1].Content, reply, emotion, moodRunLength(in.RecentMoods, emotion))
-		if (in.Mode == "playful" || in.Mode == "bold" || in.Mode == "roleplay" || in.Mode == "horny") &&
-			strings.Contains(strings.ToLower(in.Messages[len(in.Messages)-1].Content), "flirt") && in.Intensity < 5 {
-			in.Intensity++
-		}
+	}
+	if selfDeclared && declaredLevel > 0 {
+		in.Intensity = declaredLevel
+	} else {
+		// No number came back — no tag, or a tag with the feeling alone. Read the
+		// exchange for heat in either direction rather than leaving the dial where it
+		// was, which is how it got stuck at 4 for an afternoon. See inferHeatDelta.
+		in.Intensity = clampInt(in.Intensity+inferHeatDelta(in.Messages[len(in.Messages)-1].Content, reply), 1, 5)
 	}
 	// The state she is in leaving this turn. Settled here rather than where the tag was
 	// read because the gate is on the turn's *final* intensity, which a declared mood
