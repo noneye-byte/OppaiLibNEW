@@ -134,6 +134,68 @@ func readyPictureDirective(ready readyPicture, asked string) string {
 	return out
 }
 
+// pictureAskWords are the words a request to see her is made of, none of which
+// describe a picture: "can you send me a snap of you in the tub with bubbles" less
+// these is "tub bubbles", and "send me a pic of you" less these is nothing. Kept apart
+// from the ready pick's own matching, which must keep every word: "nude" is a tag.
+var pictureAskWords = map[string]bool{
+	"can": true, "could": true, "would": true, "will": true, "you": true, "u": true, "me": true, "i": true,
+	"please": true, "pls": true, "hey": true, "babe": true, "libby": true, "now": true, "again": true,
+	"send": true, "sends": true, "show": true, "give": true, "take": true, "snap": true, "shoot": true,
+	"get": true, "text": true, "share": true, "see": true, "let": true, "want": true, "wanna": true,
+	"need": true, "like": true, "love": true, "to": true, "another": true,
+	"one": true, "more": true, "some": true, "yourself": true, "that": true,
+	"this": true, "for": true, "it": true, "is": true, "be": true,
+	"pic": true, "pics": true, "picture": true, "pictures": true, "photo": true, "photos": true,
+	"selfie": true, "selfies": true, "snaps": true, "image": true, "images": true, "shot": true,
+	"nude": true, "nudes": true, "quick": true, "new": true, "little": true, "cute": true, "sexy": true,
+	"hot": true, "nice": true, "right": true, "real": true, "actual": true, "just": true, "also": true,
+}
+
+// subjectGlue are the words a subject is phrased with rather than made of: "in the
+// tub with bubbles" is about a tub and bubbles. Kept inside a subject, since the
+// generator reads better with them, and trimmed from its ends.
+var subjectGlue = map[string]bool{
+	"in": true, "on": true, "at": true, "the": true, "a": true, "an": true, "with": true,
+	"wearing": true, "and": true, "of": true, "your": true, "my": true, "from": true,
+	"while": true, "as": true, "doing": true, "into": true, "by": true, "under": true,
+}
+
+// pictureRequestSubject is what they asked to see her *in* — the request less the
+// asking — or "" when they asked to see her and nothing more. Non-empty with a ready
+// picture that fits it not at all means the picture they asked for does not exist.
+func pictureRequestSubject(asked string) string {
+	fields := strings.Fields(strings.ToLower(asked))
+	kept := make([]string, 0, len(fields))
+	for _, field := range fields {
+		word := strings.Trim(field, ".,;:!?\"'()[]*_")
+		if word == "" || pictureAskWords[word] {
+			continue
+		}
+		kept = append(kept, word)
+	}
+	for len(kept) > 0 && subjectGlue[kept[0]] {
+		kept = kept[1:]
+	}
+	for len(kept) > 0 && subjectGlue[kept[len(kept)-1]] {
+		kept = kept[:len(kept)-1]
+	}
+	if len(kept) == 0 {
+		return ""
+	}
+	return strings.Join(kept, " ")
+}
+
+// missingPictureDirective is the ready-picture line for a request nothing fits, when a
+// picture can be made. Handed a sex picture and told it "is not specifically" the bath
+// they asked for, a small model described the bath and sent the sex picture; told
+// there is no such picture and that she can make one, it has somewhere to go.
+func missingPictureDirective(subject string) string {
+	return "They asked to see you " + subject + ", and no picture you have shows that — not one. " +
+		"Do not send a picture this reply and do not describe one: say plainly that you don't have that one. " +
+		"Image generation is connected, so you can offer to make it: end a sentence with [do: generate you " + subject + "] and stop there — an offer, not a delivery."
+}
+
 // readyPictureHandle is the tag handle the directive asks her to write for the ready
 // picture: its first three tags. The catalogue's example uses the same one on a turn
 // with a ready picture, so the two directives never name different pictures.

@@ -430,3 +430,25 @@ func backgroundDirective(backgrounds []libbyBackgroundView, current string) stri
 	}
 	return b.String()
 }
+
+// moveAsk is the user asking her to be somewhere else: "move to the kitchen", "go to
+// bed", "show me you outside", "change the background". Read only on a message the
+// scene tag did not answer, and only with a place they have: it is the tag she was
+// told to write and did not, and the request is theirs, so it is obeyed.
+//
+// Without an ask nothing is inferred. "I'm in bed" names a room and moves nobody; the
+// mood-follows-room half of the directive stays the model's, because a rule for it
+// would be a rule for reading the whole conversation.
+var moveAsk = regexp.MustCompile(`(?i)\b(?:move|go|come|head|walk|get|hop|climb)\s+(?:back\s+)?(?:to|into|in|out|outside|over to|onto|on)\b|\b(?:change|switch|swap|set)\s+(?:the\s+|your\s+)?(?:background|scene|room|place)\b|\b(?:show me|see you|be)\s+(?:you\s+|yourself\s+)?(?:in|at|on|outside)\b|\blet'?s\s+go\b|\btake (?:this|it)\s+(?:to|outside|somewhere)\b`)
+
+// inferSceneMove reads where they asked her to go, when they did and it exists.
+func inferSceneMove(asked string, backgrounds []libbyBackgroundView) (id string, ok bool) {
+	if !moveAsk.MatchString(asked) {
+		return "", false
+	}
+	id, ok = resolveBackground(asked, backgrounds)
+	if !ok || id == "" {
+		return "", false
+	}
+	return id, true
+}

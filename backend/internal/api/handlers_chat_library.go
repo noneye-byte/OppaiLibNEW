@@ -109,10 +109,20 @@ func normalizeLookupWords(query string) []string {
 // "the one with the beach" matches every item whose title contains "one".
 // Kind words ("video", "comic") are deliberately absent: they are real tags and a
 // real part of a title, so they rank rather than being discarded.
+//
+// File extensions are dropped too. A model that has been shown filename titles invents
+// filenames — "[attach: 0f2e_86c.mp4]" — and the extension is then the only word in the
+// query that lands anywhere: it lands on every other .mp4 in the library, at four points
+// a title word, and the user is handed a video that shares nothing with what was asked
+// but three letters after a dot. "gif" is deliberately not here: it is a kind word, and
+// kind words rank.
 var lookupStopWords = map[string]bool{
 	"the": true, "one": true, "that": true, "this": true, "with": true, "and": true,
 	"for": true, "you": true, "your": true, "from": true, "about": true, "thing": true,
 	"item": true, "saved": true, "have": true, "some": true, "any": true,
+	"mp4": true, "m4v": true, "webm": true, "mkv": true, "mov": true, "avi": true, "wmv": true, "flv": true,
+	"jpg": true, "jpeg": true, "png": true, "webp": true, "avif": true, "bmp": true,
+	"zip": true, "rar": true, "cbz": true, "cbr": true, "pdf": true, "epub": true, "apk": true, "exe": true,
 }
 
 // libraryCandidate is a row in the running for a name lookup, with its title

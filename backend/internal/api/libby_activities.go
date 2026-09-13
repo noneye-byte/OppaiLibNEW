@@ -340,3 +340,84 @@ func activityStateDirective(id string) string {
 	}
 	return "\n\nRight now you are " + activity.Says + ". That is still true unless you change it, and the picture of you they can see shows it."
 }
+
+// ── what they asked her to do, when she did it without the tag ──────────────
+
+// activityVerbs are the states as verbs a person asks for and she narrates with:
+// "can you wave", "*waves slowly at camera*". Deliberately a short list of unambiguous
+// verbs rather than the synonym table: the table is for reading a tag she wrote, and
+// carries words — "open", "coming", "game" — that mean nothing in prose.
+var activityVerbs = map[string]string{
+	"wave": "waving", "dance": "dancing", "read": "reading", "stretch": "stretching",
+	"nap": "napping", "doze": "napping", "draw": "drawing", "sketch": "drawing", "doodle": "drawing",
+	"tidy": "tidying", "clean": "tidying", "drink": "drinking", "sip": "drinking", "eat": "eating",
+	"lounge": "lounging", "sprawl": "lounging",
+	"undress": "undressing", "strip": "undressing", "tease": "teasing", "pose": "teasing",
+	"touch": "touching", "rub": "rubbing", "finger": "fingering", "masturbate": "fingering",
+	"grind": "grinding", "ride": "riding",
+}
+
+// verbForms are the spellings a verb takes in prose, reduced back to its base: waves,
+// waving, waved, napping, teasing. Each form is tried against activityVerbs.
+func verbForms(word string) []string {
+	forms := []string{word}
+	switch {
+	case strings.HasSuffix(word, "ing") && len(word) > 4:
+		base := strings.TrimSuffix(word, "ing")
+		forms = append(forms, base, base+"e")
+		if n := len(base); n >= 2 && base[n-1] == base[n-2] {
+			forms = append(forms, base[:n-1])
+		}
+	case strings.HasSuffix(word, "ed") && len(word) > 3:
+		base := strings.TrimSuffix(word, "ed")
+		forms = append(forms, base, base+"e")
+	case strings.HasSuffix(word, "es") && len(word) > 3:
+		forms = append(forms, strings.TrimSuffix(word, "es"), strings.TrimSuffix(word, "s"))
+	case strings.HasSuffix(word, "s") && len(word) > 2:
+		forms = append(forms, strings.TrimSuffix(word, "s"))
+	}
+	return forms
+}
+
+// activityInProse is the first state the text names as a verb, if any.
+func activityInProse(text string) (string, bool) {
+	for _, word := range strings.FieldsFunc(strings.ToLower(text), func(r rune) bool {
+		return !(r >= 'a' && r <= 'z')
+	}) {
+		for _, form := range verbForms(word) {
+			if id, ok := activityVerbs[form]; ok {
+				return id, true
+			}
+		}
+	}
+	return "", false
+}
+
+// doAsk is the user asking her to do something, as opposed to mentioning it.
+var doAsk = regexp.MustCompile(`(?i)\b(?:can|could|would|will|won'?t)\s+(?:you|u)\b|\bplease\b|\b(?:go on|do it|for me)\b`)
+
+// inferAskedActivity reads the state they asked for and she went along with. Both
+// halves are required: the ask on their side, and her narrating the same thing — or
+// something of the same kind, an intimate ask answered with a different intimate act
+// — on hers. A refusal narrates nothing and sets nothing; a message that merely
+// mentions dancing is not an ask.
+func inferAskedActivity(asked, reply string) (string, bool) {
+	if !doAsk.MatchString(asked) {
+		return "", false
+	}
+	want, ok := activityInProse(asked)
+	if !ok {
+		return "", false
+	}
+	did, ok := activityInProse(reply)
+	if !ok {
+		return "", false
+	}
+	if did == want {
+		return want, true
+	}
+	if libbyActivityByID[did].Group == libbyActivityByID[want].Group && libbyActivityByID[want].Group == activityIntimate {
+		return did, true
+	}
+	return "", false
+}

@@ -150,4 +150,10 @@ var photoNarrationCue = regexp.MustCompile(`(?i)\b(?:photo|photos|pic|pics|pictu
 
 // sheSaidSheWasSending reports whether the reply, as the model wrote it, spoke of a
 // picture at all.
-func sheSaidSheWasSending(raw string) bool { return photoNarrationCue.MatchString(raw) }
+//
+// A catalogue line she copied is not her speaking of one: "(video; 1girl, …, photo
+// (medium), …)" has "photo" in it because a tag does, and reading that as narration is
+// how a question about a video was answered with a selfie tagged like the video.
+func sheSaidSheWasSending(raw string) bool {
+	return photoNarrationCue.MatchString(strayCatalogueNote.ReplaceAllString(raw, ""))
+}

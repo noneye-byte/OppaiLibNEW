@@ -87,6 +87,15 @@ var strayMetaTag = regexp.MustCompile(`(?i)[*_~` + "`" + `]{0,2}\[[^\]\n]{0,300}
 // directly: the note's opening words, then anything to the end of the line.
 var strayHistoryNote = regexp.MustCompile(`(?im)^[ \t]*\((?:you|they|she|i)\s+(?:sent a picture of (?:your|her|my)self|attached (?:a photo|from the library)|handed over from the library)\b[^\n]*\)[ \t]*$`)
 
+// strayCatalogueNote deletes a catalogue entry copied onto its own line — "(gif;
+// square)", "(video; 1girl, anus, ass, photo (medium), pussy, solo)". The shelves and
+// the history notes both describe an item as "(kind; tags)", and a model handed that
+// shape writes it back: asked for a gif she answered with nothing but "(gif; square)",
+// and asked what a video was of she pasted its line. The inner parentheses a tag can
+// carry — "photo (medium)" — are why this is a line rule rather than a wrappedSpan
+// case: wrappedSpan cannot see across them.
+var strayCatalogueNote = regexp.MustCompile(`(?im)^[ \t]*\((?:gif|gifs|video|videos|clip|clips|image|images|picture|pictures|comic|comics|game|games)\s*;[^\n]*\)[ \t]*$`)
+
 // wrappedSpan finds the emphasis and parenthesis forms a stage direction is written
 // in: *…*, **…**, _…_, (…). Each is capped at one line; emphasis at 160 characters,
 // which is longer than any of these ever are and short enough that a mismatched
@@ -128,8 +137,11 @@ var machineryPhrase = regexp.MustCompile(`(?i)^\s*(?:` +
 	// a scene.
 	`|(?:you\s+|she\s+|i\s+)?(?:hand|hands|handed|handing)\s+over\s+from\s+(?:the\s+|their\s+|your\s+)?(?:library|shelves|collection)\b` +
 	// A tag list in parentheses — "(1girl, mouth open, …)", "(1girl, anus, ass, medium
-	// quality)" — is the shape of the notes and of the catalogue, never of speech.
+	// quality)" — is the shape of the notes and of the catalogue, never of speech. So is
+	// a kind followed by a semicolon — "(gif; square)" — which is how the shelves are
+	// listed. The line form is strayCatalogueNote; this catches it mid-line.
 	`|\d+\s*(?:girls?|boys?|others?)\s*,` +
+	`|(?:gif|gifs|video|videos|clip|clips|image|images|picture|pictures|comic|comics|game|games)\s*;` +
 	// A picture referred to as a delivered artifact.
 	`|(?:photo|picture|pic|image|selfie)\s+(?:sent|attached|shown|shared|delivered|enclosed)\b` +
 	// Moving the meter.
@@ -309,6 +321,7 @@ func scrubDirectivesReporting(reply string) (cleaned string, emptied bool) {
 	cleaned = strayTag.ReplaceAllString(reply, "")
 	cleaned = strayMetaTag.ReplaceAllString(cleaned, "")
 	cleaned = strayHistoryNote.ReplaceAllString(cleaned, "")
+	cleaned = strayCatalogueNote.ReplaceAllString(cleaned, "")
 	cleaned = strayThoughtTag.ReplaceAllString(cleaned, "")
 	cleaned = wrappedSpan.ReplaceAllStringFunc(cleaned, func(span string) string {
 		inner := span

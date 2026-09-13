@@ -338,6 +338,13 @@ var photoRequestWords = regexp.MustCompile(`(?i)\b(pic|pics|picture|pictures|pho
 
 func userAskedForPhoto(text string) bool { return photoRequestWords.MatchString(text) }
 
+// herselfWords is a request that is for *her* — a picture of her, not a thing from the
+// shelves — which is the difference between a selfie tag that meant the selfie and one
+// that was a model's word for the gif it had been asked for.
+var herselfWords = regexp.MustCompile(`(?i)(?:of you|of yourself|of u|yourself|see you|selfie|selfies|nude|nudes|your (?:face|body|tits|boobs|ass|pussy|room))`)
+
+func asksForHerself(text string) bool { return herselfWords.MatchString(text) }
+
 // photoCatalogue tells the character which pictures of herself she can send, and how
 // to ask for one.
 //
@@ -942,9 +949,20 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// is told what it shows before she writes a word about it. See chat_photo_pick.go.
 	var ready readyPicture
 	readyOK := false
+	// readyMissing is a request for something specific that nothing she has shows, on a
+	// server that can make pictures: the ready picture is withheld, she is told there is
+	// none, and the turn's picture — if she reaches for one — becomes an offer to make it.
+	readyMissing, readySubject := false, ""
 	if askedToSeeHer(latestUser) && !talking {
 		ready, readyOK = pickReadyPicture(ws, character.ID, selfPics, latestUser, in.PhotoImageID, lastPhoto, sentPhotos, sentMedia)
-		if readyOK {
+		if readyOK && ready.fit == 0 && cur.ImageGenEnabled {
+			readySubject = pictureRequestSubject(latestUser)
+			readyMissing = readySubject != ""
+		}
+		switch {
+		case readyMissing:
+			add("the picture they asked for", rankReadyPicture, "\n\n"+missingPictureDirective(readySubject))
+		case readyOK:
 			// Ranked well above the catalogue it belongs beside: one line, and the line
 			// that keeps her description and the picture the same picture.
 			add("the picture ready to send", rankReadyPicture, "\n\n"+readyPictureDirective(ready, latestUser))
@@ -1484,6 +1502,13 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		// The remaining case is a state the heat does not support. It is refused rather
 		// than obeyed — but refusing a *change* must not also undo what she was already
 		// doing, or a model reaching too far would leave her standing in a blank room.
+	} else if character.ID == "libby" {
+		// No tag. If they asked her to do something and she narrated doing it — "can you
+		// wave" answered with "*waves slowly at camera*" — the state is what she wrote,
+		// tag or no tag. Same heat gate. See inferAskedActivity.
+		if inferred, ok := inferAskedActivity(latestUser, reply); ok && allowedActivity(inferred, in.Intensity) != "" {
+			activity = inferred
+		}
 	}
 	// Where she is leaving this turn. Same rules as the activity: unstated carries over,
 	// a stated place that exists takes, one that matches nothing is ignored, and "none"
@@ -1493,10 +1518,22 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		if id, ok := resolveBackground(sceneLabel, backgrounds); ok {
 			background = id
 		}
+	} else if character.ID == "libby" {
+		// No tag. A move they asked for by name is theirs to have: "can you move to the
+		// kitchen" answered with a walk to the kitchen and no tag left her in the bedroom.
+		// See inferSceneMove.
+		if id, ok := inferSceneMove(latestUser, backgrounds); ok {
+			background = id
+		}
 	}
 	// A ring only means something off a call, and a hang-up only on one. Both are
 	// reported to the client, which draws the popup or ends the call; nothing here
-	// changes what she said.
+	// changes what she said. A ring or a hang-up they asked for, or one she narrated
+	// without the tag, counts the same as the tag. See chat_call.go.
+	if character.ID == "libby" {
+		callRequested = callRequested || inferCallRequest(latestUser)
+		callEnded = callEnded || inferCallEnd(latestUser, reply)
+	}
 	callRequest := callRequested && !in.Call
 	callEnd := callEnded && in.Call
 	// The earlier message she is answering, if she quoted one that exists.
@@ -1575,7 +1612,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// does not own, and reading it that way is free.
 	attachments := []libbyAttachment{}
 	if len(attachRequests) > 0 && !silent {
-		if resolved := s.resolveLibraryAttachments(r.Context(), attachRequests, latestUser, sentMedia, taste, ws.SendWeights); len(resolved) > 0 {
+		if resolved := s.resolveLibraryAttachments(r.Context(), attachRequests, latestUser, signals.kind, sentMedia, taste, ws.SendWeights); len(resolved) > 0 {
 			attachments = resolved
 		} else if !photoAsked {
 			photoRequest, photoAsked = attachRequests[0], true
@@ -1586,8 +1623,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// the gif, not a picture of herself: a selfie is never a gif. So when the user
 	// named a kind and she wrote a send tag, the library is tried first with her
 	// words; only if nothing there fits does the tag fall through to the photo path.
-	if len(attachments) == 0 && photoAsked && !silent && signals.kind != "" && photoRequest != "" {
-		if resolved := s.resolveLibraryAttachments(r.Context(), []string{photoRequest}, latestUser, sentMedia, taste, ws.SendWeights); len(resolved) > 0 {
+	// The kind rescue inside the resolver would hand over *any* item of the kind, so it
+	// is only let loose when the message was for the kind and not for her: "send me a
+	// gif" is answered by a gif, "liked that video, send me a pic of you" is not.
+	if len(attachments) == 0 && photoAsked && !silent && signals.kind != "" && photoRequest != "" && !asksForHerself(latestUser) {
+		if resolved := s.resolveLibraryAttachments(r.Context(), []string{photoRequest}, latestUser, signals.kind, sentMedia, taste, ws.SendWeights); len(resolved) > 0 {
 			attachments, photoAsked, handedOver = resolved, false, true
 		}
 	}
@@ -1607,6 +1647,22 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		var chosen pictureRef
 		chosenOK := false
 		switch {
+		case photoAsked && readyMissing:
+			// They asked for something she has no picture of, and she reached for the tag
+			// anyway. Nothing is sent — the picture under her words would not be the one
+			// her words describe — and the offer she was asked to make is made for her,
+			// once, unless she made it herself. A card they have to press is never a
+			// picture they did not want.
+			report = photoPickReport{Source: "missing", Request: readySubject, Fit: 0, Candidates: 0}
+			if !hasActionOfKind(actions, "generate") {
+				actions = append(actions, libbyAction{
+					ID:     randomID(),
+					Kind:   "generate",
+					Label:  "Generate a picture",
+					Detail: "you " + readySubject,
+					Prompt: "you " + readySubject,
+				})
+			}
 		case photoAsked && readyOK:
 			// They asked, it was chosen before she wrote, and she described it. Whatever
 			// tags she put in the tag, this is the picture her words are about.
@@ -1635,12 +1691,16 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 				chosen, chosenOK = drawWeighted(candidates, 0, nil)
 				report.Source, report.Fit = "rescue", 0
 			}
-		case pictureWanted || narrated:
+		case (pictureWanted || narrated) && !talking && !readyMissing:
 			// No tag, but either they asked or she said she was sending one — the
 			// narration is gone by now, scrubbed, and the picture it announced has to
 			// arrive. Matched on both sides' words, less the words that name her: every
 			// picture of her is tagged with her hair and her glasses, so those fit
 			// nothing in particular and used to meet the floor on their own.
+			//
+			// Never on a turn about a picture already in the conversation: asked what a
+			// video she had handed over was of, she answered with its tags, the tags met
+			// the floor against a selfie, and a question got a nude. See chat_photo_talk.go.
 			text := withoutWords(latestUser+" "+reply, selfDescriptionWords(character, ws, selfPics))
 			candidates := pictureCandidates(ws, character.ID, selfPics, text, in.PhotoImageID, skip, sentPhotos, skipMedia, sentMedia)
 			chosen, chosenOK = drawWeighted(candidates, unpromptedPhotoFloor, nil)
@@ -1668,6 +1728,10 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// Whatever she wrote, an address she wrote is one she made up: she cannot browse, and
 	// nothing in the prompt hands her URLs to repeat. See chat_hallucinations.go.
 	reply = scrubInventedURLs(reply, knownURLs(in))
+	// A name she left as a placeholder is filled in. "How'd [Name] go?" is a card habit
+	// — {{user}} and [Name] are how cards write the person — and the user reads it as
+	// her forgetting them.
+	reply = fillNamePlaceholders(reply, ws.Profile.DisplayName)
 	// A snap is a picture sent to be seen once. It is only a snap if a picture came.
 	snap = snap && (imageID != "" || len(attachments) > 0)
 	// The reaction, landing on their latest message.

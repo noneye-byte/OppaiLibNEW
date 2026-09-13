@@ -150,7 +150,19 @@ func findAttachRequests(reply string) []string {
 // hand over the newest such item every single time. weights are the user's own tag
 // preferences, which tilt that draw: more of this, less of that, none of the other.
 // See pickLibraryMatch and chat_send_weights.go.
-func (s *Server) resolveLibraryAttachments(ctx context.Context, requests []string, asked string, skip map[int64]bool, taste libbyTaste, weights map[string]float64) []libbyAttachment {
+//
+// kind is the kind of thing the user asked for, when they named one — "gif", "video",
+// "comic", "game" — and "" when they did not. Named, it is a hard rule and a rescue at
+// once. The rule: nothing of another kind resolves, however well its title fits. Asked
+// for a gif, she wrote the title of the newest video and the user got a video; asked
+// again, she invented a filename ending in .mp4 and the extension alone matched a
+// different video; corrected a third time, she wrote a selfie tag and "pixel art" found
+// a game with "Pixels" in its name. Every one of those was the resolver doing what it
+// was told with a query the user had already contradicted in one word. The rescue:
+// when nothing of that kind fits her words or theirs, any unshown item of that kind is
+// handed over — "send me a gif" is a request any gif answers, and a librarian asked for
+// one does not come back with the wrong shelf or empty-handed.
+func (s *Server) resolveLibraryAttachments(ctx context.Context, requests []string, asked string, kind string, skip map[int64]bool, taste libbyTaste, weights map[string]float64) []libbyAttachment {
 	if len(requests) == 0 {
 		return nil
 	}
@@ -163,7 +175,16 @@ func (s *Server) resolveLibraryAttachments(ctx context.Context, requests []strin
 		words = append(words, normalizeLookupWords(query)...)
 	}
 	candidates := s.libraryCandidates(ctx, words)
-	if len(candidates) == 0 {
+	if kind != "" {
+		kept := candidates[:0:0]
+		for _, candidate := range candidates {
+			if candidate.link.Kind == kind {
+				kept = append(kept, candidate)
+			}
+		}
+		candidates = kept
+	}
+	if len(candidates) == 0 && kind == "" {
 		return nil
 	}
 	var out []libbyAttachment
@@ -196,6 +217,14 @@ func (s *Server) resolveLibraryAttachments(ctx context.Context, requests []strin
 	// named resolved to nothing, so a reply that worked never grows an extra item.
 	if len(out) == 0 && asked != "" {
 		take(asked)
+	}
+	// The kind is the last rescue: they asked for one of these, and any one they have not
+	// seen is one. Drawn the way the prompt's shelf of that kind is drawn, so it lands on
+	// something she would have been shown had the budget kept the shelf.
+	if len(out) == 0 && kind != "" {
+		if shelf := s.drawLibraryShelf(ctx, kind, 1, skip, taste, weights, nil); len(shelf) > 0 {
+			out = append(out, libbyAttachment{libbyLink: shelf[0].link})
+		}
 	}
 	return out
 }

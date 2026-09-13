@@ -72,7 +72,11 @@ var (
 	recommendCue = regexp.MustCompile(`(?i)\b(suggest|recommend|recommendation|pick (?:me |something|one|for me)|what should i|something to (?:watch|play|read|do|look at)|anything (?:good|new|fun|to)|what(?:'s| is) good|bored|tonight|in the mood|put (?:something )?on|show me something|what do you have|got any|what have (?:i|we) got|choose)\b`)
 	recentCue    = regexp.MustCompile(`(?i)\b(recent|recently|lately|latest|newest|new stuff|new ones|just added|added|uploaded|imported|last (?:few )?(?:days|week|night)|what(?:'s| is) new|this week)\b`)
 	libraryCue   = regexp.MustCompile(`(?i)\b(library|collection|shelves|shelf|how many|server|uptime|storage|disk|space|tags?|tagged|tagging|untagged|gaps?|missing)\b`)
-	actionCue    = regexp.MustCompile(`(?i)\b(tag|tags|retag|rename|delete|remove|favou?rite|collection|add (?:it|this|that|them|these)|save (?:it|this|that)|organi[sz]e|clean up|sort|rate|rating|move|hide|scan|fix|tidy)\b`)
+	// "move" only with an object: "move it into the folder" is a library action, "can
+	// you move to the kitchen" is her leaving the room, which placeCue owns. Left bare it
+	// made a room change an action, and the short message after it — "Can you
+	// masturbate?" — the answer to an offer she had never made. See actFollowUp.
+	actionCue    = regexp.MustCompile(`(?i)\b(tag|tags|retag|rename|delete|remove|favou?rite|collection|add (?:it|this|that|them|these)|save (?:it|this|that)|organi[sz]e|clean up|sort|rate|rating|move (?:it|this|that|them|these)|hide|scan|fix|tidy)\b`)
 	pastCue      = regexp.MustCompile(`(?i)\b(last time|other day|yesterday|earlier|before|remember|we talked|you said|you told|last night|that time|previous|previously|again|still)\b`)
 	placeCue     = regexp.MustCompile(`(?i)\b(bed|bedroom|sofa|couch|kitchen|outside|balcony|bath|shower|room|where are you|go to|come to|let'?s go|move to|somewhere|scene|background|place)\b`)
 	// actionFollowUpCue is a message that comes back to something she offered to do:
@@ -82,6 +86,9 @@ var (
 	// kindCue names a kind of thing on the shelves. "video call" is not a video.
 	kindCue     = regexp.MustCompile(`(?i)\b(gif|gifs|video|videos|vid|vids|clip|clips|movie|movies|comic|comics|manga|doujin|doujinshi|game|games)\b`)
 	videoCallRe = regexp.MustCompile(`(?i)\bvideo\s*-?\s*call\b`)
+	// negatedKindRe is a kind named to rule it out — "not a video", "no videos" — which
+	// is a message about the other kind.
+	negatedKindRe = regexp.MustCompile(`(?i)\b(?:(?:not|isn'?t|wasn'?t)\s+(?:a\s+|an\s+|the\s+)?|no\s+)(?:gif|gifs|video|videos|vid|vids|clip|clips|movie|movies|comic|comics|manga|doujin|doujinshi|game|games)\b`)
 )
 
 // maxActionFollowUpWords is how short the latest message has to be to count as an
@@ -99,9 +106,19 @@ const actionFollowUpDirective = "They have just answered your offer from the las
 
 // libraryKindAsked is the kind of thing the message names, in the library's own
 // vocabulary, or "" when it names none.
+//
+// A kind named only to rule it out does not count, and when two are named the last one
+// is what they want: "that's a video, a gif from the library" is a correction, and the
+// first kind in it is the thing she got wrong. Read as "video" it fed her a shelf of
+// videos and let the resolver hand her another one.
 func libraryKindAsked(text string) string {
 	text = videoCallRe.ReplaceAllString(text, " ")
-	match := kindCue.FindString(text)
+	text = negatedKindRe.ReplaceAllString(text, " ")
+	matches := kindCue.FindAllString(text, -1)
+	match := ""
+	if len(matches) > 0 {
+		match = matches[len(matches)-1]
+	}
 	switch strings.ToLower(match) {
 	case "gif", "gifs":
 		return "gif"

@@ -159,7 +159,7 @@ func TestADirectedAttachResolvesOnOneTagWord(t *testing.T) {
 	id := seedTitledMedia(t, s, "Untitled import 4192", "video", "beach")
 	ctx := context.Background()
 
-	got := s.resolveLibraryAttachments(ctx, []string{"the beach one"}, "", nil, nil, nil)
+	got := s.resolveLibraryAttachments(ctx, []string{"the beach one"}, "", "", nil, nil, nil)
 	if len(got) != 1 || got[0].ID != id {
 		t.Fatalf("attachments = %+v, want the beach video", got)
 	}
@@ -180,15 +180,15 @@ func TestAFailedAttachFallsBackToWhatTheUserAsked(t *testing.T) {
 	ctx := context.Background()
 
 	// Nothing in the library answers to this, so her own tag resolves to nothing.
-	if got := s.resolveLibraryAttachments(ctx, []string{"that thing from last week"}, "", nil, nil, nil); len(got) != 0 {
+	if got := s.resolveLibraryAttachments(ctx, []string{"that thing from last week"}, "", "", nil, nil, nil); len(got) != 0 {
 		t.Fatalf("an invented description resolved to %+v", got)
 	}
-	got := s.resolveLibraryAttachments(ctx, []string{"that thing from last week"}, "put on Summer at the Coast", nil, nil, nil)
+	got := s.resolveLibraryAttachments(ctx, []string{"that thing from last week"}, "put on Summer at the Coast", "", nil, nil, nil)
 	if len(got) != 1 || got[0].ID != id {
 		t.Fatalf("fallback attachments = %+v, want the seeded video", got)
 	}
 	// The rescue never adds to a reply that already worked.
-	both := s.resolveLibraryAttachments(ctx, []string{"Summer at the Coast"}, "put on Summer at the Coast", nil, nil, nil)
+	both := s.resolveLibraryAttachments(ctx, []string{"Summer at the Coast"}, "put on Summer at the Coast", "", nil, nil, nil)
 	if len(both) != 1 {
 		t.Fatalf("a working request grew a second item: %+v", both)
 	}

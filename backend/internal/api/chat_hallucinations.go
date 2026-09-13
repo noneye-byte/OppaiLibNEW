@@ -75,3 +75,25 @@ func scrubInventedURLs(reply string, known map[string]bool) string {
 		return inventedURLMarker + match[len(trimmed):]
 	})
 }
+
+// namePlaceholder is the person written as a slot rather than a name: [Name], [name],
+// [user], [your name], {{user}}, <USER>. Cards are authored that way, and a small model
+// that has read a card answers that way.
+var namePlaceholder = regexp.MustCompile(`(?i)\[\s*(?:name|user|user\s*name|username|your\s+name|their\s+name|player)\s*\]|\{\{\s*user\s*\}\}|<USER>`)
+
+// fillNamePlaceholders writes the user's name where she left a slot for it. With no
+// name to write the slot is removed; a doubled space is tidied, and the sentence reads
+// as if she trailed off rather than as protocol.
+func fillNamePlaceholders(reply, name string) string {
+	if !namePlaceholder.MatchString(reply) {
+		return reply
+	}
+	name = strings.TrimSpace(name)
+	out := namePlaceholder.ReplaceAllLiteralString(reply, name)
+	if name == "" {
+		out = spaceRun.ReplaceAllString(out, " ")
+		out = danglingSpace.ReplaceAllString(out, "$1")
+	}
+	return out
+}
+

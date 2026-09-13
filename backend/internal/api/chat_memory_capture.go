@@ -149,6 +149,12 @@ func renderFact(pattern factPattern, match []string, userName string) (string, b
 	if strings.HasPrefix(fact, "Their name is ") && userName != "" && strings.EqualFold(strings.TrimSpace(args[0].(string)), userName) {
 		return "", false
 	}
+	// "Call me" is also a request: "call me in the kitchen", "call me later", "call me
+	// when you're free" — none of which is a name. A name is a word or two, and it does
+	// not begin with where or when.
+	if strings.HasPrefix(fact, "Their name is ") && !looksLikeAName(first) {
+		return "", false
+	}
 	if !worthRemembering(fact) {
 		return "", false
 	}
@@ -180,4 +186,24 @@ func cleanFactObject(s string) string {
 		return ""
 	}
 	return s
+}
+
+// nameNonStarters are the words a "call me …" that is not a name begins with.
+var nameNonStarters = map[string]bool{
+	"in": true, "on": true, "at": true, "when": true, "if": true, "later": true, "tomorrow": true,
+	"tonight": true, "now": true, "back": true, "after": true, "before": true, "again": true, "soon": true,
+	"asap": true, "please": true, "pls": true, "from": true, "to": true, "about": true, "up": true,
+	"out": true, "over": true, "once": true, "whenever": true, "sometime": true, "anytime": true,
+	"the": true, "a": true, "an": true, "this": true, "that": true, "here": true, "there": true,
+	"and": true, "or": true, "with": true, "for": true, "every": true, "each": true, "next": true,
+}
+
+// looksLikeAName is a captured "my name is" / "call me" object that could be one:
+// up to three words, none of them a place or a time.
+func looksLikeAName(object string) bool {
+	fields := strings.Fields(object)
+	if len(fields) == 0 || len(fields) > 3 {
+		return false
+	}
+	return !nameNonStarters[strings.Trim(fields[0], "\"'“”‘’.,!?")]
 }

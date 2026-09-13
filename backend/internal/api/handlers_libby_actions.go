@@ -568,3 +568,13 @@ func (s *Server) applyMediaPatch(w http.ResponseWriter, r *http.Request, id int6
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "id": id})
 }
+
+// hasActionOfKind reports whether a reply already proposes an action of that kind.
+func hasActionOfKind(actions []libbyAction, kind string) bool {
+	for _, action := range actions {
+		if action.Kind == kind {
+			return true
+		}
+	}
+	return false
+}
