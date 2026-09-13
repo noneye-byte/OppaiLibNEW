@@ -289,7 +289,7 @@ func (s *Server) discordReply(ctx context.Context, settings discordSettings, cha
 	if character.Personality != "" {
 		prompt.WriteString("\nPersonality: " + character.Personality)
 	}
-	prompt.WriteString(s.libbySelfDirective(cur))
+	prompt.WriteString(s.libbySelfDirective(cur, character))
 	prompt.WriteString(discordDirective(channel, shared))
 
 	// What she knows about the person she lives with — but only when the two surfaces

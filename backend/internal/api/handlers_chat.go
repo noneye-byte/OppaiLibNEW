@@ -854,6 +854,13 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		{"What you look like (you know this about yourself)", expand(character.Appearance)},
 		{"Personality", expand(character.Personality)},
 		{"Kinks and turn-ons", expand(character.Kinks)},
+		// Her life beyond the card. Labelled in the second person like Appearance,
+		// because each is a fact about her that the reply should act on rather than a
+		// description handed to her: what she is usually doing is what the [doing:] tag
+		// draws on, her taste is what she reaches for, her limits are her own no.
+		{"What you are usually doing around the place", expand(character.Routine)},
+		{"Your taste in what is on the shelves", expand(character.Tastes)},
+		{"Your own limits", expand(character.Limits)},
 		{"Scenario", expand(character.Scenario)},
 		{"Character instructions", expand(character.SystemPrompt)},
 	}
@@ -961,7 +968,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// The self-directive is head, not a section: it is who she is, and a reply written
 	// without it is not a Libby reply at all.
 	if character.ID == "libby" {
-		modePrompt += s.libbySelfDirective(cur)
+		modePrompt += s.libbySelfDirective(cur, character)
 		// What she already knows about them, carried over from past conversations. Only
 		// Libby keeps a memory; an imported card is somebody else's character and stays
 		// stateless. See handlers_libby_memory.go.
@@ -971,7 +978,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			// Her own standing wants, kept the same way and carried beside memory.
 			// See handlers_libby_wants.go.
 			wants, _ := s.readLibbyWants(u.ID)
-			taste = buildLibbyTaste(character.Kinks, wantTexts(wants))
+			taste = buildLibbyTaste(character.Kinks+" "+character.Tastes, wantTexts(wants))
 			// Where the two of them stand — time since last, carried mood, closeness.
 			// See handlers_libby_bond.go.
 			bond, _ := s.readLibbyBond(u.ID)
@@ -1112,7 +1119,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		// each, and putting that in the core would push her past a small window outright.
 		// Without it she simply stops changing states, which costs a feature rather than
 		// the character. See libby_activities.go.
-		add("what she is doing", rankActivity, "\n\n"+activityDirective(in.Intensity))
+		add("what she is doing", rankActivity, "\n\n"+activityDirective(in.Intensity, in.Activity))
 		// Where she is. Shed-able like the activity vocabulary and for the same reason:
 		// it is a list, and without it she simply stays put. See libby_backgrounds.go.
 		//

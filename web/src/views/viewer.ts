@@ -156,6 +156,11 @@ export class OppaiViewer extends LitElement {
         max-width: 100%;
         max-height: 76vh;
         border-radius: 20px;
+        /* A hold opens the app's menu on the picture (long-press.ts); the
+           browser's own save-image callout would sit on top of it. */
+        -webkit-touch-callout: none;
+        -webkit-user-select: none;
+        user-select: none;
       }
       .placeholder {
         display: flex;

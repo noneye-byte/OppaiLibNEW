@@ -283,31 +283,42 @@ func allowedActivity(id string, intensity int) string {
 // The intensity is named because the gate is real: told the whole vocabulary at heat 1
 // she writes the tag, it is refused, and the refusal looks to her like the tag not
 // working. Shown only what is currently open to her, she uses it.
-func activityDirective(intensity int) string {
+//
+// The idle states are listed as bare words. Their descriptions were a phrase each,
+// which made this section the most expensive piece of protocol in the prompt and the
+// first to be shed on a real library — so she was told about the states on an empty
+// install and never on a full one. "reading" needs no gloss; the intimate half keeps
+// its phrases, because "spread" and "teasing" do.
+//
+// current is what she is already doing. When it is nothing, she is told to settle into
+// something *this* reply: written only as "tag it when it changes", a state that starts
+// empty never changes, and a conversation opened on a blank room stayed in one.
+func activityDirective(intensity int, current string) string {
 	var idle, intimate []string
 	for _, a := range libbyActivities {
 		if intensity < a.MinIntensity || a.Auto {
 			continue
 		}
-		entry := a.ID + " (" + a.Says + ")"
 		if a.Group == activityIdle {
-			idle = append(idle, entry)
+			idle = append(idle, a.ID)
 		} else {
-			intimate = append(intimate, entry)
+			intimate = append(intimate, a.ID+" ("+a.Says+")")
 		}
 	}
 	if len(idle) == 0 && len(intimate) == 0 {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString("You are somewhere doing something, not waiting in a blank room. ")
-	b.WriteString("Add [doing: <state>] on its own line when what you are physically doing changes, and [doing: none] when you stop. ")
-	b.WriteString("It stays set until you change it, so set it when you settle into something and leave it alone otherwise — this is not a per-message tag. ")
-	b.WriteString("Never mention it.\n")
+	b.WriteString("You are always somewhere doing something, never waiting in a blank room. ")
+	b.WriteString("Write [doing: <state>] on its own line when what you are physically doing changes, and [doing: none] when you stop. ")
+	b.WriteString("It stays set until you change it — settle into something and leave it, this is not a per-message tag. Never mention it.\n")
 	b.WriteString("Around the place: " + strings.Join(idle, ", ") + ".")
 	if len(intimate) > 0 {
 		b.WriteString(" With them, once the scene is actually there: " + strings.Join(intimate, ", ") + ". ")
 		b.WriteString("Use these because it is what you are doing, not to get somewhere, and drop back to [doing: none] or something ordinary once it is over.")
+	}
+	if !libbyActivityDeclarable(current) {
+		b.WriteString("\nYou are not in the middle of anything yet, which is not how anyone is found: pick what you were doing when they messaged — from your habits, the hour, the mood — and tag it in this reply.")
 	}
 	return b.String()
 }

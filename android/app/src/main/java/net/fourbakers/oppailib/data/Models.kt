@@ -575,6 +575,14 @@ data class ChatCharacter(
     val exampleDialogue: String = "",
     val systemPrompt: String = "",
     val creatorNotes: String = "",
+    /** Her life beyond the card — habits, taste, what you are to each other, how
+     * she writes, her own limits. Carried for the round-trip reason altGreetings
+     * is, and editable here for Libby. See the server's chatCharacter. */
+    val routine: String = "",
+    val tastes: String = "",
+    val relationship: String = "",
+    val style: String = "",
+    val limits: String = "",
     /** Greetings past the first, from an imported card.
      *
      * Carried here even though this app never shows them: the workspace round-trips
@@ -864,7 +872,11 @@ data class LibbyBackground(
 )
 
 @Serializable
-data class LibbyBackgroundsResponse(val backgrounds: List<LibbyBackground> = emptyList())
+data class LibbyBackgroundsResponse(
+    val backgrounds: List<LibbyBackground> = emptyList(),
+    /** The room a conversation is in when nobody has said. Absent from older servers. */
+    val default: String = "",
+)
 
 @Serializable
 data class LibbyBackgroundSaveRequest(val id: String = "", val name: String, val tags: List<String> = emptyList())

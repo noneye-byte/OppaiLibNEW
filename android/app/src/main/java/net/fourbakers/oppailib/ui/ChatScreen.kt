@@ -377,6 +377,7 @@ fun ChatScreen(
     var incomingCall by remember { mutableStateOf(false) }
     /** The places she can be, for the call screen and its picker. */
     var backgrounds by remember { mutableStateOf<List<LibbyBackground>>(emptyList()) }
+    var defaultBackground by remember { mutableStateOf("") }
     /** The message the next thing you send answers. */
     var replyTarget by remember { mutableStateOf<StoredChatMessage?>(null) }
     /** Library items attached to the composer, sent with the next message. */
@@ -946,7 +947,7 @@ fun ChatScreen(
         if (!callOpen) return@LaunchedEffect
         callSeconds = 0
         incomingCall = false
-        runCatching { repo.api.libbyBackgrounds() }.onSuccess { backgrounds = it.backgrounds }
+        runCatching { repo.api.libbyBackgrounds() }.onSuccess { backgrounds = it.backgrounds; defaultBackground = it.default }
         while (callOpen) { delay(1_000); callSeconds++ }
     }
     // A ring that nobody answers stops on its own and counts as missed.
@@ -986,11 +987,12 @@ fun ChatScreen(
             seconds = callSeconds,
             draft = draft,
             backgrounds = backgrounds,
+            defaultBackground = defaultBackground,
             onDraft = { draft = it },
             onSend = { sendMessage() },
             onRetry = { regenerate() },
             onBackground = { id -> updateConversation { it.copy(background = id) } },
-            onRefreshBackgrounds = { scope.launch { runCatching { repo.api.libbyBackgrounds() }.onSuccess { backgrounds = it.backgrounds } } },
+            onRefreshBackgrounds = { scope.launch { runCatching { repo.api.libbyBackgrounds() }.onSuccess { backgrounds = it.backgrounds; defaultBackground = it.default } } },
             onEnd = { callOpen = false },
         )
         return
@@ -1431,6 +1433,7 @@ private fun LibbyVideoCall(
     seconds: Int,
     draft: String,
     backgrounds: List<LibbyBackground>,
+    defaultBackground: String = "",
     onDraft: (String) -> Unit,
     onSend: () -> Unit,
     onRetry: () -> Unit,
@@ -1443,7 +1446,10 @@ private fun LibbyVideoCall(
     // Her typing art while she writes, when she is not otherwise in a state with art of
     // its own; the caption of dots says the same thing either way.
     val activity = conversation.activity.ifBlank { if (typing) "typing" else "" }
-    val place = backgrounds.firstOrNull { it.id == conversation.background && it.hasImage }
+    // A conversation with no room of its own is in the default one, when there is
+    // one — the same rule the server tells her and the web stage draws by.
+    val room = conversation.background.ifBlank { defaultBackground }
+    val place = backgrounds.firstOrNull { it.id == room && it.hasImage }
     // The last few lines as subtitles, newest at the bottom. Thoughts are not speech.
     val recent = conversation.messages.filter { it.thought.isBlank() }.takeLast(3)
     val clock = "%d:%02d".format(seconds / 60, seconds % 60)
@@ -1553,12 +1559,12 @@ private fun LibbyVideoCall(
                         horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         item {
-                            SceneTile(selected = conversation.background.isBlank(), name = "Plain", onClick = { onBackground(""); trayOpen = false }) {
+                            if (defaultBackground.isBlank()) SceneTile(selected = conversation.background.isBlank(), name = "Plain", onClick = { onBackground(""); trayOpen = false }) {
                                 Icon(Icons.Filled.BlurOn, null, tint = Color.White.copy(alpha = .7f), modifier = Modifier.size(28.dp))
                             }
                         }
                         items(usable, key = { it.id }) { bg ->
-                            SceneTile(selected = conversation.background == bg.id, name = bg.name, onClick = { onBackground(bg.id); trayOpen = false }) {
+                            SceneTile(selected = room == bg.id, name = if (bg.id == defaultBackground) "${bg.name} · default" else bg.name, onClick = { onBackground(bg.id); trayOpen = false }) {
                                 AsyncImage(repo.libbyBackgroundUrl(bg.id), bg.name, imageLoader = repo.imageLoader, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
                             }
                         }
@@ -2097,6 +2103,15 @@ private fun ChatSettings(
                 TextField(char.firstMessage, { onCharacter(char.copy(firstMessage = it)) }, label = { Text("First message") }, maxLines = 2, modifier = Modifier.fillMaxWidth())
                 TextField(char.exampleDialogue, { onCharacter(char.copy(exampleDialogue = it)) }, label = { Text("Example dialogue") }, maxLines = 4, modifier = Modifier.fillMaxWidth())
                 Text("{{char}} and {{user}} are filled in with the character's name and your profile name. Examples are used as a voice reference, never replayed as conversation.", color = ChatColors.muted, fontSize = 11.sp)
+                if (char.id == "libby") {
+                    Text("Her life", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 6.dp))
+                    Text("Beyond the card: what she is usually up to, what she reaches for, what you are to each other, how she writes, and her own limits.", color = ChatColors.muted, fontSize = 11.sp)
+                    TextField(char.routine, { onCharacter(char.copy(routine = it)) }, label = { Text("Around the place — what she is usually doing") }, maxLines = 3, modifier = Modifier.fillMaxWidth())
+                    TextField(char.tastes, { onCharacter(char.copy(tastes = it)) }, label = { Text("Her taste on the shelves") }, maxLines = 3, modifier = Modifier.fillMaxWidth())
+                    TextField(char.relationship, { onCharacter(char.copy(relationship = it)) }, label = { Text("What you are to each other") }, maxLines = 3, modifier = Modifier.fillMaxWidth())
+                    TextField(char.style, { onCharacter(char.copy(style = it)) }, label = { Text("How she writes") }, maxLines = 3, modifier = Modifier.fillMaxWidth())
+                    TextField(char.limits, { onCharacter(char.copy(limits = it)) }, label = { Text("Her own limits") }, maxLines = 3, modifier = Modifier.fillMaxWidth())
+                }
                 if (char.id != "libby") {
                     Text("Default mode", color = ChatColors.muted, fontSize = 12.sp)
                     Row(Modifier.horizontalScroll(rememberScrollState())) { chatModes.forEach { mode -> Text(mode.label, modifier = Modifier.clip(RoundedCornerShape(4.dp)).background(if (char.defaultMode == mode.id) ChatColors.accent else ChatColors.input).clickable { onCharacter(char.copy(defaultMode = mode.id)) }.padding(10.dp, 6.dp)) } }

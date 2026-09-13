@@ -785,6 +785,13 @@ export interface ChatCharacter {
   exampleDialogue?: string;
   systemPrompt?: string;
   creatorNotes?: string;
+  /** Her life beyond the card — see the server's chatCharacter. Edited on Libby's
+      panel only; any character carries them, so an imported card round-trips. */
+  routine?: string;
+  tastes?: string;
+  relationship?: string;
+  style?: string;
+  limits?: string;
   /** Greetings past the first, from an imported card. Kept so a card survives a
       round-trip through this app, and offered when a chat with them is started —
       a card author who wrote four openings meant them to be choosable. */

@@ -7,6 +7,7 @@ import {
   type LibbyAutoDecision, type LibbyAutoSettings, type LibbyAutoState, type LibbyBond, type LibbyContext,
   type DiscordPlace, type DiscordState, type LibbyIdentity, type LibbyMemory, type LibbyThought, type LibbyWant, type SharedLink,
   type StoredChatMessage, type User, type ChatReplyRef, type LibbyAttachment, type LibbyBackground, type LibbyLink, type Media,
+  type LibbyActivityDef, type LibbyOutfit,
   SEND_WEIGHTS,
 } from "../api.js";
 import { iconStyles, motionStyles } from "../theme.js";
@@ -14,9 +15,11 @@ import { formatBytes } from "../media-meta.js";
 import { markArrival } from "../motion.js";
 import { loadSpeakPref, saveSpeakPref, speak, stopSpeaking } from "../speech.js";
 import {
-  activityLabel, AMBIENT_MAX_INTENSITY, DEFAULT_LIBBY_PFP, applyImageFallback, libbyAssetCandidates, libbyHidden, loadLibbyOutfit,
+  activityLabel, AMBIENT_MAX_INTENSITY, DEFAULT_LIBBY_PFP, applyImageFallback, libbyAssetCandidates, libbyHidden, loadLibbyOutfit, saveLibbyOutfit,
   EMOTION_LABELS, LIBBY_EMOTIONS, normalizeEmotion, normalizeIntensity, type LibbyEmotion,
 } from "../libby.js";
+// Registers <oppai-libby-backgrounds>, which her world panel embeds.
+import "./libby-backgrounds.js";
 import { applyProgression, getIntensity, setIntensity } from "../libby-meter.js";
 import { libbyHeatDelta, libbyLibraryAnswer, libbyOpener, libbyReact, libbyReply, type LibbyLine } from "../libby-voice.js";
 import { menuDivider, nativeMenuWanted, openMenu, type MenuItem } from "../context-menu.js";
@@ -38,7 +41,7 @@ const MODES = [
   { id: "horny", label: "horny", emotion: "mischievous", topic: "Explicit, leading, and sending pictures." },
 ] as const;
 
-type EditorTab = "character" | "model" | "images" | "profile";
+type EditorTab = "character" | "world" | "mind" | "model" | "images" | "profile";
 
 /**
  * A picture attached to the composer but not yet sent. It is already uploaded and
@@ -52,9 +55,30 @@ interface PendingPhoto {
 }
 
 /** Chat settings categories, laid out as a Discord-style left rail. */
-const EDITOR_TABS: { id: EditorTab; label: string; icon: string; group: string }[] = [
+interface EditorTabDef { id: EditorTab; label: string; icon: string; group: string }
+
+/** An imported friend is a character card, and that is the whole of them. */
+const FRIEND_TABS: EditorTabDef[] = [
   { id: "character", label: "Character card", icon: "badge", group: "Friend" },
   { id: "images", label: "Images", icon: "image", group: "Friend" },
+  { id: "model", label: "Model & generation", icon: "memory", group: "Chat" },
+  { id: "profile", label: "Your profile", icon: "person", group: "Chat" },
+];
+
+/**
+ * Libby is more than a card, and her settings are laid out that way.
+ *
+ * She has a life (the card plus her habits, tastes, limits and what you are to each
+ * other), a world (what she wears, where she is, what she can be doing, how she
+ * sounds), and a mind (what she remembers and wants, where you stand, when she
+ * messages first, her Discord). Before, the second was scattered across three other
+ * screens and the third sat under "Your profile", which is about you.
+ */
+const LIBBY_TABS: EditorTabDef[] = [
+  { id: "character", label: "Libby", icon: "badge", group: "Libby" },
+  { id: "world", label: "Her world", icon: "public", group: "Libby" },
+  { id: "mind", label: "Her mind", icon: "psychology", group: "Libby" },
+  { id: "images", label: "Her pictures", icon: "image", group: "Libby" },
   { id: "model", label: "Model & generation", icon: "memory", group: "Chat" },
   { id: "profile", label: "Your profile", icon: "person", group: "Chat" },
 ];
@@ -446,6 +470,10 @@ export class OppaiChat extends LitElement {
   /** Whether her replies are read aloud on this device. See speech.ts. */
   @state() private speakOn = loadSpeakPref();
   @state() private editorTab: EditorTab = "character";
+  /** Her wardrobes and the MISC vocabulary, for the world panel. Null until asked for. */
+  @state() private outfits: LibbyOutfit[] | null = null;
+  @state() private activities: LibbyActivityDef[] = [];
+  private outfitsLoading = false;
   @state() private notice = "";
   @state() private noticeError = false;
   @state() private imageTags = "";
@@ -1100,6 +1128,17 @@ export class OppaiChat extends LitElement {
       font-size:12px; color:var(--muted); text-transform:none; }
     .sampling strong { color:var(--md-sys-color-on-surface); font-weight:650; }
     .mem-panel { display:grid; gap:8px; border-top:1px solid var(--line); padding-top:16px; }
+    /* Her states, on the world panel: a chip a state, the heat floor as a small
+       number, and greyed where the worn outfit has not drawn it. */
+    .state-row { display:flex; flex-wrap:wrap; gap:6px; }
+    .state-row.intimate { padding-top:6px; border-top:1px dashed var(--line); }
+    .state-chip { display:inline-flex; align-items:center; gap:5px; padding:4px 10px; border-radius:999px; background:var(--input); font-size:12px; font-weight:600; color:var(--md-sys-color-on-surface); }
+    .state-chip i { font-style:normal; font-size:10px; font-weight:700; padding:0 5px; border-radius:999px; background:color-mix(in srgb,var(--accent) 22%,transparent); color:var(--accent); }
+    .state-chip.default-art { opacity:.55; }
+    .panel .link-btn { border:0; background:none; padding:0; color:var(--accent); font:inherit; cursor:pointer; text-decoration:underline; }
+    .panel oppai-libby-backgrounds { --oppai-surface: var(--input); --oppai-surface-2: var(--side); --oppai-border: var(--line); --oppai-border-strong: var(--muted);
+      --oppai-text: var(--md-sys-color-on-surface); --oppai-text-dim: var(--md-sys-color-on-surface); --oppai-text-muted: var(--muted);
+      --oppai-primary: var(--accent); --oppai-on-primary: var(--on-accent); }
     .mem-list { list-style:none; margin:0; padding:0; display:grid; gap:6px; }
     .mem-list li { display:flex; align-items:flex-start; gap:8px; background:var(--side); border-radius:8px; padding:8px 10px; font-size:13px; }
     .mem-list li span { flex:1; }
@@ -1510,7 +1549,11 @@ export class OppaiChat extends LitElement {
    * Libby rather than an empty view, so the screen always ends up interactive.
    */
   private async load() {
-    const [status, workspace, bond] = await Promise.allSettled([api.chatStatus(), api.chatWorkspace(), api.libbyBond()]);
+    // The rooms come with the rest rather than on the first call: the stage beside
+    // the conversation draws the default room too, and fetching the list only when
+    // the call opened meant every fresh mount of this view — each switch back to the
+    // Chat tab — drew her on the plain stage until something else asked for it.
+    const [status, workspace, bond] = await Promise.allSettled([api.chatStatus(), api.chatWorkspace(), api.libbyBond(), this.loadBackgrounds()]);
     try {
       if (status.status === "fulfilled") this.status = status.value;
       if (workspace.status === "fulfilled") {
@@ -3495,15 +3538,16 @@ export class OppaiChat extends LitElement {
 
   private renderSettings() {
     const character = this.activeCharacter, conversation = this.activeConversation; if (!character || !conversation) return nothing;
-    const active = EDITOR_TABS.find((tab) => tab.id === this.editorTab) ?? EDITOR_TABS[0];
+    const tabs = character.id === "libby" ? LIBBY_TABS : FRIEND_TABS;
+    const active = tabs.find((tab) => tab.id === this.editorTab) ?? tabs[0];
     let group = "";
     return html`<section class="settings">
       <nav class="settings-nav" aria-label="Chat settings">
-        ${EDITOR_TABS.map((tab) => {
+        ${tabs.map((tab) => {
           const heading = tab.group === group ? nothing : html`<div class="nav-cat">${tab.group}</div>`;
           group = tab.group;
           return html`${heading}
-            <button class="nav-row ${tab.id === this.editorTab ? "on" : ""}" aria-current=${tab.id === this.editorTab ? "page" : "false"} @click=${() => (this.editorTab = tab.id)}>
+            <button class="nav-row ${tab.id === active.id ? "on" : ""}" aria-current=${tab.id === active.id ? "page" : "false"} @click=${() => (this.editorTab = tab.id)}>
               <span class="material-symbols-rounded">${tab.icon}</span>
               <span>${tab.id === "character" ? character.name : tab.label}</span>
             </button>`;
@@ -3518,10 +3562,12 @@ export class OppaiChat extends LitElement {
           <strong>${active.id === "character" ? character.name : active.label}<span>Changes sync between WebUI and Android</span></strong>
           <button class="icon-btn" title="Close settings" aria-label="Close settings" @click=${() => (this.settingsOpen=false)}><span class="material-symbols-rounded">close</span></button>
         </div>
-        ${this.editorTab === "character" ? this.renderCharacterPanel(character) : nothing}
-        ${this.editorTab === "model" ? this.renderModelPanel(conversation, character) : nothing}
-        ${this.editorTab === "images" ? this.renderImagesPanel(character) : nothing}
-        ${this.editorTab === "profile" ? this.renderProfilePanel() : nothing}
+        ${active.id === "character" ? this.renderCharacterPanel(character) : nothing}
+        ${active.id === "world" ? this.renderWorldPanel() : nothing}
+        ${active.id === "mind" ? this.renderMindPanel() : nothing}
+        ${active.id === "model" ? this.renderModelPanel(conversation, character) : nothing}
+        ${active.id === "images" ? this.renderImagesPanel(character) : nothing}
+        ${active.id === "profile" ? this.renderProfilePanel() : nothing}
       </div>
     </section>`;
   }
@@ -3560,6 +3606,14 @@ export class OppaiChat extends LitElement {
       ${this.field("System prompt / card instructions", "systemPrompt", character.systemPrompt ?? "", 3)}
       ${this.field("Example dialogue", "exampleDialogue", character.exampleDialogue ?? "", 3)}
       ${this.field("Creator notes (not sent to model)", "creatorNotes", character.creatorNotes ?? "", 2)}
+      ${libby ? html`<section class="group">
+        <h3>Her life<span>Beyond the card: what she is usually up to, what she reaches for, what you are to each other, how she writes, and where her own line is. All of it reaches her every turn.</span></h3>
+        ${this.field("Around the place — what she is usually doing. Her states (reading, gaming, lounging…) draw on this.", "routine", character.routine ?? "", 3)}
+        ${this.field("Her taste — what she likes on the shelves. Tips the balance when she picks something for you.", "tastes", character.tastes ?? "", 3)}
+        ${this.field("What you are to each other — partner, flatmate, someone she is still circling.", "relationship", character.relationship ?? "", 3)}
+        ${this.field("How she writes — length, case, texting habits.", "style", character.style ?? "", 3)}
+        ${this.field("Her own limits — what she will not do or be talked into. Yours are under Your profile.", "limits", character.limits ?? "", 3)}
+      </section>` : nothing}
       <label>Character-card weight <span class="range"><input type="range" min="0.1" max="2" step="0.05" .value=${String(character.promptWeight || 1)} @input=${(event:Event) => this.updateCharacter("promptWeight", Number((event.target as HTMLInputElement).value))}/><output>${(character.promptWeight || 1).toFixed(2)}</output></span></label>
       <div class="panel-actions"><button class="primary" @click=${() => void this.saveWorkspace()}>Save card</button><span class="file-btn">Import a card<input type="file" accept=".json,.png,application/json,image/png" multiple @change=${this.importCard}/></span><button @click=${() => this.exportCharacter(character.id)}>Export card</button>${character.builtIn ? html`<span class="empty">Libby's built-in card is editable.</span>` : html`<button class="danger" @click=${this.deleteCharacter}>Remove friend</button>`}</div>
     </div>`;
@@ -4057,15 +4111,108 @@ export class OppaiChat extends LitElement {
       <div class="panel-actions"><button class="primary" @click=${() => void this.saveWorkspace()}>Save profile</button></div>
       <p class="empty">
         Everything above is what <strong>you</strong> said. What Libby worked out on her
-        own is kept separately, below, and labelled as hers — you can correct or delete
-        any of it, and nothing there ever changes this.
-      </p>
+        own — what she remembers and wants, where you stand — is kept separately under
+        <button class="link-btn" @click=${() => { this.editorTab = "mind"; if (this.characterID !== "libby") this.activateCharacter("libby"); }}>Her mind</button>,
+        labelled as hers. You can correct or delete any of it, and nothing there ever changes this.
+      </p></div>`;
+  }
+
+  /**
+   * Her mind: what she has worked out on her own, and the policies about her acting
+   * on it. Every panel here is Libby's rather than the user's, which is why it is no
+   * longer under "Your profile" — memory, bond and wants are hers, and a friend's
+   * card has none of them.
+   */
+  private renderMindPanel() {
+    return html`<div class="panel">
+      <p class="empty">What Libby has worked out for herself, across every conversation. All of it is hers — you can correct or delete any of it, and none of it changes what you wrote under Your profile.</p>
       ${this.renderBondPanel()}
       ${this.renderMemoryPanel()}
       ${this.renderWantsPanel()}
       ${this.renderIdentityPanel()}
       ${this.renderAutoPanel()}
       ${this.renderDiscordPanel()}</div>`;
+  }
+
+  /** Her wardrobes and the MISC vocabulary, once, for the world panel. */
+  private async loadOutfits() {
+    if (this.outfitsLoading) return;
+    this.outfitsLoading = true;
+    try {
+      const res = await api.libbyOutfits();
+      this.outfits = res.outfits ?? [];
+      this.activities = res.activities ?? [];
+    } catch { this.outfits = []; }
+    finally { this.outfitsLoading = false; }
+  }
+
+  /** Dresses her, on this device, the way the studio's wardrobe does. */
+  private wearOutfit(id: string) {
+    saveLibbyOutfit(id);
+    this.requestUpdate();
+  }
+
+  /**
+   * Asks the shell to go somewhere — the studio to draw her, Settings for her voice.
+   * Composed, so it climbs out of this shadow root to the library, which owns
+   * navigation. Chat never learns how sections are switched.
+   */
+  private openSection(section: "studio" | "settings") {
+    this.dispatchEvent(new CustomEvent("open-section", { detail: { section }, bubbles: true, composed: true }));
+  }
+
+  /**
+   * Her world: what she wears, where she is, what she can be doing, how she sounds.
+   *
+   * These existed, each in its own corner — outfits in the studio's wardrobe, rooms
+   * under Settings › Backgrounds, states only inside the outfit editor, the voice
+   * under Settings › Libby. Reaching them meant knowing they existed. This is the
+   * one place they are all in view, beside the conversation they shape.
+   */
+  private renderWorldPanel() {
+    if (this.outfits === null && !this.outfitsLoading) { void this.loadOutfits(); }
+    const worn = loadLibbyOutfit();
+    const outfit = this.outfits?.find((o) => o.id === worn);
+    const idle = this.activities.filter((a) => a.group === "idle");
+    const intimate = this.activities.filter((a) => a.group !== "idle");
+    // A state the worn outfit drew is hers in that costume; one it did not falls to
+    // the bundled art, which draws every state. Said on the chip rather than left as
+    // a surprise when she settles into something.
+    const drawn = (a: LibbyActivityDef) => !outfit || !!outfit.activityLevels?.[a.id]?.length;
+    const chip = (a: LibbyActivityDef) => html`<span class="state-chip ${drawn(a) ? "" : "default-art"}" title=${`${a.says}${a.minIntensity > 1 ? ` — from heat ${a.minIntensity}` : ""}${drawn(a) ? "" : " · default art in this outfit"}`}>
+      ${a.label}${a.minIntensity > 1 ? html`<i>${a.minIntensity}</i>` : nothing}</span>`;
+    return html`<div class="panel">
+      <section class="group">
+        <h3>What she wears<span>The outfit she is drawn in on this device — the stage, the banner and the call. Draw new ones in the studio; the default wardrobe covers every mood and state.</span></h3>
+        <div class="grid">
+          <label>Outfit
+            <select .value=${worn} @change=${(event:Event) => this.wearOutfit((event.target as HTMLSelectElement).value)}>
+              <option value="" ?selected=${!worn}>Default wardrobe</option>
+              ${(this.outfits ?? []).map((o) => html`<option value=${o.id} ?selected=${o.id === worn}>${o.name}${o.slots ? ` · ${o.slots} squares` : ""}</option>`)}
+            </select></label>
+          <div class="panel-actions" style="align-self:end">
+            <button class="secondary" @click=${() => this.openSection("studio")}><span class="material-symbols-rounded" style="font-size:16px;vertical-align:-3px">checkroom</span> Open the outfit studio</button>
+          </div>
+        </div>
+        ${this.outfits === null ? html`<p class="empty">Loading her wardrobes…</p>` : nothing}
+      </section>
+      <section class="group">
+        <h3>Where she is<span>The rooms behind her. She moves between them herself as the conversation goes; the one marked default is where a conversation starts.</span></h3>
+        <oppai-libby-backgrounds embedded @changed=${() => void this.loadBackgrounds()}></oppai-libby-backgrounds>
+      </section>
+      <section class="group">
+        <h3>What she can be doing<span>Her states — what she is doing, as opposed to what she is feeling. She chooses them herself and stays in one until she changes it; a number is the heat she needs before she will. Typing is shown by the app while a reply is on its way.</span></h3>
+        ${this.activities.length ? html`
+          <div class="state-row">${idle.filter((a) => !a.auto).map(chip)}</div>
+          <div class="state-row intimate">${intimate.map(chip)}</div>
+          ${outfit && intimate.concat(idle).some((a) => !drawn(a)) ? html`<p class="empty">Greyed states have no picture in ${outfit.name} yet, so she wears the default art for them. Draw them in the studio.</p>` : nothing}`
+          : html`<p class="empty">${this.outfits === null ? "Loading…" : "This server has no state vocabulary yet."}</p>`}
+      </section>
+      <section class="group">
+        <h3>How she sounds<span>Her voice — which engine reads her lines, in what voice, how fast — is under Settings › Libby, beside hiding her and how quickly she warms up.</span></h3>
+        <div class="panel-actions"><button class="secondary" @click=${() => this.openSection("settings")}><span class="material-symbols-rounded" style="font-size:16px;vertical-align:-3px">record_voice_over</span> Open Libby's settings</button></div>
+      </section>
+    </div>`;
   }
 
   /**

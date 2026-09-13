@@ -70,7 +70,7 @@ func TestActivityHeatGate(t *testing.T) {
 // calm conversation she writes tags that are refused, and a refusal she cannot see
 // reads to her as the tag not working.
 func TestActivityDirectiveTracksHeat(t *testing.T) {
-	calm := activityDirective(1)
+	calm := activityDirective(1, "")
 	if !strings.Contains(calm, "reading") {
 		t.Fatalf("the idle states are missing at heat 1: %s", calm)
 	}
@@ -82,11 +82,20 @@ func TestActivityDirectiveTracksHeat(t *testing.T) {
 			t.Fatalf("%q was offered at heat 1: %s", state, calm)
 		}
 	}
-	hot := activityDirective(5)
+	hot := activityDirective(5, "")
 	for _, state := range []string{"reading", "rubbing", "fingering", "vibrator", "dildo", "spread", "climax"} {
 		if !strings.Contains(hot, state) {
 			t.Fatalf("%q is missing at heat 5: %s", state, hot)
 		}
+	}
+	// Opening on nothing, she is asked to settle into something this reply; already
+	// in a state, she is not — "tag it when it changes" is enough once there is a
+	// state to change from.
+	if !strings.Contains(calm, "tag it in this reply") {
+		t.Fatalf("no nudge to pick an opening state: %s", calm)
+	}
+	if settled := activityDirective(1, "reading"); strings.Contains(settled, "tag it in this reply") {
+		t.Fatalf("nudged to pick a state while already in one: %s", settled)
 	}
 	// A state already set is restated as still true, which is what makes it a state
 	// rather than a reaction to one message. It is a separate block from the vocabulary

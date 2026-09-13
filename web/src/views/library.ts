@@ -2,7 +2,8 @@ import { LitElement, html, css, nothing } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import { api, mascotSay, type ChatCharacter, type Media, type SourceItem, type User } from "../api.js";
-import { canShare, shareWithCharacter } from "../chat-share.js";
+import { canShare, saveForCharacter, shareWithCharacter } from "../chat-share.js";
+import { attachLongPress } from "../long-press.js";
 import { OPEN_MEDIA_EVENT } from "../chat-links.js";
 import { libbyReact, type LibbyItemFacts } from "../libby-voice.js";
 import { isIncognito } from "../incognito.js";
@@ -119,6 +120,8 @@ export class OppaiLibrary extends LitElement {
   /** Ids of uploads that have landed but not yet been announced — see onUploadDone. */
   private pendingUploads: (number | undefined)[] = [];
   private uploadSettle?: number;
+  /** Unwires hold-to-menu; see attachLongPress. */
+  private detachLongPress?: () => void;
 
   static styles = [
     iconStyles,
@@ -526,9 +529,14 @@ export class OppaiLibrary extends LitElement {
         color: var(--oppai-text-muted);
       }
 
-      /* Tiles */
+      /* Tiles. A hold opens the menu (see long-press.ts), so the browser's own
+         hold behaviours — the image callout, a text selection — are switched off
+         here rather than fighting it. */
       .tile {
         cursor: pointer;
+        -webkit-touch-callout: none;
+        -webkit-user-select: none;
+        user-select: none;
       }
       .tile-media {
         position: relative;
@@ -889,6 +897,8 @@ export class OppaiLibrary extends LitElement {
     // that built its own menu has already called preventDefault, which is how the
     // two stay out of each other's way (see onContextMenu).
     this.addEventListener("contextmenu", this.onContextMenu);
+    // And a press-and-hold is the same request from a finger.
+    this.detachLongPress = attachLongPress(this);
     // Anything nested can ask for a library item to be opened — a link Libby put in
     // a reply, a tile in the browse-together shelf. The shell owns the viewer, so
     // the request rises to here rather than each view learning how to route.
@@ -906,6 +916,7 @@ export class OppaiLibrary extends LitElement {
     super.disconnectedCallback();
     window.removeEventListener("popstate", this.onPopState);
     this.removeEventListener("contextmenu", this.onContextMenu);
+    this.detachLongPress?.();
     this.removeEventListener(OPEN_MEDIA_EVENT, this.onOpenMedia);
     window.removeEventListener("keydown", this.onKey);
     window.removeEventListener("oppai-downloads", this.onDownloads as EventListener);
@@ -922,38 +933,55 @@ export class OppaiLibrary extends LitElement {
   /**
    * The application-wide right-click menu.
    *
-   * Three cases, most specific first: a library tile acts on that item, a nav entry
-   * jumps to that section, and anything else gets the shell menu. A view that owns
-   * its own menu (Chat) has already handled the event, and text fields keep the
-   * browser's own menu so Paste stays reachable.
+   * Three cases, most specific first: a library tile acts on that item, the open
+   * item in the viewer acts on that item, and anything else gets the shell menu. A
+   * view that owns its own menu (Chat) has already handled the event, and text
+   * fields keep the browser's own menu so Paste stays reachable.
+   *
+   * The viewer case is what makes "send this to Libby" reachable from the place
+   * you are actually looking at a picture. Before, the picture you had open was the
+   * one thing on screen with no menu: right-clicking it gave the shell's, and the
+   * item had to be closed and found again in the grid to be shared.
    */
   private onContextMenu = (event: MouseEvent) => {
     if (event.defaultPrevented || nativeMenuWanted(event)) return;
     const path = event.composedPath();
     const at = (selector: string) =>
       path.find((node) => (node as HTMLElement)?.classList?.contains?.(selector)) as HTMLElement | undefined;
+    const inViewer = path.some((node) => (node as HTMLElement)?.tagName?.toLowerCase?.() === "oppai-viewer");
 
     const tileID = Number(at("tile")?.dataset.id);
-    const items = Number.isFinite(tileID) && tileID > 0
-      ? this.tileMenuItems(tileID, event)
-      : this.shellMenuItems();
+    let items: MenuItem[];
+    if (Number.isFinite(tileID) && tileID > 0) items = this.tileMenuItems(tileID, event);
+    else if (inViewer && this.selectedId != null) items = this.tileMenuItems(this.selectedId, event, true);
+    else items = this.shellMenuItems();
     if (!items.length) return;
     event.preventDefault();
     openMenu({ x: event.clientX, y: event.clientY, items });
   };
 
-  private tileMenuItems(id: number, event: MouseEvent): MenuItem[] {
+  private tileMenuItems(id: number, event: MouseEvent, open = false): MenuItem[] {
     const item = this.items.find((m) => m.id === id);
     if (!item) return [];
     const fav = this.favorites.has(id);
+    const shareable = canShare(item);
     return [
-      { label: "Open", icon: "open_in_full", run: () => this.openItem(id) },
+      ...(open ? [] : [{ label: "Open", icon: "open_in_full", run: () => this.openItem(id) }]),
       { label: fav ? "Remove from favorites" : "Add to favorites", icon: fav ? "heart_minus" : "favorite", run: () => this.toggleFavorite(id) },
-      { label: this.selectMode ? "Toggle selection" : "Select items", icon: "check_box", run: () => this.selectMode ? this.toggleSelected(id) : this.toggleSelectMode() },
+      ...(open ? [] : [{ label: this.selectMode ? "Toggle selection" : "Select items", icon: "check_box", run: () => this.selectMode ? this.toggleSelected(id) : this.toggleSelectMode() }]),
       menuDivider,
-      // Disabled rather than hidden when there is nothing showable: the entry not
-      // being there reads as "this build can't do it" instead of "not this item".
-      { label: "Share with…", icon: "ios_share", disabled: !canShare(item),
+      // The two ways to hand her a picture, one entry each and Libby's by name: she
+      // is who you are nearly always sending to, and "Share with…" then a list of
+      // one was two taps for the common case. Both disabled rather than hidden when
+      // there is nothing showable, so the entry not being there reads as "this
+      // build can't do it" instead of "not this item".
+      { label: "Show Libby now", icon: "send", disabled: shareable ? false : true,
+        hint: "attach to a message",
+        run: () => void this.share(item, { id: "libby", name: "Libby" } as ChatCharacter) },
+      { label: "Save for Libby to send later", icon: "add_photo_alternate", disabled: shareable ? false : true,
+        hint: "her gallery",
+        run: () => void this.saveForLater(item) },
+      { label: "Share with…", icon: "ios_share", disabled: !shareable,
         run: () => void this.openShareMenu(item, event.clientX, event.clientY) },
       // Who the picture is *of*, which is a different question from what is in it.
       // Only offered for stills: a video is not a portrait of anyone, and tagging one
@@ -1038,9 +1066,30 @@ export class OppaiLibrary extends LitElement {
       await shareWithCharacter(item, character.id);
       // Only switch once the bytes are in hand: landing in Chat and then failing
       // would leave the user in the wrong view with nothing to show for it.
+      this.closeItem();
       this.selectSection("chat");
     } catch (error) {
       mascotSay((error as Error).message || `Couldn't share with ${character.name}.`, "error");
+    }
+  }
+
+  /**
+   * Gives her the picture to keep, staying where you are.
+   *
+   * The scan is local and takes a moment, so it is announced; the result says which
+   * shelf it landed on, because that decides whether she can ever send it — a
+   * picture filed as "someone else" is one she remembers but never sends as herself,
+   * and the Images panel in Chat is where to correct that.
+   */
+  private async saveForLater(item: Media) {
+    mascotSay(`Saving "${item.title}" for me…`);
+    try {
+      const image = await saveForCharacter(item, "libby");
+      mascotSay(image.subject === "other"
+        ? `Kept it. It doesn't look like me, so it's on my "someone else" shelf — tell me otherwise under Chat › Images.`
+        : `Kept it — I can send that one later.`);
+    } catch (error) {
+      mascotSay((error as Error).message || "Couldn't save that for Libby.", "error");
     }
   }
 
@@ -1509,7 +1558,8 @@ export class OppaiLibrary extends LitElement {
             ? keyed("studio", html`<oppai-imagegen studio @imported=${() => this.refresh()}
                 @open-chat=${() => this.selectSection("chat")}></oppai-imagegen>`)
             : nothing}
-          ${chatMounted ? html`<oppai-chat .user=${this.user} style=${isViewer ? "display:none" : ""}></oppai-chat>` : nothing}
+          ${chatMounted ? html`<oppai-chat .user=${this.user} style=${isViewer ? "display:none" : ""}
+            @open-section=${(e: CustomEvent<{ section: "studio" | "settings" }>) => this.selectSection(e.detail.section)}></oppai-chat>` : nothing}
           ${isGrid || isFavorites || isSearch
             ? this.renderGrid(isGrid, isFavorites, isSearch)
             : nothing}

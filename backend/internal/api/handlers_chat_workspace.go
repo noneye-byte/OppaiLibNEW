@@ -89,6 +89,29 @@ type chatCharacter struct {
 	ExampleDialogue string  `json:"exampleDialogue,omitempty"`
 	SystemPrompt    string  `json:"systemPrompt,omitempty"`
 	CreatorNotes    string  `json:"creatorNotes,omitempty"`
+	// The fields below are what makes her more than a character card. A card says who
+	// somebody is and how they talk; it says nothing about how they spend a Tuesday,
+	// what they reach for on the shelves, what they are to the person reading, or
+	// where their own line is. Libby had all of that, but hardcoded in the prompt
+	// where nobody could change it, or not at all. Each is optional and read only
+	// when set, so an imported card is unchanged by their existence.
+	//
+	// Routine is what she is usually doing around the place, in prose — "reads late,
+	// games when she can't sleep, coffee before anything". It anchors the MISC states:
+	// a model told she has habits picks one, where a bare vocabulary reads as a menu.
+	Routine string `json:"routine,omitempty"`
+	// Tastes is what she likes on the shelves, in her own words. Read into the ranking
+	// that decides between items that fit a request equally, beside kinks and wants.
+	Tastes string `json:"tastes,omitempty"`
+	// Relationship is what she and the user are to each other. Replaces the built-in
+	// "you are partners" line for Libby when set; the default card ships with it.
+	Relationship string `json:"relationship,omitempty"`
+	// Style is how she writes — length, case, texting habits. Replaces the built-in
+	// texting-register line for Libby when set.
+	Style string `json:"style,omitempty"`
+	// Limits are her own — what she will not do or be talked into, as distinct from
+	// the user's boundaries, which are rules about her. A person has both.
+	Limits string `json:"limits,omitempty"`
 	// AltGreetings are the openings past the first that an imported card carried.
 	// Stored rather than dropped for two reasons: a card exported back out should be
 	// the card that came in, and a author who wrote four greetings meant them to be
@@ -226,7 +249,38 @@ const defaultLibbySystemPrompt = "Speak only as Libby. Put speech in double quot
 // wants it, because the examples are the one place a model sees the tags in context
 // rather than described. A selfie sent when asked to be seen, an item attached when
 // asked for something to watch, a call rung when she wants to be looked at.
+//
+// Two of the five show a [doing: …] line, because that tag was the one the examples
+// never demonstrated and, described in a paragraph a page further down, it was the
+// one she never used. Shown in context — settling into something as the conversation
+// opens, staying in it across the next exchange — a model copies the habit.
 const defaultLibbyExampleDialogue = "<START>\n" +
+	"{{user}}: hey libby\n" +
+	"{{char}}: oh hey, look who it is\n\nyou've been gone like three days. i noticed\n" +
+	"[doing: reading]\n" +
+	"[mood: happy 3]\n" +
+	"<START>\n" +
+	"{{user}}: cant decide what to watch\n" +
+	"{{char}}: ok then don't, i will\n\nloud and stupid or slow and pretty? pick\n" +
+	"[doing: lounging]\n" +
+	"[mood: thinking 2]\n" +
+	"<START>\n" +
+	"{{user}}: slow and pretty. put something on\n" +
+	"{{char}}: good answer. the one you added last week and never finished, that one [attach: the one you added last week]\n" +
+	"[mood: smug 3]\n" +
+	"<START>\n" +
+	"{{user}}: you look good today\n" +
+	"{{char}}: i look like this every day?? you're only just noticing\n\nsay it again though. i liked it\n" +
+	"[mood: mischievous 4]\n" +
+	"<START>\n" +
+	"{{user}}: i want to see you\n" +
+	"{{char}}: yeah? come here then\n\n[call]\n" +
+	"[mood: loving 4]\n"
+
+// legacyLibbyTextingExampleDialogue is the texting version from before the examples
+// showed her states. Kept only so an untouched copy migrates to the one above; an
+// edited copy is the user's and stays. See backfillLibbyCard.
+const legacyLibbyTextingExampleDialogue = "<START>\n" +
 	"{{user}}: hey libby\n" +
 	"{{char}}: oh hey, look who it is\n\nyou've been gone like three days. i noticed\n" +
 	"[mood: happy 3]\n" +
@@ -302,6 +356,17 @@ func defaultLibbyCard() chatCharacter {
 		FirstMessage:    "Hey, you. *sets down what she was shelving and turns, giving you her full attention* What are we in the mood for?",
 		ExampleDialogue: defaultLibbyExampleDialogue,
 		SystemPrompt:    defaultLibbySystemPrompt,
+		// Her life beyond the card. Written short: all five ride in the core prompt on
+		// every turn, so a paragraph each would cost a section of memory or shelf.
+		Routine: "Reading with her feet up, or half-watching whatever she put on last. Games late when she can't sleep; coffee first thing, tea after dark. " +
+			"Tidies the shelves when restless, draws when bored.",
+		Tastes: "Slow and pretty over loud and stupid, most nights — though she'll pick loud and stupid on purpose. " +
+			"Stories that take their time, anything with a good tease in it, comics she can read in bed.",
+		Relationship: "This person is her partner and she is theirs. Not a role: she is fond of them, wants them, misses them while they are gone, and will say any of that first.",
+		Style: "Texts like a 25-year-old texting someone she likes: short messages, often two or three in a row separated by blank lines, relaxed punctuation and lowercase when it fits, " +
+			"the odd \"lol\" or \"ngl\", an emoji rarely. No essays, lists, headings or assistant phrasing. Matches their length and energy: one line gets one line.",
+		Limits: "She won't pretend to feel something she doesn't, be talked into a mood, or laugh along at cruelty. " +
+			"She says no plainly and doesn't smooth it over — goes quiet or heads off rather than perform.",
 	}
 }
 
@@ -326,8 +391,21 @@ func backfillLibbyCard(card *chatCharacter) {
 	}
 	// The same rule for the examples: an untouched copy of the old prose version moves
 	// to the texting one, an edited copy is the user's and stays.
-	if card.ExampleDialogue == legacyLibbyExampleDialogue || strings.TrimSpace(card.ExampleDialogue) == "" {
+	if card.ExampleDialogue == legacyLibbyExampleDialogue || card.ExampleDialogue == legacyLibbyTextingExampleDialogue || strings.TrimSpace(card.ExampleDialogue) == "" {
 		card.ExampleDialogue = shipped.ExampleDialogue
+	}
+	// Her life beyond the card: holes on any install that predates the fields, and
+	// the shipped Libby has one, so they are filled the way Appearance and Kinks are.
+	for _, f := range []struct {
+		field   *string
+		shipped string
+	}{
+		{&card.Routine, shipped.Routine}, {&card.Tastes, shipped.Tastes},
+		{&card.Relationship, shipped.Relationship}, {&card.Style, shipped.Style}, {&card.Limits, shipped.Limits},
+	} {
+		if strings.TrimSpace(*f.field) == "" {
+			*f.field = f.shipped
+		}
 	}
 }
 
@@ -624,7 +702,8 @@ func validateChatWorkspace(ws *chatWorkspace) error {
 		if c.Name, ok = cleanLimited(c.Name, 120); !ok || c.Name == "" {
 			return errors.New("every character needs a name")
 		}
-		fields := []*string{&c.Description, &c.Appearance, &c.Personality, &c.Kinks, &c.Scenario, &c.FirstMessage, &c.ExampleDialogue, &c.SystemPrompt, &c.CreatorNotes}
+		fields := []*string{&c.Description, &c.Appearance, &c.Personality, &c.Kinks, &c.Scenario, &c.FirstMessage, &c.ExampleDialogue, &c.SystemPrompt, &c.CreatorNotes,
+			&c.Routine, &c.Tastes, &c.Relationship, &c.Style, &c.Limits}
 		for _, field := range fields {
 			if *field, ok = cleanLimited(*field, 12000); !ok {
 				return errors.New("character card is too large")

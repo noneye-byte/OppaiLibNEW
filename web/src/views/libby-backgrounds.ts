@@ -1,5 +1,5 @@
 import { LitElement, css, html, nothing } from "lit";
-import { customElement, state } from "lit/decorators.js";
+import { customElement, property, state } from "lit/decorators.js";
 import { api, type LibbyBackground } from "../api.js";
 import { iconStyles } from "../theme.js";
 
@@ -23,6 +23,8 @@ import { iconStyles } from "../theme.js";
  */
 @customElement("oppai-libby-backgrounds")
 export class OppaiLibbyBackgrounds extends LitElement {
+  /** Set when a panel that has its own heading embeds this; the head is dropped. */
+  @property({ type: Boolean }) embedded = false;
   @state() private backgrounds: LibbyBackground[] = [];
   @state() private defaultID = "";
   @state() private loading = true;
@@ -117,6 +119,10 @@ export class OppaiLibbyBackgrounds extends LitElement {
 
   private say(text: string, bad = false) { this.note = text; this.bad = bad; }
 
+  /** Tells whoever embeds this that the rooms or the default moved — the chat stage
+      draws the default room and would otherwise keep the old one until remounted. */
+  private changed() { this.dispatchEvent(new CustomEvent("changed", { bubbles: true, composed: true })); }
+
   private startNew() {
     this.editing = "new";
     this.draftName = "";
@@ -141,6 +147,7 @@ export class OppaiLibbyBackgrounds extends LitElement {
       });
       this.editing = null;
       await this.reload();
+      this.changed();
       this.say(id ? `Saved ${name}.` : `Added ${name}. Give it a picture so she can go there.`);
     } catch (error) {
       this.say((error as Error).message, true);
@@ -165,6 +172,7 @@ export class OppaiLibbyBackgrounds extends LitElement {
       await api.setLibbyBackgroundImage(id, dataURL);
       this.version = Date.now();
       await this.reload();
+      this.changed();
       this.say("Picture saved.");
     } catch (error) {
       this.say((error as Error).message, true);
@@ -181,6 +189,7 @@ export class OppaiLibbyBackgrounds extends LitElement {
       const next = this.defaultID === id ? "" : id;
       await api.setLibbyDefaultBackground(next);
       this.defaultID = next;
+      this.changed();
       this.say(next ? "She starts here now." : "No default room — she starts nowhere in particular.");
     } catch (error) {
       this.say((error as Error).message, true);
@@ -195,6 +204,7 @@ export class OppaiLibbyBackgrounds extends LitElement {
     try {
       await api.deleteLibbyBackground(bg.id);
       await this.reload();
+      this.changed();
       this.say(`Deleted ${bg.name}.`);
     } catch (error) {
       this.say((error as Error).message, true);
@@ -220,7 +230,7 @@ export class OppaiLibbyBackgrounds extends LitElement {
 
   render() {
     return html`
-      <div class="head">
+      ${this.embedded ? nothing : html`<div class="head">
         <div>
           <h3><span class="material-symbols-rounded">wallpaper</span>Backgrounds</h3>
           <p>
@@ -231,7 +241,7 @@ export class OppaiLibbyBackgrounds extends LitElement {
           </p>
         </div>
         <div class="spacer"></div>
-      </div>
+      </div>`}
 
       ${this.loading
         ? html`<div class="empty">Loading…</div>`
