@@ -8,8 +8,10 @@ import {
   type GenLora,
   type GenModel,
   type GenModelMeta,
+  type GenPose,
   type GenPreview,
   type GenProgress,
+  type GenWildcard,
   type GenTemplate,
   type GenVae,
   type GalleryBoard,
@@ -281,6 +283,8 @@ interface CharDraft {
   negativePrompt: string;
   /** A newly-chosen thumbnail as a data URL; undefined keeps the existing one. */
   imageData?: string;
+  /** A just-generated preview to use as the thumbnail instead of an upload. */
+  previewId?: string;
 }
 
 /** A run's name for the progress endpoints: random, URL-safe, unique enough. */
@@ -439,6 +443,27 @@ export class OppaiImageGen extends LitElement {
   @state() private charDraft: CharDraft | null = null;
   @state() private charBusy = false;
   @state() private scanBusy = false;
+
+  /** The pose library: what the subject is doing, as clickable cards like the
+      characters. Several can be picked — "sitting" and "holding a mug" compose. */
+  @state() private poses: GenPose[] = [];
+  @state() private selectedPoses: string[] = [];
+  @state() private poseDraft: CharDraft | null = null;
+  @state() private poseBusy = false;
+
+  /** Wildcard lists, and the one being written. The server rolls `__name__` on
+      every generate; this side only lists, edits, and inserts the reference. */
+  @state() private wildcards: GenWildcard[] = [];
+  @state() private wildcardDraft: { id?: string; name: string; text: string } | null = null;
+  @state() private wildcardBusy = false;
+
+  /**
+   * A library picture opened here to be edited: its controls are loaded back into the
+   * form, and a result can be saved beside it or in its place. Set through editMedia
+   * by the library, which is how "Edit in the studio" on a picture of Libby lands.
+   */
+  @property({ type: Number }) editMedia = 0;
+  @state() private editing: { id: number; title: string; tags: string[] } | null = null;
 
   // Which sidebar sections are unfolded. Models start open — it's the choice that
   // shapes everything else; the rest unfold on demand.
@@ -911,6 +936,24 @@ export class OppaiImageGen extends LitElement {
         gap: 6px;
       }
 
+      /* Wildcard lists: a chip per list, the name inserting its reference. */
+      .wildcard-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+      .wildcard-chip {
+        display: inline-flex; align-items: center; border: 1px solid var(--oppai-border-strong);
+        border-radius: 999px; background: var(--oppai-surface-2, rgba(255,255,255,0.04)); overflow: hidden;
+      }
+      .wildcard-name, .wildcard-edit, .wildcard-ro {
+        border: 0; background: none; color: inherit; font: inherit; font-size: 12px; cursor: pointer;
+        display: inline-flex; align-items: center; padding: 4px 9px;
+      }
+      .wildcard-name { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+      .wildcard-name:hover { background: var(--oppai-hover, rgba(255,255,255,0.06)); }
+      .wildcard-edit { padding: 4px 7px 4px 4px; opacity: 0.7; border-left: 1px solid var(--oppai-border-strong); }
+      .wildcard-edit:hover { opacity: 1; }
+      .wildcard-ro { padding: 4px 7px 4px 4px; opacity: 0.5; cursor: default; }
+      .wildcard-text { min-height: 180px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+      .sec-note code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; }
+
       /* Prompt block. */
       .prompt-card {
         background: var(--oppai-surface-2);
@@ -1086,6 +1129,15 @@ export class OppaiImageGen extends LitElement {
         opacity: 0.55;
         cursor: default;
       }
+      .editing-bar {
+        display: flex; align-items: center; gap: 8px; margin-bottom: 10px; padding: 8px 12px;
+        border-radius: 10px; border: 1px solid var(--oppai-border-strong);
+        background: color-mix(in srgb, var(--oppai-accent, #c58af9) 12%, var(--oppai-surface-2));
+        font-size: 12.5px; color: var(--oppai-text-dim);
+      }
+      .editing-bar .editing-copy { flex: 1; min-width: 0; }
+      .editing-bar strong { color: var(--oppai-text); }
+
       .banner {
         background: var(--oppai-surface-2);
         border: 1px solid var(--oppai-border-strong);
@@ -2502,6 +2554,8 @@ export class OppaiImageGen extends LitElement {
     this.restoreDraft();
     void this.loadStatus();
     void this.loadCharacters();
+    void this.loadPoses();
+    void this.loadWildcards();
     if (this.studio) this.enterStudio();
   }
 
@@ -2543,7 +2597,7 @@ export class OppaiImageGen extends LitElement {
     "prompt", "negative", "checkpoint", "vae", "templateId", "scheduler",
     "width", "height", "steps", "cfg", "cfgRescale", "clipSkip",
     "seamlessX", "seamlessY", "vaePrecision", "cpuNoise", "count", "seed", "board",
-    "selectedLoras", "selectedTriggers", "selectedChars",
+    "selectedLoras", "selectedTriggers", "selectedChars", "selectedPoses",
     "outfitOn", "outfitText", "outfitGear", "outfitFace", "outfitMisc", "outfitMiscBatch", "outfitTier", "outfitBackground",
     "outfitLockColors", "outfitLoadoutId", "outfitWardrobeId", "sheetZoom",
     "outfitUnderwearColor", "outfitPubicHair", "outfitPubicHairColor", "camera",
@@ -2580,6 +2634,10 @@ export class OppaiImageGen extends LitElement {
   }
 
   protected updated(changed: PropertyValues) {
+    // A picture handed in by the library to edit, loaded once per id.
+    if (changed.has("editMedia") && this.editMedia > 0 && this.editing?.id !== this.editMedia) {
+      void this.loadFromMedia(this.editMedia);
+    }
     // Apply a restored scroll position once there is something to scroll. Doing it in
     // connectedCallback would be a no-op — the form has not rendered yet.
     if (this.pendingScroll && this.scrollHost) {
@@ -2635,6 +2693,7 @@ export class OppaiImageGen extends LitElement {
       selectedLoras: this.selectedLoras,
       selectedTriggers: this.selectedTriggers,
       selectedChars: this.selectedChars,
+      selectedPoses: this.selectedPoses,
       outfitOn: this.outfitOn,
       outfitText: this.outfitText,
       outfitGear: this.outfitGear,
@@ -2701,6 +2760,7 @@ export class OppaiImageGen extends LitElement {
     if (d.selectedLoras) this.selectedLoras = d.selectedLoras;
     if (d.selectedTriggers) this.selectedTriggers = d.selectedTriggers;
     if (d.selectedChars) this.selectedChars = d.selectedChars;
+    if (d.selectedPoses) this.selectedPoses = d.selectedPoses;
     if (d.outfitOn !== undefined) this.outfitOn = d.outfitOn;
     if (d.outfitText !== undefined) this.outfitText = d.outfitText;
     // Normalized rather than spread: a draft written before colours existed stores a
@@ -2767,6 +2827,65 @@ export class OppaiImageGen extends LitElement {
     } catch {
       /* the section just stays empty */
     }
+  }
+
+  private async loadPoses() {
+    try {
+      const res = await api.poses();
+      this.poses = res.poses;
+      const ids = new Set(res.poses.map((p) => p.id));
+      this.selectedPoses = this.selectedPoses.filter((id) => ids.has(id));
+    } catch {
+      /* the section just stays empty */
+    }
+  }
+
+  private async loadWildcards() {
+    try {
+      this.wildcards = (await api.wildcards()).wildcards;
+    } catch {
+      /* the section just stays empty */
+    }
+  }
+
+  /**
+   * Opens a library picture for editing.
+   *
+   * The studio's own record, when the save carried one, puts every control back where
+   * it was. An older picture — or one Libby made herself — has only its prompt in the
+   * notes, and that is loaded as the prompt with any LoRA tokens picked out of it, so
+   * there is still something to start from rather than a blank form.
+   */
+  async loadFromMedia(id: number) {
+    try {
+      const generation = await api.mediaGeneration(id);
+      const info = generation.info as unknown as GenInfo | undefined;
+      if (info && typeof info.prompt === "string" && Array.isArray(info.loras)) {
+        this.reuseGenInfo({ ...info, loras: info.loras.filter((l) => l && typeof l.name === "string") });
+      } else {
+        const loras: Record<string, number> = {};
+        const prompt = (generation.prompt || "").replace(/<lora:([^:>]+):([-\d.]+)>/g, (_m, name: string, weight: string) => {
+          loras[name] = Number(weight) || 1;
+          return "";
+        }).replace(/\s{2,}/g, " ").trim();
+        this.prompt = prompt || generation.title;
+        this.selectedLoras = loras;
+        this.templateId = "";
+        this.selectedChars = [];
+        this.selectedPoses = [];
+        this.outfitOn = false;
+        this.showOptions = true;
+      }
+      this.editing = { id, title: generation.title, tags: generation.tags ?? [] };
+      this.showToast(`Editing “${generation.title}” — generate, then save beside it or in its place.`);
+    } catch (e) {
+      this.showToast(`Couldn't open that picture here: ${(e as Error).message}`);
+    }
+  }
+
+  /** Whether the library item being edited is one of Libby's own pictures. */
+  private get editingLibby(): boolean {
+    return !!this.editing?.tags.some((tag) => tag === "character:libby" || tag === "libby");
   }
 
   // Selecting a model applies the generator's per-model defaults (InvokeAI keeps
@@ -3045,6 +3164,16 @@ export class OppaiImageGen extends LitElement {
       if (!c) continue;
       if (c.prompt.trim()) parts.push(c.prompt.trim());
       if (c.negativePrompt?.trim()) negParts.push(c.negativePrompt.trim());
+    }
+    // Poses come after the characters: who, then what they are doing. The outfit
+    // board carries its own pose per square, so a picked pose sits it out there.
+    if (!this.outfitOn) {
+      for (const id of this.selectedPoses) {
+        const p = this.poses.find((pose) => pose.id === id);
+        if (!p) continue;
+        if (p.prompt.trim()) parts.push(p.prompt.trim());
+        if (p.negativePrompt?.trim()) negParts.push(p.negativePrompt.trim());
+      }
     }
     let prompt = parts.filter(Boolean).join(", ");
     let negative = negParts.filter(Boolean).join(", ");
@@ -3377,11 +3506,17 @@ export class OppaiImageGen extends LitElement {
     // Named, so the overlay can watch the picture form and the user can stop it.
     params.jobId = newJobId();
     this.startProgressWatch(params.jobId, params.count ?? 1);
-    let res: { images: GenPreview[]; prompt: string };
+    let res: { images: GenPreview[]; prompt: string; positive?: string; negative?: string; rolled?: boolean };
     try {
       res = await api.generate(params);
     } finally {
       this.stopProgressWatch();
+    }
+    // Wildcards were rolled server-side: the record has to say what was actually
+    // sent, or "use the same parameters" would roll again instead of reproducing.
+    if (res.rolled && typeof res.positive === "string") {
+      params.prompt = res.positive;
+      params.negativePrompt = res.negative || undefined;
     }
     const seconds = (performance.now() - startedAt) / 1000;
     const made: Shot[] = res.images.map((g: GenPreview, index: number) => ({
@@ -3405,6 +3540,9 @@ export class OppaiImageGen extends LitElement {
           triggers: this.selectedTriggers,
           characters: this.selectedChars
             .map((id) => this.characters.find((c) => c.id === id)?.name ?? "")
+            .filter(Boolean),
+          poses: this.outfitOn ? [] : this.selectedPoses
+            .map((id) => this.poses.find((p) => p.id === id)?.name ?? "")
             .filter(Boolean),
           outfit: this.outfitOn ? capturedOutfitText : "",
           controlImage: this.cutout?.name,
@@ -3650,6 +3788,7 @@ export class OppaiImageGen extends LitElement {
     this.templateId = "";
     this.selectedTriggers = [];
     this.selectedChars = [];
+    this.selectedPoses = [];
     this.outfitOn = false;
     this.showOptions = true;
     this.showToast("Generation parameters loaded");
@@ -3759,8 +3898,103 @@ export class OppaiImageGen extends LitElement {
           run: () => void this.exportShot(shot) },
         { label: "Use as a Libby background", icon: "wallpaper",
           run: () => void this.useAsBackground(shot) },
+        { label: "Save as a pose…", icon: "accessibility_new",
+          run: () => this.poseFromShot(shot) },
+        { label: "Send in chat as Libby…", icon: "send",
+          run: () => void this.sendAsLibby(shot) },
+        ...(this.editing ? [{ label: `Replace “${this.editing.title}” in the library`, icon: "published_with_changes",
+          run: () => void this.replaceOriginal(shot) }] : []),
       ],
     });
+  }
+
+  /** Starts a pose from a result: the picture becomes its thumbnail, and the prompt
+      is the starting text — usually more than a pose, so it is there to be cut down. */
+  private poseFromShot(shot: Shot) {
+    this.poseDraft = {
+      name: "",
+      prompt: shot.info?.prompt ?? this.prompt,
+      negativePrompt: "",
+      previewId: shot.id.startsWith("wip-") ? undefined : shot.id,
+    };
+  }
+
+  /**
+   * Puts a result into her chat as something she sent.
+   *
+   * It goes into the library first — a message can only carry a library item — and is
+   * saved as one of her, so from now on she knows the picture is her and can reach for
+   * it again herself. Then the server writes the message; the chat screen shows it the
+   * next time it is opened.
+   */
+  private async sendAsLibby(shot: Shot) {
+    const text = window.prompt("What does she say with it? (leave blank for just the picture)", "");
+    if (text === null) return;
+    try {
+      const saved = await this.saveShot(shot, ["libby"]);
+      const sent = await api.libbySend({ mediaId: saved, text: text.trim() });
+      this.showToast("She sent it — it's in her chat.");
+      this.dispatchEvent(new CustomEvent("libby-sent", { bubbles: true, composed: true, detail: sent }));
+    } catch (e) {
+      this.showToast(`Couldn't send that: ${(e as Error).message}`);
+    }
+  }
+
+  /**
+   * Saves a result in place of the picture being edited: the new one takes the old
+   * one's title and its tags — a picture of Libby stays a picture of Libby — and the
+   * old one is removed. The library cannot swap bytes under an id, so this is what
+   * "replace" can honestly mean.
+   */
+  private async replaceOriginal(shot: Shot) {
+    const editing = this.editing;
+    if (!editing) return;
+    if (!confirm(`Replace “${editing.title}” with this picture? The original is deleted.`)) return;
+    try {
+      const tags = editing.tags.filter((tag) => tag !== "ai-generated");
+      const saved = await this.saveShot(shot, tags, editing.title);
+      if (saved !== editing.id) await api.deleteMedia(editing.id);
+      this.editing = { ...editing, id: saved };
+      this.showToast(`Replaced “${editing.title}”.`);
+      this.dispatchEvent(new CustomEvent("imported", { bubbles: true, composed: true }));
+    } catch (e) {
+      this.showToast(`Couldn't replace it: ${(e as Error).message}`);
+    }
+  }
+
+  /** Files one result into the library and returns its media id. The record of how
+      it was made rides along so it can be opened here again. */
+  private async saveShot(shot: Shot, tags: string[] = [], title?: string): Promise<number> {
+    // Titled from what actually made it — after wildcards — rather than the reference.
+    const name = title ?? ((shot.info?.prompt?.trim() || this.prompt.trim() || this.outfitText.trim()).slice(0, 80) || "Generated image");
+    const res = await api.saveGenerated({ id: shot.id, title: name, tags, info: shot.info });
+    this.shots = this.shots.map((s) => (s.id === shot.id ? { ...s, saved: true } : s));
+    this.dispatchEvent(new CustomEvent("imported", { bubbles: true, composed: true }));
+    return res.id;
+  }
+
+  /** Downloads one outfit square as a PNG under its wardrobe filename, with the
+      generation record embedded, without going through the whole-set ZIP. */
+  private async exportOutfitSquare(shot: Shot) {
+    const name = shot.outfitFilename ?? `oppailib-seed-${shot.seed}.png`;
+    try {
+      const response = await fetch(this.previewURL(shot), { credentials: "same-origin" });
+      if (!response.ok) throw new Error(`preview returned ${response.status}`);
+      let bytes: Uint8Array<ArrayBufferLike> = new Uint8Array(await response.arrayBuffer());
+      if (shot.info) {
+        try { bytes = embedGenerationMetadata(bytes, toInfotext(shot.info), toJSON(shot.info)); }
+        catch { /* a reviewed cutout may have been re-encoded; the pixels still export */ }
+      }
+      const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: "image/png" }));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = name;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+      this.showToast(shot.cutoutReviewed ? `Exported ${name}` : `Exported ${name} — its cutout hasn't been reviewed yet.`);
+    } catch (e) {
+      this.showToast(`Couldn't export that square: ${(e as Error).message}`);
+    }
   }
 
   /**
@@ -3799,12 +4033,9 @@ export class OppaiImageGen extends LitElement {
   private async save(shot: Shot) {
     if (shot.saved) return;
     try {
-      const title = (this.prompt.trim() || this.outfitText.trim()).slice(0, 80) || "Generated image";
-      await api.saveGenerated({ id: shot.id, title });
-      this.shots = this.shots.map((s) => (s.id === shot.id ? { ...s, saved: true } : s));
+      // A redo of one of her pictures stays one of hers when saved beside the original.
+      await this.saveShot(shot, this.editingLibby ? ["libby"] : []);
       this.showToast("Saved to library");
-      // The library grid behind this view is now stale.
-      this.dispatchEvent(new CustomEvent("imported", { bubbles: true, composed: true }));
     } catch (e) {
       this.showToast((e as Error).message);
     }
@@ -4052,6 +4283,8 @@ export class OppaiImageGen extends LitElement {
         ${this.renderBody()}
       </div>
       ${this.charDraft ? this.renderCharEditor(this.charDraft) : nothing}
+      ${this.poseDraft ? this.renderPoseEditor(this.poseDraft) : nothing}
+      ${this.wildcardDraft ? this.renderWildcardEditor(this.wildcardDraft) : nothing}
       ${this.metaDraft ? this.renderMetaEditor(this.metaDraft) : nothing}
       ${this.expandedShot ? this.renderLightbox(this.expandedShot) : nothing}
       ${this.renderCutoutDialog()}
@@ -4313,6 +4546,8 @@ export class OppaiImageGen extends LitElement {
               ${this.renderSettingsSection(invoke, st.boards ?? [])}
               ${this.renderTemplateSection(st.templates ?? [])}
               ${this.renderCharacterSection()}
+              ${this.renderPoseSection()}
+              ${this.renderWildcardSection()}
             </div>
           </aside>
           <section class="workbench">${this.renderCanvasToolbar()}
@@ -4651,6 +4886,11 @@ export class OppaiImageGen extends LitElement {
             <input type="file" accept="image/*" style="display:none;" ?disabled=${busy}
               @change=${(e: Event) => { const input = e.target as HTMLInputElement; void this.uploadSquare(input.files?.[0]); input.value = ""; }} />
           </label>
+          <button class="btn" ?disabled=${!shot || busy} title="Just this square, as a PNG under its wardrobe filename"
+            @click=${() => { if (shot) void this.exportOutfitSquare(shot); }}>
+            <span class="material-symbols-rounded" style="font-size:17px;">download</span>
+            Export this square
+          </button>
           <button class="btn danger" ?disabled=${!shot || busy} @click=${() => { if (shot) void this.deleteOutfitSquare(shot); }}>
             <span class="material-symbols-rounded" style="font-size:17px;">delete</span>
             Delete this square
@@ -5244,6 +5484,259 @@ export class OppaiImageGen extends LitElement {
     `;
     const picked = this.selectedChars.length;
     return this.section("characters", "Characters", picked ? `${picked} picked` : String(this.characters.length), body);
+  }
+
+  /** The pose library: the same cards as the characters, for what she is doing. */
+  private renderPoseSection() {
+    const body = html`
+      ${this.outfitOn ? html`<div class="sec-note">
+        The outfit board sets a pose per square, so picked poses sit out while it is on.
+      </div>` : nothing}
+      ${this.poses.length
+        ? html`<div class="cards">
+            ${this.poses.map((p) => {
+              const on = this.selectedPoses.includes(p.id);
+              const thumb = `${api.poseThumbURL(p.id)}?v=${this.thumbVersion}`;
+              return html`
+                <div class="card-wrap">
+                  <button class="card ${on ? "on" : ""}" title=${p.prompt} @click=${() => this.togglePose(p.id)}>
+                    ${p.hasThumb
+                      ? this.renderArt(thumb, p.name, "accessibility_new")
+                      : html`<div class="card-blank">
+                          <span class="material-symbols-rounded" style="font-size:34px;">accessibility_new</span>
+                        </div>`}
+                    <div class="card-name">${p.name}</div>
+                  </button>
+                  <button class="card-edit" title="Edit ${p.name}"
+                    @click=${() => (this.poseDraft = { id: p.id, name: p.name, prompt: p.prompt, negativePrompt: p.negativePrompt ?? "" })}>
+                    <span class="material-symbols-rounded" style="font-size:15px;">edit</span>
+                  </button>
+                </div>`;
+            })}
+          </div>`
+        : html`<div class="sec-note">
+            Save the poses you keep asking for: a pose is a prompt fragment with a
+            picture, and clicking one adds it to the next generation. Right-click any
+            result for "Save as a pose" to start one from a picture you like.
+          </div>`}
+      <button class="side-add" @click=${() => (this.poseDraft = { name: "", prompt: "", negativePrompt: "" })}>
+        <span class="material-symbols-rounded" style="font-size:17px;">add</span> New pose
+      </button>
+    `;
+    const picked = this.selectedPoses.length;
+    return this.section("poses", "Poses", picked ? `${picked} picked` : String(this.poses.length), body);
+  }
+
+  /**
+   * Wildcards: the lists, each a chip that drops its reference into the prompt, and
+   * an editor. The rolling itself happens on the server at generate time, so the
+   * prompt keeps the reference and every take draws again.
+   */
+  private renderWildcardSection() {
+    const body = html`
+      <div class="sec-note">
+        Write <code>__name__</code> in a prompt to draw a random line from that list on
+        every generate, or <code>{red|blue|green}</code> to pick one of a few words in
+        place. Click a list to insert it.
+      </div>
+      ${this.wildcards.length
+        ? html`<div class="wildcard-chips">
+            ${this.wildcards.map((w) => html`
+              <span class="wildcard-chip">
+                <button class="wildcard-name" title=${`${w.entries.length} line${w.entries.length === 1 ? "" : "s"} — insert __${w.name}__`}
+                  @click=${() => this.insertWildcard(w.name)}>__${w.name}__</button>
+                ${w.readOnly
+                  ? html`<span class="wildcard-ro" title="A .txt file in the server's wildcards folder — edit the file to change it">
+                      <span class="material-symbols-rounded" style="font-size:14px;">lock</span></span>`
+                  : html`<button class="wildcard-edit" title="Edit ${w.name}"
+                      @click=${() => (this.wildcardDraft = { id: w.id, name: w.name, text: w.entries.join("\n") })}>
+                      <span class="material-symbols-rounded" style="font-size:14px;">edit</span></button>`}
+              </span>`)}
+          </div>`
+        : nothing}
+      <button class="side-add" @click=${() => (this.wildcardDraft = { name: "", text: "" })}>
+        <span class="material-symbols-rounded" style="font-size:17px;">add</span> New wildcard list
+      </button>
+    `;
+    return this.section("wildcards", "Wildcards", String(this.wildcards.length), body);
+  }
+
+  /** Drops a wildcard reference into the prompt at the cursor, or on the end. */
+  private insertWildcard(name: string) {
+    const ref = `__${name}__`;
+    const area = this.renderRoot.querySelector<HTMLTextAreaElement>(".prompt-area");
+    const at = area && document.activeElement === area ? area.selectionStart : this.prompt.length;
+    const before = this.prompt.slice(0, at).replace(/\s+$/, "");
+    const after = this.prompt.slice(at).replace(/^\s+/, "");
+    const lead = before && !before.endsWith(",") ? `${before}, ` : before;
+    const tail = after ? (after.startsWith(",") ? after : `, ${after}`) : "";
+    this.prompt = `${lead}${ref}${tail}`;
+  }
+
+  private togglePose(id: string) {
+    this.selectedPoses = this.selectedPoses.includes(id)
+      ? this.selectedPoses.filter((p) => p !== id)
+      : [...this.selectedPoses, id];
+  }
+
+  private onPoseThumbFile(e: Event) {
+    const input = e.target as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = "";
+    if (!file || !this.poseDraft) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (this.poseDraft) this.poseDraft = { ...this.poseDraft, imageData: String(reader.result), previewId: undefined };
+    };
+    reader.readAsDataURL(file);
+  }
+
+  private async savePose() {
+    const d = this.poseDraft;
+    if (!d || !d.name.trim() || this.poseBusy) return;
+    this.poseBusy = true;
+    try {
+      const saved = await api.savePose({
+        id: d.id, name: d.name.trim(), prompt: d.prompt, negativePrompt: d.negativePrompt,
+        imageData: d.imageData, previewId: d.previewId,
+      });
+      this.poseDraft = null;
+      this.bumpThumbs();
+      await this.loadPoses();
+      if (!d.id) this.selectedPoses = [...this.selectedPoses, saved.id];
+      this.showToast("Pose saved");
+    } catch (e) {
+      this.showToast((e as Error).message);
+    } finally {
+      this.poseBusy = false;
+    }
+  }
+
+  private async deletePose() {
+    const d = this.poseDraft;
+    if (!d?.id || this.poseBusy) return;
+    if (!confirm(`Delete “${d.name}” from the pose library?`)) return;
+    this.poseBusy = true;
+    try {
+      await api.deletePose(d.id);
+      this.poseDraft = null;
+      await this.loadPoses();
+      this.showToast("Pose deleted");
+    } catch (e) {
+      this.showToast((e as Error).message);
+    } finally {
+      this.poseBusy = false;
+    }
+  }
+
+  private async saveWildcard() {
+    const d = this.wildcardDraft;
+    if (!d || !d.name.trim() || !d.text.trim() || this.wildcardBusy) return;
+    this.wildcardBusy = true;
+    try {
+      await api.saveWildcard({ id: d.id, name: d.name.trim(), text: d.text });
+      this.wildcardDraft = null;
+      await this.loadWildcards();
+      this.showToast("Wildcard list saved");
+    } catch (e) {
+      this.showToast((e as Error).message);
+    } finally {
+      this.wildcardBusy = false;
+    }
+  }
+
+  private async deleteWildcard() {
+    const d = this.wildcardDraft;
+    if (!d?.id || this.wildcardBusy) return;
+    if (!confirm(`Delete the wildcard list “${d.name}”?`)) return;
+    this.wildcardBusy = true;
+    try {
+      await api.deleteWildcard(d.id);
+      this.wildcardDraft = null;
+      await this.loadWildcards();
+      this.showToast("Wildcard list deleted");
+    } catch (e) {
+      this.showToast((e as Error).message);
+    } finally {
+      this.wildcardBusy = false;
+    }
+  }
+
+  private renderPoseEditor(d: CharDraft) {
+    const existingThumb =
+      d.imageData ?? (d.previewId ? api.genPreviewURL(d.previewId)
+        : d.id && this.poses.find((p) => p.id === d.id)?.hasThumb
+          ? `${api.poseThumbURL(d.id)}?v=${this.thumbVersion}`
+          : undefined);
+    return html`
+      <div class="overlay" @click=${(e: Event) => { if (e.target === e.currentTarget) this.poseDraft = null; }}>
+        <div class="dialog">
+          <h3>${d.id ? "Edit pose" : "New pose"}</h3>
+          <div>
+            <label class="field">Name</label>
+            <input type="text" .value=${d.name} placeholder="Sitting with a mug"
+              @input=${(e: Event) => (this.poseDraft = { ...d, name: (e.target as HTMLInputElement).value })} />
+          </div>
+          <div>
+            <label class="field">Prompt fragment</label>
+            <textarea .value=${d.prompt} placeholder="sitting cross-legged, holding a steaming mug in both hands, …"
+              @input=${(e: Event) => (this.poseDraft = { ...d, prompt: (e.target as HTMLTextAreaElement).value })}></textarea>
+          </div>
+          <div>
+            <label class="field">Negative fragment (optional)</label>
+            <textarea .value=${d.negativePrompt} placeholder="standing, …"
+              @input=${(e: Event) => (this.poseDraft = { ...d, negativePrompt: (e.target as HTMLTextAreaElement).value })}></textarea>
+          </div>
+          <div class="dialog-thumb">
+            ${existingThumb
+              ? html`<img src=${existingThumb} alt="Thumbnail" />`
+              : html`<div class="card-blank" style="width:72px; height:96px; aspect-ratio:auto; border-radius:10px;">
+                  <span class="material-symbols-rounded">accessibility_new</span>
+                </div>`}
+            <label class="btn">
+              Choose thumbnail…
+              <input class="hidden-file" type="file" accept="image/*" @change=${(e: Event) => this.onPoseThumbFile(e)} />
+            </label>
+          </div>
+          <div class="dialog-actions">
+            ${d.id
+              ? html`<button class="btn danger" ?disabled=${this.poseBusy} @click=${() => this.deletePose()}>Delete</button>`
+              : nothing}
+            <button class="btn" @click=${() => (this.poseDraft = null)}>Cancel</button>
+            <button class="btn primary" ?disabled=${!d.name.trim() || this.poseBusy} @click=${() => this.savePose()}>Save</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  private renderWildcardEditor(d: { id?: string; name: string; text: string }) {
+    const lines = d.text.split("\n").map((line) => line.trim()).filter((line) => line && !line.startsWith("#")).length;
+    return html`
+      <div class="overlay" @click=${(e: Event) => { if (e.target === e.currentTarget) this.wildcardDraft = null; }}>
+        <div class="dialog">
+          <h3>${d.id ? "Edit wildcard list" : "New wildcard list"}</h3>
+          <div>
+            <label class="field">Name — used as <code>__name__</code></label>
+            <input type="text" .value=${d.name} placeholder="hair_colour" ?disabled=${!!d.id}
+              @input=${(e: Event) => (this.wildcardDraft = { ...d, name: (e.target as HTMLInputElement).value })} />
+          </div>
+          <div>
+            <label class="field">One line per option${lines ? ` — ${lines}` : ""}</label>
+            <textarea class="wildcard-text" .value=${d.text} placeholder="red hair&#10;blue hair&#10;silver hair, {braid|ponytail}"
+              @input=${(e: Event) => (this.wildcardDraft = { ...d, text: (e.target as HTMLTextAreaElement).value })}></textarea>
+            <div class="sec-note">A line can itself hold <code>{a|b}</code> choices or another <code>__list__</code>. Lines starting with # are ignored.</div>
+          </div>
+          <div class="dialog-actions">
+            ${d.id
+              ? html`<button class="btn danger" ?disabled=${this.wildcardBusy} @click=${() => this.deleteWildcard()}>Delete</button>`
+              : nothing}
+            <button class="btn" @click=${() => (this.wildcardDraft = null)}>Cancel</button>
+            <button class="btn primary" ?disabled=${!d.name.trim() || !d.text.trim() || this.wildcardBusy} @click=${() => this.saveWildcard()}>Save</button>
+          </div>
+        </div>
+      </div>
+    `;
   }
 
   /**
@@ -5843,6 +6336,12 @@ export class OppaiImageGen extends LitElement {
     )];
     return html`
       <div class="prompt-card">
+        ${this.editing ? html`<div class="editing-bar">
+          <span class="material-symbols-rounded" style="font-size:17px;">brush</span>
+          <span class="editing-copy">Editing <strong>${this.editing.title}</strong>${this.editingLibby ? " — one of Libby's pictures" : ""}.
+            Generate, then Save to keep it beside the original, or right-click a result to replace it.</span>
+          <button class="chip" @click=${() => (this.editing = null)}>Done</button>
+        </div>` : nothing}
         <div class="prompt-head">
           <span class="prompt-title">Prompt</span>
           <span class="toolbar-spacer"></span>
@@ -5872,6 +6371,7 @@ export class OppaiImageGen extends LitElement {
           <div class="prompt-field">
             <span class="field-tag">Positive</span>
             <textarea
+              class="prompt-area"
               aria-label="Positive prompt"
               .value=${this.prompt}
               placeholder="Describe what you want to create…"

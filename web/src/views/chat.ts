@@ -954,24 +954,43 @@ export class OppaiChat extends LitElement {
     .stage-scene { position:relative; flex:1; min-height:0; isolation:isolate; overflow:hidden; }
     .stage-bg { position:absolute; inset:-3%; background-size:cover; background-position:center; z-index:0; }
     .stage-bg.room { filter:blur(10px) saturate(1.05) brightness(.7); transform:scale(1.04); }
+    /* No room chosen: a drawn one rather than a gradient void. A wall lit from above,
+       a floor line two-thirds down with a darker floor beneath, and a window's worth
+       of light off to one side — enough that she stands *somewhere* rather than
+       hanging in brown fog, without competing with the art. */
     .stage-bg.plain { background:
-      radial-gradient(90% 55% at 50% 18%,color-mix(in srgb,var(--accent) 34%,transparent),transparent 70%),
-      radial-gradient(120% 40% at 50% 100%,color-mix(in srgb,var(--accent) 22%,transparent),transparent 60%),
-      linear-gradient(to bottom,color-mix(in srgb,var(--main) 60%,var(--side)),var(--side)); }
+      radial-gradient(80% 42% at 50% 6%,color-mix(in srgb,var(--accent) 34%,transparent),transparent 72%),
+      radial-gradient(55% 30% at 22% 72%,color-mix(in srgb,var(--accent) 22%,transparent),transparent 70%),
+      linear-gradient(to bottom,color-mix(in srgb,var(--main) 78%,var(--side)) 0%,color-mix(in srgb,var(--main) 30%,var(--side)) 71%,
+        color-mix(in srgb,#000 24%,var(--side)) 71.2%,color-mix(in srgb,#000 42%,var(--side)) 100%); }
+    .stage-bg.plain::before { content:""; position:absolute; left:8%; top:8%; width:28%; height:48%; border-radius:8px 8px 3px 3px;
+      background:linear-gradient(170deg,rgba(255,222,184,.62) 0%,rgba(255,196,150,.28) 48%,rgba(255,255,255,.05) 100%);
+      box-shadow:inset 0 0 0 2px rgba(255,255,255,.16),inset 0 0 40px rgba(255,255,255,.1),0 0 80px rgba(255,190,140,.22); }
+    /* The veil is for a photographed room; the drawn one is dim enough already. */
+    .stage-bg.plain + .stage-veil { opacity:.55; }
+    .stage-bg.plain::after { content:""; position:absolute; left:0; right:0; top:71%; height:2px;
+      background:linear-gradient(to right,transparent,color-mix(in srgb,var(--accent) 50%,transparent) 25%,color-mix(in srgb,var(--accent) 50%,transparent) 75%,transparent); opacity:.7; }
     .stage-veil { position:absolute; inset:0; z-index:0; pointer-events:none;
       background:linear-gradient(to bottom,rgba(0,0,0,.28),transparent 22%,transparent 58%,rgba(0,0,0,.55)); }
     /* A soft pool of light where she stands, so she reads as *in* the room. */
     .stage-floor { position:absolute; left:0; right:0; bottom:40px; height:46%; z-index:0; pointer-events:none;
       background:radial-gradient(60% 70% at 50% 100%,color-mix(in srgb,var(--accent) 32%,transparent),transparent 72%); opacity:.9; }
+    /* Where she stands: a pool of shadow on the floor under her, so the figure has
+       weight. It breathes with her, faintly, through the same wrapper animation. */
+    .stage-ground { position:absolute; left:50%; bottom:96px; width:62%; height:26px; transform:translateX(-50%); z-index:0; pointer-events:none;
+      background:radial-gradient(50% 50% at 50% 50%,rgba(0,0,0,.55),rgba(0,0,0,.25) 45%,transparent 72%); filter:blur(2px); }
     /* The sprite wrapper carries the idle breathing and the sprite itself carries the
        per-line reaction, so a rock into a new message does not cancel the idle loop.
        The art is a cowboy shot — head to mid-thigh, 1024×1344 — kept whole (contain)
        and as large as the scene allows, standing on the card rather than behind it:
        the card overlaps her thighs, which the shot ends at anyway. */
-    .stage-art { position:absolute; inset:60px 8px 100px; z-index:1; display:grid; place-items:center; }
-    .stage-art .sprite-hold { display:grid; place-items:center; width:100%; height:100%; transform-origin:50% 100%; }
-    .stage-art .sprite { width:100%; height:100%; object-fit:contain; object-position:center;
-      transform-origin:50% 100%; filter:drop-shadow(0 14px 30px rgba(0,0,0,.5)); }
+    .stage-art { position:absolute; inset:36px 8px 74px; z-index:1; display:grid; place-items:end center; }
+    .stage-art .sprite-hold { display:grid; place-items:end center; width:100%; height:100%; transform-origin:50% 100%; }
+    /* Stood on the floor line, and the cut edge of the shot dissolved into the card
+       rather than ending in a hard line — that hard line is what made her float. */
+    .stage-art .sprite { width:100%; height:100%; object-fit:contain; object-position:center bottom;
+      transform-origin:50% 100%; filter:drop-shadow(0 14px 30px rgba(0,0,0,.5));
+      -webkit-mask-image:linear-gradient(to bottom,#000 82%,transparent 99%); mask-image:linear-gradient(to bottom,#000 82%,transparent 99%); }
     .stage-art.empty-art { place-items:center; gap:8px; align-content:center; padding:16px; text-align:center; color:var(--muted); font-size:12px; }
     .stage-art.empty-art .material-symbols-rounded { font-size:44px; opacity:.5; }
     /* Her typing, shown on her rather than only in the log: a speech bubble of dots
@@ -1084,6 +1103,14 @@ export class OppaiChat extends LitElement {
     .mem-list { list-style:none; margin:0; padding:0; display:grid; gap:6px; }
     .mem-list li { display:flex; align-items:flex-start; gap:8px; background:var(--side); border-radius:8px; padding:8px 10px; font-size:13px; }
     .mem-list li span { flex:1; }
+    /* The reference pictures: a title that opens the picture, and two quiet actions. */
+    .mem-list .link-btn { flex:1; min-width:0; text-align:left; border:0; background:none; padding:0; color:inherit; font:inherit; cursor:pointer;
+      overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .mem-list .link-btn:hover { color:var(--accent); text-decoration:underline; }
+    .mem-list .mem-acts { flex:none; display:inline-flex; gap:4px; }
+    .mem-act { border:1px solid var(--line); border-radius:999px; padding:2px 8px; background:transparent; color:var(--muted); font-size:11px; cursor:pointer; }
+    .mem-act:hover { color:var(--accent); border-color:var(--accent); }
+    .mem-act.danger:hover { color:var(--md-sys-color-error); border-color:var(--md-sys-color-error); }
     .mem-forget { flex:none; border:0; border-radius:6px; padding:3px; background:transparent; color:var(--muted); cursor:pointer; display:flex; }
     .mem-forget:hover { color:var(--md-sys-color-error); background:var(--main); }
     /* Only the last of the three per-memory buttons is destructive, so the error colour is
@@ -3149,6 +3176,7 @@ export class OppaiChat extends LitElement {
         <div class="stage-bg ${place ? "room" : "plain"}" style=${place ? `background-image:url("${api.libbyBackgroundURL(place.id)}")` : ""}></div>
         <div class="stage-veil"></div>
         <div class="stage-floor"></div>
+        <div class="stage-ground"></div>
         <div class="stage-art">
           <!-- Keyed on the pose *and* on how many things have been said, so the sprite
                rocks into every new line rather than only when her mood changes — and
@@ -4432,6 +4460,14 @@ export class OppaiChat extends LitElement {
     catch (error) { this.say(error instanceof Error ? error.message : "Couldn't save that.", true); }
   }
 
+  /** Changes a picture's standing: a reference or not, or not her at all. */
+  private async markIdentity(mediaId: number, isLibby: boolean, reference = false) {
+    try {
+      this.identity = await api.markLibbyIdentity({ mediaId, isLibby, reference });
+      this.say(isLibby ? "Kept as her, without being a reference." : "Noted — that one isn't her.");
+    } catch (error) { this.say(error instanceof Error ? error.message : "Couldn't save that.", true); }
+  }
+
   private async scanForHerself() {
     this.say("Looking through the library…");
     try {
@@ -4470,8 +4506,14 @@ export class OppaiChat extends LitElement {
               @change=${(event:Event) => void this.saveIdentity({ floor:Number((event.target as HTMLInputElement).value) })}/></label>
           <p class="empty">Matched against how her card says she looks: ${identity.features.length ? identity.features.join(", ") : "nothing yet — fill in her appearance"}.</p>
           ${identity.references.length
-            ? html`<p class="empty">Reference pictures — what she looks like across outfits, poses and expressions:</p>
-              <ul class="mem-list">${identity.references.map((pic) => html`<li><span>${pic.title}</span></li>`)}</ul>`
+            ? html`<p class="empty">Reference pictures — what she looks like across outfits, poses and expressions. Open one to see it, drop it from the references, or say it isn't her after all:</p>
+              <ul class="mem-list">${identity.references.map((pic) => html`<li>
+                <button class="link-btn" title="Open ${pic.title}" @click=${() => requestOpenMedia(this, pic.id)}>${pic.title}</button>
+                <span class="mem-acts">
+                  <button class="mem-act" title="Keep it as her, but not as a reference" @click=${() => void this.markIdentity(pic.id, true, false)}>Not a reference</button>
+                  <button class="mem-act danger" title="This isn't her — the label comes off" @click=${() => void this.markIdentity(pic.id, false)}>Not her</button>
+                </span>
+              </li>`)}</ul>`
             : html`<p class="empty">No reference pictures yet. Mark a few from the library and she has more than one angle to go on.</p>`}
           <div class="panel-actions"><button class="secondary" @click=${() => void this.scanForHerself()}>Look through the library now</button></div>`}
     </div>`;

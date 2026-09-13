@@ -31,6 +31,17 @@ import {
 // app bar's back button closes it). Renders a kind-specific stage — video/GIF
 // player, photo, comic reader, or game detail — plus shared metadata, the tag
 // list, and the auto-tag action.
+/**
+ * Whether a picture can be opened in the image studio to be redone: a still that was
+ * generated here, or one of Libby's own — hers carry the identity tag, and every one
+ * she made herself is tagged as hers too. A photo from elsewhere has no recipe to
+ * load, so the button would only open an empty form.
+ */
+export function studioEditable(m: Media | null | undefined): boolean {
+  if (!m || (m.kind !== "image" && m.kind !== "gif")) return false;
+  return (m.tags ?? []).some((t) => t.name === "ai-generated" || t.name === "character:libby" || t.name === "libby");
+}
+
 @customElement("oppai-viewer")
 export class OppaiViewer extends LitElement {
   @property({ attribute: false }) media!: Media;
@@ -1727,6 +1738,12 @@ export class OppaiViewer extends LitElement {
             <span class="material-symbols-rounded" style="font-size:22px; color:var(--oppai-text-dim);"
               >${this.tagging ? "hourglass_empty" : "auto_awesome"}</span
             >
+          </button>`
+        : nothing}
+      ${studioEditable(this.media)
+        ? html`<button class="icon-round" title="Edit in the studio — regenerate it with its own settings"
+            @click=${() => this.dispatchEvent(new CustomEvent("edit-in-studio", { detail: { id: this.media!.id }, bubbles: true, composed: true }))}>
+            <span class="material-symbols-rounded" style="font-size:22px; color:var(--oppai-text-dim);">brush</span>
           </button>`
         : nothing}
       <button class="icon-round" title="Edit" @click=${() => this.startEdit()}>

@@ -56,6 +56,8 @@ export interface GenInfo {
   triggers: string[];
   /** Named characters whose descriptions were folded in. */
   characters: string[];
+  /** Named poses folded in the same way. Absent on records from before poses existed. */
+  poses?: string[];
   /** The outfit layer, when it was on: what it contributed. */
   outfit?: string;
   /** A control input: the cutout reference image in play, by name. */
@@ -91,6 +93,7 @@ export function buildGenInfo(
     loraHashes?: Record<string, string>;
     triggers?: string[];
     characters?: string[];
+    poses?: string[];
     outfit?: string;
     controlImage?: string;
     seconds?: number;
@@ -123,6 +126,7 @@ export function buildGenInfo(
     })),
     triggers: extra.triggers ?? [],
     characters: extra.characters ?? [],
+    poses: extra.poses?.length ? extra.poses : undefined,
     outfit: extra.outfit || undefined,
     controlImage: extra.controlImage || undefined,
     refiner:

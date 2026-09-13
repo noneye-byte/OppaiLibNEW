@@ -1148,6 +1148,32 @@ export interface GenCharacter {
   hasThumb: boolean;
 }
 
+/** A pose: the same shape as a character — a named prompt fragment with a picture —
+    for what the subject is doing rather than who they are. */
+export type GenPose = GenCharacter;
+
+/** A wildcard list: `__name__` in a prompt draws one of its entries at random on
+    every generate. A read-only list is a plain .txt file in the server's wildcards
+    folder, shown but edited on disk. */
+export interface GenWildcard {
+  id: string;
+  name: string;
+  entries: string[];
+  readOnly?: boolean;
+}
+
+/** How a saved library image was made: the studio's own record when the save carried
+    one, and otherwise the prompt alone from the item's notes. */
+export interface MediaGeneration {
+  id: number;
+  kind: string;
+  title: string;
+  prompt: string;
+  tags: string[];
+  /** The GenInfo stored at save time, as the server kept it. */
+  info?: Record<string, unknown>;
+}
+
 /**
  * Whether image generation is configured and, if so, reachable. `enabled` is false when
  * no generator URL is set; `reachable` is false when a URL is set but the box didn't
@@ -2035,7 +2061,15 @@ export const api = {
 
   // Generation is slow (tens of seconds on CPU, longer for a batch); give it room.
   generate: (params: GenerateParams) =>
-    request<{ images: GenPreview[]; prompt: string }>(
+    request<{
+      images: GenPreview[];
+      prompt: string;
+      /** The prompts as they went to the generator, after wildcards were rolled.
+          Differ from what was sent only when `rolled` is set. */
+      positive?: string;
+      negative?: string;
+      rolled?: boolean;
+    }>(
       "/api/imagegen/generate",
       { method: "POST", body: JSON.stringify(params) },
       10 * 60_000,
@@ -2067,7 +2101,7 @@ export const api = {
       method: "DELETE",
     }),
 
-  saveGenerated: (body: { id: string; title?: string; tags?: string[] }) =>
+  saveGenerated: (body: { id: string; title?: string; tags?: string[]; info?: unknown }) =>
     request<{ id: number; existed: boolean }>("/api/imagegen/save", {
       method: "POST",
       body: JSON.stringify(body),
@@ -2162,6 +2196,53 @@ export const api = {
       method: "DELETE",
     }),
   characterThumbURL: (id: string) => `/api/imagegen/characters/${encodeURIComponent(id)}/thumb`,
+
+  // ── pose library ───────────────────────────────────────────────────────────
+  // The same shape as characters, for what the subject is doing.
+
+  poses: () => request<{ poses: GenPose[] }>("/api/imagegen/poses"),
+  savePose: (body: {
+    id?: string;
+    name: string;
+    prompt: string;
+    negativePrompt?: string;
+    previewId?: string;
+    imageData?: string;
+  }) =>
+    request<GenPose>("/api/imagegen/poses", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  deletePose: (id: string) =>
+    request<{ status: string }>(`/api/imagegen/poses/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
+  poseThumbURL: (id: string) => `/api/imagegen/poses/${encodeURIComponent(id)}/thumb`,
+
+  // ── wildcards ──────────────────────────────────────────────────────────────
+  // Named lists a prompt draws from with __name__; expanded server-side on generate.
+
+  wildcards: () => request<{ wildcards: GenWildcard[] }>("/api/imagegen/wildcards"),
+  saveWildcard: (body: { id?: string; name: string; entries?: string[]; text?: string }) =>
+    request<GenWildcard>("/api/imagegen/wildcards", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  deleteWildcard: (id: string) =>
+    request<{ status: string }>(`/api/imagegen/wildcards/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
+
+  /** How a library image was made, for opening it in the studio again. */
+  mediaGeneration: (id: number) => request<MediaGeneration>(`/api/media/${id}/generation`, {}, 15_000),
+
+  /** Puts a library picture into her chat as something she sent, and marks it as a
+      picture of her. Lands in her most recent conversation unless one is named. */
+  libbySend: (body: { mediaId: number; text?: string; conversationId?: string; snap?: boolean; mood?: string }) =>
+    request<{ conversationId: string; messageId: string }>("/api/libby/send", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
 
   // ── model metadata (InvokeAI model manager) ────────────────────────────────
   // Reads and writes the generator's own model records, so edits here are the

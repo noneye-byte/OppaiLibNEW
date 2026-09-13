@@ -271,6 +271,23 @@ class Prefs(context: Context) {
         get() = sp.getBoolean(KEY_UPLOAD_WIFI_ONLY, false)
         set(v) = sp.edit().putBoolean(KEY_UPLOAD_WIFI_ONLY, v).apply()
 
+    /**
+     * The image studio's form, as JSON. Written as it changes and read back when the
+     * studio opens, so backing out, switching apps, or the lock screen taking over
+     * no longer throws away a prompt and a dozen balanced LoRAs. Per device, like the
+     * web's draft: it is work in progress, not a thing to share.
+     */
+    var genDraft: GenDraft?
+        get() = sp.getString(KEY_GEN_DRAFT, null)
+            ?.let { runCatching { Json { ignoreUnknownKeys = true }.decodeFromString(GenDraft.serializer(), it) }.getOrNull() }
+            // A month-old draft is not "where you were"; it is a form full of choices
+            // you no longer remember making.
+            ?.takeIf { it.at > 0 && System.currentTimeMillis() - it.at < GEN_DRAFT_TTL_MS }
+        set(v) = sp.edit().apply {
+            if (v == null) remove(KEY_GEN_DRAFT)
+            else putString(KEY_GEN_DRAFT, Json.encodeToString(GenDraft.serializer(), v))
+        }.apply()
+
     fun clearSession() {
         // Where you were is part of the session, not of the device. Signing out and
         // handing the phone over must not drop the next person straight back into the
@@ -294,6 +311,8 @@ class Prefs(context: Context) {
         private const val KEY_LIBBY_SPEAK = "libby_speak"
         private const val KEY_LIBBY_PROGRESSION = "libby_progression_multiplier"
         private const val KEY_UPLOAD_QUEUE = "upload_queue"
+        private const val KEY_GEN_DRAFT = "gen_draft"
+        private const val GEN_DRAFT_TTL_MS = 30L * 24 * 60 * 60 * 1000
         private const val KEY_DOWNLOAD_QUEUE = "download_queue"
         private const val KEY_UPLOAD_WIFI_ONLY = "upload_wifi_only"
         private const val KEY_REAUTH_USER = "reauth_username"

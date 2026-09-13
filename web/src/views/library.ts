@@ -29,6 +29,7 @@ import {
 import { loadRecents, noteOpened, recentlyOpened } from "../recents.js";
 import "../context-menu.js";
 import "./viewer.js";
+import { studioEditable } from "./viewer.js";
 import "./scrape-dialog.js";
 import "./settings.js";
 import "./browse.js";
@@ -99,6 +100,8 @@ export class OppaiLibrary extends LitElement {
   @state() private loading = false;
   @state() private section: Section = "home";
   @state() private selectedId: number | null = null;
+  /** A library picture handed to the Create screen to be redone. See studioEditable. */
+  @state() private editMediaId = 0;
   @state() private search = "";
   @state() private filters: Record<string, string> = {};
   @state() private favorites = loadFavorites();
@@ -959,6 +962,10 @@ export class OppaiLibrary extends LitElement {
         ? [{ label: "Is this Libby?", icon: "face_retouching_natural",
              run: () => this.openIdentityMenu(item, event.clientX, event.clientY) }]
         : []),
+      // A picture made here, or one of hers, can be redone with its own recipe.
+      ...(studioEditable(item)
+        ? [{ label: "Edit in the studio", icon: "brush", run: () => this.editInStudio(item.id) }]
+        : []),
       { label: "Copy title", icon: "content_copy", run: () => void navigator.clipboard.writeText(item.title) },
       { label: "Open the file", icon: "open_in_new", run: () => window.open(api.streamURL(id), "_blank") },
       menuDivider,
@@ -1140,6 +1147,9 @@ export class OppaiLibrary extends LitElement {
   // --- Navigation / state -------------------------------------------------
   private selectSection(id: Section) {
     if (id === this.section) return;
+    // A picture being edited belongs to one visit to Create; coming back later
+    // should not reopen it.
+    if (id !== "imagegen") this.editMediaId = 0;
     // Switching sections swaps the entire content pane, so a cross-fade is worth having
     // here where an element-level animation would not help. Progressive and skipped
     // under reduced motion; the state change is applied either way. See motion.ts.
@@ -1167,6 +1177,13 @@ export class OppaiLibrary extends LitElement {
     }
     this.openItem(id, this.items);
   };
+
+  /** Opens the Create screen with a library picture's settings loaded. */
+  private editInStudio(id: number) {
+    this.editMediaId = id;
+    this.selectedId = null;
+    this.selectSection("imagegen");
+  }
 
   private openItem(id: number, list?: Media[]) {
     if (list && list.length) this.viewerList = list.map((m) => m.id);
@@ -1481,7 +1498,7 @@ export class OppaiLibrary extends LitElement {
               ></oppai-browse>`
             : nothing}
           ${isImageGen
-            ? html`<oppai-imagegen @imported=${() => this.refresh()}
+            ? html`<oppai-imagegen .editMedia=${this.editMediaId} @imported=${() => this.refresh()}
                 @open-chat=${() => this.selectSection("chat")}></oppai-imagegen>`
             : nothing}
           <!-- Keyed so switching between Create and the studio rebuilds the element
@@ -1509,6 +1526,7 @@ export class OppaiLibrary extends LitElement {
                   this.closeItem();
                   this.refresh();
                 }}
+                @edit-in-studio=${(e: CustomEvent<{ id: number }>) => this.editInStudio(e.detail.id)}
               ></oppai-viewer>`
             : nothing}
           ${isViewer && !activeItem

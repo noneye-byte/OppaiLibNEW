@@ -61,6 +61,8 @@ type Server struct {
 	ttsDownloads map[string]bool
 	ttsErrors    map[string]string
 	characterDir string // encrypted character-library records + thumbnails
+	poseDir      string // encrypted pose-library records + thumbnails
+	wildcardDir  string // encrypted wildcard lists, plus any plain .txt lists dropped in
 	libbyDir     string // encrypted Libby outfit records + emotion art
 	chatDir      string // encrypted per-user chat workspaces + tagged character images
 	chatMu       sync.Mutex
@@ -179,6 +181,8 @@ func NewServer(cfg *config.Config, database *db.DB, store *storage.Store, sc *sc
 		ttsDownloads: map[string]bool{},
 		ttsErrors:    map[string]string{},
 		characterDir: dirOr(cfg.CharacterDir, filepath.Join(cfg.ConfigDir, "characters")),
+		poseDir:      filepath.Join(cfg.ConfigDir, "poses"),
+		wildcardDir:  filepath.Join(cfg.ConfigDir, "wildcards"),
 		libbyDir:     dirOr(cfg.LibbyDir, filepath.Join(cfg.ConfigDir, "libby")),
 		chatDir:      dirOr(cfg.ChatDir, filepath.Join(cfg.ConfigDir, "chat")),
 		uploadDir:    filepath.Join(dirOr(cfg.CacheDir, filepath.Join(cfg.ConfigDir, "cache")), "uploads"),
@@ -357,6 +361,18 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/imagegen/characters", s.requireAuth(s.handleSaveCharacter))
 	mux.HandleFunc("DELETE /api/imagegen/characters/{id}", s.requireAuth(s.handleDeleteCharacter))
 	mux.HandleFunc("GET /api/imagegen/characters/{id}/thumb", s.requireAuth(s.handleCharacterThumb))
+	// The pose library: the same shape as characters, for what the subject is doing.
+	mux.HandleFunc("GET /api/imagegen/poses", s.requireAuth(s.handleListPromptFragments(s.poseLibrary())))
+	mux.HandleFunc("POST /api/imagegen/poses", s.requireAuth(s.handleSavePromptFragment(s.poseLibrary(), nil)))
+	mux.HandleFunc("DELETE /api/imagegen/poses/{id}", s.requireAuth(s.handleDeletePromptFragment(s.poseLibrary())))
+	mux.HandleFunc("GET /api/imagegen/poses/{id}/thumb", s.requireAuth(s.handlePromptFragmentThumb(s.poseLibrary())))
+	// Wildcards: named lists a prompt draws a random line from with __name__, and
+	// {a|b|c} choices, expanded server-side on every generate. See handlers_wildcards.go.
+	mux.HandleFunc("GET /api/imagegen/wildcards", s.requireAuth(s.handleListWildcards))
+	mux.HandleFunc("POST /api/imagegen/wildcards", s.requireAuth(s.handleSaveWildcard))
+	mux.HandleFunc("DELETE /api/imagegen/wildcards/{id}", s.requireAuth(s.handleDeleteWildcard))
+	// How a saved image was made, for loading it back into the studio.
+	mux.HandleFunc("GET /api/media/{id}/generation", s.requireAuth(s.handleGetMediaGeneration))
 	// Model metadata: reads and writes InvokeAI's own model records, so edits here
 	// are the same edits its model manager would make.
 	mux.HandleFunc("GET /api/imagegen/model", s.requireAuth(s.handleGetModelMeta))
@@ -439,6 +455,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/libby/identity", s.requireAuth(s.handlePutLibbyIdentity))
 	mux.HandleFunc("POST /api/libby/identity/mark", s.requireAuth(s.handleMarkLibbyIdentity))
 	mux.HandleFunc("POST /api/libby/identity/scan", s.requireAuth(s.handleScanLibbyIdentity))
+	// A library picture sent into the chat as something she sent. See handlers_libby_send.go.
+	mux.HandleFunc("POST /api/libby/send", s.requireAuth(s.handleLibbySend))
 
 	mux.HandleFunc("GET /api/libby/bond", s.requireAuth(s.handleGetLibbyBond))
 	mux.HandleFunc("DELETE /api/libby/bond", s.requireAuth(s.handleResetLibbyBond))

@@ -92,6 +92,7 @@ CREATE TABLE IF NOT EXISTS media (
     thumb_path    TEXT,                      -- encrypted thumbnail blob
     download_enc  BLOB,                      -- encrypted external download URL (games)
     gallery_enc   BLOB,                      -- encrypted JSON array of screenshot URLs (games)
+    gen_enc       BLOB,                      -- encrypted JSON generation record (studio images)
     created_at    INTEGER NOT NULL,
     updated_at    INTEGER NOT NULL
 );

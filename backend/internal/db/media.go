@@ -81,6 +81,20 @@ func (d *DB) UpdateMediaDimensions(ctx context.Context, id int64, w, h int) erro
 	return err
 }
 
+// SetGeneration stores the encrypted generation record of an image the studio made.
+func (d *DB) SetGeneration(ctx context.Context, id int64, genEnc []byte) error {
+	_, err := d.sql.ExecContext(ctx,
+		`UPDATE media SET gen_enc = ? WHERE id = ?`, nullBytes(genEnc), id)
+	return err
+}
+
+// Generation reads the encrypted generation record, nil when the row has none.
+func (d *DB) Generation(ctx context.Context, id int64) ([]byte, error) {
+	var blob []byte
+	err := d.sql.QueryRowContext(ctx, `SELECT gen_enc FROM media WHERE id = ?`, id).Scan(&blob)
+	return blob, err
+}
+
 // SetThumbPath records the relative store path of a generated thumbnail blob.
 func (d *DB) SetThumbPath(ctx context.Context, id int64, rel string) error {
 	_, err := d.sql.ExecContext(ctx,

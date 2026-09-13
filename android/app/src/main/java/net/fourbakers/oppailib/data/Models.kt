@@ -905,6 +905,9 @@ data class GenLora(
     val name: String,
     val alias: String = "",
     val triggerPhrases: List<String> = emptyList(),
+    /** The strength the generator recommends (InvokeAI keeps one per LoRA); zero
+        when it has no opinion, in which case picking the LoRA starts it at 1. */
+    val weight: Double = 0.0,
 )
 
 @Serializable
@@ -958,6 +961,61 @@ data class ScanImageResponse(val tags: List<ScanTag> = emptyList())
 
 @Serializable
 data class GenCharacterListResponse(val characters: List<GenCharacter> = emptyList())
+
+/** A pose is the same shape as a character — a named prompt fragment with a picture
+    — for what the subject is doing rather than who they are. */
+typealias GenPose = GenCharacter
+
+@Serializable
+data class GenPoseListResponse(val poses: List<GenCharacter> = emptyList())
+
+/** A wildcard list: `__name__` in a prompt draws one entry at random on every
+    generate, rolled by the server. Read-only lists are .txt files in its folder. */
+@Serializable
+data class GenWildcard(
+    val id: String,
+    val name: String,
+    val entries: List<String> = emptyList(),
+    val readOnly: Boolean = false,
+)
+
+@Serializable
+data class GenWildcardListResponse(val wildcards: List<GenWildcard> = emptyList())
+
+/**
+ * The studio's form, as kept on the device between visits. Leaving the screen —
+ * back, another app, the lock screen, Android killing the process — used to erase
+ * every choice; this is written as the form changes and read back on the way in.
+ * Everything optional, so a draft from an older build restores what it has.
+ */
+@Serializable
+data class GenDraft(
+    val prompt: String = "",
+    val negative: String = "",
+    val checkpoint: String = "",
+    val vae: String = "",
+    val templateId: String = "",
+    val loraWeights: Map<String, Double> = emptyMap(),
+    val selectedTriggers: List<String> = emptyList(),
+    val selectedChars: List<String> = emptyList(),
+    val selectedPoses: List<String> = emptyList(),
+    val width: Int = 512,
+    val height: Int = 768,
+    val steps: Int = 25,
+    val cfg: Double = 7.0,
+    val count: Int = 1,
+    val seed: String = "-1",
+    val detailerEnabled: Boolean = false,
+    val detailerModel: String = "face_yolov8n.pt",
+    val detailerPrompt: String = "",
+    val detailerNegative: String = "",
+    val detailerConfidence: Double = 0.3,
+    val detailerDenoise: Double = 0.4,
+    val detailerMaskBlur: Int = 4,
+    val board: String = "none",
+    /** When it was written, so a draft from long ago is not offered as in progress. */
+    val at: Long = 0,
+)
 
 @Serializable
 data class ImageGenStatus(
@@ -1029,13 +1087,28 @@ data class GenProgress(
 )
 
 @Serializable
-data class GenerateResponse(val images: List<GenPreview> = emptyList(), val prompt: String = "")
+data class GenerateResponse(
+    val images: List<GenPreview> = emptyList(),
+    val prompt: String = "",
+    /** The prompts as they went to the generator, after wildcards were rolled. */
+    val positive: String = "",
+    val negative: String = "",
+    val rolled: Boolean = false,
+)
 
 @Serializable
 data class GenSaveRequest(val id: String, val title: String = "", val tags: List<String> = emptyList())
 
 @Serializable
 data class GenSaveResponse(val id: Long, val existed: Boolean = false)
+
+/** Puts a library picture into Libby's chat as something she sent, and marks it as
+    a picture of her. See the server's /api/libby/send. */
+@Serializable
+data class LibbySendRequest(val mediaId: Long, val text: String = "", val conversationId: String = "", val snap: Boolean = false)
+
+@Serializable
+data class LibbySendResponse(val conversationId: String = "", val messageId: String = "")
 
 @Serializable
 data class TagSuggestions(val suggestions: List<String> = emptyList(), val correction: String = "")

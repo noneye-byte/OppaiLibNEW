@@ -1434,12 +1434,15 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// message is how "[send: red eyes, pixel art]" came to sit in a bubble.
 	reply, _ = scrubDirectivesReporting(reply)
 	// A reaction alone is an answer, the way a thought alone is: she read it and put
-	// a heart on it. So is a picture alone. Only a reply that did none of those things
-	// and said nothing is the backend failing.
+	// a heart on it. So is a picture alone — a selfie tag, or a library item handed
+	// over with nothing said, which is exactly how "send me a gif" comes back from a
+	// model that has one to hand ("[gif: dance]" and not a word more). Only a reply
+	// that did none of those things and said nothing is the backend failing.
+	handedOver := len(attachRequests) > 0
 	if silent {
 		reply = ""
 	} else if strings.TrimSpace(reply) == "" {
-		if !reacted && !photoAsked {
+		if !reacted && !photoAsked && !handedOver {
 			writeErr(w, http.StatusBadGateway, "local LLM returned no message")
 			return
 		}
@@ -1571,6 +1574,16 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			photoRequest, photoAsked = attachRequests[0], true
 		}
 	}
+	// The trade in the other direction. "Send me a gif" is a request for a library
+	// item, and a model that answers it with the selfie tag — [send: dance] — meant
+	// the gif, not a picture of herself: a selfie is never a gif. So when the user
+	// named a kind and she wrote a send tag, the library is tried first with her
+	// words; only if nothing there fits does the tag fall through to the photo path.
+	if len(attachments) == 0 && photoAsked && !silent && signals.kind != "" && photoRequest != "" {
+		if resolved := s.resolveLibraryAttachments(r.Context(), []string{photoRequest}, latestUser, sentMedia, taste, ws.SendWeights); len(resolved) > 0 {
+			attachments, photoAsked, handedOver = resolved, false, true
+		}
+	}
 	imageID := ""
 	report := photoPickReport{}
 	// A turn she decided not to speak on does not attach a picture either. The
@@ -1638,6 +1651,12 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		} else {
 			report = photoPickReport{}
 		}
+	}
+	// She said nothing and meant to hand something over, and nothing could be found
+	// for it — not the item she named, not a picture of her in its place. An empty
+	// bubble would read as a failure; a word about it is what a person would send.
+	if handedOver && strings.TrimSpace(reply) == "" && imageID == "" && len(attachments) == 0 && !silent {
+		reply = "I went looking for one to send you, but nothing on the shelves fit."
 	}
 	// Whatever she wrote, an address she wrote is one she made up: she cannot browse, and
 	// nothing in the prompt hands her URLs to repeat. See chat_hallucinations.go.

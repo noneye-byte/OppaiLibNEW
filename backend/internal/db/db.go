@@ -108,6 +108,12 @@ func Open(path string) (*DB, error) {
 	if err := ensureColumn(sqldb, "media_tags", "weight", "REAL"); err != nil {
 		return nil, err
 	}
+	// How a generated image was made: the studio's full record, encrypted, so it can
+	// be loaded back and edited. Older rows have none and keep only their prompt in
+	// the notes.
+	if err := ensureColumn(sqldb, "media", "gen_enc", "BLOB"); err != nil {
+		return nil, err
+	}
 	return &DB{sql: sqldb, wal: wal}, nil
 }
 

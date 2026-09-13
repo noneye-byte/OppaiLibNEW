@@ -46,6 +46,7 @@ test("a saved draft round-trips", () => {
     seamlessX: true,
     vaePrecision: "fp16",
     selectedLoras: { detail: 0.8 },
+    selectedPoses: ["pose-1"],
     selectedTriggers: ["trigger"],
     outfitGear: {
       head: { color: "gold", item: "round glasses" },
@@ -75,6 +76,7 @@ test("a saved draft round-trips", () => {
   assert.equal(d.seamlessX, true);
   assert.equal(d.vaePrecision, "fp16");
   assert.deepEqual(d.selectedLoras, { detail: 0.8 });
+  assert.deepEqual(d.selectedPoses, ["pose-1"]);
   assert.deepEqual(d.selectedTriggers, ["trigger"]);
   assert.deepEqual(d.outfitGear?.head, { color: "gold", item: "round glasses" });
   assert.deepEqual(d.outfitGear?.hand2, { color: "", item: "book" });

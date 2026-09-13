@@ -125,6 +125,9 @@ class Repository(private val appContext: Context, val prefs: Prefs) {
     fun characterThumbUrl(id: String): String =
         "${baseUrl}api/imagegen/characters/${URLEncoder.encode(id, "UTF-8")}/thumb"
 
+    fun poseThumbUrl(id: String): String =
+        "${baseUrl}api/imagegen/poses/${URLEncoder.encode(id, "UTF-8")}/thumb"
+
     fun chatImageUrl(id: String): String =
         "${baseUrl}api/chat/images/${URLEncoder.encode(id, "UTF-8")}"
 

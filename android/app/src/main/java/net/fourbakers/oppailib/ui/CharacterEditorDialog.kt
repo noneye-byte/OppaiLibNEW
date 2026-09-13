@@ -50,6 +50,9 @@ import net.fourbakers.oppailib.data.ScanImageRequest
  * name/prompt fields it can **scan an image for booru tags** (the same AI tagger the
  * server runs) and fold them into the prompt, so a character can be seeded from a
  * reference picture rather than typed out. [character] with a blank id is a new one.
+ *
+ * With [pose] set the same dialog edits the pose library instead: the record is the
+ * same shape, only the wording and the endpoints differ.
  */
 @Composable
 fun CharacterEditorDialog(
@@ -58,9 +61,11 @@ fun CharacterEditorDialog(
     onSaved: () -> Unit,
     onDeleted: () -> Unit,
     onDismiss: () -> Unit,
+    pose: Boolean = false,
 ) {
     val context = LocalContext.current
     val isNew = character.id.isEmpty()
+    val noun = if (pose) "pose" else "character"
     var name by remember { mutableStateOf(character.name) }
     var prompt by remember { mutableStateOf(character.prompt) }
     var negative by remember { mutableStateOf(character.negativePrompt) }
@@ -108,24 +113,23 @@ fun CharacterEditorDialog(
         scope.launch {
             runCatching {
                 val imageData = pickedThumb?.let { uriToDataUrl(context, it) }
-                repo.api.saveCharacter(
-                    SaveCharacterRequest(
-                        id = character.id.ifEmpty { null },
-                        name = name.trim(),
-                        prompt = prompt,
-                        negativePrompt = negative,
-                        imageData = imageData,
-                    ),
+                val body = SaveCharacterRequest(
+                    id = character.id.ifEmpty { null },
+                    name = name.trim(),
+                    prompt = prompt,
+                    negativePrompt = negative,
+                    imageData = imageData,
                 )
+                if (pose) repo.api.savePose(body) else repo.api.saveCharacter(body)
             }.onSuccess { onSaved() }
-                .onFailure { repo.report(it.message ?: "Couldn't save the character") }
+                .onFailure { repo.report(it.message ?: "Couldn't save the $noun") }
             saveBusy = false
         }
     }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (isNew) "New character" else "Edit character") },
+        title = { Text(if (isNew) "New $noun" else "Edit $noun") },
         text = {
             Column(
                 Modifier.verticalScroll(rememberScrollState()),
@@ -138,7 +142,7 @@ fun CharacterEditorDialog(
                 OutlinedTextField(
                     value = prompt, onValueChange = { prompt = it },
                     label = { Text("Prompt fragment") },
-                    placeholder = { Text("1girl, red hair, green eyes, …") },
+                    placeholder = { Text(if (pose) "sitting cross-legged, holding a mug, …" else "1girl, red hair, green eyes, …") },
                     minLines = 2, modifier = Modifier.fillMaxWidth(),
                 )
                 OutlinedTextField(
@@ -157,7 +161,9 @@ fun CharacterEditorDialog(
                         contentAlignment = Alignment.Center,
                     ) {
                         val model: Any? = pickedThumb
-                            ?: if (character.hasThumb) repo.characterThumbUrl(character.id) else null
+                            ?: if (!character.hasThumb) null
+                            else if (pose) repo.poseThumbUrl(character.id)
+                            else repo.characterThumbUrl(character.id)
                         if (model != null) {
                             AsyncImage(
                                 model = model,
@@ -189,13 +195,13 @@ fun CharacterEditorDialog(
             } else {
                 TextButton(onClick = {
                     scope.launch {
-                        runCatching { repo.api.deleteCharacter(character.id) }
+                        runCatching { if (pose) repo.api.deletePose(character.id) else repo.api.deleteCharacter(character.id) }
                             .onSuccess {
                                 LibbyVoice.react(LibbyVoice.Event.LIBRARY_DELETE)
                                     .let { repo.report(it.message, it.emotion) }
                                 onDeleted()
                             }
-                            .onFailure { repo.report(it.message ?: "Couldn't delete the character") }
+                            .onFailure { repo.report(it.message ?: "Couldn't delete the $noun") }
                     }
                 }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
             }

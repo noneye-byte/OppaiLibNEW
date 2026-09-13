@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -265,6 +266,10 @@ func (s *Server) handleImageGenGenerate(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	clampGenerate(&req)
+	// Wildcards and {a|b} choices are rolled here, once per request, so every client
+	// and Libby's own pictures get them. The lists are only read when the text has
+	// something to expand. See handlers_wildcards.go.
+	rolled := s.expandGenerateWildcards(&req)
 	// Sanitize the LoRA picks once here; each backend applies them its own way
 	// (A1111 as prompt tokens, InvokeAI as graph nodes). promptRecord is the
 	// human-readable account of the whole request, kept for the save notes.
@@ -362,7 +367,39 @@ func (s *Server) handleImageGenGenerate(w http.ResponseWriter, r *http.Request) 
 		})
 		out = append(out, preview{ID: id, Seed: seed})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"images": out, "prompt": promptRecord})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"images": out,
+		"prompt": promptRecord,
+		// The prompts as they went to the generator, after wildcards. A client that
+		// recorded what it typed replaces its record with these when rolled is set,
+		// so the picture's metadata says what actually made it.
+		"positive": req.Prompt,
+		"negative": req.NegativePrompt,
+		"rolled":   rolled,
+	})
+}
+
+// expandGenerateWildcards rolls the wildcards in every prompt field of a request and
+// reports whether any changed.
+func (s *Server) expandGenerateWildcards(req *generateReq) bool {
+	fields := []*string{&req.Prompt, &req.NegativePrompt, &req.Detailer.Prompt, &req.Detailer.NegativePrompt}
+	needed := false
+	for _, f := range fields {
+		if strings.Contains(*f, "__") || strings.Contains(*f, "{") {
+			needed = true
+		}
+	}
+	if !needed {
+		return false
+	}
+	lookup := s.wildcardLookup()
+	rolled := false
+	for _, f := range fields {
+		if out, changed := imagegen.ExpandWildcards(*f, lookup, nil); changed {
+			*f, rolled = out, true
+		}
+	}
+	return rolled
 }
 
 // clampGenerate forces a request into ranges a generator (and our memory) can survive,
@@ -485,7 +522,14 @@ type genSaveReq struct {
 	ID    string   `json:"id"`
 	Title string   `json:"title"`
 	Tags  []string `json:"tags"`
+	// Info is the client's complete record of how the image was made (the studio's
+	// GenInfo), kept encrypted on the row so the picture can be opened in the studio
+	// again with every control where it was. Opaque to the server. Optional.
+	Info json.RawMessage `json:"info"`
 }
+
+// maxGenInfoBytes bounds the stored record; a real one is a kilobyte or two.
+const maxGenInfoBytes = 64 << 10
 
 // handleImageGenSave is the one crossing point into the library. It takes a preview
 // id, stores those in-memory bytes as an encrypted blob, and files it as an image —
@@ -535,6 +579,15 @@ func (s *Server) handleImageGenSave(w http.ResponseWriter, r *http.Request) {
 	if !existed {
 		s.processIngestAsync(id, put.RelPath, "image", put.Size, 0)
 	}
+	// The full recipe rides along when the client sent one. Only for a fresh row: a
+	// duplicate save must not overwrite the record of the image that is already there.
+	if !existed && len(req.Info) > 0 && len(req.Info) <= maxGenInfoBytes && json.Valid(req.Info) {
+		if genEnc, err := crypto.SealBytes(s.kek, req.Info, []byte("generation")); err == nil {
+			if err := s.db.SetGeneration(r.Context(), id, genEnc); err != nil {
+				s.log.Debug("store generation record", "err", err)
+			}
+		}
+	}
 	// Mark its provenance so generated images are findable, then apply user tags.
 	if err := s.db.AddTag(r.Context(), id, "ai-generated", "source", "generated", 0); err != nil {
 		s.log.Debug("tag generated image", "err", err)
@@ -548,6 +601,36 @@ func (s *Server) handleImageGenSave(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"id": id, "existed": existed})
+}
+
+// handleGetMediaGeneration answers "how was this made?" for a library image: the
+// studio's stored record when the save carried one, and otherwise whatever the notes
+// hold — which for anything generated here is the prompt. The studio loads either
+// back into its controls, the record completely and the prompt alone as a start.
+func (s *Server) handleGetMediaGeneration(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		writeErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	row, err := s.db.GetMedia(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "not found")
+		return
+	}
+	out := map[string]any{"id": id, "kind": row.Kind, "title": s.decrypt(row.TitleEnc, "title"), "prompt": s.decrypt(row.NotesEnc, "notes")}
+	if genEnc, err := s.db.Generation(r.Context(), id); err == nil && len(genEnc) > 0 {
+		if raw, err := crypto.OpenBytes(s.kek, genEnc, []byte("generation")); err == nil && json.Valid(raw) {
+			out["info"] = json.RawMessage(raw)
+		}
+	}
+	tags, _ := s.db.TagsForMedia(r.Context(), id)
+	names := make([]string, 0, len(tags))
+	for _, t := range tags {
+		names = append(names, t.Name)
+	}
+	out["tags"] = names
+	writeJSON(w, http.StatusOK, out)
 }
 
 // ── model metadata (InvokeAI model manager) ──────────────────────────────────

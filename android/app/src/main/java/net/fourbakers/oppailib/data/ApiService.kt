@@ -273,6 +273,10 @@ interface ApiService {
     @POST("api/imagegen/save")
     suspend fun imageGenSave(@Body body: GenSaveRequest): GenSaveResponse
 
+    /** A saved picture, sent into her chat as hers. */
+    @POST("api/libby/send")
+    suspend fun libbySend(@Body body: LibbySendRequest): LibbySendResponse
+
     @GET("api/imagegen/characters")
     suspend fun imageGenCharacters(): GenCharacterListResponse
 
@@ -282,6 +286,20 @@ interface ApiService {
 
     @DELETE("api/imagegen/characters/{id}")
     suspend fun deleteCharacter(@Path("id") id: String)
+
+    // The pose library: the same shape as characters, for what the subject is doing.
+    @GET("api/imagegen/poses")
+    suspend fun imageGenPoses(): GenPoseListResponse
+
+    @POST("api/imagegen/poses")
+    suspend fun savePose(@Body body: SaveCharacterRequest): GenCharacter
+
+    @DELETE("api/imagegen/poses/{id}")
+    suspend fun deletePose(@Path("id") id: String)
+
+    /** The wildcard lists a prompt can draw from with __name__. */
+    @GET("api/imagegen/wildcards")
+    suspend fun imageGenWildcards(): GenWildcardListResponse
 
     /** Runs the AI tagger over an uploaded image (never stored) and returns the
         booru tags it finds — used to pre-fill a character's prompt. */

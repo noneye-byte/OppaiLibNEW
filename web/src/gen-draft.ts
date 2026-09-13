@@ -100,6 +100,7 @@ export interface GenDraft {
   selectedLoras?: Record<string, number>;
   selectedTriggers?: string[];
   selectedChars?: string[];
+  selectedPoses?: string[];
 
   outfitOn?: boolean;
   outfitText?: string;
@@ -233,6 +234,7 @@ export function loadDraft(): GenDraft | null {
   if (isRecordOfBooleans(d.open)) out.open = d.open;
   if (isStringArray(d.selectedTriggers)) out.selectedTriggers = d.selectedTriggers;
   if (isStringArray(d.selectedChars)) out.selectedChars = d.selectedChars;
+  if (isStringArray(d.selectedPoses)) out.selectedPoses = d.selectedPoses;
   // Gear predates per-slot colours, so a stored draft may hold either the old
   // `{ top: "sweater" }` or the current `{ top: { color, item } }`. Both are carried
   // through as-is; the studio normalizes on restore, because migrating a shape is the
