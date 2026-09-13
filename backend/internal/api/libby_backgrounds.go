@@ -417,7 +417,11 @@ func backgroundDirective(backgrounds []libbyBackgroundView, current string) stri
 	var b strings.Builder
 	b.WriteString("Places you can be, which is what they see behind you on a call: " + strings.Join(places, "; ") + ". ")
 	b.WriteString("Write [scene: <place name>] when you move — going to bed, taking this outside, settling on the sofa — and also when the mood has moved and the room no longer fits it: " +
-		"somewhere softer as it turns tender or late, somewhere more private as it heats, somewhere ordinary once it cools. It stays until you move again. Not per message; never mention it.")
+		"somewhere softer as it turns tender or late, somewhere more private as it heats, somewhere ordinary once it cools. It stays until you move again. Not per message; never mention it. " +
+		// "Change the background to the kitchen" was answered with a selfie captioned as
+		// a kitchen: the room is what they see behind her, and asking for a different
+		// one is asking her to move, not for a picture.
+		"When they ask for a different background, or to see you somewhere else on the call, that is this — go there with the tag; it is not a request for a picture.")
 	for _, bg := range backgrounds {
 		if bg.ID == current {
 			b.WriteString(" Right now you are in " + bg.Name + ".")

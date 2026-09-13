@@ -50,6 +50,19 @@ type historyDescriber struct {
 	// media is library item id → its description, for every id in the history that
 	// could be looked up.
 	media map[int64]string
+	// mediaFull is the same items in full — title, kind, every tag — for the turn that
+	// asks about one of them rather than merely recalls it. See chat_photo_talk.go.
+	mediaFull map[int64]historyMedia
+}
+
+// historyMedia is one library item from the history, undescribed: what the line in
+// media was made from.
+type historyMedia struct {
+	title, kind string
+	tags        []string
+	// self is whether the item is a picture of her — it carries the identity tag —
+	// rather than something from the shelves.
+	self bool
 }
 
 // newHistoryDescriber gathers the tags and titles behind every attachment in the
@@ -57,7 +70,7 @@ type historyDescriber struct {
 // already in hand. Best-effort throughout: an item that cannot be read is described
 // as nothing, and the message still says something was attached.
 func (s *Server) newHistoryDescriber(ctx context.Context, ws chatWorkspace, messages []chatMessage) historyDescriber {
-	d := historyDescriber{images: map[string][]string{}, media: map[int64]string{}}
+	d := historyDescriber{images: map[string][]string{}, media: map[int64]string{}, mediaFull: map[int64]historyMedia{}}
 	wanted := make([]int64, 0, maxHistoryMediaIDs)
 	seen := map[int64]bool{}
 	needImages := false
@@ -95,10 +108,13 @@ func (s *Server) newHistoryDescriber(ctx context.Context, ws chatWorkspace, mess
 			title = "Untitled"
 		}
 		names := make([]string, 0, maxHistoryAttachmentTags)
+		full := historyMedia{title: title, kind: brief.Kind}
 		for _, tag := range tagsByID[brief.ID] {
 			if strings.EqualFold(tag.Name, libbyIdentityTag) {
+				full.self = true
 				continue
 			}
+			full.tags = append(full.tags, tag.Name)
 			if len(names) < maxHistoryAttachmentTags {
 				names = append(names, tag.Name)
 			}
@@ -108,6 +124,7 @@ func (s *Server) newHistoryDescriber(ctx context.Context, ws chatWorkspace, mess
 			line += "; " + strings.Join(names, ", ")
 		}
 		d.media[brief.ID] = line + ")"
+		d.mediaFull[brief.ID] = full
 	}
 	return d
 }
@@ -169,6 +186,14 @@ func historyContent(m chatMessage, d historyDescriber) string {
 	}
 	return text
 }
+
+// historyNotesDirective says what the parenthetical notes are, on a turn where the
+// history has any. A model shown "(you sent a picture of yourself showing …)" under
+// its own earlier turns learns the shape and writes it back — "(you attached a video
+// file — 1girl, anus, ass)" appeared verbatim in a reply — and the scrubber's net for
+// that (machineryPhrase) is the guarantee; this is the cheaper half, asking it not to.
+const historyNotesDirective = "Lines in parentheses under a message in the history — \"(you sent a picture of yourself showing …)\", \"(you handed over from the library: …)\", \"(they attached a photo …)\" — " +
+	"are the app's notes on what that message carried, not words either of you typed. Never write one yourself, in any form; the app adds them."
 
 // replyTargetDirective tells her which earlier message their latest one answers, in
 // full.

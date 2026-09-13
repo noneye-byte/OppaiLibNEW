@@ -63,7 +63,7 @@ func TestAttachRequestsAreCapped(t *testing.T) {
 // she learns they exist — listed by tags, exactly like the gallery's, with no hint
 // that there are two pools at all.
 func TestCatalogueListsLibraryPicturesOfHer(t *testing.T) {
-	catalogue := photoCatalogue(libbyGallery(), "libby", nil, libbySelfies(), nil, "")
+	catalogue := photoCatalogue(libbyGallery(), "libby", nil, libbySelfies(), nil, "", "")
 	for _, want := range []string{"rooftop", "oversized shirt", "bedroom"} {
 		if !strings.Contains(catalogue, want) {
 			t.Fatalf("catalogue is missing %q: %s", want, catalogue)
@@ -71,7 +71,7 @@ func TestCatalogueListsLibraryPicturesOfHer(t *testing.T) {
 	}
 	// A library picture already handed over this conversation is marked, not hidden,
 	// for the same reason a spent gallery picture is.
-	marked := photoCatalogue(libbyGallery(), "libby", nil, libbySelfies(), map[int64]bool{11: true}, "")
+	marked := photoCatalogue(libbyGallery(), "libby", nil, libbySelfies(), map[int64]bool{11: true}, "", "")
 	line := ""
 	for _, l := range strings.Split(marked, "\n") {
 		if strings.Contains(l, "rooftop") {
@@ -83,11 +83,11 @@ func TestCatalogueListsLibraryPicturesOfHer(t *testing.T) {
 	}
 	// With no gallery at all she is still told how to send one — the library pool
 	// carries the whole catalogue on its own.
-	alone := photoCatalogue(chatWorkspace{}, "libby", nil, libbySelfies(), nil, "")
+	alone := photoCatalogue(chatWorkspace{}, "libby", nil, libbySelfies(), nil, "", "")
 	if !strings.Contains(alone, "[send:") {
 		t.Fatalf("library-only catalogue never says how to send one: %s", alone)
 	}
-	if photoCatalogue(chatWorkspace{}, "libby", nil, nil, nil, "") != "" {
+	if photoCatalogue(chatWorkspace{}, "libby", nil, nil, nil, "", "") != "" {
 		t.Fatal("no pictures anywhere should produce no catalogue")
 	}
 }

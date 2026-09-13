@@ -109,3 +109,64 @@ func TestReadTurnSignals(t *testing.T) {
 		t.Fatal("place cue not read")
 	}
 }
+
+// "send me a gif from the library" reaches a Libby who has been shown a gif — the
+// shortlist never carried gifs, and the recent list is the newest of everything.
+func TestLibraryFeedShelvesTheKindTheyNamed(t *testing.T) {
+	s, _ := newTestServer(t)
+	seedTitledMedia(t, s, "Bouncing", "gif", "loop")
+	seedTitledMedia(t, s, "Old Favourite", "video", "classic")
+	seedTitledMedia(t, s, "Quiet Evening", "game", "cosy")
+
+	section := func(text, name string) string {
+		for _, sec := range s.libraryFeed(context.Background(), readTurnSignals(text, ""), feedChoice{}) {
+			if sec.Name == name {
+				return sec.Text
+			}
+		}
+		return ""
+	}
+	got := section("Can you send me a gif from the library", "a shelf of gifs")
+	if !strings.Contains(got, `"Bouncing" (gif; loop)`) || strings.Contains(got, "Old Favourite") {
+		t.Fatalf("the gif shelf was not fed, or carried the wrong kind: %q", got)
+	}
+	if !strings.Contains(got, "[attach: <title>]") {
+		t.Fatalf("the shelf does not say how to hand one over: %q", got)
+	}
+	if got := section("Can you send an older video from the library?", "a shelf of videos"); !strings.Contains(got, "Old Favourite") {
+		t.Fatalf("the video shelf was not fed: %q", got)
+	}
+	// Not for a video call, and not on top of the full shortlist.
+	if got := section("start a video call", "a shelf of videos"); got != "" {
+		t.Fatalf("a video call fed videos: %q", got)
+	}
+	if got := section("suggest a game for tonight", "a shelf of games"); got != "" {
+		t.Fatalf("a recommendation request fed the kind shelf as well as the shortlist: %q", got)
+	}
+	for text, want := range map[string]string{"any good comics?": "comic", "a vid pls": "video", "hey": ""} {
+		if got := libraryKindAsked(text); got != want {
+			t.Errorf("libraryKindAsked(%q) = %q, want %q", text, got, want)
+		}
+	}
+}
+
+// The turn after she offered to rename something: they picked a name, or asked
+// whether it happened. Both are the action's turn, so the vocabulary is wanted and
+// carries the follow-through nudge.
+func TestActionFollowUpIsReadOffThePreviousMessage(t *testing.T) {
+	previous := "Can you rename that video to something more fitting?"
+	for _, latest := range []string{"solo grindset", "did you change the name?", "yes do it", "the second one"} {
+		sig := readTurnSignals(latest, previous)
+		if !sig.act || !sig.actFollowUp {
+			t.Errorf("%q after %q: act=%v followUp=%v", latest, previous, sig.act, sig.actFollowUp)
+		}
+	}
+	// A new request of its own after an action is not a follow-up, and nothing is a
+	// follow-up to small talk.
+	if sig := readTurnSignals("anyway, what do you think i should watch tonight, something slow", previous); sig.actFollowUp {
+		t.Fatal("a long new request read as a follow-up")
+	}
+	if sig := readTurnSignals("yes", "how was your day"); sig.actFollowUp || sig.act {
+		t.Fatal("a yes to small talk read as an action")
+	}
+}

@@ -77,7 +77,14 @@ type libbyAttachment struct {
 // request read as a picture request and silently dropped. Both readings still work,
 // because an attach request that matches nothing in the library falls back to the
 // photo path — see the handler.
-var attachTag = regexp.MustCompile(`(?i)\[\s*attach(?:es|ing|ment)?\s*[:=-]?\s*([^\]\n]{1,120}?)\s*\]`)
+//
+// A library kind used as the tag head — "[gif: …]", "[video: …]" — is accepted as an
+// attach too, but only with the delimiter: asked for a gif from the library, a model
+// that had been given no gif to name wrote "[gif: <tags>]", which nothing read and the
+// user then saw. Read as an attach it resolves against the library first, and falls
+// back to a picture of her like any other unresolved attach. Bare "[video]" is left
+// alone; that is a stage direction.
+var attachTag = regexp.MustCompile(`(?i)\[\s*(?:attach(?:es|ing|ment)?\s*[:=-]?|(?:gif|gifs|video|videos|clip|clips)\s*[:=])\s*([^\]\n]{1,120}?)\s*\]`)
 
 // attachDirective tells her she can hand something over, when to, and what it costs.
 //

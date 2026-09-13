@@ -75,7 +75,45 @@ var (
 	actionCue    = regexp.MustCompile(`(?i)\b(tag|tags|retag|rename|delete|remove|favou?rite|collection|add (?:it|this|that|them|these)|save (?:it|this|that)|organi[sz]e|clean up|sort|rate|rating|move|hide|scan|fix|tidy)\b`)
 	pastCue      = regexp.MustCompile(`(?i)\b(last time|other day|yesterday|earlier|before|remember|we talked|you said|you told|last night|that time|previous|previously|again|still)\b`)
 	placeCue     = regexp.MustCompile(`(?i)\b(bed|bedroom|sofa|couch|kitchen|outside|balcony|bath|shower|room|where are you|go to|come to|let'?s go|move to|somewhere|scene|background|place)\b`)
+	// actionFollowUpCue is a message that comes back to something she offered to do:
+	// "did you rename it?", "is it done", "did that work". Read against the latest
+	// message when the previous one asked for the action.
+	actionFollowUpCue = regexp.MustCompile(`(?i)\b(did you|have you|did it|is it done|done\?|did that|does it|changed|renamed|tagged|worked)\b`)
+	// kindCue names a kind of thing on the shelves. "video call" is not a video.
+	kindCue     = regexp.MustCompile(`(?i)\b(gif|gifs|video|videos|vid|vids|clip|clips|movie|movies|comic|comics|manga|doujin|doujinshi|game|games)\b`)
+	videoCallRe = regexp.MustCompile(`(?i)\bvideo\s*-?\s*call\b`)
 )
+
+// maxActionFollowUpWords is how short the latest message has to be to count as an
+// answer to her offer rather than a new request: "solo grindset", "yes", "the second
+// one", "sure do it" — a choice or a nod, not a message with business of its own.
+const maxActionFollowUpWords = 6
+
+// actionFollowUpDirective is added to the action vocabulary on the turn after they
+// asked for something to be done to the collection and have now answered — picked a
+// name, said yes. Without it she offered two names, was told which, and replied
+// "done" with no tag: the offer happened in prose and the action never existed.
+const actionFollowUpDirective = "They have just answered your offer from the last exchange — picked one, agreed, or asked whether it happened. " +
+	"This is the reply that carries the [do: …] tag with their choice in it: write it now, in this reply, and still say only that you are asking, never that it is done. " +
+	"If they are asking whether it happened, it has not until they press Allow; say so and offer it again with the tag."
+
+// libraryKindAsked is the kind of thing the message names, in the library's own
+// vocabulary, or "" when it names none.
+func libraryKindAsked(text string) string {
+	text = videoCallRe.ReplaceAllString(text, " ")
+	match := kindCue.FindString(text)
+	switch strings.ToLower(match) {
+	case "gif", "gifs":
+		return "gif"
+	case "video", "videos", "vid", "vids", "clip", "clips", "movie", "movies":
+		return "video"
+	case "comic", "comics", "manga", "doujin", "doujinshi":
+		return "comic"
+	case "game", "games":
+		return "game"
+	}
+	return ""
+}
 
 // turnSignals is what the latest message is about, read once and consulted by every
 // section that has a reason to sit this turn out.
@@ -85,8 +123,15 @@ type turnSignals struct {
 	library   bool // asking about the collection or the box
 	photo     bool // asking to see her
 	act       bool // asking her to do something to the collection
-	past      bool // reaching back to another conversation
-	place     bool // moving somewhere, or asking where she is
+	// actFollowUp is the turn after act: they have answered her offer — a choice, a
+	// yes, "did you do it?" — and the tag has to go out now. See actionFollowUpDirective.
+	actFollowUp bool
+	past        bool // reaching back to another conversation
+	place       bool // moving somewhere, or asking where she is
+	// kind is the kind of item the message names — "gif", "video", "comic", "game" —
+	// so a shelf of that kind can be fed: "send me a gif" used to reach a Libby who had
+	// never been shown a gif, and she wrote a tag for one that was not there.
+	kind string
 	// words are the lookup words of the message — what the item feed searches for.
 	words []string
 }
@@ -108,6 +153,16 @@ func readTurnSignals(latest, previous string) turnSignals {
 	if len(sig.words) < 2 && previous != "" {
 		sig.words = append(sig.words, normalizeLookupWords(previous)...)
 	}
+	// The turn after an action was asked for, when the latest message is an answer to
+	// her offer rather than a request of its own: short, or asking whether it happened.
+	if previous != "" && actionCue.MatchString(previous) {
+		short := len(strings.Fields(latest)) <= maxActionFollowUpWords
+		if short || actionFollowUpCue.MatchString(latest) {
+			sig.actFollowUp = true
+			sig.act = true
+		}
+	}
+	sig.kind = libraryKindAsked(latest)
 	if len(sig.words) > 8 {
 		sig.words = sig.words[:8]
 	}
@@ -152,7 +207,35 @@ func (s *Server) libraryFeed(ctx context.Context, sig turnSignals, choice feedCh
 			out = append(out, promptSection{Name: "recent additions", Rank: rankLibraryRecent, Text: block})
 		}
 	}
+	// A shelf of the kind they named, when they named one and are not already being
+	// handed the full shortlist. Deferred: a message that merely mentions a game in
+	// passing gets it only when there is room.
+	if sig.kind != "" && !sig.recommend {
+		if block := s.libraryKindBlock(ctx, sig.kind, choice); block != "" {
+			out = append(out, promptSection{Name: "a shelf of " + sig.kind + "s", Rank: rankLibraryShortlist, Text: block, Deferred: true})
+		}
+	}
 	return out
+}
+
+// libraryKindBlock is a drawn shelf of one kind, fed when the message names that kind
+// — "send me a gif", "an older video", "a comic to read" — so the answer can be a real
+// one. Drawn like the shortlist (chat_library_sample.go), so it is a different handful
+// each time and never something already shown this conversation; the recent list is
+// the newest of everything, which is why "an older video" was answered with the
+// newest one.
+func (s *Server) libraryKindBlock(ctx context.Context, kind string, choice feedChoice) string {
+	shelf := s.drawLibraryShelf(ctx, kind, libbySuggestPerKind, choice.shown, choice.taste, choice.weights, choice.pick)
+	if len(shelf) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(shelf))
+	for _, item := range shelf {
+		parts = append(parts, feedItemLine(item.link, item.tags))
+	}
+	return "\n\nSome of the " + kind + "s on these shelves — real titles, a fresh handful, none of them shown this conversation: " +
+		strings.Join(parts, "; ") + ". " +
+		"When they ask for a " + kind + ", hand one of these over with [attach: <title>] in the same reply; if none of them is what they meant, say so rather than inventing one."
 }
 
 // libbyFacts is the cheap half of the old snapshot: the numbers and the box.

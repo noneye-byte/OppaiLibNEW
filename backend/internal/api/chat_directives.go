@@ -36,6 +36,10 @@ var strayTag = regexp.MustCompile(`(?i)[*_~` + "`" + `]{0,2}\[\s*(?:(?:` +
 	`mood|emotion|feeling|expression|face|pose|intensity|horniness|heat|meter` +
 	`|send|sends|sending|show|shows|showing|attach|attaches|attaching` +
 	`|photo|photos|pic|pics|picture|pictures|image|images|selfie|selfies` +
+	// Library kinds written as a tag head — "[gif: …]", "[video: …]" — are a model
+	// reaching for an attach it was not given the word for. Read as one by attachTag
+	// (chat_attachments.go); deleted here.
+	`|gif|gifs|video|videos|clip|clips` +
 	`|remember|remembers|remembering|memory|note|noting|noted` +
 	`|want|wants|wanting|craving|cravings|crave|craves|desire|desires` +
 	`|petname|petnames|nickname|nicknames|endearment` +
@@ -71,15 +75,32 @@ var strayThoughtTag = regexp.MustCompile(`(?i)[*_~` + "`" + `]{0,2}\[\s*(?:` +
 	`|aside|asides|mutter|mutters|muttering|to\s+(?:her)?self|to\s+myself` +
 	`)\s*[:=-][^\]\n]{0,300}\]` + "[*_~`]{0,2}")
 
+// strayMetaTag deletes a bracketed remark *about* the protocol — "[this image hasn't
+// been marked 'already sent' — it's a new one you're offering …]" — which is the
+// prompt's own wording coming back out as a stage direction. Recognised by the words
+// only the prompt uses: nothing in a scene is "already sent" or "marked".
+var strayMetaTag = regexp.MustCompile(`(?i)[*_~` + "`" + `]{0,2}\[[^\]\n]{0,300}?\b(?:already\s+(?:sent|shown)|(?:been|not|is|isn'?t|hasn'?t\s+been)\s+marked|marked\s+(?:as|')|the\s+tag\b|square[- ]bracket)[^\]\n]{0,300}\]` + "[*_~`]{0,2}")
+
+// strayHistoryNote deletes a history note copied whole onto its own line — "(you
+// handed over from the library: "p" (video; 1boy, 1girl))". The hand-over note nests
+// parentheses, which wrappedSpan cannot see across, so the line form is matched
+// directly: the note's opening words, then anything to the end of the line.
+var strayHistoryNote = regexp.MustCompile(`(?im)^[ \t]*\((?:you|they|she|i)\s+(?:sent a picture of (?:your|her|my)self|attached (?:a photo|from the library)|handed over from the library)\b[^\n]*\)[ \t]*$`)
+
 // wrappedSpan finds the emphasis and parenthesis forms a stage direction is written
-// in: *…*, **…**, _…_, (…). Each is capped at one line and 160 characters, which is
-// longer than any of these ever are and short enough that a mismatched delimiter
-// cannot run away with a paragraph.
+// in: *…*, **…**, _…_, (…). Each is capped at one line; emphasis at 160 characters,
+// which is longer than any of these ever are and short enough that a mismatched
+// delimiter cannot run away with a paragraph.
+//
+// The parenthetical form is allowed to run longer. A copied history note — "(1girl,
+// mouth open around …, audio muted on purpose — lets viewer fill the silence with
+// fantasy.)" — is a paragraph, and the cap only bounds what is *examined*: nothing is
+// deleted unless machineryPhrase says the span is about the machinery.
 //
 // Deliberately *not* a filter on emphasis as such. Italic action lines are how she
 // writes — "*leans in*" is her voice and must survive. Only spans whose content is
 // about the app's own machinery are removed, which machineryPhrase decides.
-var wrappedSpan = regexp.MustCompile(`(?i)(\*\*|\*|__|_)([^*_\n]{1,160}?)(\*\*|\*|__|_)|\(([^()\n]{1,160}?)\)`)
+var wrappedSpan = regexp.MustCompile(`(?i)(\*\*|\*|__|_)([^*_\n]{1,160}?)(\*\*|\*|__|_)|\(([^()\n]{1,400}?)\)`)
 
 // machineryPhrase recognises a stage direction that is narrating the protocol rather
 // than the scene.
@@ -96,8 +117,19 @@ var wrappedSpan = regexp.MustCompile(`(?i)(\*\*|\*|__|_)([^*_\n]{1,160}?)(\*\*|\
 var machineryPhrase = regexp.MustCompile(`(?i)^\s*(?:` +
 	// "mood: happy 3" / "intensity 4" — a label plus a value, not a sentence.
 	`(?:current\s+|displayed\s+|new\s+)?(?:mood|emotion|feeling|expression|intensity|horniness|heat)\s*(?:[:=—–-]|\bis\b|\bto\b)\s*\S` +
-	// Announcing an attachment.
-	`|(?:i\s+am\s+|i'?m\s+|she\s+)?(?:send|sends|sending|sent|attach|attaches|attaching|attached|share|shares|sharing|shared|show|shows|showing|showed|posts?|posting|uploads?|uploading)\b[^\n]{0,60}?\b(?:photo|photos|pic|pics|picture|pictures|image|images|selfie|selfies|nude|nudes)\b` +
+	// Announcing an attachment. "you" and "they" are among the subjects because the
+	// history's own notes — "(you sent a picture of yourself showing …)", "(they
+	// attached a photo …)" — are written that way, and a model shown them writes them
+	// back. See chat_history.go. Library kinds are among the objects for the same
+	// reason: "(you attached a video file — …)" was her copying the note's shape.
+	`|(?:i\s+am\s+|i'?m\s+|i\s+|i'?ve\s+|she\s+|she'?s\s+|you\s+|you'?ve\s+|they\s+|they'?ve\s+|we\s+)?(?:send|sends|sending|sent|attach|attaches|attaching|attached|share|shares|sharing|shared|show|shows|showing|showed|posts?|posting|uploads?|uploading|hand|hands|handed|handing)\b[^\n]{0,60}?\b(?:photo|photos|pic|pics|picture|pictures|image|images|selfie|selfies|nude|nudes|video|videos|gif|gifs|clip|clips|file|files|item|items|library)\b` +
+	// The history note for a library hand-over, as she copies it: "you handed over
+	// from the library: …". The source is required — "(she hands over the remote)" is
+	// a scene.
+	`|(?:you\s+|she\s+|i\s+)?(?:hand|hands|handed|handing)\s+over\s+from\s+(?:the\s+|their\s+|your\s+)?(?:library|shelves|collection)\b` +
+	// A tag list in parentheses — "(1girl, mouth open, …)", "(1girl, anus, ass, medium
+	// quality)" — is the shape of the notes and of the catalogue, never of speech.
+	`|\d+\s*(?:girls?|boys?|others?)\s*,` +
 	// A picture referred to as a delivered artifact.
 	`|(?:photo|picture|pic|image|selfie)\s+(?:sent|attached|shown|shared|delivered|enclosed)\b` +
 	// Moving the meter.
@@ -261,7 +293,22 @@ var danglingSpace = regexp.MustCompile(`[ \t]+([,.!?;:])`)
 // nothing but tags is a backend problem the caller reports as "no message", and
 // handing it back blank turns a diagnosable failure into a silent one.
 func scrubDirectives(reply string) string {
-	cleaned := strayTag.ReplaceAllString(reply, "")
+	cleaned, emptied := scrubDirectivesReporting(reply)
+	if emptied {
+		return reply
+	}
+	return cleaned
+}
+
+// scrubDirectivesReporting is scrubDirectives with the emptying reported instead of
+// hidden: cleaned is "" and emptied is true when the reply was nothing but tags. The
+// chat handler wants that distinction — a reply that was only "[send: …]" *is* a turn,
+// a picture with no words, and storing the raw tag as her message is how the user
+// came to read "[send: red eyes, pixel art]" in a bubble.
+func scrubDirectivesReporting(reply string) (cleaned string, emptied bool) {
+	cleaned = strayTag.ReplaceAllString(reply, "")
+	cleaned = strayMetaTag.ReplaceAllString(cleaned, "")
+	cleaned = strayHistoryNote.ReplaceAllString(cleaned, "")
 	cleaned = strayThoughtTag.ReplaceAllString(cleaned, "")
 	cleaned = wrappedSpan.ReplaceAllStringFunc(cleaned, func(span string) string {
 		inner := span
@@ -287,8 +334,5 @@ func scrubDirectives(reply string) string {
 	}
 	cleaned = blankLineRun.ReplaceAllString(strings.Join(lines, "\n"), "\n\n")
 	cleaned = strings.TrimSpace(cleaned)
-	if cleaned == "" {
-		return reply
-	}
-	return cleaned
+	return cleaned, cleaned == ""
 }

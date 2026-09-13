@@ -123,7 +123,7 @@ func readyPictureDirective(ready readyPicture, asked string) string {
 	if len(tags) > 12 {
 		tags = tags[:12]
 	}
-	handle := strings.Join(tags[:min(3, len(tags))], ", ")
+	handle := readyPictureHandle(ready)
 	out := "They asked to see you, and the picture ready to send shows: " + strings.Join(tags, ", ") + ". " +
 		"If you send a picture this reply, it is this one and no other: end your reply with [send: " + handle + "]. " +
 		"Describe only what is in it — nothing it does not show — and do not invent a different picture. "
@@ -132,6 +132,14 @@ func readyPictureDirective(ready readyPicture, asked string) string {
 	}
 	out += "If you would rather not send one right now, say so and write no tag."
 	return out
+}
+
+// readyPictureHandle is the tag handle the directive asks her to write for the ready
+// picture: its first three tags. The catalogue's example uses the same one on a turn
+// with a ready picture, so the two directives never name different pictures.
+func readyPictureHandle(ready readyPicture) string {
+	tags := ready.pic.tags
+	return strings.Join(tags[:min(3, len(tags))], ", ")
 }
 
 // scoreTagsWeighted is the tag overlap between a request and a picture with the
@@ -224,4 +232,55 @@ type photoPickReport struct {
 	Tags []string `json:"tags,omitempty"`
 	// Candidates is how many pictures were in the draw.
 	Candidates int `json:"candidates"`
+}
+
+// selfDescriptionWords are the words that describe *her* rather than any one picture
+// of her: the card's appearance ("long orange hair, glasses") and every tag on at
+// least half of her pictures ("1girl", "solo", "orange hair" again). Matching an
+// unprompted picture on these is matching it on nothing — a reply that mentions her
+// hair fits every picture she has equally — so the unprompted path strips them from
+// the text before scoring. See the handler's inferred case.
+func selfDescriptionWords(character chatCharacter, ws chatWorkspace, selfPics []selfPicture) map[string]bool {
+	words := map[string]bool{}
+	for _, feature := range appearanceTags(character.Appearance) {
+		for _, word := range strings.Fields(feature) {
+			words[word] = true
+		}
+	}
+	var pools [][]string
+	for _, img := range ws.Images {
+		if img.CharacterID == character.ID && isSelfPicture(img) {
+			pools = append(pools, img.Tags)
+		}
+	}
+	for _, pic := range selfPics {
+		pools = append(pools, pic.tags)
+	}
+	for tag, n := range tagFrequency(pools) {
+		if len(pools) >= 2 && n*2 >= len(pools) {
+			for _, word := range strings.Fields(tag) {
+				words[word] = true
+			}
+		}
+	}
+	return words
+}
+
+// withoutWords is text with the given words removed, for matching on what is left.
+// Case-insensitive, whole words only; punctuation stays, which the tokeniser that
+// reads the result (requestWords) discards anyway.
+func withoutWords(text string, drop map[string]bool) string {
+	if len(drop) == 0 {
+		return text
+	}
+	fields := strings.Fields(text)
+	kept := fields[:0]
+	for _, field := range fields {
+		word := strings.ToLower(strings.Trim(field, ".,;:!?\"'()[]*_"))
+		if drop[word] {
+			continue
+		}
+		kept = append(kept, field)
+	}
+	return strings.Join(kept, " ")
 }

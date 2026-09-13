@@ -357,9 +357,15 @@ func userAskedForPhoto(text string) bool { return photoRequestWords.MatchString(
 // things had "red dress" in the list or not by luck, and a model that could not see it
 // concluded she had no such picture and offered to generate one. The tags the message
 // names are listed first now, then the rarer ones. See catalogueTags.
-func photoCatalogue(ws chatWorkspace, characterID string, sent map[string]bool, selfPics []selfPicture, sentMedia map[int64]bool, asked string) string {
+//
+// example is the tag handle to show in the "for example [send: …]" line, when the
+// caller has one — the ready picture's, on a turn where one was chosen. Models copy
+// the example verbatim, and when it named the first picture in the list while the
+// ready-picture directive named another, the first picture is what she wrote. Empty
+// means the first unsent picture's tags, as before.
+func photoCatalogue(ws chatWorkspace, characterID string, sent map[string]bool, selfPics []selfPicture, sentMedia map[int64]bool, asked, example string) string {
 	lines := make([]string, 0, maxCataloguePhotos)
-	example, repeats := "", false
+	repeats := false
 	// The pictures of her, both pools, for the frequency count that orders the tags.
 	var pools [][]string
 	for _, img := range ws.Images {
@@ -917,16 +923,19 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// equally well. Hers alone, like the wants it is partly read from; an imported card
 	// gets the plain ranking. See pickLibraryMatch.
 	var taste libbyTaste
-	// The catalogue is wanted when they asked to see her, when the scene has warmed
-	// enough that she might offer, or when pictures are already going back and forth.
-	// A message about the weather at heat 1 has no use for it.
-	addDeferred("her photos", rankPhotoCatalogue, "\n\n"+photoCatalogue(ws, character.ID, sentPhotos, selfPics, sentMedia, latestUser),
-		signals.photo || in.Intensity >= 3 || len(sentPhotos) > 0)
+	// A message *about* a picture already in the conversation — a reply to one, "what
+	// are you doing in that photo" — is a turn for talking, not sending: no picture is
+	// chosen in advance and none rides along uninvited. See chat_photo_talk.go.
+	// Resolved here, before the catalogue, because it decides whether there is a ready
+	// picture; the directive itself is added with the reply-target one further down,
+	// once the history describer exists.
+	inQuestion, inQuestionOK := pictureInQuestion(in.Messages)
+	talking := inQuestionOK && !anotherPictureCue.MatchString(latestUser)
 	// When they asked to see her, the picture is chosen now, from their words, and she
 	// is told what it shows before she writes a word about it. See chat_photo_pick.go.
 	var ready readyPicture
 	readyOK := false
-	if askedToSeeHer(latestUser) {
+	if askedToSeeHer(latestUser) && !talking {
 		ready, readyOK = pickReadyPicture(ws, character.ID, selfPics, latestUser, in.PhotoImageID, lastPhoto, sentPhotos, sentMedia)
 		if readyOK {
 			// Ranked well above the catalogue it belongs beside: one line, and the line
@@ -934,6 +943,16 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			add("the picture ready to send", rankReadyPicture, "\n\n"+readyPictureDirective(ready, latestUser))
 		}
 	}
+	// The catalogue is wanted when they asked to see her, when the scene has warmed
+	// enough that she might offer, or when pictures are already going back and forth.
+	// A message about the weather at heat 1 has no use for it. Its example tag is the
+	// ready picture's when there is one, so the two directives name the same picture.
+	example := ""
+	if readyOK {
+		example = readyPictureHandle(ready)
+	}
+	addDeferred("her photos", rankPhotoCatalogue, "\n\n"+photoCatalogue(ws, character.ID, sentPhotos, selfPics, sentMedia, latestUser, example),
+		signals.photo || in.Intensity >= 3 || len(sentPhotos) > 0)
 	// Libby alone gets her self-grounding and the library snapshot. She is this
 	// server's librarian, so knowing who she is, what she can do, and what is on the
 	// shelves is in character; an imported card is somebody else's character and has
@@ -1008,6 +1027,12 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// Resolved to the whole message, and what it carried. See chat_history.go.
 	describer := s.newHistoryDescriber(r.Context(), ws, in.Messages)
 	modePrompt += replyTargetDirective(in.Messages[len(in.Messages)-1].ReplyTo, in.Messages, describer)
+	// And the picture they are asking about, in full — the history's note under it is
+	// capped, and a question about the picture wants everything it shows. Core, like
+	// the reply target: an answer about the wrong picture is worse than none.
+	if inQuestionOK {
+		modePrompt += pictureInQuestionDirective(inQuestion, describer)
+	}
 	// Where she is, and where she could be — the backgrounds the user has added for the
 	// call screen. Only Libby has a place to be; only read when there is something to
 	// choose from. See libby_backgrounds.go.
@@ -1063,7 +1088,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		// does not offer to do things, which costs a feature rather than the character.
 		// Wanted when the message asks for something done to the collection, or when
 		// they are browsing together and she has something to act on.
-		addDeferred("what she can do for you", rankActions, "\n\n"+actionDirective(caps),
+		actionText := actionDirective(caps)
+		if signals.actFollowUp {
+			actionText += "\n" + actionFollowUpDirective
+		}
+		addDeferred("what she can do for you", rankActions, "\n\n"+actionText,
 			signals.act || viewing != "" || len(in.SharedMediaIDs) > 0)
 		// Thinking, and talking to herself. Libby-only for the same reason as the rest of
 		// this block: an imported card's inner life belongs to whoever wrote it.
@@ -1141,6 +1170,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		tail.WriteString("\n\n" + photoDirective(in.PhotoTags, character))
 	}
 	history := make([]chatMessage, 0, len(in.Messages))
+	annotated := false
 	for _, m := range in.Messages {
 		m.Role = strings.ToLower(strings.TrimSpace(m.Role))
 		m.Content = strings.TrimSpace(m.Content)
@@ -1151,7 +1181,18 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		// What the model reads is the text with any quoted reply folded in and what the
 		// message carried described beneath it; the ids and the reference are ours, and
 		// stay out of the payload. See chat_replies.go and chat_history.go.
+		if describer.carried(m) != "" {
+			annotated = true
+		}
 		history = append(history, chatMessage{Role: m.Role, Content: historyContent(m, describer)})
+	}
+	// The notes under the history are the one piece of prose in the prompt she has
+	// been seen copying. Said once, in the tail, only on a turn that has any; and after
+	// silenceDirective was written so it stays the final word on the tags. Both this
+	// and silenceDirective are about what not to write, so the order between them is
+	// not load-bearing.
+	if annotated {
+		tail.WriteString("\n\n" + historyNotesDirective)
 	}
 	// Two texts in a row from the same side are one turn to the model. Chat templates
 	// alternate roles, and a local backend handed user/user/assistant either folds them
@@ -1380,9 +1421,18 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			thoughts, silent = found, repliedOnlyWithThought(reply)
 		}
 	}
+	// Whether she spoke of a picture at all, read before the scrubber deletes the
+	// narration that would say so. Gates the unprompted picture below. See
+	// chat_photo_talk.go.
+	narrated := sheSaidSheWasSending(reply)
 	// Scrubbing runs last of the readers so they still see the tags, and before link
 	// resolution so a substituted title cannot be mistaken for one.
-	reply = scrubDirectives(reply)
+	//
+	// A reply that was nothing but tags comes back empty rather than as the tags: the
+	// check below then decides whether that is a picture with no words (a turn) or the
+	// backend returning nothing usable (an error). Handing the raw tag on as her
+	// message is how "[send: red eyes, pixel art]" came to sit in a bubble.
+	reply, _ = scrubDirectivesReporting(reply)
 	// A reaction alone is an answer, the way a thought alone is: she read it and put
 	// a heart on it. So is a picture alone. Only a reply that did none of those things
 	// and said nothing is the backend failing.
@@ -1495,7 +1545,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// message ago is never an answer. Unprompted, everything already sent is withheld —
 	// sending the same one again unasked is the behaviour this exists to stop.
 	// See chat_send_weights.go.
-	pictureWanted := userAskedForPhoto(latestUser) || photoAsked
+	// A turn about a picture already sent is not a turn asking for one, however many
+	// picture words are in it. See chat_photo_talk.go.
+	pictureWanted := (userAskedForPhoto(latestUser) && !talking) || photoAsked
 	skip := sentPhotos
 	skipMedia := sentMedia
 	if pictureWanted {
@@ -1563,8 +1615,13 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 				chosen, chosenOK = drawWeighted(candidates, 0, nil)
 				report.Source, report.Fit = "rescue", 0
 			}
-		default:
-			text := latestUser + " " + reply
+		case pictureWanted || narrated:
+			// No tag, but either they asked or she said she was sending one — the
+			// narration is gone by now, scrubbed, and the picture it announced has to
+			// arrive. Matched on both sides' words, less the words that name her: every
+			// picture of her is tagged with her hair and her glasses, so those fit
+			// nothing in particular and used to meet the floor on their own.
+			text := withoutWords(latestUser+" "+reply, selfDescriptionWords(character, ws, selfPics))
 			candidates := pictureCandidates(ws, character.ID, selfPics, text, in.PhotoImageID, skip, sentPhotos, skipMedia, sentMedia)
 			chosen, chosenOK = drawWeighted(candidates, unpromptedPhotoFloor, nil)
 			if chosenOK {

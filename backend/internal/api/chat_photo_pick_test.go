@@ -147,7 +147,7 @@ func TestSharedPhotosOfOthersAreNotSelfies(t *testing.T) {
 	if counts["lunch"] != 0 || counts["her"] != 100 {
 		t.Fatalf("someone else's photo was sent as a selfie: %v", counts)
 	}
-	catalogue := photoCatalogue(ws, "libby", nil, nil, nil, "")
+	catalogue := photoCatalogue(ws, "libby", nil, nil, nil, "", "")
 	if !strings.Contains(catalogue, "Selfies you can send") || !strings.Contains(catalogue, "shared with you of other people") {
 		t.Fatalf("catalogue does not separate the two: %s", catalogue)
 	}
