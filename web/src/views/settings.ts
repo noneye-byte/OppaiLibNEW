@@ -17,10 +17,12 @@ import { KIND_META, type Kind, type ComicFit, loadComicFit, saveComicFit } from 
 import { loadHideLibby, saveHideLibby } from "../libby.js";
 import { setIncognito } from "../incognito.js";
 import { LIBBY_PROGRESSION_MULTIPLIERS, getProgressionMultiplier, setProgressionMultiplier } from "../libby-meter.js";
+// Registers <oppai-libby-backgrounds>, which the Backgrounds panel renders.
+import "./libby-backgrounds.js";
 
 
 type SettingsTab =
-  | "appearance" | "libby" | "ai" | "scraping" | "library" | "android" | "account" | "storage"
+  | "appearance" | "libby" | "backgrounds" | "ai" | "scraping" | "library" | "android" | "account" | "storage"
   | "diagnostics" | "privacy" | "about";
 
 /**
@@ -31,6 +33,9 @@ type SettingsTab =
 const SETTINGS_TABS: { id: SettingsTab; label: string; icon: string; group: string; server?: boolean; adminOnly?: boolean }[] = [
   { id: "appearance", label: "Appearance", icon: "palette", group: "You" },
   { id: "libby", label: "Libby", icon: "auto_awesome", group: "You" },
+  // Its own panel rather than a card inside Libby: it is a gallery of pictures with
+  // four operations each, and the Android app gives it a screen for the same reason.
+  { id: "backgrounds", label: "Her backgrounds", icon: "wallpaper", group: "You" },
   { id: "account", label: "Account", icon: "account_circle", group: "You" },
   { id: "ai", label: "AI tagging", icon: "smart_toy", group: "Server", server: true },
   { id: "scraping", label: "Scraping", icon: "travel_explore", group: "Server", server: true },
@@ -808,6 +813,7 @@ export class OppaiSettings extends LitElement {
     switch (this.tab) {
       case "appearance": return this.renderAppearance();
       case "libby": return this.renderLibby();
+      case "backgrounds": return html`<section class="card"><oppai-libby-backgrounds></oppai-libby-backgrounds></section>`;
       case "ai": return this.renderAI();
       case "scraping": return this.renderScraping();
       case "library": return this.renderLibrary();

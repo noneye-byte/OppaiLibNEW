@@ -3,7 +3,7 @@ import { customElement, property, query, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import {
   api, PROFILE_IMAGE_OWNER, type ChatCharacter, type ChatConversation, type ChatImage, type ChatMessage,
-  type ChatBackendInfo, type ChatModelInspection, type ChatModels, type ChatOptions, type ChatPhotoReport, type ChatProfile, type ChatSampling, type ChatStatus, type ChatWorkspace,
+  type ChatBackendInfo, type ChatDebug, type ChatModelInspection, type ChatModels, type ChatOptions, type ChatPhotoReport, type ChatProfile, type ChatSampling, type ChatStatus, type ChatWorkspace,
   type LibbyAutoDecision, type LibbyAutoSettings, type LibbyAutoState, type LibbyBond, type LibbyContext,
   type DiscordPlace, type DiscordState, type LibbyIdentity, type LibbyMemory, type LibbyThought, type LibbyWant, type SharedLink,
   type StoredChatMessage, type User, type ChatReplyRef, type LibbyAttachment, type LibbyBackground, type LibbyLink, type Media,
@@ -24,6 +24,7 @@ import { SHARE_EVENT, takePendingShare } from "../chat-share.js";
 import { excerptOf } from "../chat-replies.js";
 import { libbyMotion } from "../libby-motion.js";
 import { profileUpdates } from "../ui-metrics.js";
+import { characterToCard, readCardFile } from "../character-card.js";
 import {
   ActionApprovals, actionCardStyles, attachmentStyles, KIND_ICONS, linkChipStyles, recentlyAttached, recentHeat, recentMoods, recentlySent,
   renderActionCards, renderAttachments, renderLinkChips, requestOpenMedia,
@@ -63,6 +64,23 @@ const EDITOR_TABS: { id: EditorTab; label: string; icon: string; group: string }
     a self-driving conversation is a party trick until it fills the log unattended. */
 const AUTO_DELAY_MS = 14_000;
 const AUTO_MAX_TURNS = 8;
+
+/**
+ * One turn's captured working, for the conversation export.
+ *
+ * Kept per conversation and only in memory: the assembled prompt is several kilobytes
+ * and round-tripping it through the stored workspace would put every debugging session
+ * permanently into the user's chat file.
+ */
+interface CapturedTurn {
+  at: number;
+  request: { photoTags: string[]; photoImageId: string; task: string };
+  debug: ChatDebug;
+}
+
+/** How many captured turns a conversation keeps. An evening is hundreds of turns and
+    each one is the whole system prompt; this is enough to see a pattern. */
+const MAX_CAPTURED_TURNS = 40;
 const AUTO_KEY = "oppai_chat_autopilot";
 
 /** How long after Libby's own last message a quiet, visible chat waits before she
@@ -362,37 +380,6 @@ function optionNumber(options: ChatOptions | undefined, key: string, fallback: n
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
-function characterFromCard(parsed: Record<string, unknown>, fallbackName: string): ChatCharacter {
-  const data = ((parsed.data && typeof parsed.data === "object") ? parsed.data : parsed) as Record<string, unknown>;
-  const text = (key: string, fallback = "") => typeof data[key] === "string" ? data[key] as string : fallback;
-  return {
-    id:newID(), name:text("name", fallbackName), description:text("description"), personality:text("personality"),
-    scenario:text("scenario"), firstMessage:text("first_mes", text("firstMessage")), exampleDialogue:text("mes_example", text("exampleDialogue")),
-    systemPrompt:text("system_prompt", text("systemPrompt")), creatorNotes:text("creator_notes", text("creatorNotes")), promptWeight:1, defaultMode:"roleplay",
-  };
-}
-
-/** SillyTavern PNG cards store base64 JSON in a PNG tEXt chunk named `chara`. */
-async function characterFromPNG(file: File): Promise<ChatCharacter | null> {
-  if (!file.name.toLowerCase().endsWith(".png")) return null;
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  const view = new DataView(bytes.buffer); let offset = 8;
-  while (offset + 12 <= bytes.length) {
-    const length = view.getUint32(offset); const type = new TextDecoder().decode(bytes.subarray(offset + 4, offset + 8));
-    if (offset + 12 + length > bytes.length) break;
-    if (type === "tEXt") {
-      const raw = new TextDecoder().decode(bytes.subarray(offset + 8, offset + 8 + length));
-      const split = raw.indexOf("\0");
-      if (split > 0 && raw.slice(0, split) === "chara") {
-        const json = new TextDecoder().decode(Uint8Array.from(atob(raw.slice(split + 1)), (char) => char.charCodeAt(0)));
-        return characterFromCard(JSON.parse(json) as Record<string, unknown>, file.name.replace(/\.png$/i, ""));
-      }
-    }
-    offset += length + 12;
-  }
-  return null;
-}
-
 /** Safe, tiny chat formatter: quotes are speech, **double stars** are actions. */
 function formatted(text: string, links?: LibbyLink[], open?: (id: number) => void): TemplateResult {
   const token = /(\*\*[^*\n]+\*\*|\*[^*\n]+\*|~~[^~\n]+~~|`[^`\n]+`|"[^"\n]+")/g;
@@ -536,6 +523,20 @@ export class OppaiChat extends LitElement {
   @state() private chatSearch = "";
   /** The "new chat" screen is open in place of the list: who to start one with. */
   @state() private pickerOpen = false;
+  /**
+   * Whether turns are asked to return their working.
+   *
+   * Off by default and deliberately not remembered across reloads: it multiplies the
+   * size of every reply, and a debugging switch left on for a month is one nobody
+   * knows is on. See exportConversation.
+   */
+  @state() private captureTurns = false;
+  /** The captured turns, by conversation id. Session-only, like the switch. */
+  private turnLog = new Map<string, CapturedTurn[]>();
+  /** True while a card file is being dragged over the roster. */
+  @state() private cardDrop = false;
+  /** What the last import found, kept on screen until the next one. */
+  @state() private cardNote: { text: string; bad: boolean } | null = null;
   /** The AI is driving the conversation on its own. */
   @state() private autopilot = localStorage.getItem(AUTO_KEY) === "1";
   @state() private autoPaused = false;
@@ -682,11 +683,40 @@ export class OppaiChat extends LitElement {
     .chat-delete:hover { color:var(--md-sys-color-error); }
     .chats-empty { padding:32px 18px; color:var(--muted); font-size:13px; text-align:center; }
     /* Starting a chat: who with. Replaces the list rather than floating over it, so
-       it works identically as a phone screen and as a desktop pane. */
-    .picker { flex:1; min-height:0; overflow-y:auto; padding:0 8px 10px; display:flex; flex-direction:column; gap:2px; }
+       it works identically as a phone screen and as a desktop pane.
+       NOT called .picker — that is the library picker's full-screen scrim further
+       down this same stylesheet, and the later rule won: this panel rendered as a
+       dark sheet across the whole app. One stylesheet, one shadow root, so a class
+       name used twice here is a collision, not two scopes. */
+    .friends { flex:1; min-height:0; overflow-y:auto; padding:0 8px 10px; display:flex; flex-direction:column; gap:2px; }
+    .pick-wrap { position:relative; display:flex; align-items:center; border-radius:12px; }
+    .pick-wrap:hover { background:var(--hover); }
     .pick { width:100%; display:grid; grid-template-columns:44px minmax(0,1fr); gap:0 12px; align-items:center; padding:8px 10px;
       border:0; border-radius:12px; background:transparent; color:inherit; text-align:left; cursor:pointer; }
     .pick:hover { background:var(--hover); }
+    .pick-wrap .pick:hover { background:transparent; }
+    /* The row's own actions. Hidden until the row is touched, so a roster of twelve
+       is a list of people rather than a toolbar; always shown on coarse pointers,
+       which have no hover to reveal them with. */
+    .pick-acts { position:absolute; right:6px; display:flex; gap:2px; opacity:0; transition:opacity .12s ease; }
+    .pick-wrap:hover .pick-acts, .pick-wrap:focus-within .pick-acts { opacity:1; }
+    @media (hover:none) { .pick-acts { opacity:1; } }
+    .pick-act { border:0; background:var(--side); color:var(--muted); cursor:pointer; display:grid; place-items:center;
+      width:28px; height:28px; border-radius:8px; }
+    .pick-act:hover { color:inherit; background:var(--input); }
+    .pick-act.danger:hover { color:#f2b8b5; }
+    .pick-act .material-symbols-rounded { font-size:16px; }
+    /* Importing: a real target you can drop onto, not a file input hidden in a
+       button's label. */
+    .dropzone { margin:10px 2px 4px; padding:16px 14px; border:1.5px dashed var(--line); border-radius:14px;
+      display:flex; flex-direction:column; align-items:center; gap:4px; text-align:center; cursor:pointer;
+      color:var(--muted); font-size:12px; transition:border-color .12s ease, background .12s ease; }
+    .dropzone:hover, .dropzone.over { border-color:var(--accent); background:color-mix(in srgb,var(--accent) 8%,transparent); }
+    .dropzone input { display:none; }
+    .dropzone strong { color:var(--text); font-size:13px; }
+    .dropzone .material-symbols-rounded { font-size:26px; color:var(--accent); }
+    .card-note { margin:2px; padding:9px 11px; border-radius:10px; background:var(--input); font-size:12px; line-height:1.45; }
+    .card-note.bad { background:color-mix(in srgb,#f2b8b5 16%,transparent); color:#f2b8b5; }
     .pick-avatar { grid-row:1/3; width:44px; height:44px; border-radius:50%; overflow:hidden; display:grid; place-items:center; background:var(--input); font-size:14px; }
     .pick-name { font-weight:650; }
     .pick-sub { font-size:12px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -2475,7 +2505,18 @@ export class OppaiChat extends LitElement {
         // reads as an ordinary message — and an unprompted line wants very different
         // sampling from a reply. Everything else it classifies itself.
         task: continuation ? "autonomous" : undefined,
+        // Only while the user has capture switched on. See exportConversation.
+        debug: this.captureTurns || undefined,
       });
+      // The turn's working, kept against the conversation rather than the message: it
+      // describes how a reply was *built*, which is a fact about the request, and a
+      // reply that was regenerated should not carry the receipts of the one before it.
+      if (result.debug) {
+        const log = this.turnLog.get(conversationID) ?? [];
+        log.push({ at: startedAt, request: { photoTags, photoImageId: photoImageID, task: continuation ? "autonomous" : "" }, debug: result.debug });
+        // Bounded: this is several kilobytes a turn and an evening is hundreds.
+        this.turnLog.set(conversationID, log.slice(-MAX_CAPTURED_TURNS));
+      }
       // What the server chose, kept for the advanced panel, and the diagnostic when
       // something had to be cut to fit the model's window. Shown rather than swallowed:
       // silent truncation of her memory or her card is the failure this reports.
@@ -2683,23 +2724,79 @@ export class OppaiChat extends LitElement {
   }
 
   private async importCard(event: Event) {
-    const file = (event.target as HTMLInputElement).files?.[0]; if (!file) return;
-    try {
-      if (file.type.startsWith("image/")) {
-        const character = await characterFromPNG(file) ?? { id:newID(), name:file.name.replace(/\.[^.]+$/, "") || "New friend", promptWeight:1, defaultMode:"sweet" };
-        this.workspace.characters.push(character); this.characterID = character.id; await this.saveWorkspace();
-        const image = await api.uploadChatImage({ characterId:character.id, name:`${character.name} avatar`, imageData:await this.readDataURL(file), tags:["portrait"] });
-        this.workspace.images.push(image);
-        // saveWorkspace() above always replaces the workspace, so the portrait has
-        // to be attached to the stored character rather than the local one.
-        const stored = this.liveCharacter(character.id);
-        if (stored) stored.avatarImageId = image.id;
-        this.touchWorkspace(); this.newConversation(false); this.say("Friend added and image scanned."); return;
+    const input = event.target as HTMLInputElement;
+    const files = Array.from(input.files ?? []);
+    if (files.length) await this.ingestCards(files);
+    input.value = "";
+  }
+
+  /**
+   * Imports one or more character cards, and says what it found.
+   *
+   * Three things this does that the old one-file handler did not. It reports rather
+   * than guesses: a PNG with no card chunk used to become a character named after the
+   * file with every field blank, which looks like a successful import and is not, so
+   * it now says the picture had no card in it and offers it as a portrait instead.
+   * It tells you what came across — a card's alternate greetings and lorebook are the
+   * two things this app cannot fully hold, and silently dropping them is how you find
+   * out six conversations later. And a failure names the file, because importing a
+   * folder of forty cards and being told "couldn't import card" is not a diagnosis.
+   */
+  private async ingestCards(files: File[]) {
+    const added: string[] = [];
+    const notes: string[] = [];
+    const failed: string[] = [];
+    for (const file of files) {
+      try {
+        const parsed = await readCardFile(file);
+        const isPNG = file.name.toLowerCase().endsWith(".png") || file.type === "image/png";
+        if (!parsed) {
+          if (!isPNG && !file.type.startsWith("image/")) { failed.push(`${file.name}: no character card inside`); continue; }
+          // A picture with no card in it is still a face. Offered as one rather than
+          // turned into an empty character named after the file.
+          failed.push(`${file.name}: no card data in that image — add a friend first, then set their picture`);
+          continue;
+        }
+        if (this.workspace.characters.length >= 40) { failed.push(`${file.name}: workspace is full`); break; }
+        const character: ChatCharacter = { ...parsed.character, id: newID() };
+        this.workspace.characters.push(character);
+        this.characterID = character.id;
+        added.push(character.name);
+        if (parsed.leftovers.alternateGreetings > 0) {
+          notes.push(`${character.name}: kept ${parsed.leftovers.alternateGreetings} alternate greeting${parsed.leftovers.alternateGreetings === 1 ? "" : "s"}`);
+        }
+        if (parsed.leftovers.characterBook) {
+          notes.push(`${character.name}: the card's lorebook was dropped — this app has nowhere to put one`);
+        }
+        // The card's own art becomes their portrait. Saved first so the upload has a
+        // character to belong to; saveWorkspace replaces the workspace wholesale, so
+        // the avatar id goes onto the stored copy rather than the local one.
+        if (isPNG) {
+          await this.saveWorkspace();
+          try {
+            const image = await api.uploadChatImage({
+              characterId: character.id, name: `${character.name} avatar`,
+              imageData: await this.readDataURL(file), tags: ["portrait"],
+            });
+            this.workspace.images.push(image);
+            const stored = this.liveCharacter(character.id);
+            if (stored) stored.avatarImageId = image.id;
+          } catch (error) {
+            notes.push(`${character.name}: card imported, but the portrait didn't upload (${(error as Error).message})`);
+          }
+        }
+      } catch (error) {
+        failed.push(`${file.name}: ${(error as Error).message}`);
       }
-      const character = characterFromCard(JSON.parse(await file.text()) as Record<string, unknown>, file.name.replace(/\.json$/i, ""));
-      this.workspace.characters.push(character); this.characterID = character.id; this.touchWorkspace(); this.newConversation(false); this.say(`${character.name} joined your friends.`);
-    } catch (error) { this.say(`Couldn't import card: ${(error as Error).message}`, true); }
-    finally { (event.target as HTMLInputElement).value = ""; }
+    }
+    if (added.length) { this.touchWorkspace(); this.newConversation(false); }
+    const summary = [
+      added.length ? `Imported ${added.join(", ")}.` : "",
+      ...notes,
+      ...failed.map((line) => `Couldn't import ${line}.`),
+    ].filter(Boolean).join(" ");
+    this.cardNote = summary ? { text: summary, bad: !added.length } : null;
+    if (summary) this.say(summary, !added.length);
   }
 
   private readDataURL(file: File): Promise<string> {
@@ -3148,7 +3245,7 @@ export class OppaiChat extends LitElement {
           : html`<button class="icon-btn" title="New chat" aria-label="New chat" @click=${() => (this.pickerOpen = true)}><span class="material-symbols-rounded">edit_square</span></button>
             <button class="me-btn" title="Your profile" aria-label="Your profile" @click=${() => { this.settingsOpen = true; this.editorTab = "profile"; this.mobileNavOpen = false; }}>${this.profileAvatar(me, "me-avatar")}</button>`}
       </div>
-      ${this.pickerOpen ? this.renderPicker() : html`
+      ${this.pickerOpen ? this.renderFriends() : html`
         <label class="search"><span class="material-symbols-rounded" style="font-size:18px">search</span>
           <input type="search" placeholder="Search" aria-label="Search chats" .value=${this.chatSearch} @input=${(event: Event) => (this.chatSearch = (event.target as HTMLInputElement).value)} /></label>
         <div class="chats">${this.renderChatRows()}</div>`}
@@ -3190,23 +3287,176 @@ export class OppaiChat extends LitElement {
     return [...conversation.messages].reverse().find((message) => !message.thought)?.content ?? "";
   }
 
-  /** Who to start a chat with. Every character, then the option of making a new one. */
-  private renderPicker() {
-    return html`<div class="picker">
+  /**
+   * Who to start a chat with, and everything you can do to them from here.
+   *
+   * This is a panel inside the sidebar, not an overlay. It used to say so with the
+   * class `.picker` — which is also the library picker's full-screen scrim, defined
+   * further down the same stylesheet and therefore winning. The roster rendered as a
+   * dark sheet across the whole app. Named `.friends` now, which nothing else claims.
+   *
+   * Each row carries its own management, because the only place a character could be
+   * acted on before was inside a conversation with them: to export a card or delete
+   * somebody you had to start talking to them first. Duplicate is here rather than in
+   * the editor for the reason the others are — the roster is where you are when you
+   * think "another one like that".
+   */
+  private renderFriends() {
+    const characters = this.visibleCharacters;
+    return html`<div class="friends"
+      @dragover=${(event: DragEvent) => { event.preventDefault(); this.cardDrop = true; }}
+      @dragleave=${() => (this.cardDrop = false)}
+      @drop=${this.dropCard}>
       <div class="pick-cat">Friends</div>
-      ${this.visibleCharacters.map((character) => html`
-        <button class="pick" @click=${() => this.startChatWith(character.id)}>
-          ${this.avatar(character, "pick-avatar")}
-          <span class="pick-name">${character.name}</span>
-          <span class="pick-sub">${character.description?.trim() || (character.id === "libby" ? "Your library's companion" : "Custom character")}</span>
-        </button>`)}
-      <div class="pick-cat">More</div>
+      ${characters.map((character) => html`
+        <div class="pick-wrap">
+          <button class="pick" @click=${() => this.startChatWith(character.id)}>
+            ${this.avatar(character, "pick-avatar")}
+            <span class="pick-name">${character.name}</span>
+            <span class="pick-sub">${character.description?.trim() || (character.id === "libby" ? "Your library's companion" : "Custom character")}</span>
+          </button>
+          <div class="pick-acts">
+            <button class="pick-act" title="Duplicate ${character.name}" aria-label="Duplicate ${character.name}"
+              @click=${() => this.duplicateCharacter(character.id)}><span class="material-symbols-rounded">content_copy</span></button>
+            <button class="pick-act" title="Export ${character.name} as a card" aria-label="Export ${character.name} as a card"
+              @click=${() => this.exportCharacter(character.id)}><span class="material-symbols-rounded">download</span></button>
+            ${character.builtIn ? nothing : html`<button class="pick-act danger" title="Remove ${character.name}" aria-label="Remove ${character.name}"
+              @click=${() => this.removeCharacter(character.id)}><span class="material-symbols-rounded">delete</span></button>`}
+          </div>
+        </div>`)}
+      <div class="pick-cat">Add someone</div>
       <button class="pick add" @click=${() => { this.pickerOpen = false; this.addCharacter(); }}>
         <span class="pick-avatar"><span class="material-symbols-rounded">person_add</span></span>
-        <span class="pick-name">Add a friend</span>
-        <span class="pick-sub">Write a new character card</span>
+        <span class="pick-name">Write a new card</span>
+        <span class="pick-sub">Start from a blank character</span>
       </button>
+      <label class="dropzone ${this.cardDrop ? "over" : ""}">
+        <input type="file" accept=".json,.png,application/json,image/png" multiple @change=${this.importCard} />
+        <span class="material-symbols-rounded">upload_file</span>
+        <strong>Import a character card</strong>
+        <span>Drop a .png or .json here, or click to choose. SillyTavern V1, V2 and V3 cards all work.</span>
+      </label>
+      ${this.cardNote ? html`<div class="card-note ${this.cardNote.bad ? "bad" : ""}">${this.cardNote.text}</div>` : nothing}
     </div>`;
+  }
+
+  /**
+   * Writes a conversation out as one JSON file.
+   *
+   * The point is to be able to hand somebody — or a debugger — the whole of what
+   * happened, rather than a screenshot and a description of it. So it carries the log
+   * as stored (every message, with the ids of the pictures and items that went with
+   * it), the character card that was in force, and, for every turn captured while the
+   * switch was on, exactly what the server assembled and what the model said before
+   * anything parsed it.
+   *
+   * Turns are matched to the log by time rather than merged into it: a regenerated
+   * reply leaves two captures against one message, and flattening them would hide the
+   * thing you opened the file to look at.
+   *
+   * Nothing is redacted, because there is nothing here that is not the user's: their
+   * own messages, their own character, and the prompt built out of their own workspace.
+   * The file is written locally and goes nowhere on its own.
+   */
+  private exportConversation(conversationID?: string) {
+    const conversation = conversationID ? this.workspace.conversations.find((c) => c.id === conversationID) : this.activeConversation;
+    if (!conversation) return;
+    const character = this.workspace.characters.find((c) => c.id === conversation.characterId);
+    const turns = this.turnLog.get(conversation.id) ?? [];
+    const dump = {
+      exportedAt: new Date().toISOString(),
+      app: "oppailib",
+      // Bumped when the shape changes, so a reader can tell what it is holding.
+      format: 1,
+      conversation: {
+        id: conversation.id,
+        title: conversation.title,
+        characterId: conversation.characterId,
+        mode: conversation.mode,
+        emotion: conversation.emotion,
+        intensity: conversation.intensity,
+        activity: conversation.activity ?? "",
+        background: conversation.background ?? "",
+        options: conversation.options ?? {},
+        updatedAt: conversation.updatedAt,
+        messages: conversation.messages,
+      },
+      character: character ?? null,
+      // The gallery rows for every picture this conversation referred to, so a tag
+      // list in the log can be checked against what the picture is actually tagged.
+      images: this.workspace.images.filter((image) =>
+        conversation.messages.some((message) => message.imageId === image.id)),
+      profile: this.workspace.profile,
+      turns,
+      capture: turns.length
+        ? `${turns.length} turn(s) captured with full prompts`
+        : "No turns captured — switch on 'Capture turns' in the chat menu and send a message first",
+    };
+    const blob = new Blob([JSON.stringify(dump, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    link.href = url;
+    link.download = `oppailib-chat-${(character?.name ?? "chat").replace(/[^\w.-]+/g, "-").toLowerCase()}-${stamp}.json`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    this.say(turns.length
+      ? `Exported ${conversation.messages.length} messages and ${turns.length} captured turn(s).`
+      : `Exported ${conversation.messages.length} messages. Turn capture was off, so no prompts are included.`);
+  }
+
+  /** Files dropped onto the roster are read as cards, same as the file input. */
+  private dropCard(event: DragEvent) {
+    event.preventDefault();
+    this.cardDrop = false;
+    const files = Array.from(event.dataTransfer?.files ?? []);
+    if (files.length) void this.ingestCards(files);
+  }
+
+  /**
+   * Copies a character, conversations excluded.
+   *
+   * The copy is a fresh id with "(copy)" appended, and it keeps the original's avatar
+   * id: both point at the same gallery image, which is right — duplicating somebody to
+   * make a variant should not make you re-upload their face.
+   */
+  private duplicateCharacter(id: string) {
+    const source = this.workspace.characters.find((character) => character.id === id);
+    if (!source) return;
+    if (this.workspace.characters.length >= 40) { this.say("That's as many friends as a workspace holds.", true); return; }
+    const copy: ChatCharacter = { ...source, id: newID(), name: `${source.name} (copy)`, builtIn: false };
+    this.workspace.characters.push(copy);
+    this.touchWorkspace();
+    this.say(`${copy.name} added.`);
+  }
+
+  /** Writes a character out as a V2 card, which is what every other tool reads. */
+  private exportCharacter(id: string) {
+    const character = this.workspace.characters.find((item) => item.id === id);
+    if (!character) return;
+    const card = characterToCard(character);
+    const blob = new Blob([JSON.stringify(card, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${character.name.replace(/[^\w.-]+/g, "-").toLowerCase() || "character"}.card.json`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    this.say(`Exported ${character.name}.`);
+  }
+
+  /** Removes a character and their conversations from the roster. */
+  private removeCharacter(id: string) {
+    const character = this.workspace.characters.find((item) => item.id === id);
+    if (!character || character.builtIn) return;
+    if (!confirm(`Remove ${character.name} and every chat with them?`)) return;
+    this.workspace.characters = this.workspace.characters.filter((item) => item.id !== id);
+    this.workspace.conversations = this.workspace.conversations.filter((item) => item.characterId !== id);
+    if (this.characterID === id) this.characterID = this.workspace.characters[0]?.id ?? "libby";
+    const next = this.conversationsFor()[0];
+    if (next) this.conversationID = next.id; else this.newConversation(false);
+    this.touchWorkspace();
+    this.say(`${character.name} removed.`);
   }
 
   private startChatWith(id: string) {
@@ -3283,7 +3533,7 @@ export class OppaiChat extends LitElement {
       ${this.field("Example dialogue", "exampleDialogue", character.exampleDialogue ?? "", 3)}
       ${this.field("Creator notes (not sent to model)", "creatorNotes", character.creatorNotes ?? "", 2)}
       <label>Character-card weight <span class="range"><input type="range" min="0.1" max="2" step="0.05" .value=${String(character.promptWeight || 1)} @input=${(event:Event) => this.updateCharacter("promptWeight", Number((event.target as HTMLInputElement).value))}/><output>${(character.promptWeight || 1).toFixed(2)}</output></span></label>
-      <div class="panel-actions"><button class="primary" @click=${() => void this.saveWorkspace()}>Save card</button><span class="file-btn">Import SillyTavern card<input type="file" accept="application/json,.json,image/*" @change=${this.importCard}/></span>${character.builtIn ? html`<span class="empty">Libby's built-in card is editable.</span>` : html`<button class="danger" @click=${this.deleteCharacter}>Remove friend</button>`}</div>
+      <div class="panel-actions"><button class="primary" @click=${() => void this.saveWorkspace()}>Save card</button><span class="file-btn">Import a card<input type="file" accept=".json,.png,application/json,image/png" multiple @change=${this.importCard}/></span><button @click=${() => this.exportCharacter(character.id)}>Export card</button>${character.builtIn ? html`<span class="empty">Libby's built-in card is editable.</span>` : html`<button class="danger" @click=${this.deleteCharacter}>Remove friend</button>`}</div>
     </div>`;
   }
 
@@ -4273,6 +4523,7 @@ export class OppaiChat extends LitElement {
       ? [
           { label:"Open", icon:"forum", run:() => this.activateConversation(rowID) },
           { label:"New conversation", icon:"add_comment", run:() => this.newConversation() },
+          { label:"Export conversation…", icon:"download", run:() => this.exportConversation(rowID) },
           menuDivider,
           { label:"Delete conversation", icon:"delete", danger:true, run:() => this.deleteConversation(rowID) },
         ]
@@ -4289,6 +4540,20 @@ export class OppaiChat extends LitElement {
           { label:"New conversation", icon:"add_comment", run:() => this.newConversation() },
           { label:"Chat settings", icon:"tune", run:() => { this.settingsOpen = true; this.editorTab = "character"; } },
           { label:"Refresh model status", icon:"sync", run:() => void this.refreshModels() },
+          menuDivider,
+          // The debugging pair. Capture has to be switched on *before* the turn you
+          // want to look at, so it sits directly above the export that reads it.
+          {
+            label: this.captureTurns ? "Stop capturing turns" : "Capture turns (prompt + raw reply)",
+            icon: this.captureTurns ? "bug_report" : "pest_control",
+            run: () => {
+              this.captureTurns = !this.captureTurns;
+              this.say(this.captureTurns
+                ? "Capturing every turn's prompt and raw reply. Export the conversation to read them."
+                : "Stopped capturing turns.");
+            },
+          },
+          { label:"Export conversation…", icon:"download", run:() => this.exportConversation() },
           menuDivider,
           { label:"Clear messages", icon:"delete_sweep", danger:true, run:() => this.clearConversation() },
         ];

@@ -24,7 +24,9 @@ import {
   loadFavorites,
   saveFavorites,
   isTypingTarget,
+  formatBytes,
 } from "../media-meta.js";
+import { loadRecents, noteOpened, recentlyOpened } from "../recents.js";
 import "../context-menu.js";
 import "./viewer.js";
 import "./scrape-dialog.js";
@@ -91,6 +93,9 @@ export class OppaiLibrary extends LitElement {
   @property({ attribute: false }) user!: User;
 
   @state() private items: Media[] = [];
+  /** What has been opened on this device, newest first. Feeds Home's hero and its
+      "Jump back in" row. Per-device and client-owned; see recents.ts. */
+  @state() private recents = loadRecents();
   @state() private loading = false;
   @state() private section: Section = "home";
   @state() private selectedId: number | null = null;
@@ -336,7 +341,110 @@ export class OppaiLibrary extends LitElement {
       .greeting-sub {
         font-size: 14px;
         color: var(--oppai-text-dim);
-        margin: 0 0 32px;
+        margin: 0 0 24px;
+      }
+      /* The hero: one item at full width, art beside its details. Collapses to art
+         over details on a phone, where side-by-side would leave neither room. */
+      .hero {
+        display: grid;
+        grid-template-columns: minmax(0, 300px) minmax(0, 1fr);
+        gap: 20px;
+        align-items: center;
+        margin-bottom: 14px;
+        padding: 16px;
+        border: 1px solid var(--oppai-border);
+        border-radius: 20px;
+        background: var(--oppai-surface-2);
+      }
+      .hero-art {
+        display: grid;
+        place-items: center;
+        width: 100%;
+        aspect-ratio: 16 / 10;
+        padding: 0;
+        border: 0;
+        border-radius: 14px;
+        overflow: hidden;
+        background: var(--oppai-surface);
+        cursor: pointer;
+      }
+      .hero-art img { width: 100%; height: 100%; object-fit: cover; display: block; }
+      .hero-icon { font-size: 52px; color: var(--oppai-text-muted); }
+      .hero-body { display: grid; gap: 8px; min-width: 0; }
+      .hero-eyebrow {
+        color: var(--oppai-primary-bright);
+        font-size: 11.5px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      .hero-title {
+        margin: 0;
+        font-size: 25px;
+        font-weight: 500;
+        line-height: 1.2;
+        overflow-wrap: anywhere;
+      }
+      .hero-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+      .hero-tags span {
+        padding: 3px 9px;
+        border: 1px solid var(--oppai-border-strong);
+        border-radius: 999px;
+        color: var(--oppai-text-dim);
+        font-size: 11.5px;
+      }
+      .hero-acts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+      .hero-open, .hero-more {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        padding: 9px 18px;
+        border: 1px solid var(--oppai-border-strong);
+        border-radius: 999px;
+        background: transparent;
+        color: var(--oppai-text-dim);
+        cursor: pointer;
+        font: inherit;
+        font-size: 13.5px;
+        font-weight: 600;
+      }
+      .hero-open {
+        background: var(--oppai-primary);
+        border-color: var(--oppai-primary);
+        color: var(--oppai-on-primary);
+      }
+      .hero-more:hover { color: var(--oppai-text); }
+      .hero-open .material-symbols-rounded { font-size: 19px; }
+      /* The counts. Two of them are links to the screens they describe; the other two
+         are facts with nowhere to go, so they are not buttons. */
+      .stats {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+        gap: 10px;
+        margin-bottom: 34px;
+      }
+      .stat {
+        display: grid;
+        gap: 1px;
+        padding: 12px 14px;
+        border: 1px solid var(--oppai-border);
+        border-radius: 14px;
+        background: var(--oppai-surface-2);
+        color: inherit;
+        text-align: left;
+        font: inherit;
+      }
+      button.stat { cursor: pointer; }
+      button.stat:hover { border-color: var(--oppai-border-strong); }
+      .stat strong { font-size: 19px; font-weight: 600; }
+      .stat span { color: var(--oppai-text-muted); font-size: 11.5px; }
+      .row-sub {
+        color: var(--oppai-text-muted);
+        font-size: 12px;
+      }
+      @media (max-width: 760px) {
+        .hero { grid-template-columns: minmax(0, 1fr); gap: 14px; padding: 12px; }
+        .hero-title { font-size: 21px; }
       }
       .row {
         margin-bottom: 36px;
@@ -1071,6 +1179,10 @@ export class OppaiLibrary extends LitElement {
     if (!this.viewerPushed) {
       try { history.pushState({ oppaiViewer: true }, ""); this.viewerPushed = true; } catch { /* file: URLs, sandboxed frames */ }
     }
+    // What Home's "Jump back in" row is built from. Recorded here rather than in the
+    // viewer because this is the one place an item is opened from, whichever screen
+    // asked for it. See recents.ts.
+    this.recents = noteOpened(id);
     this.selectedId = id;
   }
   private closeItem = () => {
@@ -1602,20 +1714,32 @@ export class OppaiLibrary extends LitElement {
     `;
   }
 
+  /**
+   * Home, as a dashboard rather than a list of lists.
+   *
+   * What it used to be: a greeting and one horizontal row per kind, each showing the
+   * twelve newest of that kind. Which meant Home answered exactly one question — what
+   * did I import most recently — and answered it five times in a row. Everything a
+   * person actually opens this app for (carry on with that thing; what have I got;
+   * show me the good stuff) needed the sidebar.
+   *
+   * So it leads with one item at full width, then the two rows that are about *you*
+   * rather than about the import date — what you were in the middle of, and what
+   * you've starred — and only then the per-kind rows that were the whole page before.
+   * A strip of counts sits under the hero because "1,204 items, 38 GB" is the other
+   * thing a library page is for and nothing in this app said it.
+   *
+   * Every section renders only when it has something in it: a new install shows the
+   * hero and Recently added and nothing else, rather than four empty headings.
+   */
   private renderHome() {
     const hour = new Date().getHours();
     const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
-    const rows = KIND_ORDER.map((k) => ({
-      kind: k,
-      label: KIND_META[k].label,
-      icon: KIND_META[k].icon,
-      items: this.itemsForKind(k).slice(0, 12),
-    })).filter((r) => r.items.length > 0);
 
     if (this.loading && this.items.length === 0) {
       return html`<div class="empty">Loading your library…</div>`;
     }
-    if (rows.length === 0) {
+    if (this.items.length === 0) {
       return html`<div>
         <h2 class="greeting">${greeting}</h2>
         <p class="greeting-sub">Your library is empty — add media or import from a URL.</p>
@@ -1628,31 +1752,96 @@ export class OppaiLibrary extends LitElement {
       </div>`;
     }
 
+    const newest = [...this.items].sort((a, b) => b.createdAt - a.createdAt);
+    const continueRow = recentlyOpened(this.items, this.recents).slice(0, 12);
+    // The hero is what you last opened, because the most likely reason you are here is
+    // to carry on with it. Falls back to the newest import on a fresh device, which is
+    // the only other thing we can honestly claim to know you want.
+    const hero = continueRow[0] ?? newest[0];
+    const favorites = this.items.filter((m) => this.favorites.has(m.id)).slice(0, 12);
+    const week = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const addedThisWeek = this.items.filter((m) => m.createdAt >= week).length;
+    const totalBytes = this.items.reduce((sum, m) => sum + (m.size || 0), 0);
+
+    const kindRows = KIND_ORDER.map((k) => ({
+      kind: k,
+      label: KIND_META[k].label,
+      icon: KIND_META[k].icon,
+      items: this.itemsForKind(k).slice(0, 12),
+    })).filter((r) => r.items.length > 0);
+
+    const row = (
+      title: string,
+      icon: string,
+      items: Media[],
+      seeAll: (() => void) | null,
+      delay: number,
+      sub?: string,
+    ) => items.length === 0 ? nothing : html`
+      <section class="row anim-rise" style="animation-delay:${delay}ms;">
+        <div class="row-head">
+          <span class="material-symbols-rounded" style="font-size:22px; color:var(--oppai-primary-bright);">${icon}</span>
+          <h3 class="row-title">${title}</h3>
+          ${sub ? html`<span class="row-sub">${sub}</span>` : nothing}
+          ${seeAll ? html`<button class="see-all" @click=${seeAll}>
+            See all<span class="material-symbols-rounded" style="font-size:16px;">chevron_right</span>
+          </button>` : nothing}
+        </div>
+        <div class="row-scroll">${items.map((m) => this.renderTile(m, "200px", undefined, items))}</div>
+      </section>`;
+
     return html`
       <div>
         <h2 class="greeting anim-rise">${greeting}</h2>
         <p class="greeting-sub anim-rise" style="animation-delay:40ms;">
-          Here's what's new across your library
+          ${continueRow.length ? "Pick up where you left off" : "Here's what's new across your library"}
         </p>
-        ${rows.map(
-          (row, i) => html`
-            <section class="row anim-rise" style="animation-delay:${80 + i * 70}ms;">
-              <div class="row-head">
-                <span class="material-symbols-rounded" style="font-size:22px; color:var(--oppai-primary-bright);"
-                  >${row.icon}</span
-                >
-                <h3 class="row-title">${row.label}</h3>
-                <button class="see-all" @click=${() => this.selectSection(row.kind)}>
-                  See all
-                  <span class="material-symbols-rounded" style="font-size:16px;">chevron_right</span>
+
+        ${hero ? html`
+          <section class="hero anim-rise" style="animation-delay:70ms;">
+            <button class="hero-art" @click=${() => this.openItem(hero.id, newest)}
+              aria-label=${`Open ${hero.title}`}>
+              ${hero.hasThumb
+                ? html`<img src=${api.thumbURL(hero.id)} alt="" loading="lazy" />`
+                : html`<span class="material-symbols-rounded hero-icon">${KIND_META[hero.kind].icon}</span>`}
+            </button>
+            <div class="hero-body">
+              <span class="hero-eyebrow">
+                ${continueRow.length ? "Continue" : "Latest addition"} · ${KIND_META[hero.kind].label}
+              </span>
+              <h3 class="hero-title">${hero.title}</h3>
+              ${hero.tags?.length
+                ? html`<div class="hero-tags">${hero.tags.slice(0, 6).map((t) => html`<span>${t.name}</span>`)}</div>`
+                : nothing}
+              <div class="hero-acts">
+                <button class="hero-open" @click=${() => this.openItem(hero.id, newest)}>
+                  <span class="material-symbols-rounded">play_arrow</span>
+                  ${continueRow.length ? "Carry on" : "Open"}
+                </button>
+                <button class="hero-more" @click=${() => this.selectSection(hero.kind)}>
+                  More ${KIND_META[hero.kind].label.toLowerCase()}
                 </button>
               </div>
-              <div class="row-scroll">
-                ${row.items.map((m) => this.renderTile(m, "200px", undefined, row.items))}
-              </div>
-            </section>
-          `,
-        )}
+            </div>
+          </section>
+
+          <div class="stats anim-rise" style="animation-delay:90ms;">
+            <button class="stat" @click=${() => this.selectSection("home")}>
+              <strong>${this.items.length.toLocaleString()}</strong><span>items</span></button>
+            <button class="stat" @click=${() => this.selectSection("favorites")}>
+              <strong>${this.favorites.size.toLocaleString()}</strong><span>favourites</span></button>
+            <div class="stat">
+              <strong>${formatBytes(totalBytes)}</strong><span>stored</span></div>
+            <div class="stat">
+              <strong>${addedThisWeek.toLocaleString()}</strong><span>added this week</span></div>
+          </div>` : nothing}
+
+        ${row("Jump back in", "history", continueRow, null, 120,
+          "What you've opened on this device")}
+        ${row("Favourites", "star", favorites, () => this.selectSection("favorites"), 170)}
+        ${row("Recently added", "new_releases", newest.slice(0, 12), null, 220)}
+
+        ${kindRows.map((r, i) => row(r.label, r.icon, r.items, () => this.selectSection(r.kind), 270 + i * 60))}
       </div>
     `;
   }

@@ -14,6 +14,7 @@ import {
   isOutfitGear,
   normalizeOutfitGear,
   rollOutfitExposure,
+  type GearPiece,
 } from "./outfit-loadout.ts";
 
 const slotFor = (key: string) => OUTFIT_GEAR_SLOTS.find((s) => s.key === key)!;
@@ -142,4 +143,52 @@ test("a piece switched off is kept in the recipe but not worn", () => {
   assert.equal(gearKey(gear), gearKey(cleared));
   // Loadouts saved before the switch existed read as worn.
   assert.equal(gearWorn(normalizeOutfitGear({ top: "fitted top" }).top), true);
+});
+
+// --- Per-slot prompt wording -------------------------------------------------
+
+test("a slot's prompt word can be overridden, and the colour-lock noun follows it", () => {
+  const slot = slotFor("top");
+  const piece: GearPiece = { color: "crimson", item: "pauldron", prompt: "armour" };
+  // The override leads the clause where the built-in "top" used to.
+  assert.equal(gearPhrase(slot, piece, "a1111", false), "armour: crimson pauldron");
+  // And the noun repeated after the weighted colour follows it rather than
+  // contradicting it with the built-in word.
+  assert.equal(
+    gearPhrase(slot, piece, "a1111", true),
+    "armour: (crimson pauldron:1.25), crimson armour",
+  );
+});
+
+test("the colour-lock noun can be set apart from the prompt word", () => {
+  const slot = slotFor("top");
+  const piece: GearPiece = { color: "crimson", item: "pauldron", prompt: "armour", noun: "shoulder plate" };
+  assert.equal(
+    gearPhrase(slot, piece, "a1111", true),
+    "armour: (crimson pauldron:1.25), crimson shoulder plate",
+  );
+  // Negatives name the same noun, so what it must not be matches what it is.
+  assert.ok(gearColorNegatives(slot, piece).every((entry) => entry.endsWith("shoulder plate")));
+});
+
+test("an empty or blank override falls back to the built-in wording", () => {
+  const slot = slotFor("top");
+  assert.equal(gearPhrase(slot, { color: "", item: "tee", prompt: "   " }, "a1111", false), "top: tee");
+  assert.equal(gearPhrase(slot, { color: "", item: "tee" }, "a1111", false), "top: tee");
+});
+
+test("overrides survive being stored and read back", () => {
+  const stored = JSON.parse(JSON.stringify({
+    ...EMPTY_OUTFIT_GEAR,
+    top: { color: "crimson", item: "pauldron", prompt: "armour", noun: "shoulder plate" },
+  }));
+  const gear = normalizeOutfitGear(stored);
+  assert.equal(gear.top.prompt, "armour");
+  assert.equal(gear.top.noun, "shoulder plate");
+});
+
+test("renaming a slot changes the loadout's key, so old squares stop matching", () => {
+  const base = { ...EMPTY_OUTFIT_GEAR, top: { color: "red", item: "tee" } };
+  const renamed = { ...EMPTY_OUTFIT_GEAR, top: { color: "red", item: "tee", prompt: "armour" } };
+  assert.notEqual(gearKey(base), gearKey(renamed));
 });

@@ -23,6 +23,10 @@ const (
 	maxChatConversations = 100
 	maxConversationItems = 200
 	maxCharacterImages   = 100
+	// maxAltGreetings bounds the openings an imported card may carry. Cards in the
+	// wild carry a handful; a dozen is past what anybody picks between, and each one
+	// is stored at a first message's full size.
+	maxAltGreetings = 12
 )
 
 // chatProfile is what the user has said about themselves.
@@ -85,7 +89,13 @@ type chatCharacter struct {
 	ExampleDialogue string  `json:"exampleDialogue,omitempty"`
 	SystemPrompt    string  `json:"systemPrompt,omitempty"`
 	CreatorNotes    string  `json:"creatorNotes,omitempty"`
-	AvatarImageID   string  `json:"avatarImageId,omitempty"`
+	// AltGreetings are the openings past the first that an imported card carried.
+	// Stored rather than dropped for two reasons: a card exported back out should be
+	// the card that came in, and a author who wrote four greetings meant them to be
+	// choosable when a conversation starts. Never fed to the model as a block — only
+	// the one actually chosen becomes the first message.
+	AltGreetings  []string `json:"altGreetings,omitempty"`
+	AvatarImageID string   `json:"avatarImageId,omitempty"`
 	PromptWeight    float64 `json:"promptWeight"`
 	DefaultMode     string  `json:"defaultMode"`
 	BuiltIn         bool    `json:"builtIn,omitempty"`
@@ -619,6 +629,26 @@ func validateChatWorkspace(ws *chatWorkspace) error {
 			if *field, ok = cleanLimited(*field, 12000); !ok {
 				return errors.New("character card is too large")
 			}
+		}
+		// Alternate greetings are bounded on both axes. A card with two hundred of
+		// them is a card built to fill a workspace file, and each one is a first
+		// message, so it gets a first message's ceiling.
+		if len(c.AltGreetings) > maxAltGreetings {
+			c.AltGreetings = c.AltGreetings[:maxAltGreetings]
+		}
+		kept := c.AltGreetings[:0]
+		for _, greeting := range c.AltGreetings {
+			cleaned, fine := cleanLimited(greeting, 12000)
+			if !fine {
+				return errors.New("character card is too large")
+			}
+			if cleaned != "" {
+				kept = append(kept, cleaned)
+			}
+		}
+		c.AltGreetings = kept
+		if len(c.AltGreetings) == 0 {
+			c.AltGreetings = nil
 		}
 		if c.PromptWeight == 0 {
 			c.PromptWeight = 1

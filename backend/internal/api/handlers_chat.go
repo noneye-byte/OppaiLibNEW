@@ -91,6 +91,10 @@ type chatRequest struct {
 	// A link that was never previewed is ignored rather than fetched, so a chat message
 	// can never make this server hit an address. See handlers_libby_links.go.
 	Link string `json:"link,omitempty"`
+	// Debug asks this turn to keep its receipts: the assembled prompt, the sections it
+	// was built from and the unscrubbed reply come back in the response. Opt-in per
+	// request because the payload dwarfs the reply. See chat_debug.go.
+	Debug bool `json:"debug,omitempty"`
 	// Task says what this turn is for, when the client knows something the text cannot
 	// show: an idle nudge is an autonomous message however it is worded, and a private
 	// observation is not a reply at all. Optional — the server classifies the turn itself
@@ -1082,9 +1086,17 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		add("what she is doing", rankActivity, "\n\n"+activityDirective(in.Intensity))
 		// Where she is. Shed-able like the activity vocabulary and for the same reason:
 		// it is a list, and without it she simply stays put. See libby_backgrounds.go.
-		// Wanted on a call, where the room is on screen, or when the message moves her.
+		//
+		// Wanted on a call, where the room is on screen; when the message moves her; and
+		// whenever the scene has warmed, because the directive asks the room to follow the
+		// *mood* and not only the plot. Gated on a call and a place word alone, that second
+		// half could never happen: an evening that turned tender without anybody saying
+		// "bed" shed the section every turn, so she was never told she could move and
+		// never did. Also wanted when she is nowhere yet — the first move has to come from
+		// somewhere, and a character who has never been given a room reads as one who has
+		// no rooms. The same ceiling as the photo catalogue beside it, for the same reason.
 		addDeferred("where she is", rankActivity, "\n\n"+backgroundDirective(backgrounds, in.Background),
-			in.Call || signals.place)
+			in.Call || signals.place || in.Intensity >= 3 || in.Background == "")
 		// Learning is Libby's alone, like the library snapshot and actions: she is the
 		// one who lives here, so she is the one who remembers the person she lives with.
 		tail.WriteString("\n\n" + memoryDirective)
@@ -1179,6 +1191,14 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 	preset.MaxTokens = replyTokens
 
+	// The turn's receipts, when asked for. Built here, where the sections and the
+	// budget's two loss lists are both still in scope; the raw reply is filled in
+	// after the call. See chat_debug.go.
+	var debug *chatDebug
+	if in.Debug {
+		debug = buildChatDebug(sections, budget.DroppedSections, budget.ClearedSections, messages, signals)
+	}
+
 	payloadMap := map[string]any{"messages": messages, "stream": false}
 	if model != "" {
 		payloadMap["model"] = model
@@ -1231,6 +1251,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
+	}
+	// Before any parser touches it: the difference between a tag she wrote that was
+	// then dropped and one she never wrote is only visible here.
+	if debug != nil {
+		debug.Raw = reply
 	}
 	// Both trailing directives are stripped, and the photo one is tried on either side
 	// of the mood tag: models emit them in whichever order they please regardless of
@@ -1627,6 +1652,10 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		// note = something was cut, and the client is expected to say so rather than let it
 		// happen invisibly. See chat_budget.go.
 		"context": budget,
+		// The turn's working, when it was asked for: the assembled prompt, the sections
+		// behind it, and the reply before the scrubbers. Null on an ordinary turn. The
+		// conversation export writes these out. See chat_debug.go.
+		"debug": debug,
 	})
 }
 

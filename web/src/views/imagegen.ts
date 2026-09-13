@@ -50,6 +50,8 @@ import {
   gearColorNegatives,
   gearKey,
   gearPhrase,
+  gearPromptLabel,
+  gearPromptNoun,
   gearWorn,
   normalizeOutfitGear,
   rollOutfitExposure,
@@ -356,6 +358,9 @@ export class OppaiImageGen extends LitElement {
   /** Weights each equipped colour and names every colour it is not in the negative
       prompt. On by default: a wardrobe whose colours drift is the whole set wasted. */
   @state() private outfitLockColors = true;
+  /** Which gear slot has its prompt-wording editor open, if any. One at a time:
+      the board is ten slots and ten open editors is not a board. */
+  @state() private gearPromptOpen: OutfitGearKey | null = null;
   @state() private outfitBatchRunning = false;
   @state() private outfitExporting = false;
   @state() private outfitProgress = "";
@@ -1249,7 +1254,9 @@ export class OppaiImageGen extends LitElement {
          the single fact worth reading at a glance down ten of them. */
       .gear-slot {
         display: grid;
-        grid-template-columns: 28px minmax(0, 1fr);
+        /* Three columns now: the icon, the fields, and the button that opens the
+           prompt-wording editor. The editor itself spans the lot on its own row. */
+        grid-template-columns: 28px minmax(0, 1fr) 22px;
         gap: 3px 8px;
         min-width: 0;
         padding: 6px 8px;
@@ -1290,6 +1297,84 @@ export class OppaiImageGen extends LitElement {
         white-space: nowrap;
       }
       .gear-slot.filled .gear-slot-name { color: var(--oppai-text-dim); }
+      /* The prompt-wording toggle. Quiet until the slot has actually been renamed,
+         because for most wardrobes the built-in words are right and a lit button on
+         all ten slots would read as ten things needing attention. */
+      .gear-slot-prompt {
+        grid-column: 3;
+        grid-row: 1;
+        display: grid;
+        place-items: center;
+        width: 22px;
+        height: 20px;
+        padding: 0;
+        border: 0;
+        border-radius: 6px;
+        background: transparent;
+        color: var(--oppai-text-muted);
+        cursor: pointer;
+        opacity: 0.55;
+        transition: opacity 0.14s, color 0.14s, background 0.14s;
+      }
+      .gear-slot-prompt .material-symbols-rounded { font-size: 15px; }
+      .gear-slot-prompt:hover:not(:disabled) { opacity: 1; background: var(--oppai-surface); }
+      .gear-slot-prompt.on { opacity: 1; color: var(--oppai-primary-bright); }
+      .gear-slot-prompt.open { opacity: 1; background: var(--oppai-surface); color: var(--oppai-text); }
+      .gear-slot-prompt:disabled { opacity: 0.25; cursor: default; }
+      .gear-prompt-edit {
+        grid-column: 1 / -1;
+        display: grid;
+        gap: 6px;
+        margin-top: 5px;
+        padding-top: 7px;
+        border-top: 1px dashed var(--oppai-border);
+      }
+      .gear-prompt-edit label {
+        display: grid;
+        gap: 2px;
+        color: var(--oppai-text-muted);
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+      }
+      .gear-prompt-edit input {
+        min-width: 0;
+        padding: 5px 7px;
+        border: 1px solid var(--oppai-border);
+        border-radius: 7px;
+        background: var(--oppai-surface);
+        color: var(--oppai-text);
+        font: inherit;
+        font-size: 12px;
+        letter-spacing: normal;
+        text-transform: none;
+      }
+      .gear-prompt-preview {
+        margin: 0;
+        color: var(--oppai-text-muted);
+        font-size: 11px;
+        line-height: 1.45;
+        overflow-wrap: anywhere;
+      }
+      .gear-prompt-preview code {
+        padding: 1px 4px;
+        border-radius: 4px;
+        background: var(--oppai-surface);
+        color: var(--oppai-text-dim);
+        font-size: 10.5px;
+      }
+      .gear-prompt-reset {
+        justify-self: start;
+        padding: 4px 9px;
+        border: 1px solid var(--oppai-border);
+        border-radius: 999px;
+        background: transparent;
+        color: var(--oppai-text-muted);
+        cursor: pointer;
+        font-size: 11px;
+      }
+      .gear-prompt-reset:hover:not(:disabled) { color: var(--oppai-text); border-color: var(--oppai-border-strong); }
       /* Colour is the narrower of the two fields for the same reason it comes
          first: it modifies the garment named beside it. */
       .gear-slot-fields {
@@ -5179,12 +5264,20 @@ export class OppaiImageGen extends LitElement {
     const edit = (patch: Partial<GearPiece>) => {
       this.outfitGear = { ...this.outfitGear, [key]: { ...piece, ...patch } };
     };
+    const renamed = !!piece.prompt?.trim() || !!piece.noun?.trim();
+    const open = this.gearPromptOpen === key;
     return html`<div class="gear-slot ${equipped ? "filled" : ""} ${piece.off ? "off" : ""}" title=${slot.hint}>
       <button class="gear-slot-icon material-symbols-rounded ${described ? "" : "inert"}" aria-hidden=${described ? "false" : "true"}
         title=${piece.off ? `Wear the ${slot.label.toLowerCase()} again` : described ? `Take the ${slot.label.toLowerCase()} off without clearing it` : slot.hint}
         ?disabled=${this.outfitBatchRunning || !described}
         @click=${() => edit({ off: !piece.off })}>${piece.off ? "visibility_off" : slot.icon}</button>
       <span class="gear-slot-name">${slot.label}${piece.off ? " · off" : ""}</span>
+      <button class="gear-slot-prompt ${renamed ? "on" : ""} ${open ? "open" : ""}"
+        title=${`What the generator calls this slot — currently "${gearPromptLabel(slot, piece)}"`}
+        aria-label=${`Edit the prompt wording for ${slot.label}`} aria-expanded=${open ? "true" : "false"}
+        ?disabled=${this.outfitBatchRunning}
+        @click=${() => (this.gearPromptOpen = open ? null : key)}>
+        <span class="material-symbols-rounded">text_fields</span></button>
       <div class="gear-slot-fields">
         <input class="gear-color" type="text" .value=${piece.color}
           ?disabled=${this.outfitBatchRunning}
@@ -5195,6 +5288,25 @@ export class OppaiImageGen extends LitElement {
           aria-label=${`${slot.label}: ${slot.hint}`} placeholder=${slot.hint}
           @input=${(e: Event) => edit({ item: (e.target as HTMLInputElement).value })} />
       </div>
+      ${open ? html`<div class="gear-prompt-edit">
+        <label>Prompt word
+          <input type="text" .value=${piece.prompt ?? ""} placeholder=${slot.prompt}
+            ?disabled=${this.outfitBatchRunning}
+            aria-label=${`Prompt word for ${slot.label}`}
+            @input=${(e: Event) => edit({ prompt: (e.target as HTMLInputElement).value })} /></label>
+        <label>Colour-lock noun
+          <input type="text" .value=${piece.noun ?? ""} placeholder=${gearPromptNoun(slot, piece)}
+            ?disabled=${this.outfitBatchRunning}
+            aria-label=${`Colour-lock noun for ${slot.label}`}
+            @input=${(e: Event) => edit({ noun: (e.target as HTMLInputElement).value })} /></label>
+        <p class="gear-prompt-preview">
+          ${equipped
+            ? html`Sends: <code>${gearPhrase(slot, piece, this.status?.backend ?? "", this.outfitLockColors)}</code>`
+            : html`Describe something in this slot to see the phrase it sends.`}
+        </p>
+        ${renamed ? html`<button class="gear-prompt-reset" ?disabled=${this.outfitBatchRunning}
+          @click=${() => edit({ prompt: "", noun: "" })}>Reset to "${slot.prompt}"</button>` : nothing}
+      </div>` : nothing}
     </div>`;
   }
 

@@ -31,6 +31,29 @@ export interface GearPiece {
    * means worn, so every loadout saved before this existed reads as fully equipped.
    */
   off?: boolean;
+  /**
+   * What this slot is called in the prompt, overriding the built-in word.
+   *
+   * The slot names were chosen to be the terms a booru-trained model knows, and for
+   * the common case they are right — but they are a fixed vocabulary imposed on an
+   * open-ended wardrobe. "top: pauldron" is a worse phrase than "armour: pauldron",
+   * "head item: crown" worse than "headwear: crown", and a model trained on a
+   * different tag set may want different words entirely. There was no way to say so
+   * without editing the source.
+   *
+   * Empty or absent means the slot's built-in word, which is what every loadout
+   * saved before this existed means. The label on screen never changes — this is the
+   * word the generator is given, not the one the user navigates by.
+   */
+  prompt?: string;
+  /**
+   * The garment noun repeated after a weighted colour, overriding the built-in one.
+   *
+   * Paired with `prompt` because it does the same job one clause later: colour
+   * locking emits "(crimson pauldron:1.25), crimson top" and that trailing "top" is
+   * the built-in noun contradicting the override in front of it.
+   */
+  noun?: string;
 }
 
 /** Whether a piece is actually worn: described, and not switched off. */
@@ -127,11 +150,23 @@ export function gearPhrase(
 ): string {
   const item = piece.item.trim();
   if (!item || piece.off) return "";
+  const label = gearPromptLabel(slot, piece);
+  const noun = gearPromptNoun(slot, piece);
   const color = piece.color.trim();
-  if (!color) return `${slot.prompt}: ${item}`;
+  if (!color) return `${label}: ${item}`;
   const described = `${color} ${item}`;
-  if (!lockColors) return `${slot.prompt}: ${described}`;
-  return `${slot.prompt}: ${emphasize(described, GEAR_COLOR_WEIGHT, dialect)}, ${color} ${slot.noun}`;
+  if (!lockColors) return `${label}: ${described}`;
+  return `${label}: ${emphasize(described, GEAR_COLOR_WEIGHT, dialect)}, ${color} ${noun}`;
+}
+
+/** The word this slot goes into the prompt under: the user's override, or the built-in. */
+export function gearPromptLabel(slot: typeof OUTFIT_GEAR_SLOTS[number], piece: GearPiece): string {
+  return piece.prompt?.trim() || slot.prompt;
+}
+
+/** The garment noun repeated after a weighted colour. Follows the label's override. */
+export function gearPromptNoun(slot: typeof OUTFIT_GEAR_SLOTS[number], piece: GearPiece): string {
+  return piece.noun?.trim() || piece.prompt?.trim() || slot.noun;
 }
 
 /**
@@ -149,9 +184,10 @@ export function gearColorNegatives(
   if (!gearWorn(piece) || !color) return [];
   const named = new Set(colorFamilies(color));
   if (!named.size) return [];
+  const noun = gearPromptNoun(slot, piece);
   return GEAR_COLOR_FAMILIES
     .filter(({ name }) => !named.has(name))
-    .map(({ name }) => `${name} ${slot.noun}`);
+    .map(({ name }) => `${name} ${noun}`);
 }
 
 export type ClothesState = "on" | "displaced" | "off";
@@ -257,7 +293,17 @@ export function normalizeOutfitGear(value: unknown): OutfitGear {
   return Object.fromEntries(OUTFIT_GEAR_SLOTS.map(({ key }) => {
     const piece = raw[key];
     if (typeof piece === "string") return [key, { color: "", item: piece }];
-    if (isGearPiece(piece)) return [key, { color: piece.color, item: piece.item, ...(piece.off ? { off: true } : {}) }];
+    if (isGearPiece(piece)) {
+      return [key, {
+        color: piece.color,
+        item: piece.item,
+        ...(piece.off ? { off: true } : {}),
+        // Carried only when set. An override equal to the built-in word is stored as
+        // an override anyway: the user typed it, and the built-in may change.
+        ...(piece.prompt?.trim() ? { prompt: piece.prompt.trim() } : {}),
+        ...(piece.noun?.trim() ? { noun: piece.noun.trim() } : {}),
+      }];
+    }
     return [key, { color: "", item: "" }];
   })) as OutfitGear;
 }
@@ -267,8 +313,16 @@ export function normalizeOutfitGear(value: unknown): OutfitGear {
 export function gearKey(gear: OutfitGear): string {
   // A piece switched off is, to the generator, not there: it keys the same as an
   // empty slot, so toggling it off and clearing it describe the same clothes.
-  return JSON.stringify(Object.fromEntries(OUTFIT_GEAR_SLOTS.map(({ key }) => [
-    key,
-    gearWorn(gear[key]) ? `${gear[key].color.trim().toLowerCase()}|${gear[key].item.trim().toLowerCase()}` : "|",
-  ])));
+  return JSON.stringify(Object.fromEntries(OUTFIT_GEAR_SLOTS.map((slot) => {
+    const piece = gear[slot.key];
+    // The prompt words are part of what is described: renaming a slot changes the
+    // prompt, so squares generated before the rename no longer belong to what is on
+    // screen. Keyed only for a worn piece, like everything else here.
+    return [
+      slot.key,
+      gearWorn(piece)
+        ? `${piece.color.trim().toLowerCase()}|${piece.item.trim().toLowerCase()}|${gearPromptLabel(slot, piece).toLowerCase()}|${gearPromptNoun(slot, piece).toLowerCase()}`
+        : "|",
+    ];
+  })));
 }

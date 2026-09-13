@@ -467,6 +467,10 @@ export interface ChatTurn {
   recentMoods?: string[];
   /** The heat her last replies sat at, oldest first, for the same reason. */
   recentHeat?: number[];
+  /** Asks this turn to return its working — the assembled prompt, the sections it was
+      built from, and the reply before any tag was parsed out of it. Opt-in because the
+      payload dwarfs the reply; the conversation export is what reads it back. */
+  debug?: boolean;
   /** Whether the user has her on the call screen rather than in the message log.
       A call changes what they are doing — watching her rather than reading her — and
       the server has no other way to know it was opened. */
@@ -493,6 +497,28 @@ export interface ChatTurn {
 export interface LibbyThought {
   kind: "thought" | "aside";
   text: string;
+}
+
+/** One assembled section of the system prompt, as the budget was offered it. */
+export interface ChatDebugSection {
+  name: string;
+  rank: number;
+  /** The turn had no particular use for this one, so it was offered last. */
+  deferred: boolean;
+  /** Whether it survived into the prompt that was actually sent. */
+  kept: boolean;
+  text: string;
+}
+
+/** How one turn was built. Present only when the request asked with `debug: true`. */
+export interface ChatDebug {
+  /** Exactly what was posted to the model, system prompt included. */
+  messages: ChatMessage[];
+  sections: ChatDebugSection[];
+  /** The reply before any tag was parsed or scrubbed out of it. */
+  raw: string;
+  /** What the turn read the latest message as being about. */
+  signals: Record<string, boolean>;
 }
 
 export interface ChatResponse {
@@ -553,6 +579,10 @@ export interface ChatResponse {
       it was matched against, how well it fitted. Diagnostics for the advanced
       panel. Absent from older servers. */
   photo?: ChatPhotoReport;
+  /** How this turn was built, when the request asked for it: the assembled prompt,
+      the sections behind it, and the raw reply. Null on an ordinary turn, absent
+      from older servers. */
+  debug?: ChatDebug | null;
 }
 
 /** How the reply's picture was chosen. */
@@ -755,6 +785,10 @@ export interface ChatCharacter {
   exampleDialogue?: string;
   systemPrompt?: string;
   creatorNotes?: string;
+  /** Greetings past the first, from an imported card. Kept so a card survives a
+      round-trip through this app, and offered when a chat with them is started —
+      a card author who wrote four openings meant them to be choosable. */
+  altGreetings?: string[];
   avatarImageId?: string;
   promptWeight: number;
   defaultMode: string;

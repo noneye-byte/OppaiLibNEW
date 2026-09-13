@@ -575,6 +575,13 @@ data class ChatCharacter(
     val exampleDialogue: String = "",
     val systemPrompt: String = "",
     val creatorNotes: String = "",
+    /** Greetings past the first, from an imported card.
+     *
+     * Carried here even though this app never shows them: the workspace round-trips
+     * through the client on every save, so a field this side does not know about is a
+     * field the next Android save deletes. A card imported on the desktop would lose
+     * its alternate greetings the first time the phone wrote anything. */
+    val altGreetings: List<String> = emptyList(),
     val avatarImageId: String = "",
     val promptWeight: Double = 1.0,
     val defaultMode: String = "sweet",
