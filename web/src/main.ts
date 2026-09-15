@@ -1,22 +1,13 @@
-// Entry point: register Material 3 components, inject global M3 tokens, and
-// pull in the app components (each self-registers as a custom element).
-import "@material/web/button/filled-button.js";
-import "@material/web/button/text-button.js";
-import "@material/web/button/outlined-button.js";
-import "@material/web/iconbutton/icon-button.js";
-import "@material/web/textfield/filled-text-field.js";
-import "@material/web/textfield/outlined-text-field.js";
-import "@material/web/progress/circular-progress.js";
-import "@material/web/dialog/dialog.js";
-import "@material/web/chips/chip-set.js";
-import "@material/web/chips/assist-chip.js";
-import "@material/web/chips/filter-chip.js";
-import "@material/web/fab/fab.js";
-import "@material/web/icon/icon.js";
-import "@material/web/list/list.js";
-import "@material/web/list/list-item.js";
-import "@material/web/tabs/tabs.js";
-import "@material/web/tabs/primary-tab.js";
+// Entry point: inject the global M3 tokens and pull in the app shell (each component
+// self-registers as a custom element).
+//
+// Only the component this file's own screen needs is registered here. There were
+// eighteen, for the whole app, in the bundle everyone downloads before anything
+// renders — and ten of them (the tab bar, the list, the FAB, the chip set, the icon
+// button…) were used nowhere in the app at all. Each screen now imports what it
+// renders, so a definition arrives with the view that needs it: see login.ts and
+// scrape-dialog.ts.
+import "@material/web/progress/circular-progress.js"; // app.ts's loading state
 import { styles as typescaleStyles } from "@material/web/typography/md-typescale-styles.js";
 
 import { globalStyles, applyTheme, loadTheme, watchSystemTheme } from "./theme.js";

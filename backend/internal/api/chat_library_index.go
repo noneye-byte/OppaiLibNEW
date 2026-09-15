@@ -77,6 +77,12 @@ type libraryEntry struct {
 	// said "1" a dozen times would be the index's largest allocation for no information.
 	weights map[string]float64
 	at      int64 // created_at, the tie-break when a lookup overflows its cap
+	// What the library grid needs to narrow and order a search result without going
+	// back to SQL: the filters it offers beside the query, and the keys it sorts on.
+	// See searchLibraryPage in media_search.go.
+	favorite bool
+	rating   int
+	size     int64
 }
 
 // libraryIndex is the whole library, searchable by word.
@@ -255,7 +261,7 @@ func (s *Server) growLibraryIndex(ctx context.Context, idx *libraryIndex, stamp 
 			cursor = briefs[i].ID
 			names := make([]db.TagName, 0, len(tagsByID[briefs[i].ID]))
 			for _, tag := range tagsByID[briefs[i].ID] {
-				names = append(names, db.TagName{Name: tag.Name, Weight: tag.Weight})
+				names = append(names, db.TagName{Name: tag.Name, Weight: tag.Weight, Category: tag.Category})
 			}
 			s.addLibraryEntry(idx.entries, idx.words, idx.byKind, &briefs[i], names)
 		}
@@ -274,13 +280,20 @@ func (s *Server) addLibraryEntry(entries map[int64]*libraryEntry, words map[stri
 		title = "Untitled"
 	}
 	entry := &libraryEntry{
-		link:  libbyLink{ID: brief.ID, Title: title, Kind: brief.Kind, HasThumb: brief.HasThumb},
-		title: strings.ToLower(title),
-		at:    brief.CreatedAt,
+		link:     libbyLink{ID: brief.ID, Title: title, Kind: brief.Kind, HasThumb: brief.HasThumb},
+		title:    strings.ToLower(title),
+		at:       brief.CreatedAt,
+		favorite: brief.Favorite,
+		rating:   brief.Rating,
+		size:     brief.Size,
 	}
+	categories := make([]string, 0, 4)
 	for _, tag := range tagNames {
 		name := strings.ToLower(tag.Name)
 		entry.tags = append(entry.tags, name)
+		if tag.Category != "" {
+			categories = append(categories, strings.ToLower(tag.Category))
+		}
 		if tag.Weight > 0 && tag.Weight < 1 {
 			if entry.weights == nil {
 				entry.weights = map[string]float64{}
@@ -307,6 +320,14 @@ func (s *Server) addLibraryEntry(entries map[int64]*libraryEntry, words map[stri
 	file(brief.Kind)
 	for _, tag := range entry.tags {
 		file(tag)
+	}
+	// Notes and tag categories are filed for the library search box, which has always
+	// matched both — it ran in the browser over every field of every row. Nothing in
+	// chat looks them up, but an index that answered fewer fields than the search it
+	// now backs would quietly lose results people rely on.
+	file(s.decrypt(brief.NotesEnc, "notes"))
+	for _, category := range categories {
+		file(category)
 	}
 }
 

@@ -135,31 +135,154 @@ func (s *Server) ingestBlob(ctx context.Context, src io.Reader, meta ingestMeta)
 	return &ingestResult{ID: id, SHA256: res.SHA256, Size: res.Size, Kind: string(kind), Deduped: existed}, nil
 }
 
+// handleListMedia serves one page of the library: filtered, searched, sorted and
+// counted here rather than in the client.
+//
+//	kind=video       one kind, or every kind when absent
+//	favorite=1       favourites only
+//	q=blue hair      words that must all match a title, note or tag
+//	sort=newest      newest (default) | oldest | rating | largest
+//	limit / offset   the page, limit capped at 200
+//
+// The response carries `total`, which is what makes paging possible for the client:
+// it can show "1–60 of 4,312" and know whether to ask for more without holding the
+// rest. Before this, `q` and `favorite` did not exist and the grid implemented both
+// by downloading every row.
 func (s *Server) handleListMedia(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	q := r.URL.Query()
 	limit, _ := strconv.Atoi(q.Get("limit"))
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
 	offset, _ := strconv.Atoi(q.Get("offset"))
-	rows, err := s.db.ListMedia(r.Context(), q.Get("kind"), limit, offset)
+	if offset < 0 {
+		offset = 0
+	}
+	filter := db.MediaFilter{
+		Kind:         q.Get("kind"),
+		FavoriteOnly: isTruthy(q.Get("favorite")),
+		Tag:          q.Get("tag"),
+		Sort:         db.ParseMediaSort(q.Get("sort")),
+	}
+
+	var (
+		rows  []*db.MediaRow
+		total int
+		err   error
+	)
+	if terms := searchTerms(q.Get("q")); len(terms) > 0 {
+		// Ciphertext cannot be matched in SQL, so a query goes to the in-memory index
+		// and comes back as the ids on this page. See media_search.go.
+		var ids []int64
+		ids, total = s.searchLibraryPage(ctx, librarySearch{
+			terms:        terms,
+			kind:         filter.Kind,
+			favoriteOnly: filter.FavoriteOnly,
+			tag:          filter.Tag,
+			sort:         filter.Sort,
+		}, limit, offset)
+		rows, err = s.db.MediaByIDs(ctx, ids)
+	} else {
+		rows, err = s.db.MediaPage(ctx, filter, limit, offset)
+		if err == nil {
+			total, err = s.db.CountMedia(ctx, filter)
+		}
+	}
 	if err != nil {
+		s.log.Error("list media", "err", err)
 		writeErr(w, http.StatusInternalServerError, "db error")
 		return
 	}
+
 	out := make([]models.Media, 0, len(rows))
 	ids := make([]int64, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, s.toModel(row))
 		ids = append(ids, row.ID)
 	}
-	// Tags ride along with the list: the client searches and filters over them
-	// without a round trip per item. One batched query, not one per row.
-	if tags, err := s.db.TagsForMediaBatch(r.Context(), ids); err == nil {
+	// Tags ride along with the list: the client renders them on the tile without a
+	// round trip per item. One batched query, not one per row.
+	if tags, err := s.db.TagsForMediaBatch(ctx, ids); err == nil {
 		for i := range out {
 			out[i].Tags = tags[out[i].ID]
 		}
 	} else {
 		s.log.Warn("list tags", "err", err)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": out})
+	writeJSON(w, http.StatusOK, map[string]any{"items": out, "total": total})
+}
+
+// isTruthy reads a query flag. Present-and-not-false counts as set, so ?favorite,
+// ?favorite=1 and ?favorite=true all mean the same thing and a client that sends
+// ?favorite=0 to mean "no" is understood too.
+func isTruthy(v string) bool {
+	switch strings.ToLower(v) {
+	case "", "0", "false", "no":
+		return false
+	default:
+		return true
+	}
+}
+
+// handleTopTags is the tags worth offering as filter chips: the most-used ones,
+// optionally within one kind. ?kind=video&limit=12
+//
+// /api/tags has been in ARCHITECTURE.md since the first commit and was never routed.
+// This is the part of it the UI actually needs — the client used to work the same list
+// out from every row it had downloaded, which is one of the reasons it downloaded them
+// all.
+func (s *Server) handleTopTags(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	tags, err := s.db.TopTags(r.Context(), q.Get("kind"), limit)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": tags})
+}
+
+// handleMediaStats is the library's shape without any of its rows: how many items
+// of each kind, how many in total, and how many arrived in the last week.
+//
+// Home needs exactly these numbers to label its shelves and its "N added this week".
+// It used to compute them from the whole library in browser memory, which meant the
+// dashboard could not render until every row had been transferred.
+func (s *Server) handleMediaStats(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	byKind, err := s.db.CountMediaByKind(ctx)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	total := 0
+	for _, n := range byKind {
+		total += n
+	}
+	// Seconds, matching media.created_at. Home used to work this out in the browser
+	// from Date.now(), which is milliseconds, so the comparison was three orders of
+	// magnitude out and "N added this week" has always read 0.
+	week := time.Now().Add(-7 * 24 * time.Hour).Unix()
+	thisWeek, err := s.db.CountMediaSince(ctx, week)
+	if err != nil {
+		s.log.Warn("stats since", "err", err)
+	}
+	favorites, err := s.db.CountMedia(ctx, db.MediaFilter{FavoriteOnly: true})
+	if err != nil {
+		s.log.Warn("stats favorites", "err", err)
+	}
+	bytes, err := s.db.TotalMediaBytes(ctx)
+	if err != nil {
+		s.log.Warn("stats bytes", "err", err)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"total":     total,
+		"byKind":    byKind,
+		"favorites": favorites,
+		"thisWeek":  thisWeek,
+		"bytes":     bytes,
+	})
 }
 
 func (s *Server) handleGetMedia(w http.ResponseWriter, r *http.Request) {

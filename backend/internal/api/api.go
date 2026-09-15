@@ -283,6 +283,11 @@ func (s *Server) Handler() http.Handler {
 
 	// Media (protected).
 	mux.HandleFunc("GET /api/media", s.requireAuth(s.handleListMedia))
+	// The library's shape without its rows, so Home can label its shelves without
+	// paging through them. See handleMediaStats.
+	mux.HandleFunc("GET /api/media/stats", s.requireAuth(s.handleMediaStats))
+	// The filter chips' tags, most-used first. See handleTopTags.
+	mux.HandleFunc("GET /api/tags/top", s.requireAuth(s.handleTopTags))
 	mux.HandleFunc("POST /api/media", s.requireAuth(s.handleUploadMedia))
 	mux.HandleFunc("POST /api/media/bulk", s.requireAuth(s.handleBulkMedia))
 
@@ -373,6 +378,25 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/imagegen/wildcards/{id}", s.requireAuth(s.handleDeleteWildcard))
 	// How a saved image was made, for loading it back into the studio.
 	mux.HandleFunc("GET /api/media/{id}/generation", s.requireAuth(s.handleGetMediaGeneration))
+
+	// Collections: a named, ordered list of items. The tables were in the schema from
+	// the beginning with nothing to reach them; see handlers_collections.go.
+	mux.HandleFunc("GET /api/collections", s.requireAuth(s.handleListCollections))
+	mux.HandleFunc("POST /api/collections", s.requireAuth(s.handleCreateCollection))
+	mux.HandleFunc("PATCH /api/collections/{id}", s.requireAuth(s.handleRenameCollection))
+	mux.HandleFunc("DELETE /api/collections/{id}", s.requireAuth(s.handleDeleteCollection))
+	mux.HandleFunc("GET /api/collections/{id}/items", s.requireAuth(s.handleCollectionItems))
+	mux.HandleFunc("POST /api/collections/{id}/items", s.requireAuth(s.handleAddToCollection))
+	mux.HandleFunc("PUT /api/collections/{id}/order", s.requireAuth(s.handleReorderCollection))
+	mux.HandleFunc("DELETE /api/collections/{id}/items/{media}", s.requireAuth(s.handleRemoveFromCollection))
+	mux.HandleFunc("GET /api/media/{id}/collections", s.requireAuth(s.handleMediaCollections))
+
+	// Resume. Per user and server-side, so the position is the same on the phone and
+	// the desktop; see handlers_progress.go.
+	mux.HandleFunc("GET /api/resume", s.requireAuth(s.handleResume))
+	mux.HandleFunc("GET /api/media/{id}/progress", s.requireAuth(s.handleGetProgress))
+	mux.HandleFunc("PUT /api/media/{id}/progress", s.requireAuth(s.handleSetProgress))
+	mux.HandleFunc("DELETE /api/media/{id}/progress", s.requireAuth(s.handleClearProgress))
 	// Model metadata: reads and writes InvokeAI's own model records, so edits here
 	// are the same edits its model manager would make.
 	mux.HandleFunc("GET /api/imagegen/model", s.requireAuth(s.handleGetModelMeta))

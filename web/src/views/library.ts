@@ -1,7 +1,20 @@
 import { LitElement, html, css, nothing } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
-import { api, mascotSay, type ChatCharacter, type Media, type SourceItem, type User } from "../api.js";
+import {
+  api,
+  mascotSay,
+  MEDIA_PAGE_SIZE,
+  type ChatCharacter,
+  type Collection,
+  type LibraryStats,
+  type Media,
+  type MediaQuery,
+  type MediaSort,
+  type SourceItem,
+  type TagCount,
+  type User,
+} from "../api.js";
 import { canShare, saveForCharacter, shareWithCharacter } from "../chat-share.js";
 import { attachLongPress } from "../long-press.js";
 import { OPEN_MEDIA_EVENT } from "../chat-links.js";
@@ -26,18 +39,67 @@ import {
   saveFavorites,
   isTypingTarget,
   formatBytes,
+  studioEditable,
 } from "../media-meta.js";
 import { loadRecents, noteOpened, recentlyOpened } from "../recents.js";
 import "../context-menu.js";
-import "./viewer.js";
-import { studioEditable } from "./viewer.js";
-import "./scrape-dialog.js";
-import "./settings.js";
-import "./browse.js";
-import "./imagegen.js";
-import "./chat.js";
 import { libbyWhere } from "./libby-drawer.js";
 import "./libby-drawer.js";
+
+/**
+ * The screens, loaded when they are first needed.
+ *
+ * These were static imports, which put every screen in the first bundle: the studio
+ * and the chat view alone are some twelve thousand lines, and they were parsed before
+ * the login form could paint, for someone who only wanted to look at a thumbnail. One
+ * chunk of 1.2 MB became the price of opening the app at all.
+ *
+ * A custom element can be written into the template before its module has loaded — the
+ * browser upgrades the element when the definition arrives — so the section switches
+ * immediately and fills in a moment later. Nothing waits on the import; there is
+ * nothing to wait for.
+ *
+ * Keyed by section so each module is fetched once, and the promise is kept rather than
+ * a boolean: two quick taps on Chat must not start two fetches.
+ */
+const VIEW_MODULES: Record<ViewKey, () => Promise<unknown>> = {
+  settings: () => import("./settings.js"),
+  browse: () => import("./browse.js"),
+  imagegen: () => import("./imagegen.js"),
+  chat: () => import("./chat.js"),
+  // Not sections, but loaded the same way and on the same terms: the viewer the first
+  // time an item is opened, the import dialog when one is opened. Separately, so
+  // opening a picture does not also fetch the dialog's text fields and chips.
+  viewer: () => import("./viewer.js"),
+  scrape: () => import("./scrape-dialog.js"),
+};
+
+/** Which chunk a section lives in. Create and the studio are one module in two modes,
+ *  so both map to the same key. */
+type ViewKey = "settings" | "browse" | "imagegen" | "chat" | "viewer" | "scrape";
+function viewKey(section: string): ViewKey | null {
+  if (section === "studio") return "imagegen";
+  return section in VIEW_MODULES ? (section as ViewKey) : null;
+}
+
+const loadedViews = new Map<string, Promise<unknown>>();
+
+/** Starts a chunk loading (or returns the load already in flight). */
+function loadView(section: string): Promise<unknown> {
+  const key = viewKey(section);
+  if (!key) return Promise.resolve();
+  const existing = loadedViews.get(key);
+  if (existing) return existing;
+  const load = VIEW_MODULES[key];
+  const p = load().catch((err) => {
+    // A failed chunk must be retryable: leaving the rejected promise in the map would
+    // make the section permanently blank.
+    loadedViews.delete(key);
+    throw err;
+  });
+  loadedViews.set(key, p);
+  return p;
+}
 
 /** Where the shell can be.
  *
@@ -46,7 +108,16 @@ import "./libby-drawer.js";
  * the better of the two: it opens over the real library grid, where the screen had to
  * render a second copy of it. Old state naming that section is handled in selectSection.
  */
-type Section = "home" | "favorites" | "browse" | "imagegen" | "studio" | "chat" | "settings" | Kind;
+type Section =
+  | "home"
+  | "favorites"
+  | "collections"
+  | "browse"
+  | "imagegen"
+  | "studio"
+  | "chat"
+  | "settings"
+  | Kind;
 
 interface NavSection {
   id: Section;
@@ -58,6 +129,9 @@ const NAV_SECTIONS: NavSection[] = [
   { id: "home", label: "Home", icon: "home" },
   ...KIND_ORDER.map((k) => ({ id: k, label: KIND_META[k].label, icon: KIND_META[k].icon })),
   { id: "favorites", label: "Favorites", icon: "favorite" },
+  // A named, ordered list of items — the one thing a tag cannot express, since a tag
+  // says what something is and says it about everything it is on equally.
+  { id: "collections", label: "Collections", icon: "bookmarks" },
   // Remote catalogues. Not part of the library — nothing here is imported until the
   // user saves it — but it's how things get *into* the library, so it sits with them.
   { id: "browse", label: "Browse", icon: "explore" },
@@ -71,21 +145,10 @@ const NAV_SECTIONS: NavSection[] = [
   { id: "chat", label: "Chat", icon: "chat_bubble" },
 ];
 
-// Everything about an item a search query can match: its title, its notes, and
-// its tags — both the tag name and its category, so "character" or "rating"
-// surfaces everything the AI classified that way.
-function searchHaystack(m: Media): string {
-  const tags = (m.tags ?? []).flatMap((t) => [t.name, t.category]);
-  return [m.title, m.notes ?? "", ...tags].join("\n").toLowerCase();
-}
-
-// Terms are ANDed, so "blue hair explicit" narrows across fields — a tag from
-// one, a rating from another — rather than requiring one field to hold them all.
-function matchesSearch(m: Media, terms: string[]): boolean {
-  if (terms.length === 0) return true;
-  const hay = searchHaystack(m);
-  return terms.every((t) => hay.includes(t));
-}
+// Search itself lives on the server now — see media_search.go. It matches the same
+// fields this file used to (title, notes, tag names, tag categories) and ANDs the
+// terms the same way, but against the whole collection rather than against whatever
+// the browser had downloaded.
 
 // Main application shell for the OppaiLib Media Server UI: a nav rail, top app
 // bar with search, and a content area that routes between the home dashboard,
@@ -94,11 +157,56 @@ function matchesSearch(m: Media, terms: string[]): boolean {
 export class OppaiLibrary extends LitElement {
   @property({ attribute: false }) user!: User;
 
+  /** The pages of the current query that have been loaded — what the grid draws.
+   *
+   *  Not the library. This held every row until the server learned to search and
+   *  filter (see reload / media_search.go), which put the whole collection in one
+   *  tab's memory and made every screen wait for all of it. */
   @state() private items: Media[] = [];
+  /** How many items the current query matches in total, from the server. What makes
+   *  "1–60 of 4,312" sayable, and what tells the sentinel whether to ask for more. */
+  @state() private total = 0;
+  /** The order the grid is in. Title is absent on purpose: titles are encrypted, so
+   *  the server cannot sort by one. */
+  @state() private sort: MediaSort = "newest";
+  /** The library's shape, for Home's counts. Null until it arrives. */
+  @state() private stats: LibraryStats | null = null;
+  /** Home's shelves, each a bounded query rather than a slice of everything. */
+  @state() private home: {
+    resume: Media[];
+    favorites: Media[];
+    newest: Media[];
+    byKind: Record<Kind, Media[]>;
+  } | null = null;
+  /** The filter chips for the current kind, counted by the server. */
+  @state() private chipTags: TagCount[] = [];
+  /** Named, ordered lists. The tables were in the schema from the first commit with
+   *  nothing to reach them; see handlers_collections.go. */
+  @state() private collections: Collection[] = [];
+  /** Which collection is open, when the section is "collections". */
+  @state() private openCollection: Collection | null = null;
   /** What has been opened on this device, newest first. Feeds Home's hero and its
       "Jump back in" row. Per-device and client-owned; see recents.ts. */
   @state() private recents = loadRecents();
   @state() private loading = false;
+  /** A further page on its way. Separate from `loading` so appending never blanks
+   *  what is already on screen. */
+  @state() private loadingMore = false;
+  /** Which lazily-loaded screens are ready to render.
+   *
+   *  A view is rendered only once its chunk is in. Writing the element out early and
+   *  letting the browser upgrade it looks free, but Lit runs connectedCallback at
+   *  upgrade time and only re-applies the property bindings afterwards — so a view that
+   *  reads a property on connect (the viewer does, to fetch the item) sees undefined
+   *  and throws. */
+  @state() private viewReady = new Set<ViewKey>();
+  /** Cancels the page the query has moved on from. */
+  private pageAbort?: AbortController;
+  private homeAbort?: AbortController;
+  /** Waits for the typing to stop before asking the server. */
+  private searchDebounce?: number;
+  /** Watches the end of the grid, to ask for the next page before it is reached. */
+  private moreObserver?: IntersectionObserver;
   @state() private section: Section = "home";
   @state() private selectedId: number | null = null;
   /** A library picture handed to the Create screen to be redone. See studioEditable. */
@@ -501,6 +609,53 @@ export class OppaiLibrary extends LitElement {
         font-size: 13px;
         color: var(--oppai-text-muted);
       }
+      /* The sort control sits at the far end of the grid heading, so the heading reads
+         "what this is, how much of it, in what order". */
+      .sort {
+        margin-left: auto;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 13px;
+      }
+      .sort-label {
+        color: var(--oppai-text-muted);
+      }
+      .sort select {
+        height: 34px;
+        padding: 0 8px;
+        border-radius: 8px;
+        border: 1px solid var(--oppai-border-strong);
+        background: var(--oppai-surface);
+        color: var(--oppai-text);
+        font-family: inherit;
+        font-size: 13px;
+      }
+      /* The end of what has loaded. The sentinel is what the observer watches; the
+         button behind it is for anyone the observer does not reach. */
+      .more-sentinel,
+      .more-end {
+        display: grid;
+        place-items: center;
+        padding: 28px 0 8px;
+        font-size: 13px;
+        color: var(--oppai-text-muted);
+      }
+      .more-btn {
+        height: 40px;
+        padding: 0 20px;
+        border-radius: 20px;
+        border: 1px solid var(--oppai-border-strong);
+        background: var(--oppai-surface);
+        color: var(--oppai-text);
+        font-family: inherit;
+        font-size: 14px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      .more-btn:hover {
+        background: var(--oppai-surface-2);
+      }
       .chips {
         display: flex;
         gap: 8px;
@@ -537,6 +692,17 @@ export class OppaiLibrary extends LitElement {
         -webkit-touch-callout: none;
         -webkit-user-select: none;
         user-select: none;
+      }
+      /* A focused tile has to be visible as such, now that one can be reached by
+         keyboard. focus-visible rather than focus, so a mouse click does not leave a
+         ring behind it. */
+      .tile:focus {
+        outline: none;
+      }
+      .tile:focus-visible {
+        outline: 2px solid var(--oppai-primary);
+        outline-offset: 3px;
+        border-radius: 18px;
       }
       .tile-media {
         position: relative;
@@ -891,7 +1057,9 @@ export class OppaiLibrary extends LitElement {
   connectedCallback() {
     super.connectedCallback();
     profileUpdates(this, "library");
-    this.refresh();
+    // Hearts from before favourites were server-side go up first, so the first page
+    // that comes back already knows about them.
+    void this.migrateLocalFavorites().then(() => this.refresh());
     // The shell's menu is the fallback for the whole app: it catches right-clicks
     // that bubble out of any view, including through a child's shadow root. A view
     // that built its own menu has already called preventDefault, which is how the
@@ -924,6 +1092,39 @@ export class OppaiLibrary extends LitElement {
     window.removeEventListener("oppai-upload-complete", this.onUploadDone);
     window.removeEventListener("oppai-incognito", this.onIncognito);
     if (this.uploadSettle) clearTimeout(this.uploadSettle);
+    // Nothing in flight should outlive the view: an abandoned page would land on a
+    // disconnected element, and the observer would keep the grid's last node alive.
+    if (this.searchDebounce) clearTimeout(this.searchDebounce);
+    this.pageAbort?.abort();
+    this.homeAbort?.abort();
+    this.moreObserver?.disconnect();
+  }
+
+  /**
+   * Keeps the "load more" sentinel observed as the grid re-renders.
+   *
+   * An observer rather than a button or a scroll handler: it fires once, early, off
+   * the main thread, and asks for the next page before the end of this one is reached.
+   * rootMargin gives it a screen of warning so the grid rarely shows a gap.
+   */
+  protected updated(changed: Map<string, unknown>) {
+    super.updated?.(changed as never);
+    const sentinel = this.renderRoot?.querySelector(".more-sentinel");
+    if (!sentinel) {
+      this.moreObserver?.disconnect();
+      this.moreObserver = undefined;
+      return;
+    }
+    if (!this.moreObserver) {
+      this.moreObserver = new IntersectionObserver(
+        (entries) => {
+          if (entries.some((e) => e.isIntersecting)) void this.loadMore();
+        },
+        { rootMargin: "600px 0px" },
+      );
+    }
+    this.moreObserver.disconnect();
+    this.moreObserver.observe(sentinel);
   }
 
   private onIncognito = () => {
@@ -969,6 +1170,15 @@ export class OppaiLibrary extends LitElement {
       ...(open ? [] : [{ label: "Open", icon: "open_in_full", run: () => this.openItem(id) }]),
       { label: fav ? "Remove from favorites" : "Add to favorites", icon: fav ? "heart_minus" : "favorite", run: () => this.toggleFavorite(id) },
       ...(open ? [] : [{ label: this.selectMode ? "Toggle selection" : "Select items", icon: "check_box", run: () => this.selectMode ? this.toggleSelected(id) : this.toggleSelectMode() }]),
+      // A list in an order you chose, which is the one thing the tags cannot express.
+      { label: "Add to collection…", icon: "playlist_add",
+        run: () => this.openCollectionMenu([id], event.clientX, event.clientY) },
+      // Only while looking at one: "remove from collection" needs a collection to
+      // mean, and on any other screen it would be a menu entry with no referent.
+      ...(this.openCollection
+        ? [{ label: `Take off "${this.openCollection.name}"`, icon: "playlist_remove",
+             run: () => void this.removeFromOpenCollection(id) }]
+        : []),
       menuDivider,
       // The two ways to hand her a picture, one entry each and Libby's by name: she
       // is who you are nearly always sending to, and "Share with…" then a list of
@@ -1173,24 +1383,163 @@ export class OppaiLibrary extends LitElement {
     this.selectedId = this.viewerList[j];
   };
 
-  private async refresh() {
+  /**
+   * The query the grid is currently showing, as the server takes it.
+   *
+   * One place decides what is on screen, so the loader, the "load more" and the
+   * cancellation all agree about what they are loading. Section, search box, sort
+   * and filter chip are the whole of it.
+   */
+  private get query(): MediaQuery {
+    const search = this.search.trim();
+    if (search) return { q: search, sort: this.sort };
+    if (this.section === "favorites") return { favorite: true, sort: this.sort };
+    if (KIND_ORDER.includes(this.section as Kind)) {
+      const kind = this.section as Kind;
+      const chip = this.filters[kind];
+      return { kind, tag: chip && chip !== "All" ? chip : undefined, sort: this.sort };
+    }
+    return { sort: this.sort };
+  }
+
+  /** A string that changes exactly when the query does, for deciding whether a
+   *  page that has arrived still belongs on screen. */
+  private queryKey(q: MediaQuery): string {
+    return [q.kind ?? "", q.q ?? "", q.tag ?? "", q.favorite ? "fav" : "", q.sort ?? "newest"].join("|");
+  }
+
+  /**
+   * Loads the first page of the current query, replacing what is on screen.
+   *
+   * This used to be the whole library: pages of 200 in a loop until the server ran
+   * out, held in one tab's memory, because search and favourites were filters applied
+   * in the browser. Both are the server's now (see media_search.go), so a screen costs
+   * a screenful — and the collection is allowed to be as large as the disk.
+   *
+   * The in-flight page is cancelled when a newer one starts. Without that, typing in
+   * the search box raced its own requests and the grid could settle on the results for
+   * a prefix of what had been typed.
+   */
+  private async reload() {
+    const q = this.query;
+    const key = this.queryKey(q);
+    this.pageAbort?.abort();
+    const abort = new AbortController();
+    this.pageAbort = abort;
     this.loading = true;
     try {
-      // Search/favorites are client-side, so the web client needs the whole library.
-      // The API caps a page at 200; asking for 500 fell back to its 50-item default,
-      // which made older images disappear from the desktop UI.
-      const pageSize = 200;
-      const all: Media[] = [];
-      for (let offset = 0; ; offset += pageSize) {
-        const res = await api.listMedia("", pageSize, offset);
-        const page = res.items ?? [];
-        all.push(...page);
-        if (page.length < pageSize) break;
-      }
-      this.items = all;
+      const page = await api.listMedia({ ...q, limit: MEDIA_PAGE_SIZE, offset: 0, signal: abort.signal });
+      if (this.queryKey(this.query) !== key) return;
+      this.items = page.items ?? [];
+      this.total = page.total ?? this.items.length;
+      this.noteServerFavorites(this.items);
+    } catch (err) {
+      if (abort.signal.aborted) return;
+      mascotSay((err as Error).message || "Couldn't load the library.", "error");
     } finally {
-      this.loading = false;
+      if (this.pageAbort === abort) this.loading = false;
     }
+  }
+
+  /** Appends the next page. Called by the sentinel at the end of the grid. */
+  private async loadMore() {
+    if (this.loading || this.loadingMore || this.items.length >= this.total) return;
+    const q = this.query;
+    const key = this.queryKey(q);
+    this.loadingMore = true;
+    try {
+      const page = await api.listMedia({ ...q, limit: MEDIA_PAGE_SIZE, offset: this.items.length });
+      // A page that arrives after the query moved on is discarded rather than mixed
+      // into results it does not belong to.
+      if (this.queryKey(this.query) !== key) return;
+      const seen = new Set(this.items.map((m) => m.id));
+      this.items = [...this.items, ...(page.items ?? []).filter((m) => !seen.has(m.id))];
+      this.total = page.total ?? this.total;
+      this.noteServerFavorites(page.items ?? []);
+    } catch {
+      /* A page that failed to load is retried by scrolling; nothing to say. */
+    } finally {
+      this.loadingMore = false;
+    }
+  }
+
+  /**
+   * Home's shelves, each a bounded query rather than a slice of the whole library.
+   *
+   * Nine small requests in parallel, every one of them indexed and none of them larger
+   * than a row of twelve tiles. The dashboard used to be derived from the entire
+   * collection in memory, which is why it could not draw until all of it had arrived.
+   */
+  private async loadHome() {
+    const abort = new AbortController();
+    this.homeAbort?.abort();
+    this.homeAbort = abort;
+    const row = (q: MediaQuery) =>
+      api.listMedia({ ...q, limit: 12, signal: abort.signal }).then((p) => p.items ?? []).catch(() => []);
+    try {
+      const [stats, resume, favorites, newest, ...kinds] = await Promise.all([
+        api.libraryStats(abort.signal).catch(() => null),
+        api.resumeShelf(abort.signal).then((r) => r.items ?? []).catch(() => []),
+        row({ favorite: true }),
+        row({}),
+        ...KIND_ORDER.map((k) => row({ kind: k })),
+      ]);
+      if (abort.signal.aborted) return;
+      const byKind = {} as Record<Kind, Media[]>;
+      KIND_ORDER.forEach((k, i) => (byKind[k] = kinds[i] ?? []));
+      this.stats = stats;
+      this.home = { resume, favorites, newest, byKind };
+      this.noteServerFavorites([...favorites, ...newest, ...resume]);
+    } catch {
+      /* Home degrades to whatever shelves did arrive. */
+    }
+  }
+
+  /** The filter chips for a kind: the tags most of that kind's items carry.
+   *
+   *  Asked of the server, which can count them. The client used to work them out from
+   *  every row it had downloaded, so which chips appeared depended on how much had
+   *  loaded. */
+  private async loadChips(kind: Kind) {
+    try {
+      const { items } = await api.topTags(kind, 8);
+      if (this.section === kind) this.chipTags = items ?? [];
+    } catch {
+      this.chipTags = [];
+    }
+  }
+
+  /**
+   * Starts a screen's chunk loading and re-renders when it arrives.
+   *
+   * Idempotent, and safe to call on every navigation: loadView keeps one promise per
+   * chunk, so two quick taps on Chat do not start two fetches.
+   */
+  private ensureView(section: string) {
+    const key = viewKey(section);
+    if (!key || this.viewReady.has(key)) return;
+    void loadView(section)
+      .then(() => {
+        // A new Set rather than a mutation: Lit compares by identity.
+        this.viewReady = new Set(this.viewReady).add(key);
+      })
+      .catch(() => {
+        mascotSay("That screen failed to load. Try again?", "error");
+      });
+  }
+
+  /** Whether a screen can be rendered yet. */
+  private ready(section: string): boolean {
+    const key = viewKey(section);
+    return !key || this.viewReady.has(key);
+  }
+
+  /** Reloads whatever the current screen is, after something changed it. */
+  private refresh() {
+    void this.loadHome();
+    void this.reload();
+    if (KIND_ORDER.includes(this.section as Kind)) void this.loadChips(this.section as Kind);
+    void this.loadCollections();
   }
 
   // --- Navigation / state -------------------------------------------------
@@ -1202,10 +1551,25 @@ export class OppaiLibrary extends LitElement {
     // Switching sections swaps the entire content pane, so a cross-fade is worth having
     // here where an element-level animation would not help. Progressive and skipped
     // under reduced motion; the state change is applied either way. See motion.ts.
+    // Fetch the screen's code as the section changes, not before.
+    this.ensureView(id);
     withViewTransition(() => {
       this.section = id;
       this.selectedId = null;
       this.search = "";
+      // A new section is a new query, so what is on screen goes rather than lingering
+      // under the next heading while its replacement loads.
+      this.items = [];
+      this.total = 0;
+      this.openCollection = null;
+      // Inside the callback, and after the assignments above. startViewTransition runs
+      // what it is given asynchronously, so a load started outside it reads the section
+      // the user is leaving — and then has its results wiped by the reset above. That
+      // is what made a kind's grid come up empty while its filter chips worked.
+      if (id === "home") void this.loadHome();
+      else if (id === "collections") void this.loadCollections();
+      else void this.reload();
+      if (KIND_ORDER.includes(id as Kind)) void this.loadChips(id as Kind);
     });
   }
   /**
@@ -1219,10 +1583,18 @@ export class OppaiLibrary extends LitElement {
    */
   private onOpenMedia = async (event: Event) => {
     const { id } = (event as CustomEvent<{ id: number }>).detail;
-    if (!this.items.some((item) => item.id === id)) await this.refresh();
     if (!this.items.some((item) => item.id === id)) {
-      mascotSay("That one isn't in the library any more.", "error");
-      return;
+      // One item, by id. This used to reload the library to find out whether the id
+      // existed — which, while the client held all of it, meant a link Libby sent
+      // could cost a full re-fetch of the collection.
+      try {
+        const item = await api.getMedia(id);
+        this.items = [item, ...this.items];
+        this.noteServerFavorites([item]);
+      } catch {
+        mascotSay("That one isn't in the library any more.", "error");
+        return;
+      }
     }
     this.openItem(id, this.items);
   };
@@ -1235,6 +1607,7 @@ export class OppaiLibrary extends LitElement {
   }
 
   private openItem(id: number, list?: Media[]) {
+    this.ensureView("viewer");
     if (list && list.length) this.viewerList = list.map((m) => m.id);
     else if (!this.viewerList.includes(id)) this.viewerList = [id];
     // Opening the viewer is a place you can go back from. One history entry per
@@ -1272,22 +1645,222 @@ export class OppaiLibrary extends LitElement {
       try { history.back(); } catch { /* nothing to go back to */ }
     }
   }
+  /**
+   * Typing in the search box.
+   *
+   * Debounced, because each query is now a request: firing one per keystroke would
+   * send six for "beach" and leave the grid settling on whichever came back last.
+   * reload() cancels the previous request as well, so the pair of them means the
+   * server is asked once, for what was actually typed.
+   */
   private onSearchInput(e: Event) {
     this.search = (e.target as HTMLInputElement).value;
     this.selectedId = null;
+    if (this.searchDebounce) clearTimeout(this.searchDebounce);
+    this.searchDebounce = window.setTimeout(() => void this.reload(), 250);
   }
   private clearSearch() {
+    if (this.searchDebounce) clearTimeout(this.searchDebounce);
     this.search = "";
+    void this.reload();
   }
   private setFilter(section: string, tag: string) {
     this.filters = { ...this.filters, [section]: tag };
+    void this.reload();
   }
-  private toggleFavorite(id: number, e?: Event) {
+  private setSort(sort: MediaSort) {
+    if (sort === this.sort) return;
+    this.sort = sort;
+    void this.reload();
+  }
+  /**
+   * Stars an item, on the server.
+   *
+   * Favourites used to be a Set in localStorage, which made them per-device: a heart
+   * tapped on the desktop was not a heart on the phone, and the Favorites section
+   * could only be a filter the browser applied over the whole downloaded library. The
+   * media table has had a `favorite` column and the PATCH has accepted it all along.
+   *
+   * The local Set stays as a mirror of what the loaded rows say, so the heart is drawn
+   * without a lookup, and it is updated before the request so the tap feels immediate.
+   * A failure puts it back.
+   */
+  private async toggleFavorite(id: number, e?: Event) {
     e?.stopPropagation();
+    const wanted = !this.favorites.has(id);
+    this.setLocalFavorite(id, wanted);
+    try {
+      await api.updateMedia(id, { favorite: wanted });
+      // The Favorites grid is a server query now, so an item removed there has to
+      // leave the page rather than sit on it with an empty heart.
+      if (!wanted && this.query.favorite) {
+        this.items = this.items.filter((m) => m.id !== id);
+        this.total = Math.max(0, this.total - 1);
+      }
+      if (this.stats) {
+        this.stats = { ...this.stats, favorites: Math.max(0, this.stats.favorites + (wanted ? 1 : -1)) };
+      }
+    } catch (err) {
+      this.setLocalFavorite(id, !wanted);
+      mascotSay((err as Error).message || "Couldn't save that.", "error");
+    }
+  }
+
+  /** Moves the heart without asking the server. */
+  private setLocalFavorite(id: number, on: boolean) {
     const next = new Set(this.favorites);
-    next.has(id) ? next.delete(id) : next.add(id);
+    on ? next.add(id) : next.delete(id);
     this.favorites = next;
-    saveFavorites(next);
+    this.items = this.items.map((m) => (m.id === id ? { ...m, favorite: on } : m));
+  }
+
+  /** Folds what the server says about a page of rows into the local mirror. */
+  private noteServerFavorites(rows: Media[]) {
+    if (!rows.length) return;
+    const next = new Set(this.favorites);
+    let changed = false;
+    for (const m of rows) {
+      const had = next.has(m.id);
+      if (m.favorite && !had) {
+        next.add(m.id);
+        changed = true;
+      } else if (!m.favorite && had) {
+        next.delete(m.id);
+        changed = true;
+      }
+    }
+    if (changed) this.favorites = next;
+  }
+
+  /**
+   * Moves a localStorage favourites list onto the server, once.
+   *
+   * Runs before the first load so the hearts someone spent time on do not vanish the
+   * release favourites became server-side. One bulk PATCH, and the local key is
+   * cleared so a later device with its own list is migrated on its own first run
+   * rather than this one re-uploading a stale set.
+   */
+  private async migrateLocalFavorites() {
+    const local = loadFavorites();
+    if (local.size === 0) return;
+    try {
+      await api.bulkMedia("update", [...local], { favorite: true });
+      saveFavorites(new Set());
+    } catch {
+      /* Left in place to try again next time rather than lost. */
+    }
+  }
+
+  // --- Collections --------------------------------------------------------
+  private async loadCollections() {
+    try {
+      const { items } = await api.listCollections();
+      this.collections = items ?? [];
+    } catch {
+      this.collections = [];
+    }
+  }
+
+  private async newCollection(withItems: number[] = []) {
+    const name = prompt("Name this collection:");
+    if (name == null || !name.trim()) return;
+    try {
+      const { id } = await api.createCollection(name.trim());
+      if (withItems.length) await api.addToCollection(id, withItems);
+      await this.loadCollections();
+      mascotSay(withItems.length
+        ? `Made "${name.trim()}" with ${withItems.length} item${withItems.length === 1 ? "" : "s"}.`
+        : `Made "${name.trim()}".`, "success");
+    } catch (err) {
+      mascotSay((err as Error).message || "Couldn't make that collection.", "error");
+    }
+  }
+
+  /** The "add to collection" menu: the existing lists, plus making a new one. */
+  private openCollectionMenu(ids: number[], x: number, y: number) {
+    const add = async (collection: Collection) => {
+      try {
+        const { added } = await api.addToCollection(collection.id, ids);
+        await this.loadCollections();
+        mascotSay(added === 0
+          ? `Already on "${collection.name}".`
+          : `Added ${added} to "${collection.name}".`, "success");
+      } catch (err) {
+        mascotSay((err as Error).message || "Couldn't add that.", "error");
+      }
+    };
+    openMenu({
+      x, y,
+      title: ids.length === 1 ? "Add to collection" : `Add ${ids.length} items to…`,
+      items: [
+        ...this.collections.map((c) => ({
+          label: c.name,
+          icon: "playlist_add",
+          hint: `${c.count} item${c.count === 1 ? "" : "s"}`,
+          run: () => void add(c),
+        })),
+        ...(this.collections.length ? [menuDivider] : []),
+        { label: "New collection…", icon: "create_new_folder", run: () => void this.newCollection(ids) },
+      ],
+    });
+  }
+
+  private async openCollectionItems(c: Collection) {
+    this.openCollection = c;
+    this.search = "";
+    this.section = "collections";
+    this.loading = true;
+    try {
+      const page = await api.collectionItems(c.id, MEDIA_PAGE_SIZE, 0);
+      this.items = page.items ?? [];
+      this.total = page.total ?? this.items.length;
+      this.openCollection = page.collection ?? c;
+      this.noteServerFavorites(this.items);
+    } catch (err) {
+      mascotSay((err as Error).message || "Couldn't open that collection.", "error");
+    } finally {
+      this.loading = false;
+    }
+  }
+
+  private async removeFromOpenCollection(mediaId: number) {
+    const c = this.openCollection;
+    if (!c) return;
+    try {
+      await api.removeFromCollection(c.id, mediaId);
+      this.items = this.items.filter((m) => m.id !== mediaId);
+      this.total = Math.max(0, this.total - 1);
+      await this.loadCollections();
+    } catch (err) {
+      mascotSay((err as Error).message || "Couldn't take that off.", "error");
+    }
+  }
+
+  private async renameOpenCollection(c: Collection) {
+    const name = prompt("Rename this collection:", c.name);
+    if (name == null || !name.trim() || name.trim() === c.name) return;
+    try {
+      await api.renameCollection(c.id, name.trim());
+      this.openCollection = { ...c, name: name.trim() };
+      await this.loadCollections();
+    } catch (err) {
+      mascotSay((err as Error).message || "Couldn't rename that.", "error");
+    }
+  }
+
+  private async deleteCollection(c: Collection) {
+    if (!confirm(`Delete the collection "${c.name}"? The items stay in your library.`)) return;
+    try {
+      await api.deleteCollection(c.id);
+      if (this.openCollection?.id === c.id) {
+        this.openCollection = null;
+        this.items = [];
+        this.total = 0;
+      }
+      await this.loadCollections();
+    } catch (err) {
+      mascotSay((err as Error).message || "Couldn't delete that.", "error");
+    }
   }
 
   // --- Bulk selection -----------------------------------------------------
@@ -1315,11 +1888,11 @@ export class OppaiLibrary extends LitElement {
       await api.bulkMedia("delete", ids);
       const line = libbyReact("libraryDelete", { count: ids.length });
       mascotSay(line.message, "success", { emotion: line.emotion, intensity: line.intensity });
-      // Drop any client-side favorites for the deleted items.
+      // The favourite went with the row (it is a column on it), so only the local
+      // mirror needs clearing.
       const favs = new Set(this.favorites);
       ids.forEach((id) => favs.delete(id));
       this.favorites = favs;
-      saveFavorites(favs);
       this.exitSelect();
       await this.refresh();
     } catch (err) {
@@ -1371,12 +1944,19 @@ export class OppaiLibrary extends LitElement {
       this.busy = false;
     }
   }
-  private bulkFavorite() {
-    // Favorites live client-side (localStorage); add the whole selection.
-    const next = new Set(this.favorites);
-    this.selected.forEach((id) => next.add(id));
-    this.favorites = next;
-    saveFavorites(next);
+  private async bulkFavorite() {
+    // One PATCH for the selection. Favourites are the server's now, so this is the
+    // same thing the heart on a tile does, in bulk.
+    const ids = [...this.selected];
+    if (!ids.length) return;
+    ids.forEach((id) => this.setLocalFavorite(id, true));
+    try {
+      await api.bulkMedia("update", ids, { favorite: true });
+      if (this.stats) this.stats = { ...this.stats, favorites: this.stats.favorites + ids.length };
+    } catch (err) {
+      ids.forEach((id) => this.setLocalFavorite(id, false));
+      mascotSay((err as Error).message || "Couldn't star those.", "error");
+    }
     this.exitSelect();
   }
   private logout() {
@@ -1453,13 +2033,15 @@ export class OppaiLibrary extends LitElement {
     if (e.dataTransfer?.files?.length) this.onFiles(e.dataTransfer.files);
   }
   private openScrape() {
+    this.ensureView("scrape");
     this.uploadOpen = false;
     (this.renderRoot.querySelector("oppai-scrape-dialog") as any)?.open();
   }
 
   // --- Derived view state -------------------------------------------------
+  /** Home's shelf for a kind, from the bounded query loadHome made. */
   private itemsForKind(kind: Kind): Media[] {
-    return this.items.filter((m) => m.kind === kind);
+    return this.home?.byKind[kind] ?? [];
   }
 
   /**
@@ -1478,13 +2060,11 @@ export class OppaiLibrary extends LitElement {
    * anywhere.
    */
   private onScreenItems(isGrid: boolean, isFavorites: boolean, isSearch: boolean): Media[] {
-    if (isFavorites) return this.items.filter((m) => this.favorites.has(m.id));
-    if (isSearch) {
-      const terms = this.search.trim().toLowerCase().split(/\s+/).filter(Boolean);
-      return this.items.filter((m) => matchesSearch(m, terms));
-    }
-    if (isGrid) return this.itemsForKind(this.section as Kind);
-    return this.items;
+    // Every grid screen — a kind, favourites, a search, a collection — is now the same
+    // thing: the page the server returned for this query. No client-side filtering to
+    // repeat, because there is nothing loaded that does not belong on screen.
+    if (isGrid || isFavorites || isSearch) return this.items;
+    return this.home?.newest ?? this.items;
   }
 
   private get viewerQueue(): Media[] {
@@ -1506,11 +2086,12 @@ export class OppaiLibrary extends LitElement {
     const chatMounted = this.section === "chat" && !hasSearch;
     const isChat = !isViewer && chatMounted;
     const isFavorites = !isViewer && this.section === "favorites" && !hasSearch;
+    const isCollections = !isViewer && this.section === "collections" && !hasSearch;
     const isHome = !isViewer && this.section === "home" && !hasSearch && !isFavorites;
     const isSearch = !isViewer && hasSearch;
     const isGrid =
-      !isViewer && !isHome && !isFavorites && !isSearch && !isSettings && !isBrowse && !isImageGen &&
-      !isStudio && !isChat;
+      !isViewer && !isHome && !isFavorites && !isCollections && !isSearch && !isSettings &&
+      !isBrowse && !isImageGen && !isStudio && !isChat;
 
     const activeItem = isViewer ? this.items.find((m) => m.id === this.selectedId) ?? null : null;
 
@@ -1524,6 +2105,7 @@ export class OppaiLibrary extends LitElement {
     // Named after her because she is who you are usually talking to.
     else if (isChat) headerTitle = "Chat with Libby";
     else if (isFavorites) headerTitle = "Favorites";
+    else if (isCollections) headerTitle = this.openCollection?.name ?? "Collections";
     else if (isHome) headerTitle = "Library";
     else headerTitle = KIND_META[this.section as Kind]?.label ?? "Library";
 
@@ -1534,36 +2116,50 @@ export class OppaiLibrary extends LitElement {
         <main class=${isChat || isImageGen ? "flush" : ""}>
           ${isHome ? this.renderHome() : nothing}
           ${isSettings
-            ? html`<oppai-settings .user=${this.user}
-                @open-studio=${() => this.selectSection("studio")}></oppai-settings>`
+            ? this.ready("settings")
+              ? html`<oppai-settings .user=${this.user}
+                  @open-studio=${() => this.selectSection("studio")}></oppai-settings>`
+              : this.renderViewLoading()
             : nothing}
           ${isBrowse
-            ? html`<oppai-browse
-                ?can-add-sites=${!!this.user?.isAdmin}
-                @imported=${() => this.refresh()}
-                @browse-frame-changed=${(event: CustomEvent<typeof this.browseFrame>) => {
-                  this.browseFrame = event.detail;
-                }}
-              ></oppai-browse>`
+            ? this.ready("browse")
+              ? html`<oppai-browse
+                  ?can-add-sites=${!!this.user?.isAdmin}
+                  @imported=${() => this.refresh()}
+                  @browse-frame-changed=${(event: CustomEvent<typeof this.browseFrame>) => {
+                    this.browseFrame = event.detail;
+                  }}
+                ></oppai-browse>`
+              : this.renderViewLoading()
             : nothing}
           ${isImageGen
-            ? html`<oppai-imagegen .editMedia=${this.editMediaId} @imported=${() => this.refresh()}
-                @open-chat=${() => this.selectSection("chat")}></oppai-imagegen>`
+            ? this.ready("imagegen")
+              ? html`<oppai-imagegen .editMedia=${this.editMediaId} @imported=${() => this.refresh()}
+                  @open-chat=${() => this.selectSection("chat")}></oppai-imagegen>`
+              : this.renderViewLoading()
             : nothing}
           <!-- Keyed so switching between Create and the studio rebuilds the element
                rather than reusing one whose studio setup ran (or did not run) for the
                other mode. They share a draft on purpose; they must not share an
                instance. -->
           ${isStudio
-            ? keyed("studio", html`<oppai-imagegen studio @imported=${() => this.refresh()}
-                @open-chat=${() => this.selectSection("chat")}></oppai-imagegen>`)
+            ? this.ready("studio")
+              ? keyed("studio", html`<oppai-imagegen studio @imported=${() => this.refresh()}
+                  @open-chat=${() => this.selectSection("chat")}></oppai-imagegen>`)
+              : this.renderViewLoading()
             : nothing}
-          ${chatMounted ? html`<oppai-chat .user=${this.user} style=${isViewer ? "display:none" : ""}
-            @open-section=${(e: CustomEvent<{ section: "studio" | "settings" }>) => this.selectSection(e.detail.section)}></oppai-chat>` : nothing}
+          ${chatMounted
+            ? this.ready("chat")
+              ? html`<oppai-chat .user=${this.user} style=${isViewer ? "display:none" : ""}
+                  @open-section=${(e: CustomEvent<{ section: "studio" | "settings" }>) => this.selectSection(e.detail.section)}></oppai-chat>`
+              : this.renderViewLoading()
+            : nothing}
+          ${isCollections ? this.renderCollections() : nothing}
           ${isGrid || isFavorites || isSearch
             ? this.renderGrid(isGrid, isFavorites, isSearch)
             : nothing}
-          ${isViewer && activeItem
+          ${isViewer && activeItem && !this.ready("viewer") ? this.renderViewLoading() : nothing}
+          ${isViewer && activeItem && this.ready("viewer")
             ? html`<oppai-viewer
                 .media=${activeItem}
                 .queue=${this.viewerQueue}
@@ -1604,9 +2200,13 @@ export class OppaiLibrary extends LitElement {
       ${this.renderUpload()}
       ${this.renderBulkBar()}
       ${this.renderDownloads()}
-      <oppai-scrape-dialog @imported=${() => this.refresh()}></oppai-scrape-dialog>
+      ${this.ready("scrape")
+        ? html`<oppai-scrape-dialog @imported=${() => this.refresh()}></oppai-scrape-dialog>`
+        : nothing}
       <oppai-context-menu></oppai-context-menu>
-      <input id="file" type="file" multiple @change=${this.onFileInput} />
+      <!-- display:none, and only ever reached through the "Add media" button, but a
+           control with no name is a control with no name if anything does reach it. -->
+      <input id="file" type="file" multiple aria-label="Choose files to add" @change=${this.onFileInput} />
     `;
   }
 
@@ -1617,7 +2217,7 @@ export class OppaiLibrary extends LitElement {
       ${this.downloads.slice(0, 5).map((task) => html`
         <div class="download-row">
           <div class="download-ring" style=${`--p:${task.progress}`}>
-            <span class="material-symbols-rounded">${task.state === "done" ? "check" : task.state === "error" ? "error" : "download"}</span>
+            <span aria-hidden="true" class="material-symbols-rounded">${task.state === "done" ? "check" : task.state === "error" ? "error" : "download"}</span>
           </div>
           <div class="download-copy">
             <div class="download-title">${task.label}</div>
@@ -1626,7 +2226,7 @@ export class OppaiLibrary extends LitElement {
               : task.state === "done" ? "Complete" : task.error || "Failed"}</div>
           </div>
           ${task.state !== "running" ? html`<button class="download-dismiss" title="Dismiss" @click=${() => dismissDownload(task.id)}>
-            <span class="material-symbols-rounded">close</span>
+            <span aria-hidden="true" class="material-symbols-rounded">close</span>
           </button>` : nothing}
         </div>`)}
     </aside>`;
@@ -1639,22 +2239,29 @@ export class OppaiLibrary extends LitElement {
       <div class="bulk-bar">
         <span class="bulk-count">${n} selected</span>
         <button class="bulk-btn" ?disabled=${this.busy} @click=${() => this.bulkTags("add")}>
-          <span class="material-symbols-rounded" style="font-size:18px;">sell</span>Add tags
+          <span aria-hidden="true" class="material-symbols-rounded" style="font-size:18px;">sell</span>Add tags
         </button>
         <button class="bulk-btn" ?disabled=${this.busy} @click=${() => this.bulkTags("remove")}>
-          <span class="material-symbols-rounded" style="font-size:18px;">label_off</span>Remove tags
+          <span aria-hidden="true" class="material-symbols-rounded" style="font-size:18px;">label_off</span>Remove tags
         </button>
         <button class="bulk-btn" ?disabled=${this.busy} @click=${this.bulkChangeKind}>
-          <span class="material-symbols-rounded" style="font-size:18px;">category</span>Type
+          <span aria-hidden="true" class="material-symbols-rounded" style="font-size:18px;">category</span>Type
         </button>
         <button class="bulk-btn" ?disabled=${this.busy} @click=${this.bulkFavorite}>
-          <span class="material-symbols-rounded" style="font-size:18px;">favorite</span>Favorite
+          <span aria-hidden="true" class="material-symbols-rounded" style="font-size:18px;">favorite</span>Favorite
+        </button>
+        <button
+          class="bulk-btn"
+          ?disabled=${this.busy}
+          @click=${(e: MouseEvent) => this.openCollectionMenu([...this.selected], e.clientX, e.clientY)}
+        >
+          <span aria-hidden="true" class="material-symbols-rounded" style="font-size:18px;">playlist_add</span>Collection
         </button>
         <button class="bulk-btn danger" ?disabled=${this.busy} @click=${this.bulkDelete}>
-          <span class="material-symbols-rounded" style="font-size:18px;">delete</span>Delete
+          <span aria-hidden="true" class="material-symbols-rounded" style="font-size:18px;">delete</span>Delete
         </button>
         <button class="bulk-btn" @click=${() => this.exitSelect()}>
-          <span class="material-symbols-rounded" style="font-size:18px;">close</span>
+          <span aria-hidden="true" class="material-symbols-rounded" style="font-size:18px;">close</span>
         </button>
       </div>
     `;
@@ -1670,20 +2277,24 @@ export class OppaiLibrary extends LitElement {
           ${logoSVG}
         </button>
         <button class="add-btn" title="Add media" @click=${this.toggleUpload}>
-          <span class="material-symbols-rounded" style="font-size:26px;">add</span>
+          <span aria-hidden="true" class="material-symbols-rounded" style="font-size:26px;">add</span>
         </button>
 
         <div class="nav-list">
           ${NAV_SECTIONS.map((n) => {
             const active = this.section === n.id && this.selectedId == null;
             return html`
-              <button class="nav-item" @click=${() => this.selectSection(n.id)}>
+              <button
+                class="nav-item"
+                aria-current=${active ? "page" : nothing}
+                @click=${() => this.selectSection(n.id)}
+              >
                 <span
                   class="nav-pill"
                   style="background:${active ? "var(--oppai-primary-container)" : "transparent"};"
                 >
                   <span
-                    class="material-symbols-rounded ${active ? "fill-icon" : ""}"
+                    aria-hidden="true" class="material-symbols-rounded ${active ? "fill-icon" : ""}"
                     style="font-size:22px; color:${active ? "var(--oppai-primary-bright)" : "var(--oppai-text-dim)"};"
                     >${n.icon}</span
                   >
@@ -1708,7 +2319,7 @@ export class OppaiLibrary extends LitElement {
             ? "var(--oppai-primary-bright)"
             : "var(--oppai-text-dim)"};"
         >
-          <span class="material-symbols-rounded ${settingsActive ? "fill-icon" : ""}" style="font-size:22px;"
+          <span aria-hidden="true" class="material-symbols-rounded ${settingsActive ? "fill-icon" : ""}" style="font-size:22px;"
             >settings</span
           >
         </button>
@@ -1734,15 +2345,17 @@ export class OppaiLibrary extends LitElement {
               @click=${this.closeItem}
               style="width:40px; height:40px; border-radius:20px; background:none; color:var(--oppai-text); flex-shrink:0;"
             >
-              <span class="material-symbols-rounded" style="font-size:24px;">arrow_back</span>
+              <span aria-hidden="true" class="material-symbols-rounded" style="font-size:24px;">arrow_back</span>
             </button>`
           : nothing}
 
         <h1 class="h-title">${title}</h1>
 
         <div class="searchbox">
-          <span class="material-symbols-rounded" style="font-size:20px; color:var(--oppai-text-dim);">search</span>
+          <span aria-hidden="true" class="material-symbols-rounded" style="font-size:20px; color:var(--oppai-text-dim);">search</span>
           <input
+            type="search"
+            aria-label="Search the library"
             .value=${this.search}
             @input=${this.onSearchInput}
             placeholder="Search titles, tags, notes..."
@@ -1750,10 +2363,12 @@ export class OppaiLibrary extends LitElement {
           ${hasSearch
             ? html`<button
                 class="icon-btn"
+                aria-label="Clear the search"
+                title="Clear the search"
                 @click=${this.clearSearch}
                 style="background:none; color:var(--oppai-text-dim);"
               >
-                <span class="material-symbols-rounded" style="font-size:18px;">close</span>
+                <span aria-hidden="true" class="material-symbols-rounded" style="font-size:18px;">close</span>
               </button>`
             : nothing}
         </div>
@@ -1766,7 +2381,7 @@ export class OppaiLibrary extends LitElement {
               title="Select multiple"
               @click=${this.toggleSelectMode}
             >
-              <span class="material-symbols-rounded" style="font-size:18px;"
+              <span aria-hidden="true" class="material-symbols-rounded" style="font-size:18px;"
                 >${this.selectMode ? "check_circle" : "check_box_outline_blank"}</span
               >
               <span style="font-size:13px; font-weight:500;">Select</span>
@@ -1774,7 +2389,7 @@ export class OppaiLibrary extends LitElement {
           : nothing}
         ${!isSettings
           ? html`<button class="filters-btn">
-              <span class="material-symbols-rounded" style="font-size:18px;">tune</span>
+              <span aria-hidden="true" class="material-symbols-rounded" style="font-size:18px;">tune</span>
               <span style="font-size:13px; font-weight:500;">Filters</span>
             </button>`
           : nothing}
@@ -1804,15 +2419,15 @@ export class OppaiLibrary extends LitElement {
     const hour = new Date().getHours();
     const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
 
-    if (this.loading && this.items.length === 0) {
+    if (!this.home) {
       return html`<div class="empty">Loading your library…</div>`;
     }
-    if (this.items.length === 0) {
+    if ((this.stats?.total ?? this.home.newest.length) === 0) {
       return html`<div>
         <h2 class="greeting">${greeting}</h2>
         <p class="greeting-sub">Your library is empty — add media or import from a URL.</p>
         <div class="empty">
-          <span class="material-symbols-rounded" style="font-size:40px; display:block; margin-bottom:12px;"
+          <span aria-hidden="true" class="material-symbols-rounded" style="font-size:40px; display:block; margin-bottom:12px;"
             >library_add</span
           >
           <div style="font-size:14px;">Nothing here yet.</div>
@@ -1820,22 +2435,29 @@ export class OppaiLibrary extends LitElement {
       </div>`;
     }
 
-    const newest = [...this.items].sort((a, b) => b.createdAt - a.createdAt);
-    const continueRow = recentlyOpened(this.items, this.recents).slice(0, 12);
+    const newest = this.home.newest;
+    // Two "carry on" lists, and they answer different questions. The server's knows
+    // where you were in something and is the same on every device; recents.ts knows
+    // what this device opened, however briefly. The server's leads, and what it does
+    // not cover is filled in from the device's own memory.
+    const resumeRow = this.home.resume;
+    const openedHere = recentlyOpened(newest, this.recents).slice(0, 12);
+    const continueRow = resumeRow.length ? resumeRow : openedHere;
     // The hero is what you last opened, because the most likely reason you are here is
     // to carry on with it. Falls back to the newest import on a fresh device, which is
     // the only other thing we can honestly claim to know you want.
     const hero = continueRow[0] ?? newest[0];
-    const favorites = this.items.filter((m) => this.favorites.has(m.id)).slice(0, 12);
-    const week = Date.now() - 7 * 24 * 60 * 60 * 1000;
-    const addedThisWeek = this.items.filter((m) => m.createdAt >= week).length;
-    const totalBytes = this.items.reduce((sum, m) => sum + (m.size || 0), 0);
+    const favorites = this.home.favorites;
+    // Counted by the server. This was worked out from the library in browser memory,
+    // and "added this week" compared a millisecond clock against the server's seconds,
+    // so it always read zero.
+    const addedThisWeek = this.stats?.thisWeek ?? 0;
 
     const kindRows = KIND_ORDER.map((k) => ({
       kind: k,
       label: KIND_META[k].label,
       icon: KIND_META[k].icon,
-      items: this.itemsForKind(k).slice(0, 12),
+      items: this.itemsForKind(k),
     })).filter((r) => r.items.length > 0);
 
     const row = (
@@ -1848,11 +2470,11 @@ export class OppaiLibrary extends LitElement {
     ) => items.length === 0 ? nothing : html`
       <section class="row anim-rise" style="animation-delay:${delay}ms;">
         <div class="row-head">
-          <span class="material-symbols-rounded" style="font-size:22px; color:var(--oppai-primary-bright);">${icon}</span>
+          <span aria-hidden="true" class="material-symbols-rounded" style="font-size:22px; color:var(--oppai-primary-bright);">${icon}</span>
           <h3 class="row-title">${title}</h3>
           ${sub ? html`<span class="row-sub">${sub}</span>` : nothing}
           ${seeAll ? html`<button class="see-all" @click=${seeAll}>
-            See all<span class="material-symbols-rounded" style="font-size:16px;">chevron_right</span>
+            See all<span aria-hidden="true" class="material-symbols-rounded" style="font-size:16px;">chevron_right</span>
           </button>` : nothing}
         </div>
         <div class="row-scroll">${items.map((m) => this.renderTile(m, "200px", undefined, items))}</div>
@@ -1871,7 +2493,7 @@ export class OppaiLibrary extends LitElement {
               aria-label=${`Open ${hero.title}`}>
               ${hero.hasThumb
                 ? html`<img src=${api.thumbURL(hero.id)} alt="" loading="lazy" />`
-                : html`<span class="material-symbols-rounded hero-icon">${KIND_META[hero.kind].icon}</span>`}
+                : html`<span aria-hidden="true" class="material-symbols-rounded hero-icon">${KIND_META[hero.kind].icon}</span>`}
             </button>
             <div class="hero-body">
               <span class="hero-eyebrow">
@@ -1883,7 +2505,7 @@ export class OppaiLibrary extends LitElement {
                 : nothing}
               <div class="hero-acts">
                 <button class="hero-open" @click=${() => this.openItem(hero.id, newest)}>
-                  <span class="material-symbols-rounded">play_arrow</span>
+                  <span aria-hidden="true" class="material-symbols-rounded">play_arrow</span>
                   ${continueRow.length ? "Carry on" : "Open"}
                 </button>
                 <button class="hero-more" @click=${() => this.selectSection(hero.kind)}>
@@ -1893,19 +2515,22 @@ export class OppaiLibrary extends LitElement {
             </div>
           </section>
 
+          <!-- Every figure here is counted by the server (GET /api/media/stats).
+               They used to be derived from the library in browser memory, which is
+               why the dashboard could not draw until all of it had arrived. -->
           <div class="stats anim-rise" style="animation-delay:90ms;">
             <button class="stat" @click=${() => this.selectSection("home")}>
-              <strong>${this.items.length.toLocaleString()}</strong><span>items</span></button>
+              <strong>${(this.stats?.total ?? 0).toLocaleString()}</strong><span>items</span></button>
             <button class="stat" @click=${() => this.selectSection("favorites")}>
-              <strong>${this.favorites.size.toLocaleString()}</strong><span>favourites</span></button>
+              <strong>${(this.stats?.favorites ?? 0).toLocaleString()}</strong><span>favourites</span></button>
             <div class="stat">
-              <strong>${formatBytes(totalBytes)}</strong><span>stored</span></div>
+              <strong>${formatBytes(this.stats?.bytes ?? 0)}</strong><span>stored</span></div>
             <div class="stat">
               <strong>${addedThisWeek.toLocaleString()}</strong><span>added this week</span></div>
           </div>` : nothing}
 
         ${row("Jump back in", "history", continueRow, null, 120,
-          "What you've opened on this device")}
+          resumeRow.length ? "Where you left off, on any device" : "What you've opened on this device")}
         ${row("Favourites", "star", favorites, () => this.selectSection("favorites"), 170)}
         ${row("Recently added", "new_releases", newest.slice(0, 12), null, 220)}
 
@@ -1914,50 +2539,59 @@ export class OppaiLibrary extends LitElement {
     `;
   }
 
+  /**
+   * The grid: one page of a server-side query, with the rest fetched as it is
+   * reached.
+   *
+   * Everything here used to be worked out from the whole library in memory — the
+   * filter, the favourites, the search, the item count, even which filter chips
+   * existed. All five are the server's answers now, which is what lets this screen
+   * cost a screenful instead of a collection.
+   */
   private renderGrid(isGrid: boolean, isFavorites: boolean, isSearch: boolean) {
-    let title = "";
-    let gridItems: Media[] = [];
-    let chips: { label: string; active: boolean }[] = [];
+    const kind = isGrid ? (this.section as Kind) : null;
+    const title = isFavorites
+      ? "Favorites"
+      : isSearch
+        ? "Search results"
+        : (KIND_META[kind as Kind]?.label ?? "");
+    const gridItems = this.items;
+    // The server's count of everything matching, not the length of what has loaded.
+    const count = this.loading
+      ? "Loading…"
+      : this.total === gridItems.length
+        ? `${this.total.toLocaleString()} ${this.total === 1 ? "item" : "items"}`
+        : `${gridItems.length.toLocaleString()} of ${this.total.toLocaleString()}`;
 
-    if (isFavorites) {
-      title = "Favorites";
-      gridItems = this.items.filter((m) => this.favorites.has(m.id));
-    } else if (isSearch) {
-      title = "Search results";
-      const terms = this.search.trim().toLowerCase().split(/\s+/).filter(Boolean);
-      gridItems = this.items.filter((m) => matchesSearch(m, terms));
-    } else {
-      const kind = this.section as Kind;
-      title = KIND_META[kind]?.label ?? "";
-      const all = this.itemsForKind(kind);
-      const tagNames = Array.from(new Set(all.flatMap((m) => (m.tags ?? []).map((t) => t.name)))).slice(0, 8);
-      const active = this.filters[kind] ?? "All";
-      chips = ["All", ...tagNames].map((label) => ({ label, active: active === label }));
-      gridItems =
-        active === "All" ? all : all.filter((m) => (m.tags ?? []).some((t) => t.name === active));
-    }
-
-    const count = `${gridItems.length} ${gridItems.length === 1 ? "item" : "items"}`;
+    const activeChip = kind ? (this.filters[kind] ?? "All") : "All";
+    const chips = kind
+      ? ["All", ...this.chipTags.map((t) => t.name)].map((label) => ({
+          label,
+          active: activeChip === label,
+        }))
+      : [];
 
     return html`
       <div>
         <div class="grid-head">
           <h2 class="grid-title">${title}</h2>
           <span class="grid-count">${count}</span>
+          ${this.renderSort()}
         </div>
 
-        ${isGrid && chips.length > 1
-          ? html`<div class="chips">
+        ${chips.length > 1
+          ? html`<div class="chips" role="group" aria-label="Filter by tag">
               ${chips.map(
                 (c) => html`<button
                   class="chip"
+                  aria-pressed=${c.active ? "true" : "false"}
                   @click=${() => this.setFilter(this.section, c.label)}
                   style="background:${c.active ? "var(--oppai-accent)" : "transparent"}; color:${c.active
                     ? "var(--oppai-on-accent)"
                     : "var(--oppai-text-dim)"}; border:1px solid ${c.active ? "var(--oppai-accent)" : "var(--oppai-border-strong)"};"
                 >
                   ${c.active
-                    ? html`<span class="material-symbols-rounded" style="font-size:16px;">check</span>`
+                    ? html`<span aria-hidden="true" class="material-symbols-rounded" style="font-size:16px;">check</span>`
                     : nothing}
                   ${c.label}
                 </button>`,
@@ -1966,18 +2600,188 @@ export class OppaiLibrary extends LitElement {
           : html`<div style="height:24px;"></div>`}
 
         ${gridItems.length === 0
+          ? this.loading
+            ? html`<div class="empty" aria-busy="true">Loading…</div>`
+            : html`<div class="empty">
+                <span aria-hidden="true" class="material-symbols-rounded" style="font-size:40px; display:block; margin-bottom:12px;"
+                  >${isFavorites ? "favorite_border" : "search_off"}</span
+                >
+                <div style="font-size:14px;">
+                  ${isFavorites
+                    ? "No favorites yet. Tap the heart on any item."
+                    : "No items match your search or filter."}
+                </div>
+              </div>`
+          : html`<div
+                class="grid"
+                role="list"
+                aria-label=${title}
+                aria-busy=${this.loading ? "true" : "false"}
+              >
+                ${gridItems.map((m, i) => this.renderTile(m, "100%", i, gridItems))}
+              </div>
+              ${this.renderMore()}`}
+      </div>
+    `;
+  }
+
+  /** The gap between asking for a screen and having its code. */
+  private renderViewLoading() {
+    return html`<div class="empty" role="status" aria-live="polite">
+      <md-circular-progress indeterminate style="--md-circular-progress-size:36px"></md-circular-progress>
+    </div>`;
+  }
+
+  /** How the grid is ordered. Four orders, none by title: titles are encrypted, so
+   *  the server cannot sort by one. */
+  private renderSort() {
+    const options: { id: MediaSort; label: string }[] = [
+      { id: "newest", label: "Newest first" },
+      { id: "oldest", label: "Oldest first" },
+      { id: "rating", label: "Highest rated" },
+      { id: "largest", label: "Largest first" },
+    ];
+    return html`<label class="sort">
+      <span class="sort-label">Sort</span>
+      <select
+        aria-label="Sort order"
+        @change=${(e: Event) => this.setSort((e.target as HTMLSelectElement).value as MediaSort)}
+      >
+        ${options.map((o) => html`<option value=${o.id} ?selected=${o.id === this.sort}>${o.label}</option>`)}
+      </select>
+    </label>`;
+  }
+
+  /**
+   * The end of the loaded pages.
+   *
+   * A sentinel the observer in updated() watches, so the next page is asked for before
+   * this one runs out, with a button behind it for anyone whose browser or settings
+   * make the observer moot. It is also the honest place to say there is no more, which
+   * a grid that had quietly stopped at its first 50 rows could not.
+   */
+  private renderMore() {
+    if (this.items.length >= this.total) {
+      return this.total > MEDIA_PAGE_SIZE
+        ? html`<div class="more-end" role="status">That is everything — ${this.total.toLocaleString()} items.</div>`
+        : nothing;
+    }
+    return html`<div class="more-sentinel" role="status" aria-live="polite">
+      ${this.loadingMore
+        ? html`<span>Loading more…</span>`
+        : html`<button class="more-btn" @click=${() => void this.loadMore()}>Show more</button>`}
+    </div>`;
+  }
+
+  /**
+   * Collections: the lists, or the one that is open.
+   *
+   * The open list is drawn with the same tiles as every other grid, in the collection's
+   * own order — which is the whole point of it, and the one thing a tag cannot say.
+   * Items can be taken off here; deleting the collection never touches what was on it.
+   */
+  private renderCollections() {
+    const open = this.openCollection;
+    if (open) {
+      return html`
+        <div>
+          <div class="grid-head">
+            <button
+              class="see-all"
+              @click=${() => {
+                this.openCollection = null;
+                this.items = [];
+                this.total = 0;
+              }}
+            >
+              <span aria-hidden="true" class="material-symbols-rounded" style="font-size:16px;">chevron_left</span>All
+              collections
+            </button>
+            <h2 class="grid-title">${open.name}</h2>
+            <span class="grid-count">
+              ${open.count.toLocaleString()} ${open.count === 1 ? "item" : "items"}
+            </span>
+            <button class="see-all" @click=${() => void this.renameOpenCollection(open)}>Rename</button>
+            <button class="see-all" @click=${() => void this.deleteCollection(open)}>Delete</button>
+          </div>
+          ${this.items.length === 0
+            ? html`<div class="empty">
+                ${this.loading
+                  ? "Loading…"
+                  : "Nothing on this collection yet — add items from a tile's menu."}
+              </div>`
+            : html`<div class="grid" role="list" aria-label=${open.name}>
+                ${this.items.map((m, i) => this.renderTile(m, "100%", i, this.items))}
+              </div>`}
+        </div>
+      `;
+    }
+    return html`
+      <div>
+        <div class="grid-head">
+          <h2 class="grid-title">Collections</h2>
+          <span class="grid-count">${this.collections.length.toLocaleString()}</span>
+          <button class="see-all" @click=${() => void this.newCollection()}>
+            <span aria-hidden="true" class="material-symbols-rounded" style="font-size:16px;">add</span>New
+          </button>
+        </div>
+        ${this.collections.length === 0
           ? html`<div class="empty">
-              <span class="material-symbols-rounded" style="font-size:40px; display:block; margin-bottom:12px;"
-                >${isFavorites ? "favorite_border" : "search_off"}</span
+              <span
+                aria-hidden="true" class="material-symbols-rounded"
+                style="font-size:40px; display:block; margin-bottom:12px;"
+                >bookmarks</span
               >
               <div style="font-size:14px;">
-                ${isFavorites
-                  ? "No favorites yet. Tap the heart on any item."
-                  : "No items match your search or filter."}
+                No collections yet. A collection is a list in an order you choose — a series to
+                read through, a set to work along.
               </div>
             </div>`
-          : html`<div class="grid">
-              ${gridItems.map((m, i) => this.renderTile(m, "100%", i, gridItems))}
+          : html`<div class="grid" role="list" aria-label="Collections">
+              ${this.collections.map(
+                (c) => html`<div
+                  class="tile"
+                  role="listitem"
+                  tabindex="0"
+                  aria-label=${`${c.name}, ${c.count} ${c.count === 1 ? "item" : "items"}`}
+                  @click=${() => void this.openCollectionItems(c)}
+                  @keydown=${(e: KeyboardEvent) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      void this.openCollectionItems(c);
+                    }
+                  }}
+                  @contextmenu=${(e: MouseEvent) => {
+                    e.preventDefault();
+                    openMenu({
+                      x: e.clientX, y: e.clientY, title: c.name,
+                      items: [
+                        { label: "Open", icon: "open_in_full", run: () => void this.openCollectionItems(c) },
+                        { label: "Rename…", icon: "edit", run: () => void this.renameOpenCollection(c) },
+                        menuDivider,
+                        { label: "Delete collection", icon: "delete", danger: true,
+                          hint: "the items stay in your library",
+                          run: () => void this.deleteCollection(c) },
+                      ],
+                    });
+                  }}
+                >
+                  <div
+                    class="tile-media"
+                    style="width:100%; aspect-ratio:1; background:var(--oppai-surface-2); display:grid; place-items:center;"
+                  >
+                    ${c.cover
+                      ? html`<img src=${api.thumbURL(c.cover)} alt="" loading="lazy" />`
+                      : html`<span aria-hidden="true" class="material-symbols-rounded" style="font-size:34px; color:var(--oppai-text-dim);"
+                          >bookmarks</span
+                        >`}
+                  </div>
+                  <div class="tile-meta">
+                    <div class="tile-title">${c.name}</div>
+                    <div class="tile-tag">${c.count} ${c.count === 1 ? "item" : "items"}</div>
+                  </div>
+                </div>`,
+              )}
             </div>`}
       </div>
     `;
@@ -1997,7 +2801,19 @@ export class OppaiLibrary extends LitElement {
       <div
         class=${cls}
         data-id=${m.id}
+        role=${index != null ? "listitem" : "button"}
+        tabindex="0"
+        aria-label=${`${m.title}${stat ? `, ${stat}` : ""}, ${meta.typeLabel}`}
+        aria-pressed=${this.selectMode ? (isSel ? "true" : "false") : nothing}
         @click=${() => (this.selectMode ? this.toggleSelected(m.id) : this.openItem(m.id, list))}
+        @keydown=${(e: KeyboardEvent) => {
+          // Enter and Space open, the same as a click. A grid of items you can see but
+          // cannot reach without a mouse is not a grid a keyboard user can use at all.
+          if (e.key !== "Enter" && e.key !== " ") return;
+          e.preventDefault();
+          if (this.selectMode) this.toggleSelected(m.id);
+          else this.openItem(m.id, list);
+        }}
         style="flex-shrink:0; width:${width}; ${delay}"
       >
         <div
@@ -2007,7 +2823,7 @@ export class OppaiLibrary extends LitElement {
           ${hasThumbnail(m)
             ? html`<img loading="lazy" src=${api.thumbURL(m.id)} alt=${m.title} />`
             : html`<div class="tile-overlay">
-                <span class="material-symbols-rounded" style="font-size:30px; color:#fff;"
+                <span aria-hidden="true" class="material-symbols-rounded" style="font-size:30px; color:#fff;"
                   >${meta.icon}</span
                 >
                 <span class="type-label">${meta.typeLabel}</span>
@@ -2015,15 +2831,18 @@ export class OppaiLibrary extends LitElement {
           ${this.selectMode
             ? html`<div class="select-check ${isSel ? "on" : ""}">
                 ${isSel
-                  ? html`<span class="material-symbols-rounded">check</span>`
+                  ? html`<span aria-hidden="true" class="material-symbols-rounded">check</span>`
                   : nothing}
               </div>`
             : html`<button
                 class="fav-btn ${fav ? "is-fav" : ""}"
+                aria-label=${fav ? `Remove ${m.title} from favourites` : `Add ${m.title} to favourites`}
+                aria-pressed=${fav ? "true" : "false"}
+                title=${fav ? "Remove from favourites" : "Add to favourites"}
                 @click=${(e: Event) => this.toggleFavorite(m.id, e)}
               >
                 <span
-                  class="material-symbols-rounded fill-icon"
+                  aria-hidden="true" class="material-symbols-rounded fill-icon"
                   style="font-size:18px; color:${fav ? "var(--oppai-fav)" : "rgba(255,255,255,0.9)"};"
                   >${fav ? "favorite" : "favorite_border"}</span
                 >
@@ -2054,7 +2873,7 @@ export class OppaiLibrary extends LitElement {
             @dragleave=${() => (this.dragActive = false)}
             @drop=${this.onDrop}
           >
-            <span class="material-symbols-rounded" style="font-size:36px; display:block; margin-bottom:10px;"
+            <span aria-hidden="true" class="material-symbols-rounded" style="font-size:36px; display:block; margin-bottom:10px;"
               >upload_file</span
             >
             <div style="font-size:14px;">Drag files here, or click to browse</div>

@@ -105,6 +105,11 @@ CREATE INDEX IF NOT EXISTS idx_media_created ON media(created_at);
 -- paged read into an index walk. DESC matches the query's direction so the walk
 -- doesn't have to be reversed.
 CREATE INDEX IF NOT EXISTS idx_media_kind_created ON media(kind, created_at DESC);
+-- Favourites is a nav section, not a rare query: it is one of the few screens
+-- someone opens every session, and it used to be filtered in the browser over the
+-- whole downloaded library. Same shape as the composite above — filter and order in
+-- one walk — for `WHERE favorite = 1 ORDER BY created_at DESC`.
+CREATE INDEX IF NOT EXISTS idx_media_favorite_created ON media(favorite, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS game_gallery (
     game_id  INTEGER NOT NULL REFERENCES media(id) ON DELETE CASCADE,
@@ -260,9 +265,17 @@ CREATE TABLE IF NOT EXISTS upload_chunks (
     PRIMARY KEY (session_id, idx)
 );
 
--- Full-text search over decrypted-at-write searchable text (title + tags).
--- Note: content is only indexed if the user opts into plaintext search index.
-CREATE VIRTUAL TABLE IF NOT EXISTS media_fts USING fts5(
-    title, tags, notes,
-    content=''                            -- external-content contentless index
-);
+-- media_fts was an FTS5 table for title/tags/notes that nothing ever wrote a row to
+-- and nothing ever queried — the opt-in that would have populated it was never
+-- built, so it sat empty while the architecture doc advertised it as how search
+-- worked. Search is the in-memory index in api/chat_library_index.go: the KEK holder
+-- decrypts titles once and keeps the postings in process memory, which is the only
+-- place they can be searched without writing plaintext to disk.
+--
+-- Dropped rather than left in place, so nobody reads the schema and believes search
+-- is indexed here. If on-disk indexing is ever wanted (a library past the index's
+-- 200k ceiling, or search that survives a restart without a rebuild), the thing to
+-- build is a blind index — HMAC each token under the KEK and index the digests —
+-- not this, which would have put every title on disk in plaintext and undone
+-- title_enc.
+DROP TABLE IF EXISTS media_fts;

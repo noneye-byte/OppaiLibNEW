@@ -1,0 +1,79 @@
+name: Checks
+
+# The gate in front of everything that ships. Both release workflows call this
+# first (`needs: checks`), so a push to main that breaks a test never reaches
+# GHCR or the APK — pushing to main *is* the release here, and there is no
+# review step between the push and the image.
+#
+# Callable (`workflow_call`) rather than duplicated into each release workflow:
+# one definition of "the tests pass", used by the publish, the APK build, and
+# every pull request.
+
+on:
+  workflow_call:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: Go vet + tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      # The thumbnail package skips its tests when ffmpeg is absent, which would
+      # make the poster/probe paths silently untested on CI. Cheap to install,
+      # and the image ships ffmpeg anyway.
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+
+      - name: go vet
+        working-directory: backend
+        run: go vet ./...
+
+      - name: go test
+        working-directory: backend
+        run: go test ./...
+
+  web:
+    name: Web types + tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Type-check and build
+        working-directory: web
+        # Emits to a throwaway directory: the committed bundle in
+        # backend/internal/web/dist is a release artifact, and CI must not
+        # imply it was refreshed.
+        env:
+          OPPAI_WEB_OUTDIR: ${{ runner.temp }}/web-dist
+        run: npm run build
+
+      - name: npm test
+        working-directory: web
+        run: npm test

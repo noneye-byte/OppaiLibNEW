@@ -42,6 +42,70 @@ export interface Media {
   updatedAt: number;
 }
 
+/** How many items one page of the grid asks for. The server caps a page at 200; this
+ *  is a screenful and a bit, so the first paint is quick and scrolling stays ahead of
+ *  the eye. */
+export const MEDIA_PAGE_SIZE = 60;
+
+/** The orders the library can be asked for. No title sort: titles are encrypted, so
+ *  the server cannot order by one — see db.MediaSort. */
+export type MediaSort = "newest" | "oldest" | "rating" | "largest";
+
+/** One library query. Everything is optional; the empty query is "the newest page of
+ *  everything". */
+export interface MediaQuery {
+  kind?: string;
+  /** Words that must all match a title, note, tag or tag category. */
+  q?: string;
+  /** One exact tag, as the filter chips use. */
+  tag?: string;
+  favorite?: boolean;
+  sort?: MediaSort;
+  limit?: number;
+  offset?: number;
+  /** Cancels this page when the query it belongs to has been superseded. */
+  signal?: AbortSignal;
+}
+
+/** One page of the library, and the size of what it is a page of. */
+export interface MediaPage {
+  items: Media[];
+  total: number;
+}
+
+/** The library's shape, for a dashboard that should not have to hold the library to
+ *  describe it. */
+export interface LibraryStats {
+  total: number;
+  byKind: Record<string, number>;
+  favorites: number;
+  thisWeek: number;
+  /** Bytes stored, summed by the server. */
+  bytes: number;
+}
+
+export interface TagCount {
+  name: string;
+  count: number;
+}
+
+/** A named, ordered list of items. `cover` is the first item's id, or 0 when empty. */
+export interface Collection {
+  id: number;
+  name: string;
+  count: number;
+  cover: number;
+  createdAt: number;
+}
+
+/** Where a user was in an item: seconds for a video, page index for a comic. */
+export interface MediaProgress {
+  mediaId: number;
+  position: number;
+  duration: number;
+  updatedAt: number;
+}
+
 /** One backed-up save file belonging to a game. Not a library item — a save is an
  *  attachment on a game, so it never appears in the grid or in search. */
 export interface GameSave {
@@ -73,6 +137,10 @@ export interface MediaPatch {
   notes?: string;
   kind?: Media["kind"];
   rating?: number;
+  /** Starred. The column has always been here and the PATCH has always accepted it;
+   *  the web client kept its own list in localStorage instead, so a favourite marked
+   *  on the desktop was not one on the phone. */
+  favorite?: boolean;
   addTags?: string[];
   removeTags?: string[];
 }
@@ -1824,13 +1892,88 @@ export const api = {
       body: JSON.stringify({ password }),
     }),
 
-  listMedia: (kind = "", limit = 60, offset = 0) => {
+  /**
+   * One page of the library, filtered and searched by the server.
+   *
+   * `total` is what makes this pageable: the count of everything matching, so a grid
+   * can say "60 of 4,312" and know whether to ask for more. The library screen used
+   * to call this in a loop until the server ran dry, then filter the result in the
+   * browser, because search and favourites had no server side at all.
+   *
+   * Pass `signal` from an AbortController to cancel a page that has been superseded —
+   * a search box whose query has moved on, a section navigated away from.
+   */
+  listMedia: (query: MediaQuery = {}) => {
+    const q = new URLSearchParams();
+    if (query.kind) q.set("kind", query.kind);
+    if (query.q?.trim()) q.set("q", query.q.trim());
+    if (query.tag) q.set("tag", query.tag);
+    if (query.favorite) q.set("favorite", "1");
+    if (query.sort && query.sort !== "newest") q.set("sort", query.sort);
+    q.set("limit", String(query.limit ?? MEDIA_PAGE_SIZE));
+    q.set("offset", String(query.offset ?? 0));
+    return request<MediaPage>(`/api/media?${q}`, { signal: query.signal });
+  },
+
+  /** The library's shape without its rows, for Home's counts. */
+  libraryStats: (signal?: AbortSignal) => request<LibraryStats>("/api/media/stats", { signal }),
+
+  /** The tags worth offering as filter chips, most-used first. */
+  topTags: (kind = "", limit = 12, signal?: AbortSignal) => {
     const q = new URLSearchParams();
     if (kind) q.set("kind", kind);
     q.set("limit", String(limit));
-    q.set("offset", String(offset));
-    return request<{ items: Media[] }>(`/api/media?${q}`);
+    return request<{ items: TagCount[] }>(`/api/tags/top?${q}`, { signal });
   },
+
+  // --- Collections ---------------------------------------------------------
+  listCollections: (signal?: AbortSignal) =>
+    request<{ items: Collection[] }>("/api/collections", { signal }),
+  createCollection: (name: string) =>
+    request<{ id: number; name: string }>("/api/collections", {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    }),
+  renameCollection: (id: number, name: string) =>
+    request<void>(`/api/collections/${id}`, { method: "PATCH", body: JSON.stringify({ name }) }),
+  deleteCollection: (id: number) => request<void>(`/api/collections/${id}`, { method: "DELETE" }),
+  collectionItems: (id: number, limit = MEDIA_PAGE_SIZE, offset = 0, signal?: AbortSignal) => {
+    const q = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+    return request<{ collection: Collection; items: Media[]; total: number }>(
+      `/api/collections/${id}/items?${q}`,
+      { signal },
+    );
+  },
+  addToCollection: (id: number, mediaIds: number[]) =>
+    request<{ added: number }>(`/api/collections/${id}/items`, {
+      method: "POST",
+      body: JSON.stringify({ mediaIds }),
+    }),
+  removeFromCollection: (id: number, mediaId: number) =>
+    request<void>(`/api/collections/${id}/items/${mediaId}`, { method: "DELETE" }),
+  reorderCollection: (id: number, mediaIds: number[]) =>
+    request<void>(`/api/collections/${id}/order`, {
+      method: "PUT",
+      body: JSON.stringify({ mediaIds }),
+    }),
+  collectionsOf: (mediaId: number, signal?: AbortSignal) =>
+    request<{ items: Collection[] }>(`/api/media/${mediaId}/collections`, { signal }),
+
+  // --- Resume --------------------------------------------------------------
+  /** Where this user was in an item. Server-side, so it is the same on every device. */
+  getProgress: (mediaId: number, signal?: AbortSignal) =>
+    request<MediaProgress>(`/api/media/${mediaId}/progress`, { signal }),
+  /** Record a position; zero clears it, which is what "start again" means. */
+  setProgress: (mediaId: number, position: number) =>
+    request<void>(`/api/media/${mediaId}/progress`, {
+      method: "PUT",
+      body: JSON.stringify({ position }),
+    }),
+  clearProgress: (mediaId: number) =>
+    request<void>(`/api/media/${mediaId}/progress`, { method: "DELETE" }),
+  /** What to carry on with: items left part-way through, most recent first. */
+  resumeShelf: (signal?: AbortSignal) =>
+    request<{ items: Media[]; progress: MediaProgress[] }>("/api/resume", { signal }),
   getMedia: (id: number) => request<Media>(`/api/media/${id}`),
   // <img>/<video> can't set headers; auth rides on the HttpOnly session cookie
   // set at login (same-origin request).

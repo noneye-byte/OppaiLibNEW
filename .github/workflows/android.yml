@@ -13,7 +13,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  checks:
+    uses: ./.github/workflows/checks.yml
+
   apk:
+    needs: checks
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:

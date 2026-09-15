@@ -19,7 +19,13 @@ env:
   IMAGE_NAME: noneye-byte/oppailib
 
 jobs:
+  # Nothing is published until the tests pass. A push to main is the release, so
+  # this is the only gate there is.
+  checks:
+    uses: ./.github/workflows/checks.yml
+
   apk:
+    needs: checks
     runs-on: ubuntu-latest
     timeout-minutes: 45
     outputs:
@@ -94,7 +100,7 @@ jobs:
           retention-days: 1
 
   publish:
-    needs: apk
+    needs: [checks, apk]
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:

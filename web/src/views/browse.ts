@@ -1,3 +1,4 @@
+import "@material/web/progress/circular-progress.js";
 import { LitElement, html, css, nothing, type PropertyValues } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { iconStyles, motionStyles } from "../theme.js";

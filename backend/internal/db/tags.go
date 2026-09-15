@@ -229,3 +229,48 @@ func nullFloat(f float64) any {
 	}
 	return f
 }
+
+// TagCount is a tag and how many library items carry it.
+type TagCount struct {
+	Name  string `json:"name"`
+	Count int    `json:"count"`
+}
+
+// TopTags is the most-used tags, optionally within one kind.
+//
+// This is what the grid's filter chips are: the handful of tags worth offering as a
+// one-tap narrowing of what is on screen. The client used to derive them by looking
+// at every row it had downloaded, which meant the chips were a property of how much
+// had loaded rather than of the library — and which only worked because it had
+// downloaded all of it.
+func (d *DB) TopTags(ctx context.Context, kind string, limit int) ([]TagCount, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 12
+	}
+	q := `SELECT t.name, COUNT(*) AS n
+	      FROM media_tags mt
+	      JOIN tags t ON t.id = mt.tag_id
+	      JOIN media m ON m.id = mt.media_id`
+	args := []any{}
+	if kind != "" {
+		q += ` WHERE m.kind = ?`
+		args = append(args, kind)
+	}
+	q += ` GROUP BY t.id ORDER BY n DESC, t.name ASC LIMIT ?`
+	args = append(args, limit)
+
+	rows, err := d.sql.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []TagCount
+	for rows.Next() {
+		var tc TagCount
+		if err := rows.Scan(&tc.Name, &tc.Count); err != nil {
+			return nil, err
+		}
+		out = append(out, tc)
+	}
+	return out, rows.Err()
+}

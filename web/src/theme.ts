@@ -143,13 +143,13 @@ export const globalStyles = `
 
 // Material Symbols Rounded icon helper, included in each shadow root that
 // renders <span class="material-symbols-rounded">. The @font-face itself is
-// loaded document-side via <link> in index.html and applies inside shadow DOM.
+// declared document-side in index.html (self-hosted from /fonts) and applies
+// inside shadow DOM.
 export const iconStyles = css`
   .material-symbols-rounded {
     font-family: "Material Symbols Rounded";
     font-weight: normal;
     font-style: normal;
-    font-variation-settings: "opsz" 24, "wght" 400, "FILL" 0, "GRAD" 0;
     line-height: 1;
     letter-spacing: normal;
     text-transform: none;
@@ -161,8 +161,12 @@ export const iconStyles = css`
     -webkit-font-smoothing: antialiased;
     user-select: none;
   }
+  /* The filled weight is its own face, not an axis sweep. It was written as
+     font-variation-settings, which never did anything: the font the page loaded
+     was pinned to FILL 0 and carried no axis to move, so a filled star rendered
+     outlined. Switching families is what actually fills it. */
   .fill-icon {
-    font-variation-settings: "opsz" 24, "wght" 500, "FILL" 1, "GRAD" 0;
+    font-family: "Material Symbols Rounded Fill";
   }
 `;
 

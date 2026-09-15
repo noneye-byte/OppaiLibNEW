@@ -11,9 +11,14 @@ import (
 // <script> or text/html response cannot execute. The rest is tuned to what the
 // built UI actually needs:
 //
-//   - style-src allows 'unsafe-inline' (Lit/Material components set inline styles)
-//     and Google Fonts' stylesheet host; script has no such exception.
-//   - font-src permits Google Fonts' file host and data: URIs.
+//   - style-src allows 'unsafe-inline' (Lit/Material components set inline styles,
+//     and index.html declares its @font-face rules there); script has no such
+//     exception.
+//   - font-src is 'self' and data: only. Fonts are vendored into web/public/fonts,
+//     so nothing the page loads reaches off-origin for them — and with the Google
+//     hosts gone from here, a <link> to them reappearing in index.html is blocked
+//     by the browser rather than quietly phoning home from every household running
+//     this.
 //   - img/media-src cover self plus data:/blob: for generated thumbnails and object
 //     URLs; all remote media is already proxied through our origin.
 //   - object-src 'none', base-uri 'self' and frame-ancestors 'none' close the
@@ -29,8 +34,8 @@ const contentSecurityPolicy = "default-src 'self'; " +
 	"object-src 'none'; " +
 	"frame-ancestors 'none'; " +
 	"script-src 'self'; " +
-	"style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
-	"font-src 'self' https://fonts.gstatic.com data:; " +
+	"style-src 'self' 'unsafe-inline'; " +
+	"font-src 'self' data:; " +
 	"img-src 'self' data: blob:; " +
 	"media-src 'self' blob:; " +
 	"frame-src 'self' https://html-classic.itch.zone https://html.itch.zone https://itch.io; " +

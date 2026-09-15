@@ -25,6 +25,7 @@ import {
   saveComicFit,
   loadComicPage,
   saveComicPage,
+  studioEditable,
 } from "../media-meta.js";
 
 // Inline single-item viewer, rendered inside the library content column (the
@@ -37,10 +38,10 @@ import {
  * she made herself is tagged as hers too. A photo from elsewhere has no recipe to
  * load, so the button would only open an empty form.
  */
-export function studioEditable(m: Media | null | undefined): boolean {
-  if (!m || (m.kind !== "image" && m.kind !== "gif")) return false;
-  return (m.tags ?? []).some((t) => t.name === "ai-generated" || t.name === "character:libby" || t.name === "libby");
-}
+// studioEditable now lives in media-meta.ts, so asking the question does not mean
+// importing this module — which is what kept the shell from loading its screens on
+// demand. Re-exported because that is where callers have always found it.
+export { studioEditable };
 
 @customElement("oppai-viewer")
 export class OppaiViewer extends LitElement {
@@ -906,8 +907,20 @@ export class OppaiViewer extends LitElement {
       if (this.media.id !== id) return;
       this.comic = info;
       if (info.readable && info.pages > 0) {
+        // The device's own memory opens the reader immediately; the server's answer —
+        // which is the same on the phone and the desktop — corrects it a moment later.
         this.page = Math.min(Math.max(loadComicPage(id), 1), info.pages);
         this.preloadPage(id, this.page + 1);
+        try {
+          const saved = await api.getProgress(id);
+          const page = Math.round(saved.position);
+          if (this.media.id === id && page >= 1 && page <= info.pages && page !== this.page) {
+            this.page = page;
+            this.preloadPage(id, page + 1);
+          }
+        } catch {
+          /* The local page stands. */
+        }
       }
     } catch (e) {
       if (this.media.id !== id) return;
@@ -929,6 +942,8 @@ export class OppaiViewer extends LitElement {
     if (next === this.page) return;
     this.page = next;
     saveComicPage(m.id, next);
+    // And on the server, so the page you reached is the page any device opens on.
+    void api.setProgress(m.id, next).catch(() => {});
     this.preloadPage(m.id, next + 1);
     // In width-fit the page is taller than the viewport; start the new one at
     // its top rather than wherever the last one was scrolled to.
@@ -940,6 +955,74 @@ export class OppaiViewer extends LitElement {
   private setFit(fit: ComicFit) {
     this.fit = fit;
     saveComicFit(fit);
+  }
+
+  // --- Resume -------------------------------------------------------------
+  // Where you were, kept on the server so it is the same wherever you come back.
+  // Videos had no memory at all before this: every reopen started from zero, however
+  // long the film.
+
+  /** How often a playing video reports in. Ten seconds is often enough that a crash
+   *  or a closed lid loses almost nothing, and rare enough that a two-hour film costs
+   *  a few hundred tiny writes rather than one per frame. */
+  private static readonly PROGRESS_INTERVAL = 10;
+  /** Below this, there is nothing to resume: a few seconds in is the beginning. */
+  private static readonly PROGRESS_FLOOR = 15;
+  /** Past this share of the duration it is finished, and resuming would drop you at
+   *  the credits. Matches the server's own finish line in db.ResumeIDs. */
+  private static readonly PROGRESS_DONE = 0.97;
+  private lastReported = 0;
+
+  /** Seeks a freshly loaded video to where it was left. */
+  private onVideoReady = async (e: Event) => {
+    const video = e.target as HTMLVideoElement;
+    const id = this.media.id;
+    this.lastReported = 0;
+    try {
+      const saved = await api.getProgress(id);
+      // The item may have been paged past while the request was out.
+      if (this.media.id !== id || saved.position < OppaiViewer.PROGRESS_FLOOR) return;
+      const duration = video.duration || saved.duration;
+      if (duration > 0 && saved.position > duration * OppaiViewer.PROGRESS_DONE) return;
+      video.currentTime = saved.position;
+      mascotSay(`Picking up where you left off.`);
+    } catch {
+      /* No saved position, or no answer: start at the beginning. */
+    }
+  };
+
+  /** Reports the position as it plays, at most once per interval. */
+  private onVideoTime = (e: Event) => {
+    const video = e.target as HTMLVideoElement;
+    const at = video.currentTime;
+    if (Math.abs(at - this.lastReported) < OppaiViewer.PROGRESS_INTERVAL) return;
+    this.lastReported = at;
+    this.saveProgress(at, video.duration);
+  };
+
+  /** A pause is the most likely moment someone walks away, so it is worth a write
+   *  even if the interval has not elapsed. */
+  private flushProgress = (e: Event) => {
+    const video = e.target as HTMLVideoElement;
+    this.lastReported = video.currentTime;
+    this.saveProgress(video.currentTime, video.duration);
+  };
+
+  /** Finishing clears the position: nothing to carry on with, and leaving it set
+   *  would put a watched film back on the resume shelf. */
+  private onVideoEnded = () => {
+    this.lastReported = 0;
+    void api.clearProgress(this.media.id).catch(() => {});
+  };
+
+  private saveProgress(position: number, duration: number) {
+    const id = this.media.id;
+    // The start is not a position, and neither is the end.
+    if (position < OppaiViewer.PROGRESS_FLOOR || (duration > 0 && position > duration * OppaiViewer.PROGRESS_DONE)) {
+      void api.clearProgress(id).catch(() => {});
+      return;
+    }
+    void api.setProgress(id, position).catch(() => {});
   }
 
   private videoEl(): HTMLVideoElement | null {
@@ -1447,6 +1530,10 @@ export class OppaiViewer extends LitElement {
             autoplay
             playsinline
             preload="metadata"
+            @loadedmetadata=${this.onVideoReady}
+            @timeupdate=${this.onVideoTime}
+            @pause=${this.flushProgress}
+            @ended=${this.onVideoEnded}
           ></video>
         </div>`;
       case "gif":

@@ -51,12 +51,52 @@ is WebAuthn working as designed.
 
 | Method | Path | Notes |
 |--------|------|-------|
-| GET | `/api/media?kind=&limit=&offset=` | list, newest first. `kind ∈ video\|gif\|image\|comic\|game` |
+| GET | `/api/media?kind=&q=&tag=&favorite=&sort=&limit=&offset=` | one page of the library → `{items, total}`. See below. |
+| GET | `/api/media/stats` | the library's shape without its rows → `{total, byKind, favorites, thisWeek, bytes}` |
+| GET | `/api/tags/top?kind=&limit=` | the most-used tags, for filter chips → `{items:[{name,count}]}` |
 | POST | `/api/media` | multipart: `file` (required), `title`, `source`, `kind`. → `{id, sha256, deduped}` |
 | GET | `/api/media/{id}` | full media incl. `tags` |
 | GET | `/api/media/{id}/stream` | decrypts + streams the blob (browser uses cookie auth) |
 | GET | `/api/media/{id}/thumb` | poster frame (video), comic cover, or the item's own bytes |
 | POST | `/api/media/{id}/autotag` | runs the AI tagger synchronously → `{tags}`. Videos and GIFs are sampled across several frames, so this can take a while. |
+
+### Listing, searching and sorting
+
+`GET /api/media` is the one endpoint a library screen needs:
+
+| Param | Meaning |
+|-------|---------|
+| `kind` | one of `video\|gif\|image\|comic\|game`; absent means every kind |
+| `q` | words that must **all** match a title, note, tag name or tag category |
+| `tag` | one exact tag, as the filter chips use |
+| `favorite` | `1` for favourites only |
+| `sort` | `newest` (default), `oldest`, `rating`, `largest` |
+| `limit` | capped at 200, default 50 |
+| `offset` | where the page starts |
+
+`total` in the response is how many rows match the filter, not how many were
+returned — it is what lets a client page without holding the rest.
+
+There is no sort by title, and there cannot be: `title_enc` is ciphertext, so
+SQLite has nothing meaningful to order by.
+
+**How `q` works.** Everything except the free-text search is a SQL filter. The search
+cannot be, because titles and notes are encrypted at rest — no index over the database
+file can match one. It is answered instead from an in-memory index that the process
+holding the KEK builds by decrypting every title once
+([chat_library_index.go](../backend/internal/api/chat_library_index.go), originally
+built so Libby could be asked about the collection by name). Nothing decrypted is
+written back to disk; a stolen database file still yields ciphertext.
+
+Two consequences worth knowing:
+
+- A search can be up to a few seconds stale on a *retitle* (the index is refreshed on a
+  stamp check, on a timer, and whenever a handler that edited text says so). Filtering
+  and sorting without `q` never go near it and are always exactly fresh.
+- A library past the index's 200,000-row ceiling indexes its newest rows and searches
+  those. If that ever matters, the thing to build is a blind index — HMAC each token
+  under the KEK and index the digests — not a plaintext FTS table, which would undo
+  `title_enc`.
 
 ## Resumable uploads
 
@@ -311,6 +351,40 @@ the alternative is removing weights from under a running model because a probe t
 ```
 `title`, `notes`, and `source` are stored AES-256-GCM-encrypted at rest and
 decrypted for the response.
+
+## Collections
+
+A named, ordered list of items. The order is the point: it is the one thing a tag
+cannot express, since a tag says what something is and says it about everything it is
+on equally. Deleting a collection never deletes what was on it.
+
+| Method | Path | Notes |
+|--------|------|-------|
+| GET | `/api/collections` | → `{items:[{id,name,count,cover,createdAt}]}`; `cover` is the first item's id, 0 when empty |
+| POST | `/api/collections` | `{name}` → `{id,name}`. 409 if the name is taken |
+| PATCH | `/api/collections/{id}` | `{name}` → 204. 409 if the name is taken |
+| DELETE | `/api/collections/{id}` | 204. The items stay in the library |
+| GET | `/api/collections/{id}/items?limit=&offset=` | → `{collection, items, total}`, in the collection's own order |
+| POST | `/api/collections/{id}/items` | `{mediaIds}` → `{added}`. Appends; anything already on the list is skipped rather than refused |
+| DELETE | `/api/collections/{id}/items/{media}` | 204 |
+| PUT | `/api/collections/{id}/order` | `{mediaIds}` → 204. Partial: the ids named go first, everything else keeps its order behind them |
+| GET | `/api/media/{id}/collections` | which lists one item is on |
+
+## Resume
+
+Where a user was in an item — seconds for a video, page index for a comic. Per user
+and server-side, so a film started on the sofa carries on in bed.
+
+| Method | Path | Notes |
+|--------|------|-------|
+| GET | `/api/media/{id}/progress` | → `{mediaId, position, duration, updatedAt}`. Never opened reads as `position: 0`, not 404 |
+| PUT | `/api/media/{id}/progress` | `{position}` → 204. A position of 0 clears it |
+| DELETE | `/api/media/{id}/progress` | 204 — "start again" |
+| GET | `/api/resume` | items left part-way through, most recent first → `{items, progress}` |
+
+Anything at or past 97% of its duration is treated as finished and is left off
+`/api/resume`: a "carry on with" shelf whose first tile is something you finished last
+night is worse than an empty one.
 
 ## Scraping
 

@@ -22,16 +22,24 @@ import (
 
 // MediaBrief is the least of a row needed to name it and rank it against a query.
 type MediaBrief struct {
-	ID        int64
-	Kind      string
-	TitleEnc  []byte
-	HasThumb  bool
-	Favorite  bool
-	Rating    int
+	ID       int64
+	Kind     string
+	TitleEnc []byte
+	// NotesEnc is carried for the same reason as TagName.Category: the library
+	// search box has always matched notes, and it can only match what the index
+	// holds. Usually NULL, so the extra decrypt per row costs nothing on most of
+	// them.
+	NotesEnc []byte
+	HasThumb bool
+	Favorite bool
+	Rating   int
+	// Size is carried so the index can order a search result the same four ways the
+	// grid offers — largest included — without a second query per page.
+	Size      int64
 	CreatedAt int64
 }
 
-const briefColumns = `m.id, m.kind, m.title_enc, m.thumb_path, m.favorite, m.rating, m.created_at`
+const briefColumns = `m.id, m.kind, m.title_enc, m.notes_enc, m.thumb_path, m.favorite, m.rating, m.size, m.created_at`
 
 func scanBriefs(rows *sql.Rows) ([]MediaBrief, error) {
 	defer rows.Close()
@@ -40,7 +48,7 @@ func scanBriefs(rows *sql.Rows) ([]MediaBrief, error) {
 		var b MediaBrief
 		var thumb sql.NullString
 		var fav int
-		if err := rows.Scan(&b.ID, &b.Kind, &b.TitleEnc, &thumb, &fav, &b.Rating, &b.CreatedAt); err != nil {
+		if err := rows.Scan(&b.ID, &b.Kind, &b.TitleEnc, &b.NotesEnc, &thumb, &fav, &b.Rating, &b.Size, &b.CreatedAt); err != nil {
 			return nil, err
 		}
 		b.HasThumb = thumb.Valid && thumb.String != ""

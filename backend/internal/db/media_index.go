@@ -61,18 +61,23 @@ func (d *DB) BriefsAfter(ctx context.Context, afterID int64, limit int) ([]Media
 type TagName struct {
 	Name   string
 	Weight float64
+	// Category is the bucket a tag was filed under — "character", "rating",
+	// "artist". Carried because the library search box matches it: typing
+	// "rating" is how you ask for everything the tagger classified that way, and
+	// that search used to run in the browser over the whole downloaded library.
+	// Ranking still ignores it; only the word index files it.
+	Category string
 }
 
 // AllTagNames returns every media row's tag names, keyed by media id.
 //
 // One sweep of the join rather than TagsForMediaBatch's bounded IN clause, because
 // the caller here wants the lot: batching it would be thousands of round trips and
-// a placeholder list SQLite would refuse. Names and weights only — the index ranks
-// on words and tilts on how much of an item a word describes; category, source and
-// score are nothing it can use.
+// a placeholder list SQLite would refuse. Names, weights and categories only —
+// source and score are nothing the index can use.
 func (d *DB) AllTagNames(ctx context.Context) (map[int64][]TagName, error) {
 	rows, err := d.sql.QueryContext(ctx, `
-		SELECT mt.media_id, t.name, COALESCE(mt.weight, 0)
+		SELECT mt.media_id, t.name, COALESCE(mt.weight, 0), t.category
 		FROM media_tags mt JOIN tags t ON t.id = mt.tag_id
 		ORDER BY mt.media_id`)
 	if err != nil {
@@ -83,7 +88,7 @@ func (d *DB) AllTagNames(ctx context.Context) (map[int64][]TagName, error) {
 	for rows.Next() {
 		var id int64
 		var tag TagName
-		if err := rows.Scan(&id, &tag.Name, &tag.Weight); err != nil {
+		if err := rows.Scan(&id, &tag.Name, &tag.Weight, &tag.Category); err != nil {
 			return nil, err
 		}
 		out[id] = append(out[id], tag)

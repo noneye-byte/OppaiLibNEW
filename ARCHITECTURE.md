@@ -12,7 +12,7 @@ telemetry.
 | Layer | Choice | Why |
 |-------|--------|-----|
 | **Backend API** | **Go 1.23** (net/http, stdlib-first) | Compiles to a single static binary → tiny (~20 MB) Docker image, ideal for lean Unraid boxes. First-class crypto stdlib (AES-256-GCM), excellent concurrency for concurrent uploads/transcode orchestration, trivial cross-compile. No runtime/interpreter to ship. |
-| **Database** | **SQLite** via `modernc.org/sqlite` (pure-Go, **cgo-free**) | Embedded, zero-admin, perfect for single-user/household. Pure-Go driver keeps the build static and cross-platform. FTS5 for full-text search. Sensitive fields encrypted at the app layer (see §4). |
+| **Database** | **SQLite** via `modernc.org/sqlite` (pure-Go, **cgo-free**) | Embedded, zero-admin, perfect for single-user/household. Pure-Go driver keeps the build static and cross-platform. Sensitive fields encrypted at the app layer, which is also why free-text search is not SQLite's job here (see §4). |
 | **Blob storage** | Custom **envelope-encrypted** file store on `/media` | Per-file AES-256-GCM with a random data key wrapped by a passphrase-derived master key. Blobs are self-describing and independently decryptable given the master passphrase → safe to back up. |
 | **AI tagging** | **ONNX Runtime** (`onnxruntime_go`) running an open tagger model | Runs fully local on CPU, optional GPU. Model is swappable (a `.onnx` + labels file dropped into `/config/models`). CPU fallback always works. |
 | **Scraper** | Pluggable Go interface + **YAML-defined** site parsers | New sites are added as config (CSS selectors) without recompiling. Ships with a generic OpenGraph/`<meta>` parser as the reference implementation. |
@@ -34,16 +34,20 @@ library bundled in the image; there is no second service to orchestrate.
    Android APK  ───────▶│                OppaiLib server (Go)        │
    (Compose/M3)         │                                            │
                         │  net/http router                           │
-   Web UI (Lit/M3) ────▶│   ├── /api/auth      auth + sessions       │
-   served as static     │   ├── /api/media     CRUD, stream, upload  │
-   assets by the binary │   ├── /api/tags      tag/collection mgmt    │
-                        │   ├── /api/search    FTS + tag filters      │
-                        │   ├── /api/scrape    URL → media + metadata │
-                        │   └── /api/ai        auto-tag jobs          │
+   Web UI (Lit/M3) ────▶│   ├── /api/auth        auth + sessions      │
+   served as static     │   ├── /api/media       CRUD, stream, upload,│
+   assets by the binary │   │                    search, sort, page   │
+                        │   ├── /api/collections named ordered lists  │
+                        │   ├── /api/resume      where you were       │
+                        │   ├── /api/tags/top    filter chips         │
+                        │   ├── /api/scrape      URL → media + meta   │
+                        │   ├── /api/chat        Libby                │
+                        │   ├── /api/imagegen    the studio           │
+                        │   └── /api/ai          auto-tag jobs        │
                         │                                            │
                         │  ┌─────────┐  ┌──────────┐  ┌───────────┐  │
                         │  │ crypto  │  │ storage  │  │   db       │  │
-                        │  │ envelope│  │ enc blob │  │ sqlite+fts │  │
+                        │  │ envelope│  │ enc blob │  │  sqlite    │  │
                         │  │ AES-GCM │  │  store   │  │ (metadata) │  │
                         │  └────┬────┘  └────┬─────┘  └─────┬─────┘  │
                         │       │            │              │        │
@@ -86,7 +90,9 @@ library bundled in the image; there is no second service to orchestrate.
 - `collections(id, name)` and `collection_items(collection_id, media_id, position)`
 - `progress(user_id, media_id, position, updated_at)` — watch/read progress
 - `scrape_jobs`, `ai_jobs` — background job queue
-- `media_fts` — FTS5 virtual table mirroring searchable text
+
+There is no full-text table. There was a `media_fts` declaration from the first commit
+that nothing ever wrote a row to or queried, and it has been dropped — see §7.
 
 See [backend/internal/db/schema.sql](backend/internal/db/schema.sql).
 
@@ -111,6 +117,15 @@ See [backend/internal/db/schema.sql](backend/internal/db/schema.sql).
 - **Auth.** Passwords hashed with Argon2id. Opaque random session tokens stored
   server-side with expiry. Android app adds optional PIN/biometric lock and a
   quick-lock gesture; panic/decoy mode is on the roadmap.
+- **Searching encrypted text.** Titles and notes are ciphertext, so no index in the
+  database file can match one. Search runs instead against an in-memory index that the
+  KEK-holding process builds by decrypting every title and note once, at first use
+  (`api/chat_library_index.go`; `api/media_search.go` is the library's entry to it).
+  Nothing decrypted is written back to disk, so a stolen database file still yields
+  ciphertext. Tags are plaintext and indexed in SQL, as are kind, rating and favourite,
+  so everything except free-text search is an ordinary indexed query. If on-disk search
+  is ever needed, the shape to build is a blind index — HMAC each token under the KEK
+  and index the digests — not a plaintext FTS table.
 - **Backup guidance.** Losing the passphrase = unrecoverable data (by design).
   `keystore.json` + the SQLite DB + `/media` are the full backup set. The README
   covers key rotation and backup.
@@ -146,15 +161,37 @@ OppaiLib/
 
 ---
 
-## 6. Build order (this project follows the prompt's module cadence)
+## 6. What is actually built
 
-1. ✅ Architecture + scaffold + packaging skeleton  ← **you are here**
-2. ⏳ Backend core (config, DB, HTTP, auth/sessions)
-3. ⏳ Storage / encryption layer
-4. ⏳ Scraper framework + generic parser
-5. ⏳ Local AI tagging module
-6. ⏳ Web UI (Material 3)
-7. ⏳ Android APK
-8. ⏳ Unraid packaging polish + full README
+All eight of the original modules landed, and a good deal that was never in the plan.
+The repo layout in §5 is the skeleton; the parts of the tree it does not mention are:
 
-Each module is committed and checked in before starting the next.
+| Area | Where | What |
+|------|-------|------|
+| Libby | `api/handlers_libby*.go`, `api/chat_*.go` | the character: chat, memory, bond, activities, backgrounds, identity |
+| Image generation | `internal/imagegen/`, `api/handlers_imagegen.go` | A1111/InvokeAI/ComfyUI clients, the outfit studio, the gallery |
+| Voice | `internal/tts/piper.go` | local Piper TTS |
+| Sources | `internal/sources/` | browsable catalogues (rule34, 4chan, YAML-defined sites) |
+| Discord | `internal/discord/` | relay |
+| Passkeys | `api/handlers_passkeys.go` | WebAuthn alongside passwords |
+| Games | `api/handlers_webgame.go`, `api/handlers_game_saves.go` | browser-playable builds, save backups |
+
+## 7. Decisions that changed
+
+Things the sections above once described differently, kept because the reasoning
+outlives the change:
+
+- **Search is in memory, not in SQLite.** `media_fts` was declared in the schema from
+  the first commit and never written to or read from; §2 advertised a `/api/search`
+  route that was never registered, and the web client compensated by downloading the
+  entire library and filtering it in the browser. The table is dropped and search is
+  served from the decrypted in-memory index (§4). The web client now asks the server.
+- **Tag management has no endpoints of its own.** §2 listed `/api/tags` for years with
+  nothing behind it. Tags ride along on every media row and are edited through
+  `PATCH /api/media/{id}`; the only standalone route is `/api/tags/top`, which counts
+  the tags worth offering as filter chips.
+- **Collections and progress were schema-only.** Both tables existed from the start
+  with no API and no UI. They are wired up now — see `docs/API.md`.
+- **The image is not ~20 MB.** §1's justification for Go still holds, but the shipped
+  image carries ffmpeg, the ONNX runtime, Piper and ~68 MB of Libby's artwork embedded
+  in the binary. There is a lean image variant for boxes that do not want all of it.

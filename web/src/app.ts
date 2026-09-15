@@ -8,7 +8,6 @@ import { libbyMotion, typeDuration } from "./libby-motion.js";
 import { bumpIntensity } from "./libby-meter.js";
 import { libbyOnUpload, type LibbyItemFacts } from "./libby-voice.js";
 import { profileUpdates } from "./ui-metrics.js";
-import "./views/login.js";
 import "./views/library.js";
 import "./views/upload-manager.js";
 
@@ -406,6 +405,10 @@ export class OppaiApp extends LitElement {
       return html`<div class="center"><md-circular-progress indeterminate></md-circular-progress></div>${mascot}`;
     }
     if (!this.user) {
+      // Fetched here rather than imported at the top: the element is written into the
+      // template now and upgrades when its module lands, and a signed-in visit never
+      // pays for a screen it will not show.
+      void import("./views/login.js");
       return html`<oppai-login @logged-in=${this.onLoggedIn}></oppai-login>`;
     }
     // The upload manager is mounted here, beside the whole app rather than inside

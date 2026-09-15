@@ -1,6 +1,18 @@
+import "@material/web/progress/circular-progress.js";
 import { LitElement, css, html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { customElement, property, query, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
+// The text-shaping these render paths depend on, extracted so it can be tested without
+// a component. See chat-text.ts.
+import {
+  closenessLabel,
+  findLinkInText,
+  plainSpeech,
+  previewText,
+  readingDelay,
+  splitIntoBubbles,
+  timeAgo,
+} from "../chat-text.js";
 import {
   api, PROFILE_IMAGE_OWNER, type ChatCharacter, type ChatConversation, type ChatImage, type ChatMessage,
   type ChatBackendInfo, type ChatDebug, type ChatModelInspection, type ChatModels, type ChatOptions, type ChatPhotoReport, type ChatProfile, type ChatSampling, type ChatStatus, type ChatWorkspace,
@@ -122,52 +134,8 @@ const IDLE_NUDGE_MS = 210_000;
     sentence boundaries, grouped so the pieces stay message-sized. Short replies are
     never split: an eight-word line arriving as three bubbles is fragmentation, not
     texture. Capped so a long reply becomes a few texts, not a wall of them. */
-/** Finds a link in what is being typed, matching the server's own rule: an explicit
-    scheme or a bare "www." host, with sentence punctuation left out of the address.
-    Narrow on purpose — treating any dotted word as a hostname turns "see notes.txt"
-    into a fetch. The server normalizes and re-checks whatever this finds. */
-function findLinkInText(text: string): string {
-  const found = /(?:https?:\/\/|www\.)[^\s<>"'`]{2,}/i.exec(text)?.[0] ?? "";
-  return found.replace(/[.,;:!?)\]}'"]+$/, "");
-}
-
 /** How long an incoming call rings before it counts as missed. */
 const RING_MS = 40_000;
-
-const MAX_BUBBLES = 5;
-function splitIntoBubbles(text: string): string[] {
-  const trimmed = text.trim();
-  if (!trimmed) return [trimmed];
-  // A blank line is an intended break and is honoured whatever the length: she is
-  // told to text in short separate messages, and "oh hey\n\nyou've been gone three
-  // days" arriving as one bubble with a paragraph gap in it was the bug. The length
-  // floor below only guards the *sentence* splitting, which is a guess.
-  let parts = trimmed.split(/\n{2,}/).map((part) => part.trim()).filter(Boolean);
-  if (parts.length < 2) {
-    // Below this a reply is a single thought; splitting it only fragments.
-    if (trimmed.length < 160) return [trimmed];
-    // No paragraph seam — fall back to grouping sentences into message-sized runs.
-    const sentences = trimmed.match(/[^.!?…]+[.!?…]+["')\]]*\s*|[^.!?…]+$/g)?.map((s) => s.trim()).filter(Boolean);
-    if (!sentences || sentences.length < 2) return [trimmed];
-    parts = [];
-    let current = "";
-    for (const sentence of sentences) {
-      // Break when the run is already message-sized, but stop breaking once one more
-      // group would blow the cap — everything left then accretes into the last bubble.
-      if (current && current.length + sentence.length > 200 && parts.length < MAX_BUBBLES - 1) {
-        parts.push(current.trim());
-        current = sentence;
-      } else {
-        current = current ? `${current} ${sentence}` : sentence;
-      }
-    }
-    if (current.trim()) parts.push(current.trim());
-  }
-  if (parts.length <= MAX_BUBBLES) return parts;
-  // More paragraphs than the cap allows: keep the first few, fold the rest together so
-  // nothing is dropped.
-  return [...parts.slice(0, MAX_BUBBLES - 1), parts.slice(MAX_BUBBLES - 1).join("\n\n")];
-}
 
 /** The emoji offered when you react to one of her messages. A short row, like a
     phone's: the point of a reaction is that it is quicker than words. */
@@ -177,19 +145,6 @@ const REACTIONS = ["❤️", "😂", "😮", "😢", "🔥", "👍", "👀", "�
     how far the bubble follows the finger at most. */
 const SWIPE_REPLY_PX = 56;
 const SWIPE_MAX_PX = 72;
-
-/** How long she takes to pick the phone up and read what you sent, before the
-    receipt turns to "Read" and the dots start. Scales with how much there is to
-    read; a burst of texts resets it, so she reads them together. Capped, because a
-    read receipt that takes ten seconds reads as her ignoring you. */
-function readingDelay(chars: number, quietMs: number): number {
-  const jitter = (base: number) => base * (0.7 + Math.random() * 0.6);
-  // A beat to notice it, then ~35 characters a second — reading, not typing.
-  let ms = jitter(700 + chars * 28);
-  // A conversation that has been quiet for a while means the phone was down.
-  if (quietMs > 10 * 60_000) ms += jitter(1500);
-  return Math.min(6500, ms);
-}
 
 /** Reserved image owner for a character's avatar, so a picture set as the face
     never joins that character's gallery nor gets attached to a reply. Mirrors
@@ -236,9 +191,6 @@ function listTimeOf(ms: number): string {
   return new Date(ms).toLocaleDateString([], { month: "short", day: "numeric" });
 }
 /** One line of what was last said, with the markup that formats a message stripped out. */
-function previewText(text: string): string {
-  return text.replace(/\*\*|~~|`|\*/g, "").replace(/\s+/g, " ").trim();
-}
 /**
  * No sampler settings by default — the server tunes them per turn.
  *
@@ -253,11 +205,6 @@ function previewText(text: string): string {
  * write — untouched, they only display what came back.
  */
 const defaultOptions = (): ChatOptions => ({});
-
-/** A line with its markup off, for places that quote her rather than render her. */
-function plainSpeech(text: string): string {
-  return text.replace(/\[[^\]\n]{0,200}\]/g, " ").replace(/\*\*|__|~~|\*|`/g, "").replace(/\s+/g, " ").trim();
-}
 
 /** localStorage key for the portrait column's width, per device. */
 const STAGE_WIDTH_KEY = "oppai_stage_width";
@@ -340,22 +287,6 @@ const MEMORY_KIND_LABELS: Record<string, string> = {
 const casualUnansweredNote = "two";
 
 /** A relative-time phrase for the bond panel: "just now", "3 hours ago", "5 days ago". */
-function timeAgo(atMillis: number): string {
-  const seconds = Math.max(0, (Date.now() - atMillis) / 1000);
-  if (seconds < 90) return "just now";
-  if (seconds < 5400) return `${Math.round(seconds / 60)} minutes ago`;
-  if (seconds < 172800) return `${Math.round(seconds / 3600)} hours ago`;
-  return `${Math.round(seconds / 86400)} days ago`;
-}
-
-/** Puts her closeness (0–1) into words for the bond panel, matching the server's tiers. */
-function closenessLabel(warmth: number): string {
-  if (warmth < 0.15) return "Still getting to know each other";
-  if (warmth < 0.5) return "Comfortable with each other by now";
-  if (warmth < 0.85) return "Close — you know each other well";
-  return "Deeply close after all this time";
-}
-
 function emptyWorkspace(): ChatWorkspace {
   return { profile: { displayName: "", persona: "" }, characters: [], conversations: [], images: [] };
 }
@@ -624,6 +555,8 @@ export class OppaiChat extends LitElement {
   /** The library picker: its search box and what it found. */
   @state() private picker: { query: string; items: Media[]; loading: boolean } | null = null;
   private pickerSeq = 0;
+  /** Cancels the picker search a keystroke has superseded. */
+  private pickerAbort?: AbortController;
   @query(".log") private log?: HTMLElement;
   @query(".composer textarea") private composer?: HTMLTextAreaElement;
   private callTimer = 0;
@@ -2297,24 +2230,29 @@ export class OppaiChat extends LitElement {
 
   private closePicker() { this.picker = null; this.focusComposer(); }
 
-  /** Lists the library, newest first, filtered by title on the client. The list
-      endpoint is the same one the grid uses; a few hundred titles is a cheap search. */
+  /** Searches the library for something to attach, server-side.
+   *
+   *  This used to ask for 400 rows and filter them here, which quietly searched the
+   *  newest fifty: the list endpoint caps a page at 200 and fell back to its 50-item
+   *  default for anything larger, so a title imported last month could not be
+   *  attached by name at all. The same endpoint now takes the query, matches it
+   *  against every title, note and tag in the collection, and returns one page of
+   *  what it found. */
   private async searchLibrary(query: string) {
     if (!this.picker) return;
     const seq = ++this.pickerSeq;
+    // A query that has moved on takes its request with it, rather than leaving it to
+    // land on a picker that is showing something else.
+    this.pickerAbort?.abort();
+    const abort = new AbortController();
+    this.pickerAbort = abort;
     this.picker = { ...this.picker, query, loading:true };
     try {
-      const { items } = await api.listMedia("", 400, 0);
+      const { items } = await api.listMedia({ q: query, limit: 120, signal: abort.signal });
       if (seq !== this.pickerSeq || !this.picker) return;
-      const words = query.toLowerCase().split(/\s+/).filter(Boolean);
-      const hits = items.filter((item) => {
-        if (!words.length) return true;
-        const hay = `${item.title} ${item.kind} ${(item.tags ?? []).map((tag) => tag.name).join(" ")}`.toLowerCase();
-        return words.every((word) => hay.includes(word));
-      });
-      this.picker = { query, items:hits.slice(0, 120), loading:false };
+      this.picker = { query, items, loading:false };
     } catch (error) {
-      if (seq !== this.pickerSeq || !this.picker) return;
+      if (abort.signal.aborted || seq !== this.pickerSeq || !this.picker) return;
       this.picker = { ...this.picker, loading:false };
       this.say((error as Error).message, true);
     }

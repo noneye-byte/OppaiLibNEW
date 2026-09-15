@@ -1,3 +1,9 @@
+import "@material/web/button/filled-button.js";
+import "@material/web/button/text-button.js";
+import "@material/web/textfield/outlined-text-field.js";
+import "@material/web/progress/circular-progress.js";
+import "@material/web/dialog/dialog.js";
+import "@material/web/chips/filter-chip.js";
 import { LitElement, html, css } from "lit";
 import { customElement, state, query } from "lit/decorators.js";
 import { api, type ScrapeResult } from "../api.js";

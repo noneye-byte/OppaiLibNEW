@@ -1,5 +1,17 @@
+import "@material/web/progress/circular-progress.js";
 import { LitElement, html, css, nothing, type PropertyValues } from "lit";
 import { customElement, property, query, state } from "lit/decorators.js";
+// The board's index arithmetic and the input clamps, extracted so they can be tested
+// without a component. See gen-grid.ts.
+import {
+  clampFloat,
+  clampNum,
+  slotKeyOf,
+  squareAddress as addressOfSquare,
+  squareIndex as indexOfSquare,
+  type SquareAddress,
+  type SquareLayout,
+} from "../gen-grid.js";
 import { iconStyles, motionStyles } from "../theme.js";
 import {
   api,
@@ -247,28 +259,24 @@ const OUTFIT_TIERS: { label: string; mood: string }[] = [
 const EXPRESSION_SQUARES = OUTFIT_FACES.length * OUTFIT_TIERS.length;
 const MISC_SQUARES = OUTFIT_ACTIVITIES.length;
 
+/** The board's shape, as gen-grid.ts takes it: how many of each kind of square there
+ * are, without what any of them is. */
+const SQUARE_LAYOUT: SquareLayout = {
+  faces: OUTFIT_FACES.length,
+  tiers: OUTFIT_TIERS.length,
+  miscIds: OUTFIT_ACTIVITIES.map((item) => item.id),
+};
+
 /** Decodes a square index into the tier, the expression, and the MISC state ("" for an
- * expression square). Out-of-range indexes clamp to the last square of their block. */
-function squareAddress(index: number): { tier: number; face: number; misc: string } {
-  if (index >= EXPRESSION_SQUARES) {
-    const offset = Math.min(index - EXPRESSION_SQUARES, MISC_SQUARES - 1);
-    return { tier: 0, face: 0, misc: OUTFIT_ACTIVITIES[offset].id };
-  }
-  const clamped = Math.max(0, Math.min(index, EXPRESSION_SQUARES - 1));
-  return { tier: Math.floor(clamped / OUTFIT_FACES.length), face: clamped % OUTFIT_FACES.length, misc: "" };
+ * expression square). The arithmetic is in gen-grid.ts, where it is round-tripped over
+ * every square in the tests; these two bind it to this board. */
+function squareAddress(index: number): SquareAddress {
+  return addressOfSquare(index, SQUARE_LAYOUT);
 }
 
 /** The inverse: where a (tier, face | misc) square sits in the index space. */
 function squareIndex(tier: number, face: number, misc: string): number {
-  const miscIndex = misc ? OUTFIT_ACTIVITIES.findIndex((item) => item.id === misc) : -1;
-  if (miscIndex >= 0) return EXPRESSION_SQUARES + miscIndex;
-  return face + tier * OUTFIT_FACES.length;
-}
-
-/** The key one square is matched by: its slot, not its filename. A filename carries
- * the theme text, so renaming the outfit used to orphan every square on the board. */
-function slotKeyOf(slot: Pick<DraftOutfitSlot, "emotion" | "tier">): string {
-  return `${slot.emotion}:${slot.tier}`;
+  return indexOfSquare(tier, face, misc, SQUARE_LAYOUT);
 }
 
 /** The studio's cell sizes, as the width of one square. 0 means fit the row to the
@@ -6930,20 +6938,6 @@ function blobToDataURL(blob: Blob): Promise<string> {
     reader.onerror = () => reject(new Error("couldn't read the image"));
     reader.readAsDataURL(blob);
   });
-}
-
-/** Clamp a numeric input's string value to an integer range, falling back to a default. */
-function clampNum(v: string, lo: number, hi: number, def: number): number {
-  const n = Number(v);
-  if (!Number.isFinite(n)) return def;
-  return Math.min(hi, Math.max(lo, Math.round(n)));
-}
-
-/** Like clampNum but keeps fractional values (CFG scale moves in halves). */
-function clampFloat(v: string, lo: number, hi: number, def: number): number {
-  const n = Number(v);
-  if (!Number.isFinite(n)) return def;
-  return Math.min(hi, Math.max(lo, n));
 }
 
 declare global {

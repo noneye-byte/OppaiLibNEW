@@ -132,6 +132,20 @@ export function saveFavorites(favs: Set<number>): void {
   }
 }
 
+/**
+ * Whether a picture can be reopened in the studio with its own settings.
+ *
+ * Here rather than in viewer.ts, where it used to live: a predicate over a Media is
+ * not viewer behaviour, and importing it pulled the whole viewer module into whatever
+ * asked. That is what stopped the shell from loading its screens on demand.
+ */
+export function studioEditable(m: Media | null | undefined): boolean {
+  if (!m || (m.kind !== "image" && m.kind !== "gif")) return false;
+  return (m.tags ?? []).some(
+    (t) => t.name === "ai-generated" || t.name === "character:libby" || t.name === "libby",
+  );
+}
+
 // --- Comic reader ----------------------------------------------------------
 // How a page is sized ("page" fits the whole page on screen, "width" fills the
 // column and scrolls) and where the reader left off, per comic. Both are
