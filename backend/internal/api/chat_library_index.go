@@ -326,6 +326,9 @@ func (s *Server) addLibraryEntry(entries map[int64]*libraryEntry, words map[stri
 	// chat looks them up, but an index that answered fewer fields than the search it
 	// now backs would quietly lose results people rely on.
 	file(s.decrypt(brief.NotesEnc, "notes"))
+	// And the vision model's prose, so a search finds a picture by what is in it
+	// rather than only by what it was called. See vision_describe.go.
+	file(s.decrypt(brief.DescriptionEnc, "description"))
 	for _, category := range categories {
 		file(category)
 	}

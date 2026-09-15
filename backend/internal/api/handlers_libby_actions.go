@@ -48,7 +48,8 @@ const (
 type libbyAction struct {
 	// ID is unique within the reply, so a client can track which card is in flight.
 	ID string `json:"id"`
-	// Kind is what will happen: "generate", "import", "tag", "favorite", "rename".
+	// Kind is what will happen: "generate", "import", "tag", "favorite", "rename",
+	// "shelf".
 	Kind string `json:"kind"`
 	// Label is the button-height summary — "Generate a picture".
 	Label string `json:"label"`
@@ -120,7 +121,9 @@ func actionDirective(caps actionCapabilities) string {
 			"- [do: import <url>] — offer to add something at a web address to their library. Only a URL the user themselves wrote in this conversation, copied exactly; you have no addresses of your own and must never make one up.",
 			"- [do: tag <title> | <tag, tag>] — offer to add tags to something in the library, named by its title.",
 			"- [do: favorite <title>] — offer to favourite something in the library.",
-			"- [do: rename <title> | <new title>] — offer to rename something in the library. Only when they asked for a better name or the current one is plainly a filename or a number.")
+			"- [do: rename <title> | <new title>] — offer to rename something in the library. Only when they asked for a better name or the current one is plainly a filename or a number.",
+			"- [do: shelf <what tonight is for, in a few words>] — offer to put together tonight's shelf: a short collection called \""+libbyShelfName+"\", picked by you from what they like and what you want to show them. "+
+				"For when they ask what to watch tonight, want a few things lined up, or tell you to choose for them.")
 	}
 	if len(lines) == 0 {
 		return ""
@@ -282,6 +285,25 @@ func (s *Server) buildLibbyAction(verb, argument string, caps actionCapabilities
 			MediaTitle: link.Title,
 		}, true
 
+	case "shelf", "playlist", "lineup":
+		if !caps.Library {
+			return libbyAction{}, false
+		}
+		theme := strings.Join(strings.Fields(argument), " ")
+		if len(theme) > 120 {
+			theme = strings.TrimSpace(theme[:120])
+		}
+		detail := libbyShelfName
+		if theme != "" {
+			detail += " — " + theme
+		}
+		return libbyAction{
+			Kind:   "shelf",
+			Label:  "Put together tonight's shelf",
+			Detail: detail,
+			Prompt: theme,
+		}, true
+
 	case "rename", "retitle", "call":
 		if !caps.Library {
 			return libbyAction{}, false
@@ -341,6 +363,18 @@ type actRequest struct {
 	MediaID int64    `json:"mediaId,omitempty"`
 	Tags    []string `json:"tags,omitempty"`
 	Title   string   `json:"title,omitempty"`
+	// Outfit, Activity and Intensity are her state on the device at the moment the
+	// user pressed Allow on a generate card: what she is wearing, what she is doing,
+	// how heated things are. All three are client-owned between turns (see
+	// chatRequest), so the approval carries them the way a chat turn does. A picture
+	// she makes of herself is drawn in that state, which is what makes it a picture
+	// *of now* rather than of a woman in the default sprite's clothes.
+	Outfit    string `json:"outfit,omitempty"`
+	Activity  string `json:"activity,omitempty"`
+	Intensity int    `json:"intensity,omitempty"`
+	// RecentMediaIDs are what she has already handed over in this conversation, so a
+	// shelf she builds is not the things they have just seen. See libby_shelf.go.
+	RecentMediaIDs []int64 `json:"recentMediaIds,omitempty"`
 }
 
 // handleLibbyAct performs one action the user has approved.
@@ -367,6 +401,8 @@ func (s *Server) handleLibbyAct(w http.ResponseWriter, r *http.Request) {
 		s.actFavorite(w, r, req)
 	case "rename":
 		s.actRename(w, r, req)
+	case "shelf":
+		s.actShelf(w, r, req)
 	default:
 		writeErr(w, http.StatusBadRequest, "unknown action")
 	}
@@ -438,11 +474,10 @@ func (s *Server) actGenerate(w http.ResponseWriter, r *http.Request, cur setting
 	}
 	// Her likeness leads and the subject follows, which is the order these prompts are
 	// written in and the order the weighting favours: the picture should be of her,
-	// doing the thing, rather than of the thing with her somewhere in it.
-	prompt := subject
-	if cur.LibbyGenPrompt != "" {
-		prompt = cur.LibbyGenPrompt + ", " + subject
-	}
+	// doing the thing, rather than of the thing with her somewhere in it. Between the
+	// two goes her state — the clothes she has on and what she is doing — so the
+	// picture is of her as she is in this conversation. See libbySelfiePrompt.
+	prompt, stateTags := s.libbySelfiePrompt(cur.LibbyGenPrompt, subject, req.Outfit, req.Activity, req.Intensity)
 	gen := generateReq{
 		Prompt:         prompt,
 		NegativePrompt: cur.LibbyGenNegativePrompt,
@@ -472,13 +507,125 @@ func (s *Server) actGenerate(w http.ResponseWriter, r *http.Request, cur setting
 		return
 	}
 	// Titled and tagged so it is findable later as something she made, rather than
-	// landing in the library as another anonymous "Generated image".
+	// landing in the library as another anonymous "Generated image". The subject and
+	// her state go on as tags too: they are what the selfie picker matches a request
+	// against (chat_photo_pick.go), so a picture made for "you in the bath" is the one
+	// that answers "the bath one" next time rather than a fresh generation.
+	tags := append([]string{"libby"}, stateTags...)
+	tags = append(tags, selfieSubjectTags(subject)...)
 	saved := s.delegate(r, s.handleImageGenSave, http.MethodPost, "/api/imagegen/save", genSaveReq{
 		ID:    result.Images[0].ID,
 		Title: libbyImageTitle(subject),
-		Tags:  []string{"libby"},
+		Tags:  tags,
 	})
+	if saved.status >= 200 && saved.status < 300 {
+		// It is a picture of her by construction, so say so the way a manual verdict
+		// does — recognition would likely agree, but "likely" is a poor basis for
+		// whether she can send it. Best-effort: the save already succeeded.
+		var filed struct {
+			ID int64 `json:"id"`
+		}
+		if err := json.Unmarshal([]byte(saved.body.String()), &filed); err == nil && filed.ID > 0 {
+			if err := s.db.AddTag(r.Context(), filed.ID, libbyIdentityTag, libbyIdentityCategory, "manual", 0); err != nil {
+				s.log.Debug("tag generated selfie as her", "err", err)
+			}
+			s.touchLibraryIndex()
+		}
+	}
 	relay(w, saved)
+}
+
+// libbySelfiePrompt composes the prompt for a picture she makes of herself, and the
+// tags that record the state it was made in.
+//
+// Order: her likeness, then the outfit she has on, then what she is doing, then the
+// subject asked for. The outfit comes from the worn wardrobe's own prompt when the
+// studio recorded one, and from the bundled wardrobe's tier description otherwise —
+// the same tiers wardrobeDirective tells her she is wearing, so the picture and her
+// account of herself agree. The activity is the MISC state's generator words, gated
+// at the same floor the state itself is (allowedActivity): a calm conversation cannot
+// be talked into an explicit picture by a client that sends the wrong state.
+func (s *Server) libbySelfiePrompt(likeness, subject, outfitID, activity string, intensity int) (string, []string) {
+	parts := make([]string, 0, 4)
+	var tags []string
+	if likeness = strings.TrimSpace(likeness); likeness != "" {
+		parts = append(parts, likeness)
+	}
+	if intensity < 1 {
+		intensity = 1
+	} else if intensity > 5 {
+		intensity = 5
+	}
+	clothes := ""
+	if outfitID = strings.TrimSpace(outfitID); outfitID != "" && validChatID(outfitID, false) {
+		if outfit, err := s.readLibbyOutfit(outfitID); err == nil {
+			clothes = outfit.Prompt
+			if name := strings.TrimSpace(outfit.Name); name != "" {
+				tags = append(tags, normalizeChatTag("outfit:"+name))
+			}
+		}
+	}
+	if clothes == "" {
+		clothes = libbyWardrobeGen[intensity]
+	}
+	if clothes != "" {
+		parts = append(parts, clothes)
+	}
+	if id := allowedActivity(activity, intensity); id != "" {
+		if a := libbyActivityByID[id]; a.Gen != "" {
+			parts = append(parts, a.Gen)
+			tags = append(tags, id)
+		}
+	}
+	if subject = strings.TrimSpace(subject); subject != "" {
+		parts = append(parts, subject)
+	}
+	return strings.Join(parts, ", "), tags
+}
+
+// libbyWardrobeGen is the bundled wardrobe in generator words, one entry per heat
+// tier, mirroring libbyWardrobe (handlers_chat.go) which is the same clothes in prose.
+var libbyWardrobeGen = map[int]string{
+	1: "black tank top, orange shorts with white trim, drawstring, glasses",
+	2: "black tank top, orange shorts, glasses, blush, bra strap slip",
+	3: "black tank top, orange shorts, glasses, blush, strap slip, flushed",
+	4: "black tank top pulled off one shoulder, orange bra visible, orange shorts, fogged glasses, blush",
+	5: "tank top pulled down, bare breasts, orange shorts pulled down, black panties, glasses, heavy blush",
+}
+
+// selfieSubjectTags turns the subject she was asked for into tags, so the picture is
+// matched by them next time. Comma-separated phrases become tags; a bare sentence
+// becomes one tag per word worth keeping. Bounded, and the asking words dropped, the
+// way the picker itself reads a request (pictureRequestSubject).
+func selfieSubjectTags(subject string) []string {
+	var out []string
+	seen := map[string]bool{}
+	add := func(tag string) {
+		tag = normalizeChatTag(tag)
+		if tag == "" || seen[tag] || len(out) >= 8 {
+			return
+		}
+		seen[tag] = true
+		out = append(out, tag)
+	}
+	// Split before the asking words are stripped: pictureRequestSubject trims the
+	// commas off, and a phrase list read afterwards is one long phrase.
+	if strings.Contains(subject, ",") {
+		for _, phrase := range strings.Split(subject, ",") {
+			add(pictureRequestSubject(phrase))
+		}
+		return out
+	}
+	subject = pictureRequestSubject(subject)
+	if subject == "" {
+		return nil
+	}
+	for _, word := range strings.Fields(subject) {
+		if len(word) >= 3 && !subjectGlue[word] {
+			add(word)
+		}
+	}
+	return out
 }
 
 // maxLibbyImageTitle keeps a generated title to something a grid tile can show.

@@ -123,15 +123,24 @@ func pictureInQuestionDirective(m chatMessage, d historyDescriber) string {
 			what += "; " + strings.Join(tags, ", ")
 		}
 		what += ")"
+		// When a vision model has written what the picture shows, she gets that too:
+		// prose she can answer from, where a tag list only ever got read back.
+		if item.description != "" {
+			what += ". What it shows, in words: " + item.description
+		}
+		source := "those tags"
+		if item.description != "" {
+			source = "that description and those tags"
+		}
 		switch {
 		case item.self && !theirs:
 			return "\n\nThe picture they are asking about is one you sent earlier, and everything it shows is: " + what + ". That is you in it. " +
-				"Answer from those tags in your own words, as a memory of your own — what you had on, what you were doing, where you were — never as a list, and never claiming anything the tags do not show. " +
+				"Answer from " + source + " in your own words, as a memory of your own — what you had on, what you were doing, where you were — never as a list, and never claiming anything they do not show. " +
 				"This is a turn for talking about that picture: do not send another one unless they ask to see you."
 		case theirs:
 			return "\n\nWhat they are asking about is something they attached from the library: " + what + ". Talk about that item — it is on their shelves, not a picture of you — and hand nothing else over for this unless they ask."
 		default:
-			return "\n\nWhat they are asking about is something you handed over from the library earlier: " + what + ". Talk about that item from its title and tags — it is on their shelves, not a picture of you — and hand nothing else over for this unless they ask."
+			return "\n\nWhat they are asking about is something you handed over from the library earlier: " + what + ". Talk about that item from what is known of it — it is on their shelves, not a picture of you — and hand nothing else over for this unless they ask."
 		}
 	}
 	return ""

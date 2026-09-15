@@ -1,4 +1,4 @@
-import{q as w,i as $,N as k,u as n,a as S,e as u,O as I,A as o,b as a,t as z,B as C,P as A,M as U}from"./index-CsG9DGtL.js";import{e as T}from"./query-__j_ZMY6.js";function q(e,t,i,s){const r=t.cursor??"";if(s)return{items:y(t.items),cursor:r,error:""};if(r&&r===i)return{items:e,cursor:"",error:"This source returned the same page cursor twice, so paging was stopped."};const d=new Set(e.map(b=>b.id)),h=y(t.items).filter(b=>!d.has(b.id));return t.items.length>0&&h.length===0?{items:e,cursor:"",error:"This source repeated an earlier page, so paging was stopped."}:{items:[...e,...h],cursor:r,error:""}}function y(e){const t=new Set;return e.filter(i=>t.has(i.id)?!1:(t.add(i.id),!0))}var L=Object.defineProperty,F=Object.getOwnPropertyDescriptor,g=(e,t,i,s)=>{for(var r=s>1?void 0:s?F(t,i):t,d=e.length-1,h;d>=0;d--)(h=e[d])&&(r=(s?h(t,i,r):h(r))||r);return s&&r&&L(t,i,r),r};let m=class extends S{constructor(){super(...arguments),this.existingNames=[],this.url="",this.busy=!1,this.error="",this.proposal=null,this.yaml="",this.showYaml=!1,this.saving=!1,this.analyze=async e=>{e.preventDefault();const t=this.url.trim();if(t){this.busy=!0,this.error="",this.proposal=null;try{const i=await u.analyzeSource(t);this.proposal=i,this.yaml=i.yaml}catch(i){this.error=i.message}finally{this.busy=!1}}},this.save=async()=>{if(this.proposal){this.saving=!0,this.error="";try{const e=await u.saveSource(this.yaml);this.dispatchEvent(new CustomEvent("added",{detail:e,bubbles:!0,composed:!0}))}catch(e){this.error=e.message}finally{this.saving=!1}}},this.close=async()=>{await I(this.sheet),this.dispatchEvent(new CustomEvent("close",{bubbles:!0,composed:!0}))}}render(){return a`
+import{q as w,i as $,N as k,u as n,a as S,e as h,O as I,A as o,b as a,t as z,B as C,P as F,M as q}from"./index-D3VFtMgd.js";import{e as T}from"./query-__j_ZMY6.js";function A(e,t,i,s){const r=t.cursor??"";if(s)return{items:y(t.items),cursor:r,error:""};if(r&&r===i)return{items:e,cursor:"",error:"This source returned the same page cursor twice, so paging was stopped."};const p=new Set(e.map(g=>g.id)),u=y(t.items).filter(g=>!p.has(g.id));return t.items.length>0&&u.length===0?{items:e,cursor:"",error:"This source repeated an earlier page, so paging was stopped."}:{items:[...e,...u],cursor:r,error:""}}function y(e){const t=new Set;return e.filter(i=>t.has(i.id)?!1:(t.add(i.id),!0))}var U=Object.defineProperty,L=Object.getOwnPropertyDescriptor,f=(e,t,i,s)=>{for(var r=s>1?void 0:s?L(t,i):t,p=e.length-1,u;p>=0;p--)(u=e[p])&&(r=(s?u(t,i,r):u(r))||r);return s&&r&&U(t,i,r),r};let m=class extends S{constructor(){super(...arguments),this.existingNames=[],this.url="",this.busy=!1,this.error="",this.proposal=null,this.yaml="",this.showYaml=!1,this.saving=!1,this.analyze=async e=>{e.preventDefault();const t=this.url.trim();if(t){this.busy=!0,this.error="",this.proposal=null;try{const i=await h.analyzeSource(t);this.proposal=i,this.yaml=i.yaml}catch(i){this.error=i.message}finally{this.busy=!1}}},this.save=async()=>{if(this.proposal){this.saving=!0,this.error="";try{const e=await h.saveSource(this.yaml);this.dispatchEvent(new CustomEvent("added",{detail:e,bubbles:!0,composed:!0}))}catch(e){this.error=e.message}finally{this.saving=!1}}},this.close=async()=>{await I(this.sheet),this.dispatchEvent(new CustomEvent("close",{bubbles:!0,composed:!0}))}}render(){return a`
       <div class="backdrop" @click=${this.backdropClick}>
         <div class="sheet" role="dialog" aria-modal="true" aria-label="Add a site to browse">
           <header>
@@ -79,7 +79,7 @@ import{q as w,i as $,N as k,u as n,a as S,e as u,O as I,A as o,b as a,t as z,B a
                 ${e.preview.map(s=>a`
                   <div class="tile">
                     <img
-                      src=${u.sourceStreamURL(s.thumbUrl)}
+                      src=${h.sourceStreamURL(s.thumbUrl)}
                       alt=""
                       loading="lazy"
                       @error=${r=>r.target.style.visibility="hidden"}
@@ -288,7 +288,40 @@ import{q as w,i as $,N as k,u as n,a as S,e as u,O as I,A as o,b as a,t as z,B a
         }
       }
     }
-  `];g([k({attribute:!1})],m.prototype,"existingNames",2);g([n()],m.prototype,"url",2);g([n()],m.prototype,"busy",2);g([n()],m.prototype,"error",2);g([n()],m.prototype,"proposal",2);g([n()],m.prototype,"yaml",2);g([n()],m.prototype,"showYaml",2);g([n()],m.prototype,"saving",2);g([T(".sheet")],m.prototype,"sheet",2);m=g([z("oppai-add-source")],m);var P=Object.defineProperty,_=Object.getOwnPropertyDescriptor,p=(e,t,i,s)=>{for(var r=s>1?void 0:s?_(t,i):t,d=e.length-1,h;d>=0;d--)(h=e[d])&&(r=(s?h(t,i,r):h(r))||r);return s&&r&&P(t,i,r),r};let l=class extends S{constructor(){super(...arguments),this.canAddSites=!1,this.sources=[],this.sourceId="",this.iconFailed=new Set,this.addingSite=!1,this.feedId="",this.container=null,this.sort="",this.query="",this.draft="",this.items=[],this.cursor="",this.loading=!1,this.loadingSources=!0,this.error="",this.active=null,this.pages=[],this.pageAt=0,this.saving=!1,this.toast="",this.commentsFor=null,this.comments=[],this.commentsLoading=!1,this.commentsError="",this.commentQuery="",this.threadQuery="",this.threadDraft="",this.reqId=0,this.onSiteAdded=async e=>{const t=e.detail;this.addingSite=!1,await this.loadSources(!0),t!=null&&t.id&&this.pickSource(t.id),this.toast=`${(t==null?void 0:t.name)??"Site"} added.`},this.removeCurrentSource=async()=>{const e=this.removableSource;if(e)try{await u.deleteSource(e.id),this.toast=`${e.name} removed.`,this.sourceId="",await this.loadSources(!0)}catch(t){this.error=t.message}},this.leaveContainer=()=>{this.container=null,this.reset()},this.close=()=>{this.active=null,this.pages=[]},this.closeComments=()=>{this.commentsFor=null,this.comments=[],this.commentsError=""}}connectedCallback(){super.connectedCallback(),C(this,"browse"),typeof IntersectionObserver<"u"&&(this.pageObserver=new IntersectionObserver(e=>{e.some(t=>t.isIntersecting)&&this.load(!1)},{rootMargin:"500px 0px"})),this.loadSources()}disconnectedCallback(){var e;(e=this.pageObserver)==null||e.disconnect(),super.disconnectedCallback()}updated(e){var s,r;super.updated(e);const t=d=>e.has(d);(t("active")||t("items"))&&this.centerCurrentInQueue(),["active","items","sourceId","feedId","container"].some(t)&&this.announceFrame();const i=this.renderRoot.querySelector("[data-page-sentinel]");i!==this.pageSentinel&&(this.pageSentinel&&((s=this.pageObserver)==null||s.unobserve(this.pageSentinel)),this.pageSentinel=i??void 0,i&&((r=this.pageObserver)==null||r.observe(i)))}announceFrame(){var i,s,r;const e=((i=this.source)==null?void 0:i.name)??"Browse",t=((s=this.container)==null?void 0:s.title)??((r=this.feed)==null?void 0:r.label);this.dispatchEvent(new CustomEvent("browse-frame-changed",{detail:{items:this.items.slice(0,16),focused:this.active,where:t?`${e} · ${t}`:e},bubbles:!0,composed:!0}))}centerCurrentInQueue(){const e=this.renderRoot.querySelector(".upnext .strip"),t=e==null?void 0:e.querySelector(".strip-item.on");!e||!t||(e.scrollLeft=Math.max(0,t.offsetLeft-(e.clientWidth-t.offsetWidth)/2))}get source(){return this.sources.find(e=>e.id===this.sourceId)}get feed(){var e;return(e=this.source)==null?void 0:e.feeds.find(t=>t.id===this.feedId)}get isSearch(){var e;return!this.container&&((e=this.feed)==null?void 0:e.query)===!0}get searchTarget(){var i,s;const e=((i=this.source)==null?void 0:i.name)??"",t=((s=this.feed)==null?void 0:s.label.trim())??"";return t&&t.toLowerCase()!=="search"?`${e} ${t.toLowerCase()}`:e}get activeFeed(){var e;return((e=this.container)==null?void 0:e.feedId)??this.feedId}get isFourChan(){return this.sourceId==="4chan"}async loadSources(e=!1){var t;try{const{sources:i}=await u.sources(e);this.sources=i;const s=i.find(d=>d.id===this.sourceId),r=s??i[0];r?(this.sourceId=r.id,s||(this.feedId=((t=r.feeds[0])==null?void 0:t.id)??"")):(this.sourceId="",this.feedId="")}catch(i){this.error=i instanceof Error?i.message:"Couldn't reach the server"}finally{this.loadingSources=!1}this.sourceId&&this.load(!0)}async load(e){var i;if(!this.sourceId||((i=this.source)==null?void 0:i.authentication)==="required"||!e&&(this.loading||!this.cursor)||this.isSearch&&!this.query)return;const t=++this.reqId;this.loading=!0;try{const s=await u.browseSource(this.sourceId,{feed:this.activeFeed,cursor:e?void 0:this.cursor,q:this.container?void 0:this.query||void 0,sort:this.container?void 0:this.sort||void 0});if(t!==this.reqId)return;const r=q(this.items,s,e?"":this.cursor,e);this.items=r.items,this.cursor=r.cursor,this.error=r.error}catch(s){if(t!==this.reqId)return;this.error=s instanceof Error?s.message:"Couldn't load that feed"}finally{t===this.reqId&&(this.loading=!1)}}reset(){this.items=[],this.cursor="",this.error="",this.load(!0)}renderSiteTabs(){return a`
+  `];f([k({attribute:!1})],m.prototype,"existingNames",2);f([n()],m.prototype,"url",2);f([n()],m.prototype,"busy",2);f([n()],m.prototype,"error",2);f([n()],m.prototype,"proposal",2);f([n()],m.prototype,"yaml",2);f([n()],m.prototype,"showYaml",2);f([n()],m.prototype,"saving",2);f([T(".sheet")],m.prototype,"sheet",2);m=f([z("oppai-add-source")],m);var N=Object.defineProperty,_=Object.getOwnPropertyDescriptor,l=(e,t,i,s)=>{for(var r=s>1?void 0:s?_(t,i):t,p=e.length-1,u;p>=0;p--)(u=e[p])&&(r=(s?u(t,i,r):u(r))||r);return s&&r&&N(t,i,r),r};let d=class extends S{constructor(){super(...arguments),this.canAddSites=!1,this.sources=[],this.sourceId="",this.iconFailed=new Set,this.addingSite=!1,this.feedId="",this.container=null,this.sort="",this.query="",this.draft="",this.items=[],this.cursor="",this.loading=!1,this.loadingSources=!0,this.error="",this.active=null,this.pages=[],this.pageAt=0,this.saving=!1,this.toast="",this.commentsFor=null,this.comments=[],this.commentsLoading=!1,this.commentsError="",this.commentQuery="",this.threadQuery="",this.threadDraft="",this.feeds=[],this.feedNew=[],this.feedBusy=!1,this.feedsOpen=!1,this.reqId=0,this.onSiteAdded=async e=>{const t=e.detail;this.addingSite=!1,await this.loadSources(!0),t!=null&&t.id&&this.pickSource(t.id),this.toast=`${(t==null?void 0:t.name)??"Site"} added.`},this.removeCurrentSource=async()=>{const e=this.removableSource;if(e)try{await h.deleteSource(e.id),this.toast=`${e.name} removed.`,this.sourceId="",await this.loadSources(!0)}catch(t){this.error=t.message}},this.leaveContainer=()=>{this.container=null,this.reset()},this.close=()=>{this.active=null,this.pages=[]},this.closeComments=()=>{this.commentsFor=null,this.comments=[],this.commentsError=""}}connectedCallback(){super.connectedCallback(),C(this,"browse"),typeof IntersectionObserver<"u"&&(this.pageObserver=new IntersectionObserver(e=>{e.some(t=>t.isIntersecting)&&this.load(!1)},{rootMargin:"500px 0px"})),this.loadSources(),this.loadFeeds()}async loadFeeds(){try{const[{feeds:e},{items:t}]=await Promise.all([h.savedFeeds(),h.newFromFeeds()]);this.feeds=e,this.feedNew=t}catch{}}get watchedHere(){if(!this.isSearch||!this.query)return;const e=this.sort||"";return this.feeds.find(t=>t.source===this.sourceId&&t.feed===this.feedId&&(t.query??"").toLowerCase()===this.query.toLowerCase()&&(t.sort??"")===e)}async watchThisSearch(){if(!(!this.isSearch||!this.query||this.feedBusy)){this.feedBusy=!0;try{const e=await h.saveFeed({source:this.sourceId,feed:this.feedId,query:this.query,sort:this.sort||void 0});this.feeds.some(t=>t.id===e.id)||(this.feeds=[...this.feeds,e]),this.showToast(`Watching “${e.name}” — new results land on the shelf above.`)}catch(e){this.showToast(e.message)}finally{this.feedBusy=!1}}}async unwatch(e){try{await h.deleteFeed(e.id),this.feeds=this.feeds.filter(t=>t.id!==e.id),this.feedNew=this.feedNew.filter(t=>t.feedId!==e.id)}catch(t){this.showToast(t.message)}}async checkFeedsNow(){if(!this.feedBusy){this.feedBusy=!0;try{const{feeds:e}=await h.checkFeeds();this.feeds=e,this.feedNew=(await h.newFromFeeds()).items;const t=this.feedNew.length;this.showToast(t?`${t} new since you last looked.`:"Nothing new yet.")}catch(e){this.showToast(e.message)}finally{this.feedBusy=!1}}}async markFeedsSeen(){try{await h.markFeedsSeen(),this.feedNew=[],this.feeds=this.feeds.map(e=>({...e,newCount:0}))}catch(e){this.showToast(e.message)}}openFeedItem(e){const t=this.feeds.find(i=>i.id===e.feedId);t&&(t.source!==this.sourceId||t.feed!==this.feedId||t.query!==this.query)&&(this.sourceId=t.source,this.feedId=t.feed,this.container=null,this.sort=t.sort??"",this.query=t.query??"",this.draft=this.query,this.reset()),this.open(e)}renderFeedShelf(){if(!this.feeds.length)return o;const e=this.feedNew;return a`
+      <section class="feed-shelf">
+        <div class="feed-head">
+          <span class="material-symbols-rounded" style="font-size:22px; color:var(--oppai-primary-bright);">new_releases</span>
+          <h3 class="feed-title">New from your feeds</h3>
+          <span class="count">${e.length?`${e.length} new`:"nothing new"}</span>
+          <button class="chip" ?disabled=${this.feedBusy} @click=${()=>void this.checkFeedsNow()}>
+            <span class="material-symbols-rounded" style="font-size:16px;">refresh</span>${this.feedBusy?"Checking…":"Check now"}
+          </button>
+          ${e.length?a`<button class="chip" @click=${()=>void this.markFeedsSeen()}>
+            <span class="material-symbols-rounded" style="font-size:16px;">check</span>Seen</button>`:o}
+          <button class="chip" aria-pressed=${this.feedsOpen} @click=${()=>this.feedsOpen=!this.feedsOpen}>
+            ${this.feeds.length} ${this.feeds.length===1?"feed":"feeds"}
+          </button>
+        </div>
+        ${this.feedsOpen?a`<div class="chips tight">
+          ${this.feeds.map(t=>a`<span class="chip feed-chip" title=${t.error?`Last check failed: ${t.error}`:t.checkedAt?`Checked ${new Date(t.checkedAt).toLocaleString()}`:"Not checked yet"}>
+            ${t.error?a`<span class="material-symbols-rounded" style="font-size:16px;">warning</span>`:o}
+            ${t.name}${t.newCount?a` · ${t.newCount}`:o}
+            <button class="feed-drop" title="Stop watching" @click=${()=>void this.unwatch(t)}>
+              <span class="material-symbols-rounded" style="font-size:16px;">close</span>
+            </button>
+          </span>`)}
+        </div>`:o}
+        ${e.length?a`<div class="feed-strip">
+          ${e.slice(0,40).map(t=>a`
+            <button class="feed-tile" title=${`${t.title} — from ${t.feedName}`} @click=${()=>this.openFeedItem(t)}>
+              ${t.thumbUrl?a`<img src=${h.sourceStreamURL(t.thumbUrl)} loading="lazy" alt=${t.title} />`:a`<span class="material-symbols-rounded" style="font-size:36px;">image</span>`}
+              ${t.kind==="video"?a`<span class="play material-symbols-rounded" style="font-size:36px;">play_circle</span>`:o}
+              <span class="feed-from">${t.feedName}</span>
+            </button>`)}
+        </div>`:o}
+      </section>
+    `}disconnectedCallback(){var e;(e=this.pageObserver)==null||e.disconnect(),super.disconnectedCallback()}updated(e){var s,r;super.updated(e);const t=p=>e.has(p);(t("active")||t("items"))&&this.centerCurrentInQueue(),["active","items","sourceId","feedId","container"].some(t)&&this.announceFrame();const i=this.renderRoot.querySelector("[data-page-sentinel]");i!==this.pageSentinel&&(this.pageSentinel&&((s=this.pageObserver)==null||s.unobserve(this.pageSentinel)),this.pageSentinel=i??void 0,i&&((r=this.pageObserver)==null||r.observe(i)))}announceFrame(){var i,s,r;const e=((i=this.source)==null?void 0:i.name)??"Browse",t=((s=this.container)==null?void 0:s.title)??((r=this.feed)==null?void 0:r.label);this.dispatchEvent(new CustomEvent("browse-frame-changed",{detail:{items:this.items.slice(0,16),focused:this.active,where:t?`${e} · ${t}`:e},bubbles:!0,composed:!0}))}centerCurrentInQueue(){const e=this.renderRoot.querySelector(".upnext .strip"),t=e==null?void 0:e.querySelector(".strip-item.on");!e||!t||(e.scrollLeft=Math.max(0,t.offsetLeft-(e.clientWidth-t.offsetWidth)/2))}get source(){return this.sources.find(e=>e.id===this.sourceId)}get feed(){var e;return(e=this.source)==null?void 0:e.feeds.find(t=>t.id===this.feedId)}get isSearch(){var e;return!this.container&&((e=this.feed)==null?void 0:e.query)===!0}get searchTarget(){var i,s;const e=((i=this.source)==null?void 0:i.name)??"",t=((s=this.feed)==null?void 0:s.label.trim())??"";return t&&t.toLowerCase()!=="search"?`${e} ${t.toLowerCase()}`:e}get activeFeed(){var e;return((e=this.container)==null?void 0:e.feedId)??this.feedId}get isFourChan(){return this.sourceId==="4chan"}async loadSources(e=!1){var t;try{const{sources:i}=await h.sources(e);this.sources=i;const s=i.find(p=>p.id===this.sourceId),r=s??i[0];r?(this.sourceId=r.id,s||(this.feedId=((t=r.feeds[0])==null?void 0:t.id)??"")):(this.sourceId="",this.feedId="")}catch(i){this.error=i instanceof Error?i.message:"Couldn't reach the server"}finally{this.loadingSources=!1}this.sourceId&&this.load(!0)}async load(e){var i;if(!this.sourceId||((i=this.source)==null?void 0:i.authentication)==="required"||!e&&(this.loading||!this.cursor)||this.isSearch&&!this.query)return;const t=++this.reqId;this.loading=!0;try{const s=await h.browseSource(this.sourceId,{feed:this.activeFeed,cursor:e?void 0:this.cursor,q:this.container?void 0:this.query||void 0,sort:this.container?void 0:this.sort||void 0});if(t!==this.reqId)return;const r=A(this.items,s,e?"":this.cursor,e);this.items=r.items,this.cursor=r.cursor,this.error=r.error}catch(s){if(t!==this.reqId)return;this.error=s instanceof Error?s.message:"Couldn't load that feed"}finally{t===this.reqId&&(this.loading=!1)}}reset(){this.items=[],this.cursor="",this.error="",this.load(!0)}renderSiteTabs(){return a`
       <div class="site-tabs" role="tablist" aria-label="Sites">
         ${this.sources.map(e=>{const t=e.id===this.sourceId,i=this.iconFailed.has(e.id);return a`
             <button
@@ -300,7 +333,7 @@ import{q as w,i as $,N as k,u as n,a as S,e as u,O as I,A as o,b as a,t as z,B a
             >
               ${i?a`<span class="site-mono" aria-hidden="true">${e.name.slice(0,1).toUpperCase()}</span>`:a`<img
                     class="site-icon"
-                    src=${u.sourceIconURL(e.id)}
+                    src=${h.sourceIconURL(e.id)}
                     alt=""
                     loading="lazy"
                     @error=${()=>this.markIconFailed(e.id)}
@@ -328,7 +361,7 @@ import{q as w,i as $,N as k,u as n,a as S,e as u,O as I,A as o,b as a,t as z,B a
             @close=${()=>this.addingSite=!1}
             @added=${this.onSiteAdded}
           ></oppai-add-source>`:o}
-    `}get removableSource(){if(!this.canAddSites)return;const e=this.source;return e!=null&&e.userAdded?e:void 0}markIconFailed(e){this.iconFailed=new Set(this.iconFailed).add(e)}pickSource(e){var t,i;e!==this.sourceId&&(this.sourceId=e,this.feedId=((i=(t=this.sources.find(s=>s.id===e))==null?void 0:t.feeds[0])==null?void 0:i.id)??"",this.container=null,this.sort="",this.query="",this.draft="",this.reset())}pickFeed(e){var t,i;e===this.feedId&&!this.container||(this.feedId=e,this.container=null,this.sort="",((i=(t=this.source)==null?void 0:t.feeds.find(s=>s.id===e))==null?void 0:i.query)!==!0&&(this.query="",this.draft=""),this.reset())}addThread(e){var b;e.preventDefault();const t=this.threadDraft.trim(),i=t.match(/^(?:https?:\/\/)?(?:boards\.4chan\.org\/)?\/?([a-z0-9]+)\/?$/i);if(i){this.threadDraft="",this.pickFeed(i[1].toLowerCase());return}const s=t.match(/(?:boards\.4chan\.org\/)?([a-z0-9]+)\/(?:thread\/)?(\d+)/i)??t.match(/^\/?([a-z0-9]+):t?(\d+)$/i);if(!s){this.showToast("Enter a board such as /b/, or a 4chan thread URL");return}const r=s[1].toLowerCase(),d=s[2],h=`${r}:t${d}`;(b=this.source)!=null&&b.feeds.some(f=>f.id===r)&&(this.feedId=r),this.threadDraft="",this.openContainer({id:h,title:`/${r}/ thread No.${d}`,kind:"thread",thumbUrl:"",feedId:h,threadId:h})}pickSort(e){e!==this.sort&&(this.sort=e,this.reset())}openContainer(e){this.container=e,this.threadQuery="",this.reset()}submitSearch(e){e.preventDefault(),this.query=this.draft.trim(),this.container=null,this.reset()}async open(e){var t,i;if(this.active=e,this.pages=[],this.pageAt=0,e.kind==="comic")try{const{pages:s}=await u.sourcePages(this.sourceId,e.id);if(((t=this.active)==null?void 0:t.id)!==e.id)return;this.pages=s,this.warmPages(1)}catch(s){if(((i=this.active)==null?void 0:i.id)!==e.id)return;this.error=s instanceof Error?s.message:"Couldn't open that comic",this.active=null}}warmPages(e){for(let t=e;t<Math.min(e+E,this.pages.length);t++)new Image().src=u.sourceStreamURL(this.pages[t])}goPage(e){const t=Math.min(Math.max(e,0),this.pages.length-1);t!==this.pageAt&&(this.pageAt=t,this.warmPages(t+1))}async openComments(e){var i,s,r;const t=e.threadId;if(t){this.commentsFor=e,this.comments=[],this.commentsError="",this.commentQuery="",this.commentsLoading=!0;try{const{comments:d}=await u.sourceComments(this.sourceId,t);if(((i=this.commentsFor)==null?void 0:i.id)!==e.id)return;this.comments=d}catch(d){if(((s=this.commentsFor)==null?void 0:s.id)!==e.id)return;this.commentsError=d instanceof Error?d.message:"Couldn't load the thread"}finally{((r=this.commentsFor)==null?void 0:r.id)===e.id&&(this.commentsLoading=!1)}}}save(e){if(!e||this.saving)return;const t=e.kind==="comic"||e.kind==="thread";this.saving=!0,A(e.title||"Source download",async i=>{try{i(.08),await u.saveFromSource(this.sourceId,{itemId:t?e.id:void 0,mediaUrl:t?void 0:e.mediaUrl,pageUrl:e.pageUrl,title:e.title,kind:t?"comic":e.kind,tags:e.tags}),i(1),this.dispatchEvent(new CustomEvent("imported",{bubbles:!0,composed:!0}))}finally{this.saving=!1}}),this.showToast(e.kind==="thread"?"Downloading thread in background":"Downloading in background")}showToast(e){this.toast=e,setTimeout(()=>{this.toast=""},2600)}renderTile(e,t){const i=e.kind==="thread",s=i?`${e.count??0}`:e.width&&e.height?`${e.width}×${e.height}`:"";return a`
+    `}get removableSource(){if(!this.canAddSites)return;const e=this.source;return e!=null&&e.userAdded?e:void 0}markIconFailed(e){this.iconFailed=new Set(this.iconFailed).add(e)}pickSource(e){var t,i;e!==this.sourceId&&(this.sourceId=e,this.feedId=((i=(t=this.sources.find(s=>s.id===e))==null?void 0:t.feeds[0])==null?void 0:i.id)??"",this.container=null,this.sort="",this.query="",this.draft="",this.reset())}pickFeed(e){var t,i;e===this.feedId&&!this.container||(this.feedId=e,this.container=null,this.sort="",((i=(t=this.source)==null?void 0:t.feeds.find(s=>s.id===e))==null?void 0:i.query)!==!0&&(this.query="",this.draft=""),this.reset())}addThread(e){var g;e.preventDefault();const t=this.threadDraft.trim(),i=t.match(/^(?:https?:\/\/)?(?:boards\.4chan\.org\/)?\/?([a-z0-9]+)\/?$/i);if(i){this.threadDraft="",this.pickFeed(i[1].toLowerCase());return}const s=t.match(/(?:boards\.4chan\.org\/)?([a-z0-9]+)\/(?:thread\/)?(\d+)/i)??t.match(/^\/?([a-z0-9]+):t?(\d+)$/i);if(!s){this.showToast("Enter a board such as /b/, or a 4chan thread URL");return}const r=s[1].toLowerCase(),p=s[2],u=`${r}:t${p}`;(g=this.source)!=null&&g.feeds.some(b=>b.id===r)&&(this.feedId=r),this.threadDraft="",this.openContainer({id:u,title:`/${r}/ thread No.${p}`,kind:"thread",thumbUrl:"",feedId:u,threadId:u})}pickSort(e){e!==this.sort&&(this.sort=e,this.reset())}openContainer(e){this.container=e,this.threadQuery="",this.reset()}submitSearch(e){e.preventDefault(),this.query=this.draft.trim(),this.container=null,this.reset()}async open(e){var t,i;if(this.active=e,this.pages=[],this.pageAt=0,e.kind==="comic")try{const{pages:s}=await h.sourcePages(this.sourceId,e.id);if(((t=this.active)==null?void 0:t.id)!==e.id)return;this.pages=s,this.warmPages(1)}catch(s){if(((i=this.active)==null?void 0:i.id)!==e.id)return;this.error=s instanceof Error?s.message:"Couldn't open that comic",this.active=null}}warmPages(e){for(let t=e;t<Math.min(e+O,this.pages.length);t++)new Image().src=h.sourceStreamURL(this.pages[t])}goPage(e){const t=Math.min(Math.max(e,0),this.pages.length-1);t!==this.pageAt&&(this.pageAt=t,this.warmPages(t+1))}async openComments(e){var i,s,r;const t=e.threadId;if(t){this.commentsFor=e,this.comments=[],this.commentsError="",this.commentQuery="",this.commentsLoading=!0;try{const{comments:p}=await h.sourceComments(this.sourceId,t);if(((i=this.commentsFor)==null?void 0:i.id)!==e.id)return;this.comments=p}catch(p){if(((s=this.commentsFor)==null?void 0:s.id)!==e.id)return;this.commentsError=p instanceof Error?p.message:"Couldn't load the thread"}finally{((r=this.commentsFor)==null?void 0:r.id)===e.id&&(this.commentsLoading=!1)}}}save(e){if(!e||this.saving)return;const t=e.kind==="comic"||e.kind==="thread";this.saving=!0,F(e.title||"Source download",async i=>{try{i(.08),await h.saveFromSource(this.sourceId,{itemId:t?e.id:void 0,mediaUrl:t?void 0:e.mediaUrl,pageUrl:e.pageUrl,title:e.title,kind:t?"comic":e.kind,tags:e.tags}),i(1),this.dispatchEvent(new CustomEvent("imported",{bubbles:!0,composed:!0}))}finally{this.saving=!1}}),this.showToast(e.kind==="thread"?"Downloading thread in background":"Downloading in background")}showToast(e){this.toast=e,setTimeout(()=>{this.toast=""},2600)}renderTile(e,t){const i=e.kind==="thread",s=i?`${e.count??0}`:e.width&&e.height?`${e.width}×${e.height}`:"";return a`
       <button
         class="tile anim-rise"
         style="animation-delay:${Math.min(t,12)*45}ms;"
@@ -336,7 +369,7 @@ import{q as w,i as $,N as k,u as n,a as S,e as u,O as I,A as o,b as a,t as z,B a
         title=${e.title}
       >
         <div class="tile-media">
-          ${e.thumbUrl?a`<img src=${u.sourceStreamURL(e.thumbUrl)} loading="lazy" alt=${e.title} />`:a`<div class="tile-blank">
+          ${e.thumbUrl?a`<img src=${h.sourceStreamURL(e.thumbUrl)} loading="lazy" alt=${e.title} />`:a`<div class="tile-blank">
                 <span class="material-symbols-rounded" style="font-size:36px;">forum</span>
               </div>`}
           ${e.kind==="video"?a`<span class="play material-symbols-rounded" style="font-size:44px;">play_circle</span>`:o}
@@ -374,14 +407,14 @@ import{q as w,i as $,N as k,u as n,a as S,e as u,O as I,A as o,b as a,t as z,B a
         </div>
 
         <div class="ostage">
-          ${t?i?a`<img src=${u.sourceStreamURL(i)} alt="Page ${this.pageAt+1}" />`:a`<md-circular-progress indeterminate></md-circular-progress>`:e.kind==="video"?a`<video
-                  src=${u.sourceStreamURL(e.mediaUrl??"")}
+          ${t?i?a`<img src=${h.sourceStreamURL(i)} alt="Page ${this.pageAt+1}" />`:a`<md-circular-progress indeterminate></md-circular-progress>`:e.kind==="video"?a`<video
+                  src=${h.sourceStreamURL(e.mediaUrl??"")}
                   controls
                   autoplay
                   loop
                   playsinline
                   preload="metadata"
-                ></video>`:a`<img src=${u.sourceStreamURL(e.mediaUrl??e.thumbUrl)} alt=${e.title} />`}
+                ></video>`:a`<img src=${h.sourceStreamURL(e.mediaUrl??e.thumbUrl)} alt=${e.title} />`}
         </div>
 
         ${e.kind==="video"||e.kind==="image"?this.renderUpNext(e):o}
@@ -417,14 +450,14 @@ import{q as w,i as $,N as k,u as n,a as S,e as u,O as I,A as o,b as a,t as z,B a
                 aria-current=${s.id===e.id}
                 @click=${()=>this.open(s)}
               >
-                <img src=${u.sourceStreamURL(s.thumbUrl)} loading="lazy" alt=${s.title} />
+                <img src=${h.sourceStreamURL(s.thumbUrl)} loading="lazy" alt=${s.title} />
                 ${s.kind==="video"?a`<span class="strip-play material-symbols-rounded">play_circle</span>`:o}
                 ${r===i+1?a`<span class="strip-next">Next</span>`:o}
               </button>
             `)}
         </div>
       </div>
-    `}renderComments(e){const t=e.postNo,i=this.commentQuery.trim().toLowerCase(),s=i?this.comments.filter(r=>[String(r.no),r.name,r.subject,r.text].some(d=>(d??"").toLowerCase().includes(i))):this.comments;return a`
+    `}renderComments(e){const t=e.postNo,i=this.commentQuery.trim().toLowerCase(),s=i?this.comments.filter(r=>[String(r.no),r.name,r.subject,r.text].some(p=>(p??"").toLowerCase().includes(i))):this.comments;return a`
       <div
         class="overlay comments"
         @click=${r=>{r.target===r.currentTarget&&this.closeComments()}}
@@ -461,11 +494,11 @@ import{q as w,i as $,N as k,u as n,a as S,e as u,O as I,A as o,b as a,t as z,B a
           ${t?a`<span class="cbadge here-badge">This file</span>`:o}
           <span class="cname">${e.name||"Anonymous"}</span>
           <span class="cno">No.${e.no}</span>
-          <span class="ctime">${O(e.time)}</span>
+          <span class="ctime">${P(e.time)}</span>
         </header>
         ${e.subject?a`<div class="csub">${e.subject}</div>`:o}
         ${this.renderAttachment(e)}
-        ${e.text?a`<div class="ctext">${N(e.text,i=>this.goToPost(i))}</div>`:o}
+        ${e.text?a`<div class="ctext">${E(e.text,i=>this.goToPost(i))}</div>`:o}
       </article>
     `}goToPost(e){this.commentQuery="",this.updateComplete.then(()=>{var t;(t=this.renderRoot.querySelector(`#post-${e}`))==null||t.scrollIntoView({behavior:"smooth",block:"center"})})}renderAttachment(e){if(!e.thumbUrl)return o;const t=e.kind==="video";return a`
       <button
@@ -473,7 +506,7 @@ import{q as w,i as $,N as k,u as n,a as S,e as u,O as I,A as o,b as a,t as z,B a
         title=${t?"Play this video":"Open this file"}
         @click=${()=>this.openAttachment(e)}
       >
-        <img class="cthumb" src=${u.sourceStreamURL(e.thumbUrl)} loading="lazy" alt="" />
+        <img class="cthumb" src=${h.sourceStreamURL(e.thumbUrl)} loading="lazy" alt="" />
         ${t?a`<span class="cplay material-symbols-rounded">play_circle</span>`:o}
       </button>
     `}openAttachment(e){var s;const i=(e.itemId?this.items.find(r=>r.id===e.itemId):void 0)??{id:e.itemId??`post-${e.no}`,title:e.subject||`No.${e.no}`,kind:e.kind??"image",thumbUrl:e.thumbUrl??"",mediaUrl:e.mediaUrl,threadId:(s=this.commentsFor)==null?void 0:s.threadId,postNo:e.no};this.closeComments(),this.open(i)}renderContainerHead(e){var t;return a`
@@ -508,13 +541,14 @@ import{q as w,i as $,N as k,u as n,a as S,e as u,O as I,A as o,b as a,t as z,B a
           />
         </label>
       </div>
-    `}render(){var r,d,h,b,f,v;if(this.loadingSources)return a`<div class="empty"><md-circular-progress indeterminate></md-circular-progress></div>`;if(!this.sources.length)return a`<div class="empty">No remote sources are configured.</div>`;const e=((r=this.feed)==null?void 0:r.sorts)??[],t=this.container,i=this.threadQuery.trim().toLowerCase(),s=t&&i?this.items.filter(c=>[c.title,String(c.postNo??""),c.kind].some(x=>x.toLowerCase().includes(i))):this.items;return a`
+    `}render(){var r,p,u,g,b,v;if(this.loadingSources)return a`<div class="empty"><md-circular-progress indeterminate></md-circular-progress></div>`;if(!this.sources.length)return a`<div class="empty">No remote sources are configured.</div>`;const e=((r=this.feed)==null?void 0:r.sorts)??[],t=this.container,i=this.threadQuery.trim().toLowerCase(),s=t&&i?this.items.filter(c=>[c.title,String(c.postNo??""),c.kind].some(x=>x.toLowerCase().includes(i))):this.items;return a`
       ${t?this.renderContainerHead(t):a`
             <div class="head">
-              <h2 class="title">${((d=this.source)==null?void 0:d.name)??"Browse"}</h2>
+              <h2 class="title">${((p=this.source)==null?void 0:p.name)??"Browse"}</h2>
               <span class="count">${this.items.length?`${this.items.length} shown`:""}</span>
             </div>
 
+            ${this.renderFeedShelf()}
             ${this.renderSiteTabs()}
 
             ${this.isFourChan?a`<div class="thread-tools">
@@ -523,8 +557,8 @@ import{q as w,i as $,N as k,u as n,a as S,e as u,O as I,A as o,b as a,t as z,B a
                     aria-label="4chan board"
                     @change=${c=>this.pickFeed(c.target.value)}
                   >
-                    ${(((h=this.source)==null?void 0:h.feeds)??[]).map(c=>a`<option value=${c.id} ?selected=${c.id===this.feedId}>${c.label}</option>`)}
-					${(b=this.source)!=null&&b.feeds.some(c=>c.id===this.feedId)?o:a`<option value=${this.feedId} selected>/${this.feedId}/ — Custom board</option>`}
+                    ${(((u=this.source)==null?void 0:u.feeds)??[]).map(c=>a`<option value=${c.id} ?selected=${c.id===this.feedId}>${c.label}</option>`)}
+					${(g=this.source)!=null&&g.feeds.some(c=>c.id===this.feedId)?o:a`<option value=${this.feedId} selected>/${this.feedId}/ — Custom board</option>`}
                   </select>
                   <form class="thread-tools add-thread" @submit=${this.addThread}>
                     <label class="searchbox">
@@ -538,7 +572,7 @@ import{q as w,i as $,N as k,u as n,a as S,e as u,O as I,A as o,b as a,t as z,B a
                     <button class="chip" type="submit">Open</button>
                   </form>
                 </div>`:a`<div class="chips ${this.isSearch?"tight":""}">
-                  ${(((f=this.source)==null?void 0:f.feeds)??[]).map(c=>a`<button
+                  ${(((b=this.source)==null?void 0:b.feeds)??[]).map(c=>a`<button
                       class="chip"
                       aria-pressed=${c.id===this.feedId}
                       @click=${()=>this.pickFeed(c.id)}
@@ -559,6 +593,13 @@ import{q as w,i as $,N as k,u as n,a as S,e as u,O as I,A as o,b as a,t as z,B a
                       />
                     </label>
                     <button class="chip" type="submit">Search</button>
+                    ${this.query?this.watchedHere?a`<button class="chip" type="button" aria-pressed="true" title="Stop watching this search"
+                            @click=${()=>void this.unwatch(this.watchedHere)}>
+                            <span class="material-symbols-rounded" style="font-size:16px;">check</span>Watching
+                          </button>`:a`<button class="chip" type="button" ?disabled=${this.feedBusy} title="Check this search a few times a day and shelve what is new"
+                            @click=${()=>void this.watchThisSearch()}>
+                            <span class="material-symbols-rounded" style="font-size:16px;">playlist_add</span>Watch this search
+                          </button>`:o}
                   </form>
                   ${e.length?a`<div class="chips tight">
                         ${e.map(c=>a`<button
@@ -606,7 +647,7 @@ import{q as w,i as $,N as k,u as n,a as S,e as u,O as I,A as o,b as a,t as z,B a
       ${this.active?this.renderOverlay(this.active):o}
       ${this.commentsFor?this.renderComments(this.commentsFor):o}
       ${this.toast?a`<div class="toast">${this.toast}</div>`:o}
-    `}};l.styles=[U,w,$`
+    `}};d.styles=[q,w,$`
       :host {
         display: block;
         color: var(--oppai-text);
@@ -639,6 +680,38 @@ import{q as w,i as $,N as k,u as n,a as S,e as u,O as I,A as o,b as a,t as z,B a
       }
 
       /* Chips — same shape as the library's filter chips. */
+      /* The "new from your feeds" shelf above the site tabs. */
+      .feed-shelf {
+        margin: 0 0 18px;
+        padding: 12px 14px;
+        border-radius: 16px;
+        background: var(--oppai-surface-1);
+        border: 1px solid var(--oppai-border, rgba(255,255,255,.08));
+      }
+      .feed-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+      .feed-title { margin: 0; font-size: 15px; font-weight: 600; }
+      .feed-head .count { font-size: 12px; color: var(--oppai-text-muted); flex: 1; }
+      .feed-chip { display: inline-flex; align-items: center; gap: 6px; }
+      .feed-drop {
+        border: none; background: transparent; color: inherit; padding: 0; margin-left: 2px;
+        display: inline-grid; place-items: center; cursor: pointer; opacity: .7;
+      }
+      .feed-drop:hover { opacity: 1; }
+      .feed-strip { display: flex; gap: 10px; overflow-x: auto; padding: 12px 0 4px; }
+      .feed-tile {
+        position: relative; flex: 0 0 auto; width: 140px; height: 140px; padding: 0;
+        border: 1px solid var(--oppai-border, rgba(255,255,255,.1)); border-radius: 12px; overflow: hidden;
+        background: var(--oppai-surface-2); color: var(--oppai-text-dim); cursor: pointer;
+        display: grid; place-items: center;
+      }
+      .feed-tile img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+      .feed-tile .play { position: absolute; color: #fff; filter: drop-shadow(0 2px 6px rgba(0,0,0,.6)); }
+      .feed-from {
+        position: absolute; left: 0; right: 0; bottom: 0; padding: 4px 8px; font-size: 11px; color: #fff;
+        background: linear-gradient(transparent, rgba(0,0,0,.75)); text-align: left;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      }
+
       .chips {
         display: flex;
         gap: 8px;
@@ -1251,5 +1324,5 @@ import{q as w,i as $,N as k,u as n,a as S,e as u,O as I,A as o,b as a,t as z,B a
         .thread-tools .searchbox { max-width: none; width: 100%; }
         .add-thread { margin-left: 0; width: 100%; }
       }
-    `];p([k({type:Boolean,attribute:"can-add-sites"})],l.prototype,"canAddSites",2);p([n()],l.prototype,"sources",2);p([n()],l.prototype,"sourceId",2);p([n()],l.prototype,"iconFailed",2);p([n()],l.prototype,"addingSite",2);p([n()],l.prototype,"feedId",2);p([n()],l.prototype,"container",2);p([n()],l.prototype,"sort",2);p([n()],l.prototype,"query",2);p([n()],l.prototype,"draft",2);p([n()],l.prototype,"items",2);p([n()],l.prototype,"cursor",2);p([n()],l.prototype,"loading",2);p([n()],l.prototype,"loadingSources",2);p([n()],l.prototype,"error",2);p([n()],l.prototype,"active",2);p([n()],l.prototype,"pages",2);p([n()],l.prototype,"pageAt",2);p([n()],l.prototype,"saving",2);p([n()],l.prototype,"toast",2);p([n()],l.prototype,"commentsFor",2);p([n()],l.prototype,"comments",2);p([n()],l.prototype,"commentsLoading",2);p([n()],l.prototype,"commentsError",2);p([n()],l.prototype,"commentQuery",2);p([n()],l.prototype,"threadQuery",2);p([n()],l.prototype,"threadDraft",2);l=p([z("oppai-browse")],l);const E=4;function O(e){return e?new Date(e*1e3).toLocaleString(void 0,{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"}):""}function N(e,t){return e.split(`
-`).map(i=>{const s=!/^>>\d+/.test(i)&&i.startsWith(">"),r=i.split(/(>>\d+)/g);return a`<div class=${s?"cgreen":""}>${r.map(d=>{const h=d.match(/^>>(\d+)$/);return h?a`<button class="cquote" @click=${()=>t(Number(h[1]))}>${d}</button>`:d})}</div>`})}export{l as OppaiBrowse};
+    `];l([k({type:Boolean,attribute:"can-add-sites"})],d.prototype,"canAddSites",2);l([n()],d.prototype,"sources",2);l([n()],d.prototype,"sourceId",2);l([n()],d.prototype,"iconFailed",2);l([n()],d.prototype,"addingSite",2);l([n()],d.prototype,"feedId",2);l([n()],d.prototype,"container",2);l([n()],d.prototype,"sort",2);l([n()],d.prototype,"query",2);l([n()],d.prototype,"draft",2);l([n()],d.prototype,"items",2);l([n()],d.prototype,"cursor",2);l([n()],d.prototype,"loading",2);l([n()],d.prototype,"loadingSources",2);l([n()],d.prototype,"error",2);l([n()],d.prototype,"active",2);l([n()],d.prototype,"pages",2);l([n()],d.prototype,"pageAt",2);l([n()],d.prototype,"saving",2);l([n()],d.prototype,"toast",2);l([n()],d.prototype,"commentsFor",2);l([n()],d.prototype,"comments",2);l([n()],d.prototype,"commentsLoading",2);l([n()],d.prototype,"commentsError",2);l([n()],d.prototype,"commentQuery",2);l([n()],d.prototype,"threadQuery",2);l([n()],d.prototype,"threadDraft",2);l([n()],d.prototype,"feeds",2);l([n()],d.prototype,"feedNew",2);l([n()],d.prototype,"feedBusy",2);l([n()],d.prototype,"feedsOpen",2);d=l([z("oppai-browse")],d);const O=4;function P(e){return e?new Date(e*1e3).toLocaleString(void 0,{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"}):""}function E(e,t){return e.split(`
+`).map(i=>{const s=!/^>>\d+/.test(i)&&i.startsWith(">"),r=i.split(/(>>\d+)/g);return a`<div class=${s?"cgreen":""}>${r.map(p=>{const u=p.match(/^>>(\d+)$/);return u?a`<button class="cquote" @click=${()=>t(Number(u[1]))}>${p}</button>`:p})}</div>`})}export{d as OppaiBrowse};

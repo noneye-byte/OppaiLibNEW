@@ -58,6 +58,46 @@ type Request struct {
 	Voice string
 	// Speed is a multiplier on the pace, 1 being the voice's own; 0.5–2.
 	Speed float64
+	// Heat is how keyed up she is on the line, 1–5, or 0 for "not said". It shapes
+	// the delivery on engines that can: piper reads a line slower and breathier as
+	// the heat climbs, with longer gaps between sentences. See HeatDelivery.
+	Heat int
+}
+
+// Delivery is how a line is read, beyond which voice and how fast: the knobs piper
+// exposes, in piper's units. Zero values mean the engine's own defaults.
+type Delivery struct {
+	// LengthScale stretches every phoneme; 1 is the voice's natural pace.
+	LengthScale float64
+	// NoiseScale is how much the voice varies from its cleanest reading — higher is
+	// breathier and less even. Piper's default is 0.667.
+	NoiseScale float64
+	// NoiseW is the variation in phoneme length — higher is less metronomic. Piper's
+	// default is 0.8.
+	NoiseW float64
+	// SentenceSilence is the pause between sentences, in seconds.
+	SentenceSilence float64
+}
+
+// HeatDelivery is the delivery for a heat level.
+//
+// One voice, read five ways. The mapping is deliberately gentle at the bottom — 1 and
+// 2 are the same voice she always has, so an ordinary evening does not sound
+// different from yesterday — and only leans in from 3, where a line is already
+// flirting. By 5 she is slower, breathier and leaves longer gaps, which is what a
+// person sounds like at the edge and is as far as a text-to-speech voice can go
+// without a model that was trained for it. A heat outside 1–5 is the plain reading.
+func HeatDelivery(heat int) Delivery {
+	switch heat {
+	case 3:
+		return Delivery{LengthScale: 1.05, NoiseScale: 0.72, NoiseW: 0.88, SentenceSilence: 0.3}
+	case 4:
+		return Delivery{LengthScale: 1.12, NoiseScale: 0.8, NoiseW: 0.95, SentenceSilence: 0.38}
+	case 5:
+		return Delivery{LengthScale: 1.2, NoiseScale: 0.9, NoiseW: 1.05, SentenceSilence: 0.48}
+	default:
+		return Delivery{LengthScale: 1, NoiseScale: 0.667, NoiseW: 0.8, SentenceSilence: 0.25}
+	}
 }
 
 // Engine turns a line into audio.

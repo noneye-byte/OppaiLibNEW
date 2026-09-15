@@ -114,6 +114,11 @@ func Open(path string) (*DB, error) {
 	if err := ensureColumn(sqldb, "media", "gen_enc", "BLOB"); err != nil {
 		return nil, err
 	}
+	// What a vision model said the picture shows, encrypted like a note: prose about
+	// the content is the content. Older rows have none until they are described.
+	if err := ensureColumn(sqldb, "media", "description_enc", "BLOB"); err != nil {
+		return nil, err
+	}
 	return &DB{sql: sqldb, wal: wal}, nil
 }
 

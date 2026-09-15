@@ -67,6 +67,20 @@ type Settings struct {
 	// delete controls are simply absent.
 	ChatModelDir string `json:"chatModelDir"`
 
+	// A local vision model that writes prose about a picture — what the tagger's
+	// word list cannot: who is where, doing what, in what style. An OpenAI-compatible
+	// chat endpoint whose model accepts images (Ollama or LM Studio with a
+	// llava/qwen-vl/gemma3 build, llama.cpp server with an mmproj). Separate from the
+	// chat backend because Libby's text model is picked for obedience inside an 8K
+	// window and is usually a text-only build. VisionAuto describes every new
+	// picture and clip on import; VisionEnabled is derived from the URL.
+	VisionURL       string `json:"visionUrl"`
+	VisionModel     string `json:"visionModel"`
+	VisionAPIKey    string `json:"visionApiKey"`
+	VisionAPIKeySet bool   `json:"visionApiKeySet"`
+	VisionAuto      bool   `json:"visionAuto"`
+	VisionEnabled   bool   `json:"visionEnabled"`
+
 	// Libby's voice.
 	//
 	// TTSEngine picks how her lines are turned into sound: "auto" uses the local piper
@@ -149,6 +163,10 @@ const (
 	keyChatModel           = "chat.model"
 	keyChatModelDir        = "chat.model_dir"
 	keyChatAPIKey          = "chat.api_key"
+	keyVisionURL           = "vision.url"
+	keyVisionModel         = "vision.model"
+	keyVisionAPIKey        = "vision.api_key"
+	keyVisionAuto          = "vision.auto"
 	keyTTSEngine           = "tts.engine"
 	keyTTSVoice            = "tts.voice"
 	keyTTSSpeed            = "tts.speed"
@@ -190,6 +208,9 @@ func Defaults(cfg *config.Config) Settings {
 		ChatURL:             cfg.ChatURL,
 		ChatModel:           cfg.ChatModel,
 		ChatAPIKey:          cfg.ChatAPIKey,
+		VisionURL:           cfg.VisionURL,
+		VisionModel:         cfg.VisionModel,
+		VisionAuto:          true,
 		TTSEngine:           "auto",
 		TTSSpeed:            1,
 		TTSURL:              cfg.TTSURL,
@@ -261,6 +282,18 @@ func Merge(base Settings, stored map[string]string) Settings {
 	}
 	if v, ok := stored[keyChatAPIKey]; ok {
 		s.ChatAPIKey = v
+	}
+	if v, ok := stored[keyVisionURL]; ok {
+		s.VisionURL = v
+	}
+	if v, ok := stored[keyVisionModel]; ok {
+		s.VisionModel = v
+	}
+	if v, ok := stored[keyVisionAPIKey]; ok {
+		s.VisionAPIKey = v
+	}
+	if v, err := strconv.ParseBool(stored[keyVisionAuto]); err == nil {
+		s.VisionAuto = v
 	}
 	if v, ok := stored[keyTTSEngine]; ok {
 		s.TTSEngine = v
@@ -337,6 +370,10 @@ func (s Settings) Map() map[string]string {
 		keyChatModel:           s.ChatModel,
 		keyChatModelDir:        s.ChatModelDir,
 		keyChatAPIKey:          s.ChatAPIKey,
+		keyVisionURL:           s.VisionURL,
+		keyVisionModel:         s.VisionModel,
+		keyVisionAPIKey:        s.VisionAPIKey,
+		keyVisionAuto:          strconv.FormatBool(s.VisionAuto),
 		keyTTSEngine:           s.TTSEngine,
 		keyTTSVoice:            s.TTSVoice,
 		keyTTSSpeed:            strconv.FormatFloat(s.TTSSpeed, 'f', -1, 64),
@@ -371,6 +408,8 @@ func (s Settings) Redacted() Settings {
 	s.Rule34APIKey = ""
 	s.ChatAPIKeySet = s.ChatAPIKey != ""
 	s.ChatAPIKey = ""
+	s.VisionAPIKeySet = s.VisionAPIKey != ""
+	s.VisionAPIKey = ""
 	s.TTSAPIKeySet = s.TTSAPIKey != ""
 	s.TTSAPIKey = ""
 	return s
@@ -421,6 +460,10 @@ func (s *Settings) Clamp() {
 	// its OpenAI endpoint does not require OppaiLib to own that lifecycle or even
 	// send a model field. The live readiness probe decides whether Chat can run.
 	s.ChatEnabled = s.ChatURL != ""
+	s.VisionURL = strings.TrimRight(strings.TrimSpace(s.VisionURL), "/")
+	s.VisionModel = strings.TrimSpace(s.VisionModel)
+	s.VisionAPIKey = strings.TrimSpace(s.VisionAPIKey)
+	s.VisionEnabled = s.VisionURL != ""
 	switch s.TTSEngine {
 	case "auto", "piper", "openai", "off":
 	default:

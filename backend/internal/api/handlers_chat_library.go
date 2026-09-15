@@ -658,6 +658,14 @@ type chatViewing struct {
 	// Section names where they are — "videos", "favorites", a search term. Free text
 	// from the client, so it is quoted into the prompt rather than instructing it.
 	Section string `json:"section,omitempty"`
+	// Position and Duration are where in the focus item they are, in seconds, when it
+	// is a video that is playing. Without them she knew *what* was on but not whether
+	// it had just started or was nearly done, and reacted to a title card and a climax
+	// in the same words. Zero means unknown, not the start.
+	Position float64 `json:"position,omitempty"`
+	Duration float64 `json:"duration,omitempty"`
+	// Paused says the video is not playing right now — they stopped it to talk.
+	Paused bool `json:"paused,omitempty"`
 }
 
 type chatViewingItem struct {
@@ -677,7 +685,7 @@ type chatViewingItem struct {
 // is a picture of *her*. The character:libby tag says who the picture is of, so
 // asserting it at an imported card would be telling somebody else's character they are
 // looking at themselves.
-func (s *Server) viewingDirective(ctx context.Context, viewing *chatViewing, mode string, intensity int, isLibby bool) string {
+func (s *Server) viewingDirective(ctx context.Context, viewing *chatViewing, mode string, intensity int, isLibby bool, userID int64) string {
 	if viewing == nil {
 		return ""
 	}
@@ -795,11 +803,17 @@ func (s *Server) viewingDirective(ctx context.Context, viewing *chatViewing, mod
 	}
 	if focus != "" {
 		if focusKind == "video" {
-			fmt.Fprintf(&b, "\nRight now the two of you are watching %s together, and it is playing.\n", focus)
+			if viewing.Paused {
+				fmt.Fprintf(&b, "\nRight now the two of you are watching %s together; they have paused it to talk.\n", focus)
+			} else {
+				fmt.Fprintf(&b, "\nRight now the two of you are watching %s together, and it is playing.\n", focus)
+			}
+			b.WriteString(whereInVideo(viewing.Position, viewing.Duration))
 			b.WriteString("Watch it with them. React to what is happening on screen as it happens — the thing that just " +
 				"caught your eye, the part you like, what you are hoping happens next — the way someone curled up next to you " +
 				"on the couch talks over a video, in a sentence or two. Do not summarise the whole thing or describe it from its " +
 				"tags as though reading a label: respond to this moment of it as if you are seeing it play. ")
+			b.WriteString(s.bookmarksInView(ctx, userID, viewing.FocusID, viewing.Position))
 		} else {
 			fmt.Fprintf(&b, "\nRight now they have opened %s.\n", focus)
 			b.WriteString("React to that one thing. Say what catches your eye, whether you like it, what it reminds you of — " +
@@ -839,6 +853,72 @@ func (s *Server) viewingDirective(ctx context.Context, viewing *chatViewing, mod
 		}
 	}
 	return b.String()
+}
+
+// whereInVideo says how far into the video they are, in the terms a person watching
+// would use — "just started", "about halfway", "nearly at the end" — with the
+// timecode for the sake of a reply that wants to name a moment. Nothing when the
+// client did not say: a guess about the start would be wrong most of the time.
+func whereInVideo(position, duration float64) string {
+	if position <= 0 && duration <= 0 {
+		return ""
+	}
+	at := formatTimecode(position)
+	if duration <= 0 {
+		return fmt.Sprintf("They are %s in. ", at)
+	}
+	total := formatTimecode(duration)
+	frac := position / duration
+	var phrase string
+	switch {
+	case position < 20 || frac < 0.05:
+		phrase = "It has only just started"
+	case frac < 0.3:
+		phrase = "It is still early on"
+	case frac < 0.6:
+		phrase = "It is about halfway"
+	case frac < 0.85:
+		phrase = "It is well into the second half"
+	default:
+		phrase = "It is nearly at the end"
+	}
+	return fmt.Sprintf("%s — %s of %s. ", phrase, at, total)
+}
+
+// bookmarksInView tells her which moments of the open video the user has marked,
+// with where they are relative to now, so "the bit you bookmarked is coming up" is
+// a thing she can say and "skip to 4:10" a thing she can suggest. Nothing when there
+// are none, and nothing for a character who is not her: the marks are this user's
+// and only their librarian has been shown them.
+func (s *Server) bookmarksInView(ctx context.Context, userID, mediaID int64, position float64) string {
+	if userID == 0 || mediaID <= 0 {
+		return ""
+	}
+	marks, err := s.db.BookmarksForMedia(ctx, userID, mediaID)
+	if err != nil || len(marks) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(marks))
+	for i, mark := range marks {
+		if i >= 6 {
+			break
+		}
+		part := formatTimecode(mark.Position)
+		if label := s.decrypt(mark.LabelEnc, "bookmark"); label != "" {
+			part += fmt.Sprintf(" (%q)", label)
+		}
+		switch {
+		case position > 0 && mark.Position < position-15:
+			part += ", already past"
+		case position > 0 && mark.Position <= position+15:
+			part += ", right about now"
+		case position > 0:
+			part += ", coming up"
+		}
+		parts = append(parts, part)
+	}
+	return "They have bookmarked moments in this one — the parts they come back to: " + strings.Join(parts, "; ") + ". " +
+		"You may mention one by its time if it fits — \"the bit at 4:10 is coming up\" — and suggest skipping to it; do not list them. "
 }
 
 // Outside-site labels are data displayed in the frame, not prompt text. Bounding

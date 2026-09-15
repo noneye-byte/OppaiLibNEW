@@ -70,7 +70,7 @@ func TestActivityHeatGate(t *testing.T) {
 // calm conversation she writes tags that are refused, and a refusal she cannot see
 // reads to her as the tag not working.
 func TestActivityDirectiveTracksHeat(t *testing.T) {
-	calm := activityDirective(1, "")
+	calm := activityDirective(1, "", nil)
 	if !strings.Contains(calm, "reading") {
 		t.Fatalf("the idle states are missing at heat 1: %s", calm)
 	}
@@ -82,7 +82,7 @@ func TestActivityDirectiveTracksHeat(t *testing.T) {
 			t.Fatalf("%q was offered at heat 1: %s", state, calm)
 		}
 	}
-	hot := activityDirective(5, "")
+	hot := activityDirective(5, "", nil)
 	for _, state := range []string{"reading", "rubbing", "fingering", "vibrator", "dildo", "spread", "climax"} {
 		if !strings.Contains(hot, state) {
 			t.Fatalf("%q is missing at heat 5: %s", state, hot)
@@ -94,7 +94,7 @@ func TestActivityDirectiveTracksHeat(t *testing.T) {
 	if !strings.Contains(calm, "tag it in this reply") {
 		t.Fatalf("no nudge to pick an opening state: %s", calm)
 	}
-	if settled := activityDirective(1, "reading"); strings.Contains(settled, "tag it in this reply") {
+	if settled := activityDirective(1, "reading", nil); strings.Contains(settled, "tag it in this reply") {
 		t.Fatalf("nudged to pick a state while already in one: %s", settled)
 	}
 	// A state already set is restated as still true, which is what makes it a state
@@ -210,5 +210,40 @@ func TestChatRefusesAnUngatedStateAndKeepsTheOldOne(t *testing.T) {
 	}
 	if strings.Contains(out.Message, "[") {
 		t.Fatalf("the refused tag reached the prose: %q", out.Message)
+	}
+}
+
+// A line they have drawn holds the way the heat floor does: the state is refused
+// server-side, not merely left out of the prompt.
+func TestARememberedBoundaryRulesAStateOut(t *testing.T) {
+	store := libbyMemoryStore{Memories: []libbyMemory{
+		{Text: "They asked me never to bring toys into it", Kind: memoryBoundary},
+		{Text: "They love it when I tease", Kind: memoryPreference},
+	}}
+	limits := activityLimits(store)
+	if !limits["vibrator"] || !limits["dildo"] {
+		t.Fatalf("toys were not ruled out: %v", limits)
+	}
+	if limits["teasing"] || limits["fingering"] {
+		t.Fatalf("a preference or an unrelated state was ruled out: %v", limits)
+	}
+	if withinLimits(allowedActivity("vibrator", 5), limits) != "" {
+		t.Error("the heat gate let a limited state through")
+	}
+	if withinLimits(allowedActivity("fingering", 5), limits) != "fingering" {
+		t.Error("an unlimited state was refused")
+	}
+	if directive := activityDirective(5, "", limits); strings.Contains(directive, "vibrator") || !strings.Contains(directive, "fingering") {
+		t.Errorf("the vocabulary did not follow the limits: %s", directive)
+	}
+	// A blanket limit empties the intimate half entirely.
+	blanket := activityLimits(libbyMemoryStore{Memories: []libbyMemory{{Text: "keep it clean, nothing sexual", Kind: memoryBoundary}}})
+	for _, a := range libbyActivities {
+		if a.Group == activityIntimate && !blanket[a.ID] {
+			t.Errorf("%s survived a blanket limit", a.ID)
+		}
+		if a.Group == activityIdle && blanket[a.ID] {
+			t.Errorf("%s, an idle state, was ruled out", a.ID)
+		}
 	}
 }

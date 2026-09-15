@@ -11,13 +11,18 @@ import {
   type Media,
   type MediaQuery,
   type MediaSort,
+  type Bookmark,
   type SourceItem,
   type TagCount,
   type User,
 } from "../api.js";
 import { canShare, saveForCharacter, shareWithCharacter } from "../chat-share.js";
 import { attachLongPress } from "../long-press.js";
-import { OPEN_MEDIA_EVENT } from "../chat-links.js";
+import { formatMoment, OPEN_MEDIA_EVENT } from "../chat-links.js";
+import { isExplicit, loadSafeMode, safeKeyAction, saveSafeMode } from "../safe-mode.js";
+import {
+  activeFilterCount, buildQuery, filterScope, filtersApply, NO_FILTERS, type LibraryFilters,
+} from "../library-filters.js";
 import { libbyReact, type LibbyItemFacts } from "../libby-voice.js";
 import { isIncognito } from "../incognito.js";
 import { iconStyles, motionStyles, loadTheme, saveTheme, applyTheme } from "../theme.js";
@@ -177,7 +182,14 @@ export class OppaiLibrary extends LitElement {
     favorites: Media[];
     newest: Media[];
     byKind: Record<Kind, Media[]>;
+    /** The latest bookmarked moments across the library. See handlers_bookmarks.go. */
+    moments: Bookmark[];
   } | null = null;
+  /** A moment to open the next viewer at — a bookmark handed over in chat, or one
+      picked off the Moments row. Cleared once the viewer has it. */
+  @state() private viewerStartAt = 0;
+  /** The safe toggle: explicit tiles veiled, Libby off screen. Per device. */
+  @state() private safe = loadSafeMode();
   /** The filter chips for the current kind, counted by the server. */
   @state() private chipTags: TagCount[] = [];
   /** Named, ordered lists. The tables were in the schema from the first commit with
@@ -213,6 +225,10 @@ export class OppaiLibrary extends LitElement {
   @state() private editMediaId = 0;
   @state() private search = "";
   @state() private filters: Record<string, string> = {};
+  /** The header's Filters menu: kind, favourites and a minimum rating, on top of
+   *  whatever the section and the chip decide. See library-filters.ts. */
+  @state() private refine: LibraryFilters = NO_FILTERS;
+  @state() private filtersOpen = false;
   @state() private favorites = loadFavorites();
   @state() private uploadOpen = false;
   @state() private dragActive = false;
@@ -432,6 +448,50 @@ export class OppaiLibrary extends LitElement {
         cursor: pointer;
         flex-shrink: 0;
       }
+      /* The Filters menu hangs off its button, under the header, so it never pushes
+         the grid around while it is open. */
+      .filters-wrap { position: relative; flex-shrink: 0; }
+      .fbadge {
+        min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px;
+        background: var(--oppai-primary); color: var(--oppai-on-primary);
+        font-size: 11px; font-weight: 700; display: grid; place-items: center;
+      }
+      .filters-pop {
+        position: absolute; right: 0; top: 46px; z-index: 30;
+        width: min(340px, calc(100vw - 32px));
+        background: var(--oppai-surface-2); color: var(--oppai-text);
+        border: 1px solid var(--oppai-border); border-radius: 16px;
+        box-shadow: 0 14px 44px rgba(0, 0, 0, .38);
+        padding: 12px 14px 10px;
+        animation: fpop .16s var(--oppai-ease-spring, ease-out);
+      }
+      @keyframes fpop { from { opacity: 0; transform: translateY(-6px); } }
+      @media (prefers-reduced-motion: reduce) { .filters-pop { animation: none; } }
+      .frow-label {
+        font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
+        color: var(--oppai-text-muted); margin: 8px 0 6px;
+      }
+      .frow-label:first-child { margin-top: 0; }
+      .frow { display: flex; flex-wrap: wrap; gap: 6px; }
+      .fchip {
+        height: 32px; padding: 0 12px; border-radius: 16px; font: inherit; font-size: 13px;
+        display: inline-flex; align-items: center; gap: 5px; cursor: pointer;
+        background: transparent; color: var(--oppai-text-dim);
+        border: 1px solid var(--oppai-border-strong);
+      }
+      .fchip.on {
+        background: var(--oppai-accent); color: var(--oppai-on-accent); border-color: var(--oppai-accent);
+      }
+      .ffoot {
+        display: flex; align-items: center; justify-content: space-between;
+        margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--oppai-border);
+        font-size: 12px; color: var(--oppai-text-muted);
+      }
+      .flink {
+        border: none; background: none; color: var(--oppai-primary-bright); font: inherit;
+        font-size: 13px; font-weight: 500; cursor: pointer; padding: 4px 6px;
+      }
+      .flink:disabled { color: var(--oppai-text-muted); cursor: default; }
       main {
         flex: 1;
         overflow-y: auto;
@@ -730,6 +790,36 @@ export class OppaiLibrary extends LitElement {
       .tile:hover .tile-media img {
         transform: scale(1.06);
       }
+      .moment-tile {
+        position: relative;
+        flex: 0 0 auto;
+        width: 200px;
+        padding: 0;
+        border: 1px solid var(--oppai-border, rgba(255,255,255,.1));
+        border-radius: 14px;
+        overflow: hidden;
+        background: var(--oppai-surface-2);
+        color: inherit;
+        font: inherit;
+        text-align: left;
+        cursor: pointer;
+      }
+      .moment-tile img { display: block; width: 200px; height: 112px; object-fit: cover; background: #000; }
+      .moment-tile.veiled img { filter: blur(22px) saturate(.6); }
+      .moment-caption { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; }
+      .moment-caption strong { font-size: 13px; }
+      .moment-caption span {
+        font-size: 12px; color: var(--oppai-text-muted);
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      }
+      /* The safe toggle: a rated-explicit tile is a blur until it is switched off. */
+      .tile.veiled .tile-media img,
+      .hero-art.veiled img {
+        filter: blur(22px) saturate(.6);
+        transform: scale(1.15);
+      }
+      .tile.veiled:hover .tile-media img { transform: scale(1.15); }
+      .viewer-veil { filter: blur(30px) saturate(.5); pointer-events: none; }
       .tile-overlay {
         position: absolute;
         inset: 0;
@@ -1091,6 +1181,7 @@ export class OppaiLibrary extends LitElement {
     window.removeEventListener("oppai-download-complete", this.onDownloadComplete);
     window.removeEventListener("oppai-upload-complete", this.onUploadDone);
     window.removeEventListener("oppai-incognito", this.onIncognito);
+    document.removeEventListener("pointerdown", this.onFiltersOutside, true);
     if (this.uploadSettle) clearTimeout(this.uploadSettle);
     // Nothing in flight should outlive the view: an abandoned page would land on a
     // disconnected element, and the observer would keep the grid's last node alive.
@@ -1109,6 +1200,10 @@ export class OppaiLibrary extends LitElement {
    */
   protected updated(changed: Map<string, unknown>) {
     super.updated?.(changed as never);
+    if (changed.has("filtersOpen")) {
+      if (this.filtersOpen) document.addEventListener("pointerdown", this.onFiltersOutside, true);
+      else document.removeEventListener("pointerdown", this.onFiltersOutside, true);
+    }
     const sentinel = this.renderRoot?.querySelector(".more-sentinel");
     if (!sentinel) {
       this.moreObserver?.disconnect();
@@ -1354,8 +1449,20 @@ export class OppaiLibrary extends LitElement {
   // Comics are the exception: there the arrows turn pages (the viewer owns them),
   // so the shell stands down and only Escape still closes.
   private onKey = (e: KeyboardEvent) => {
-    if (this.selectedId == null || this.uploadOpen) return;
     if (isTypingTarget(e)) return;
+    // The safe keys work everywhere, viewer or not: they exist for the moment
+    // somebody walks in, which is not a moment to be on the right screen first.
+    switch (safeKeyAction(e)) {
+      case "toggle":
+        e.preventDefault();
+        this.toggleSafe();
+        return;
+      case "lock":
+        e.preventDefault();
+        this.logout();
+        return;
+    }
+    if (this.selectedId == null || this.uploadOpen) return;
     const reading = this.items.find((m) => m.id === this.selectedId)?.kind === "comic";
     switch (e.key) {
       case "ArrowRight":
@@ -1391,21 +1498,13 @@ export class OppaiLibrary extends LitElement {
    * and filter chip are the whole of it.
    */
   private get query(): MediaQuery {
-    const search = this.search.trim();
-    if (search) return { q: search, sort: this.sort };
-    if (this.section === "favorites") return { favorite: true, sort: this.sort };
-    if (KIND_ORDER.includes(this.section as Kind)) {
-      const kind = this.section as Kind;
-      const chip = this.filters[kind];
-      return { kind, tag: chip && chip !== "All" ? chip : undefined, sort: this.sort };
-    }
-    return { sort: this.sort };
+    return buildQuery(this.section, this.search, this.filters[this.section], this.refine, this.sort);
   }
 
   /** A string that changes exactly when the query does, for deciding whether a
    *  page that has arrived still belongs on screen. */
   private queryKey(q: MediaQuery): string {
-    return [q.kind ?? "", q.q ?? "", q.tag ?? "", q.favorite ? "fav" : "", q.sort ?? "newest"].join("|");
+    return [q.kind ?? "", q.q ?? "", q.tag ?? "", q.favorite ? "fav" : "", q.minRating ?? 0, q.sort ?? "newest"].join("|");
   }
 
   /**
@@ -1477,18 +1576,19 @@ export class OppaiLibrary extends LitElement {
     const row = (q: MediaQuery) =>
       api.listMedia({ ...q, limit: 12, signal: abort.signal }).then((p) => p.items ?? []).catch(() => []);
     try {
-      const [stats, resume, favorites, newest, ...kinds] = await Promise.all([
+      const [stats, resume, favorites, newest, moments, ...kinds] = await Promise.all([
         api.libraryStats(abort.signal).catch(() => null),
         api.resumeShelf(abort.signal).then((r) => r.items ?? []).catch(() => []),
         row({ favorite: true }),
         row({}),
+        api.recentBookmarks(12, abort.signal).then((r) => r.bookmarks ?? []).catch(() => [] as Bookmark[]),
         ...KIND_ORDER.map((k) => row({ kind: k })),
       ]);
       if (abort.signal.aborted) return;
       const byKind = {} as Record<Kind, Media[]>;
       KIND_ORDER.forEach((k, i) => (byKind[k] = kinds[i] ?? []));
       this.stats = stats;
-      this.home = { resume, favorites, newest, byKind };
+      this.home = { resume, favorites, newest, byKind, moments };
       this.noteServerFavorites([...favorites, ...newest, ...resume]);
     } catch {
       /* Home degrades to whatever shelves did arrive. */
@@ -1582,7 +1682,8 @@ export class OppaiLibrary extends LitElement {
    * since this view last loaded.
    */
   private onOpenMedia = async (event: Event) => {
-    const { id } = (event as CustomEvent<{ id: number }>).detail;
+    const { id, at } = (event as CustomEvent<{ id: number; at?: number }>).detail;
+    this.viewerStartAt = at && at > 0 ? at : 0;
     if (!this.items.some((item) => item.id === id)) {
       // One item, by id. This used to reload the library to find out whether the id
       // existed — which, while the client held all of it, meant a link Libby sent
@@ -1672,6 +1773,24 @@ export class OppaiLibrary extends LitElement {
     if (sort === this.sort) return;
     this.sort = sort;
     void this.reload();
+  }
+  private setRefine(change: Partial<LibraryFilters>) {
+    this.refine = { ...this.refine, ...change };
+    void this.reload();
+  }
+  private clearRefine() {
+    if (this.refine === NO_FILTERS) return;
+    this.refine = NO_FILTERS;
+    void this.reload();
+  }
+  /** Closes the Filters menu on a click outside it. Listening only while it is open
+   *  keeps a document-wide listener off every other click. */
+  private onFiltersOutside = (e: Event) => {
+    if (e.composedPath().some((n) => n instanceof HTMLElement && n.classList.contains("filters-wrap"))) return;
+    this.filtersOpen = false;
+  };
+  private toggleFilters() {
+    this.filtersOpen = !this.filtersOpen;
   }
   /**
    * Stars an item, on the server.
@@ -1963,6 +2082,20 @@ export class OppaiLibrary extends LitElement {
     this.dispatchEvent(new CustomEvent("logout", { bubbles: true, composed: true }));
   }
 
+  /** Veils explicit tiles and takes Libby off the screen, or puts it all back. */
+  private toggleSafe() {
+    this.safe = !this.safe;
+    saveSafeMode(this.safe);
+    // Whatever is playing goes quiet with the screen.
+    if (this.safe) {
+      for (const video of this.renderRoot.querySelectorAll("video")) video.muted = true;
+      this.renderRoot.querySelector("oppai-viewer")?.renderRoot?.querySelectorAll("video").forEach((video) => (video.muted = true));
+    }
+  }
+
+  /** Where the open viewer's video is, for the Libby drawer's "watching together". */
+  private viewerPlayback = () => this.renderRoot.querySelector("oppai-viewer")?.playback() ?? null;
+
   // --- Upload -------------------------------------------------------------
   private toggleUpload = () => {
     this.uploadOpen = !this.uploadOpen;
@@ -2163,6 +2296,7 @@ export class OppaiLibrary extends LitElement {
             ? html`<oppai-viewer
                 .media=${activeItem}
                 .queue=${this.viewerQueue}
+                .startAt=${this.viewerStartAt}
                 .favorite=${this.favorites.has(activeItem.id)}
                 @toggle-favorite=${() => this.toggleFavorite(activeItem.id)}
                 @navigate=${(e: CustomEvent<{ dir: number }>) => this.stepItem(e.detail.dir)}
@@ -2192,6 +2326,7 @@ export class OppaiLibrary extends LitElement {
             ? [activeItem, ...this.onScreenItems(isGrid, isFavorites, isSearch)]
             : this.onScreenItems(isGrid, isFavorites, isSearch)}
         .focused=${activeItem}
+        .playback=${this.viewerPlayback}
         .externalItems=${isBrowse ? this.browseFrame.items : []}
         .externalFocused=${isBrowse ? this.browseFrame.focused : null}
         .where=${isBrowse ? this.browseFrame.where : libbyWhere(isSearch ? "search" : this.section)}
@@ -2311,6 +2446,21 @@ export class OppaiLibrary extends LitElement {
 
         <button
           class="icon-btn nav-utility"
+          title=${this.safe ? "Safe view is on — press ` to show everything" : "Safe view: veil explicit tiles (`), or ~ to lock"}
+          aria-pressed=${this.safe ? "true" : "false"}
+          @click=${() => this.toggleSafe()}
+          style="width:48px; height:48px; border-radius:24px; background:${this.safe
+            ? "var(--oppai-primary-container)"
+            : "var(--oppai-surface-2)"}; color:${this.safe
+            ? "var(--oppai-primary-bright)"
+            : "var(--oppai-text-dim)"};"
+        >
+          <span aria-hidden="true" class="material-symbols-rounded" style="font-size:22px;"
+            >${this.safe ? "visibility_off" : "visibility"}</span
+          >
+        </button>
+        <button
+          class="icon-btn nav-utility"
           title="Settings"
           @click=${() => this.selectSection("settings")}
           style="width:48px; height:48px; border-radius:24px; background:${settingsActive
@@ -2387,14 +2537,75 @@ export class OppaiLibrary extends LitElement {
               <span style="font-size:13px; font-weight:500;">Select</span>
             </button>`
           : nothing}
-        ${!isSettings
-          ? html`<button class="filters-btn">
-              <span aria-hidden="true" class="material-symbols-rounded" style="font-size:18px;">tune</span>
-              <span style="font-size:13px; font-weight:500;">Filters</span>
-            </button>`
-          : nothing}
+        ${!isViewer && filtersApply(this.section, this.search) ? this.renderFilters() : nothing}
       </header>
     `;
+  }
+
+  /**
+   * The Filters menu. It offers exactly what the screen cannot already say: the kind
+   * on Favorites and in a search, favourites-only on a kind section and in a search,
+   * and a minimum rating everywhere. The sort is repeated here because on a phone the
+   * grid's sort menu is a long scroll away.
+   */
+  private renderFilters() {
+    const scope = filterScope(this.section, this.search);
+    const active = activeFilterCount(this.refine, scope);
+    const chip = (on: boolean, label: unknown, click: () => void) => html`<button
+      class="fchip ${on ? "on" : ""}" aria-pressed=${on ? "true" : "false"} @click=${click}>${label}</button>`;
+    const sorts: { id: MediaSort; label: string }[] = [
+      { id: "newest", label: "Newest" }, { id: "oldest", label: "Oldest" },
+      { id: "rating", label: "Top rated" }, { id: "largest", label: "Largest" },
+    ];
+    return html`<div class="filters-wrap">
+      <button
+        class="filters-btn header-toggle ${active ? "on" : ""}"
+        aria-haspopup="dialog"
+        aria-expanded=${this.filtersOpen ? "true" : "false"}
+        title="Filter the grid"
+        @click=${this.toggleFilters}
+      >
+        <span aria-hidden="true" class="material-symbols-rounded" style="font-size:18px;">tune</span>
+        <span style="font-size:13px; font-weight:500;">Filters</span>
+        ${active ? html`<span class="fbadge">${active}</span>` : nothing}
+      </button>
+      ${this.filtersOpen
+        ? html`<div class="filters-pop" role="dialog" aria-label="Filters"
+            @keydown=${(e: KeyboardEvent) => { if (e.key === "Escape") this.filtersOpen = false; }}>
+            ${scope.kind
+              ? html`<div class="frow-label">Kind</div>
+                  <div class="frow">
+                    ${chip(!this.refine.kind, "All", () => this.setRefine({ kind: "" }))}
+                    ${KIND_ORDER.map((k) => chip(this.refine.kind === k, html`<span aria-hidden="true"
+                      class="material-symbols-rounded" style="font-size:16px;">${KIND_META[k].icon}</span>${KIND_META[k].label}`,
+                      () => this.setRefine({ kind: this.refine.kind === k ? "" : k })))}
+                  </div>`
+              : nothing}
+            <div class="frow-label">Rating</div>
+            <div class="frow">
+              ${chip(this.refine.minRating === 0, "Any", () => this.setRefine({ minRating: 0 }))}
+              ${[3, 4, 5].map((n) => chip(this.refine.minRating === n, html`<span aria-hidden="true"
+                class="material-symbols-rounded" style="font-size:16px;">star</span>${n === 5 ? "5" : n + "+"}`,
+                () => this.setRefine({ minRating: this.refine.minRating === n ? 0 : n })))}
+            </div>
+            ${scope.favorite
+              ? html`<div class="frow-label">Only</div>
+                  <div class="frow">
+                    ${chip(this.refine.favorite, html`<span aria-hidden="true" class="material-symbols-rounded"
+                      style="font-size:16px;">favorite</span>Favourites`, () => this.setRefine({ favorite: !this.refine.favorite }))}
+                  </div>`
+              : nothing}
+            <div class="frow-label">Sort</div>
+            <div class="frow">
+              ${sorts.map((s) => chip(this.sort === s.id, s.label, () => this.setSort(s.id)))}
+            </div>
+            <div class="ffoot">
+              <span>${this.loading ? "Loading…" : `${this.total.toLocaleString()} ${this.total === 1 ? "item" : "items"}`}</span>
+              <button class="flink" ?disabled=${!active} @click=${() => this.clearRefine()}>Clear filters</button>
+            </div>
+          </div>`
+        : nothing}
+    </div>`;
   }
 
   /**
@@ -2489,7 +2700,7 @@ export class OppaiLibrary extends LitElement {
 
         ${hero ? html`
           <section class="hero anim-rise" style="animation-delay:70ms;">
-            <button class="hero-art" @click=${() => this.openItem(hero.id, newest)}
+            <button class="hero-art ${this.safe && isExplicit(hero.tags) ? "veiled" : ""}" @click=${() => this.openItem(hero.id, newest)}
               aria-label=${`Open ${hero.title}`}>
               ${hero.hasThumb
                 ? html`<img src=${api.thumbURL(hero.id)} alt="" loading="lazy" />`
@@ -2532,11 +2743,40 @@ export class OppaiLibrary extends LitElement {
         ${row("Jump back in", "history", continueRow, null, 120,
           resumeRow.length ? "Where you left off, on any device" : "What you've opened on this device")}
         ${row("Favourites", "star", favorites, () => this.selectSection("favorites"), 170)}
+        ${this.renderMoments(this.home.moments)}
         ${row("Recently added", "new_releases", newest.slice(0, 12), null, 220)}
 
         ${kindRows.map((r, i) => row(r.label, r.icon, r.items, () => this.selectSection(r.kind), 270 + i * 60))}
       </div>
     `;
+  }
+
+  /**
+   * The Moments row: the latest bookmarked parts of videos, each opening the video
+   * at that second. Frames rather than posters, because the point of a bookmark is
+   * that it is *not* the start of the thing.
+   */
+  private renderMoments(moments: Bookmark[]) {
+    if (!moments.length) return nothing;
+    return html`
+      <section class="row anim-rise" style="animation-delay:200ms;">
+        <div class="row-head">
+          <span aria-hidden="true" class="material-symbols-rounded" style="font-size:22px; color:var(--oppai-primary-bright);">bookmarks</span>
+          <h3 class="row-title">Moments</h3>
+          <span class="row-sub">The parts you marked · press B in a video to add one</span>
+        </div>
+        <div class="row-scroll">
+          ${moments.map((mark) => html`
+            <button class="moment-tile ${this.safe ? "veiled" : ""}" title=${`${mark.title ?? ""} at ${formatMoment(mark.position)}`}
+              @click=${() => { this.viewerStartAt = mark.position; void this.onOpenMedia(new CustomEvent(OPEN_MEDIA_EVENT, { detail: { id: mark.mediaId, at: mark.position } })); }}>
+              <img src=${api.bookmarkThumbURL(mark.id)} alt="" loading="lazy" />
+              <span class="moment-caption">
+                <strong>${formatMoment(mark.position)}</strong>
+                <span>${mark.label || mark.title || ""}</span>
+              </span>
+            </button>`)}
+        </div>
+      </section>`;
   }
 
   /**
@@ -2796,7 +3036,8 @@ export class OppaiLibrary extends LitElement {
     const anim = index != null ? "anim-rise" : "";
     const delay = index != null ? `animation-delay:${Math.min(index, 12) * 45}ms;` : "";
     const isSel = this.selected.has(m.id);
-    const cls = `tile ${anim} ${this.selectMode ? "selecting" : ""} ${isSel ? "selected" : ""}`;
+    const veiled = this.safe && isExplicit(m.tags);
+    const cls = `tile ${anim} ${this.selectMode ? "selecting" : ""} ${isSel ? "selected" : ""} ${veiled ? "veiled" : ""}`;
     return html`
       <div
         class=${cls}

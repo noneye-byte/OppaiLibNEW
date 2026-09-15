@@ -769,7 +769,7 @@ fun ChatScreen(
                                 messages = convo.messages + line, updatedAt = System.currentTimeMillis(),
                             ))
                             // Read aloud as it lands; the queue keeps bubbles in order.
-                            if (speakOn) repo.speech.speak(text)
+                            if (speakOn) repo.speech.speak(text, level)
                         }
                     } else {
                         val convo = live()
@@ -1163,6 +1163,18 @@ fun ChatScreen(
                                 onHold = { holdMessage = it }, onReply = { replyTarget = it },
                                 onReact = { m, emoji -> react(m, emoji) }, onOpenSnap = { snapOpen = it },
                                 receipt = receiptFor(item, convo),
+                                // Her state at the moment Allow is pressed, read then rather
+                                // than when the card was drawn. See LibbyActRequest.
+                                actContext = {
+                                    val live = convo
+                                    LibbyActRequest(
+                                        kind = "",
+                                        outfit = if (char.id == "libby") repo.prefs.libbyOutfit else "",
+                                        activity = live.activity,
+                                        intensity = live.intensity,
+                                        recentMediaIds = live.messages.flatMap { entry -> entry.attachments.map { it.id } }.distinct().takeLast(40),
+                                    )
+                                },
                             )
                         }
                     }
@@ -2296,6 +2308,7 @@ private fun ChatMessageRow(
     onReact: (StoredChatMessage, String) -> Unit = { _, _ -> },
     onOpenSnap: (StoredChatMessage) -> Unit = {},
     receipt: String = "",
+    actContext: () -> LibbyActRequest = { LibbyActRequest(kind = "") },
 ) {
     if (entry.thought.isNotBlank()) { ChatThoughtRow(char, entry); return }
     val friend = entry.role == "assistant"
@@ -2413,7 +2426,7 @@ private fun ChatMessageRow(
             ChatAttachments(repo, char, entry.attachments, onOpenMedia)
             }
             ChatLinkChips(repo, entry.links, onOpenMedia)
-            ChatActionCards(repo, entry.actions)
+            ChatActionCards(repo, entry.actions, actContext)
             // One stamp per run, at its foot, so a burst of four texts is marked once
             // instead of four times. The ticks are the same idea as everywhere else: the
             // message is in the log on the server, which is as delivered as it gets here.
@@ -2464,7 +2477,7 @@ private fun ChatMessageRow(
  * look pressable after a reload, which is either a lie or a second import.
  */
 @Composable
-private fun ChatActionCards(repo: Repository, actions: List<LibbyAction>) {
+private fun ChatActionCards(repo: Repository, actions: List<LibbyAction>, actContext: () -> LibbyActRequest = { LibbyActRequest(kind = "") }) {
     if (actions.isEmpty()) return
     val scope = rememberCoroutineScope()
     Column(Modifier.fillMaxWidth().padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -2489,7 +2502,7 @@ private fun ChatActionCards(repo: Repository, actions: List<LibbyAction>) {
                             Button(onClick = {
                                 state = "running"
                                 scope.launch {
-                                    runCatching { repo.api.libbyAct(action.toRequest()) }
+                                    runCatching { repo.api.libbyAct(action.toRequest(actContext())) }
                                         .onSuccess { state = "done"; status = actionDone(action.kind) }
                                         .onFailure { state = "failed"; status = it.message ?: "That didn't work." }
                                 }
@@ -2509,8 +2522,11 @@ private fun ChatActionCards(repo: Repository, actions: List<LibbyAction>) {
     }
 }
 
-private fun LibbyAction.toRequest() =
-    LibbyActRequest(kind = kind, prompt = prompt, url = url, mediaId = mediaId, tags = tags, title = title)
+private fun LibbyAction.toRequest(context: LibbyActRequest = LibbyActRequest(kind = "")) =
+    LibbyActRequest(
+        kind = kind, prompt = prompt, url = url, mediaId = mediaId, tags = tags, title = title,
+        outfit = context.outfit, activity = context.activity, intensity = context.intensity, recentMediaIds = context.recentMediaIds,
+    )
 
 /** Icon per action kind, falling back to a generic mark so a kind this build has never
     heard of still renders as a card the user can read and refuse. */
@@ -2531,6 +2547,7 @@ private fun actionDone(kind: String) = when (kind) {
     "tag" -> "Tags added."
     "favorite" -> "Favorited."
     "rename" -> "Renamed."
+    "shelf" -> "The shelf is in your collections."
     else -> "Done."
 }
 

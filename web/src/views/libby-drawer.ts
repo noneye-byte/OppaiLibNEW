@@ -82,6 +82,9 @@ export class OppaiLibbyDrawer extends LitElement {
   @property({ attribute: false }) items: Media[] = [];
   /** The one item the user is actually looking at, when there is one. */
   @property({ attribute: false }) focused: Media | null = null;
+  /** Where the open video is, asked at send time so it is *this* moment. Null when
+      nothing playable is on stage. Set by the shell, which owns the viewer. */
+  @property({ attribute: false }) playback: (() => { position: number; duration: number; paused: boolean } | null) | null = null;
   /** Outside-site tiles in frame. Kept separate because they do not have local media
       ids and must never masquerade as downloaded library records. */
   @property({ attribute: false }) externalItems: SourceItem[] = [];
@@ -322,12 +325,16 @@ export class OppaiLibbyDrawer extends LitElement {
       .filter((item) => item.id !== this.externalFocused?.id)
       .slice(0, VIEWING_WINDOW)
       .map(toViewingItem);
+    const play = this.focused?.kind === "video" ? this.playback?.() : null;
     return {
       focusId: this.focused?.id,
       ids,
       external,
       focusExternal: this.externalFocused ? toViewingItem(this.externalFocused) : undefined,
       section: this.where,
+      position: play?.position || undefined,
+      duration: play?.duration || undefined,
+      paused: play?.paused || undefined,
     };
   }
 

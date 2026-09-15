@@ -82,9 +82,10 @@ library bundled in the image; there is no second service to orchestrate.
 
 - `users(id, username, pw_hash, created_at, is_admin)`
 - `sessions(token, user_id, expires_at, created_at)`
-- `media(id, kind, sha256, size, blob_path, title_enc, notes_enc, rating,
-   duration, width, height, created_at, imported_from)` — `kind ∈
-   {video, gif, image, comic, game}`
+- `media(id, kind, sha256, size, blob_path, title_enc, notes_enc, description_enc,
+   rating, duration, width, height, created_at, imported_from)` — `kind ∈
+   {video, gif, image, comic, game}`; `description_enc` is a vision model's prose
+   about the picture, encrypted like a note (`api/vision_describe.go`)
 - `tags(id, name, category)` and `media_tags(media_id, tag_id, source)`
    (`source ∈ {manual, ai, scrape}`)
 - `collections(id, name)` and `collection_items(collection_id, media_id, position)`
@@ -116,7 +117,11 @@ See [backend/internal/db/schema.sql](backend/internal/db/schema.sql).
   secrecy can enable the "opaque tags" option (roadmap).
 - **Auth.** Passwords hashed with Argon2id. Opaque random session tokens stored
   server-side with expiry. Android app adds optional PIN/biometric lock and a
-  quick-lock gesture; panic/decoy mode is on the roadmap.
+  quick-lock gesture. The web app has a safe toggle (`` ` `` veils every tile the
+  tagger rated past "sensitive" and takes Libby off screen; `~` signs out on the
+  spot, which with incognito on lands on the Nextcloud page — `web/src/safe-mode.ts`).
+  A decoy passphrase opening a second, harmless library is still on the roadmap: it
+  is a second KEK, database and media root, not a filter.
 - **Searching encrypted text.** Titles and notes are ciphertext, so no index in the
   database file can match one. Search runs instead against an in-memory index that the
   KEK-holding process builds by decrypting every title and note once, at first use
@@ -171,6 +176,8 @@ The repo layout in §5 is the skeleton; the parts of the tree it does not mentio
 | Libby | `api/handlers_libby*.go`, `api/chat_*.go` | the character: chat, memory, bond, activities, backgrounds, identity |
 | Image generation | `internal/imagegen/`, `api/handlers_imagegen.go` | A1111/InvokeAI/ComfyUI clients, the outfit studio, the gallery |
 | Voice | `internal/tts/piper.go` | local Piper TTS |
+| Vision | `internal/vision/`, `api/vision_describe.go` | a local multimodal LLM describes pictures and clips in prose |
+| Civitai | `api/handlers_civitai.go`, `api/civitai_installs.go` | the catalogue browser, and the studio's models matched to it by hash |
 | Sources | `internal/sources/` | browsable catalogues (rule34, 4chan, YAML-defined sites) |
 | Discord | `internal/discord/` | relay |
 | Passkeys | `api/handlers_passkeys.go` | WebAuthn alongside passwords |

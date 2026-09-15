@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
+	"time"
 )
 
 // Feeding her the library a turn at a time.
@@ -47,8 +49,14 @@ const (
 	rankLibraryRecent    = 8  // what was added lately — asked for, rarely load-bearing
 	rankLibraryShortlist = 11 // what she could recommend — asked for
 	rankLibraryFacts     = 12 // the shape of the collection
+	rankLibraryWatching  = 50 // what they had on a little while ago
 	rankLibraryMatches   = 55 // the items this message is about
 )
+
+// watchingRecency is how long after they last touched something it still counts as
+// "what they were watching". Long enough to cover a video paused to talk in the
+// chat tab; short enough that yesterday's film is not tonight's subject.
+const watchingRecency = 3 * time.Hour
 
 // libraryFeedMax bounds the matched items fed for one turn. Eight is a shelf she can
 // hold in her head; past that the model starts listing instead of answering.
@@ -193,6 +201,10 @@ type feedChoice struct {
 	shown   map[int64]bool
 	taste   libbyTaste
 	weights map[string]float64
+	// userID is whose shelves these are, for the parts of the feed that are per user:
+	// what they were watching a moment ago, and the moments they have bookmarked.
+	// Zero feeds neither.
+	userID int64
 	// pick is the die; nil rolls for real. Injected so a test can load it.
 	pick func(total float64) float64
 }
@@ -210,6 +222,11 @@ func (s *Server) libraryFeed(ctx context.Context, sig turnSignals, choice feedCh
 
 	if block := s.libraryMatchesBlock(ctx, sig.words, choice); block != "" {
 		out = append(out, promptSection{Name: "the items they mentioned", Rank: rankLibraryMatches, Text: block})
+	}
+	// What they had on a little while ago. Deferred: it is context for "that was
+	// good" and "did you see that part", not for a message about her day.
+	if block := s.libraryWatchingBlock(ctx, choice.userID, time.Now()); block != "" {
+		out = append(out, promptSection{Name: "what they were watching", Rank: rankLibraryWatching, Text: block, Deferred: true})
 	}
 	// The shortlists and the recent list are read only when asked for. Not merely
 	// deferred: they cost a handful of queries and a few hundred tokens, and on the
@@ -253,6 +270,99 @@ func (s *Server) libraryKindBlock(ctx context.Context, kind string, choice feedC
 	return "\n\nSome of the " + kind + "s on these shelves — real titles, a fresh handful, none of them shown this conversation: " +
 		strings.Join(parts, "; ") + ". " +
 		"When they ask for a " + kind + ", hand one of these over with [attach: <title>] in the same reply; if none of them is what they meant, say so rather than inventing one."
+}
+
+// libraryWatchingBlock is the item they most recently left part-way through, when
+// that was recent enough to still be what they are watching.
+//
+// The viewer reports where they are as they watch (handlers_progress.go), and until
+// now only the resume shelf read it. From the chat screen she had no idea that the
+// other tab had a film paused twenty minutes in, so "that part was incredible" was
+// answered as if about nothing. This is that one row, in her terms: what it is, how
+// far in, how long ago — and the moments they have marked in it, which are the parts
+// they are most likely to be talking about.
+func (s *Server) libraryWatchingBlock(ctx context.Context, userID int64, now time.Time) string {
+	if userID == 0 {
+		return ""
+	}
+	ids, err := s.db.ResumeIDs(ctx, userID, 1)
+	if err != nil || len(ids) == 0 {
+		return ""
+	}
+	positions, err := s.db.ProgressForMedia(ctx, userID, ids)
+	if err != nil {
+		return ""
+	}
+	progress, ok := positions[ids[0]]
+	if !ok {
+		return ""
+	}
+	ago := now.Sub(time.Unix(progress.UpdatedAt, 0))
+	if ago < 0 || ago > watchingRecency {
+		return ""
+	}
+	briefs, err := s.db.BriefsByIDs(ctx, ids)
+	if err != nil || len(briefs) == 0 {
+		return ""
+	}
+	brief := briefs[0]
+	title := s.decrypt(brief.TitleEnc, "title")
+	if title == "" {
+		title = "Untitled"
+	}
+	tagsByID, _ := s.db.TagsForMediaBatch(ctx, ids)
+	var tags []string
+	for _, tag := range tagsByID[brief.ID] {
+		if len(tags) >= libraryFeedTags {
+			break
+		}
+		tags = append(tags, tag.Name)
+	}
+	link := libbyLink{ID: brief.ID, Title: title, Kind: brief.Kind, HasThumb: brief.HasThumb}
+	var b strings.Builder
+	b.WriteString("\n\nA little while ago (" + humanDuration(int64(ago.Seconds())) + " ago) they had " + feedItemLine(link, tags) + " open")
+	switch brief.Kind {
+	case "video":
+		fmt.Fprintf(&b, " and stopped %s in", formatTimecode(progress.Position))
+		if progress.Duration > 0 {
+			fmt.Fprintf(&b, " of %s", formatTimecode(progress.Duration))
+		}
+	case "comic":
+		fmt.Fprintf(&b, " at page %d", int(progress.Position))
+	}
+	b.WriteString(". It may still be playing in another tab. If they talk about \"it\", \"that\", \"that part\" with nothing else named, this is what they mean — react as someone who knows what they were watching, without announcing that you checked. ")
+	b.WriteString(s.bookmarkNotes(ctx, userID, []int64{brief.ID})[brief.ID])
+	return b.String()
+}
+
+// bookmarkNotes renders each item's marked moments as a clause for a feed line —
+// "bookmarked at 4:10 (\"the good part\"), 9:32" — keyed by media id, so a section
+// listing several items can say where the good parts are. Empty for items with none.
+func (s *Server) bookmarkNotes(ctx context.Context, userID int64, ids []int64) map[int64]string {
+	out := map[int64]string{}
+	if userID == 0 || len(ids) == 0 {
+		return out
+	}
+	marks, err := s.db.BookmarksForMediaBatch(ctx, userID, ids)
+	if err != nil {
+		return out
+	}
+	for id, list := range marks {
+		parts := make([]string, 0, len(list))
+		for i, mark := range list {
+			if i >= 4 {
+				break
+			}
+			part := formatTimecode(mark.Position)
+			if label := s.decrypt(mark.LabelEnc, "bookmark"); label != "" {
+				part += fmt.Sprintf(" (%q)", label)
+			}
+			parts = append(parts, part)
+		}
+		out[id] = "They have bookmarked moments in it at " + strings.Join(parts, ", ") +
+			" — to hand them one of those rather than the whole thing, write [attach: <title> @ <time>]. "
+	}
+	return out
 }
 
 // libbyFacts is the cheap half of the old snapshot: the numbers and the box.
@@ -338,6 +448,7 @@ func (s *Server) libraryMatchesBlock(ctx context.Context, words []string, choice
 	}
 	matches = orderLibraryMatchesForFeed(matches, choice.shown, choice.taste, choice.weights, choice.pick)
 	lines := make([]string, 0, libraryFeedMax)
+	var fedIDs []int64
 	for _, match := range matches {
 		if match.score < libraryFeedFloor {
 			break
@@ -346,6 +457,18 @@ func (s *Server) libraryMatchesBlock(ctx context.Context, words []string, choice
 			break
 		}
 		lines = append(lines, feedItemLine(match.link, match.tags))
+		fedIDs = append(fedIDs, match.link.ID)
+	}
+	// The marked moments on what was fed, so "the bit I bookmarked" resolves to a
+	// time she can name and hand over.
+	var marked []string
+	for id, note := range s.bookmarkNotes(ctx, choice.userID, fedIDs) {
+		for _, match := range matches {
+			if match.link.ID == id {
+				marked = append(marked, fmt.Sprintf("%q: %s", match.link.Title, note))
+				break
+			}
+		}
 	}
 	if len(lines) == 0 && len(shown) == 0 {
 		return ""
@@ -359,6 +482,10 @@ func (s *Server) libraryMatchesBlock(ctx context.Context, words []string, choice
 	}
 	if len(shown) > 0 {
 		b.WriteString("\n\nAlready shown them in this conversation, so not again unless they ask for it by name: " + strings.Join(shown, ", ") + ".")
+	}
+	if len(marked) > 0 {
+		sort.Strings(marked)
+		b.WriteString("\n\n" + strings.Join(marked, " "))
 	}
 	return b.String()
 }

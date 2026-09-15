@@ -63,6 +63,11 @@ type libbyActivity struct {
 	// what the picture shows, because the state is a fact about her and the art is only
 	// one of the things that reads it.
 	Says string `json:"says"`
+	// Gen is the state in generator words — the tags a picture of her doing this is
+	// prompted with when she draws herself from chat. Kept beside Says rather than
+	// derived from it, because prose and booru tags are different languages: "curled
+	// up dozing, barely awake" is not a prompt, "lying down, sleeping, closed eyes" is.
+	Gen string `json:"-"`
 	// MinIntensity is the heat below which this state is not available to her, on the
 	// 1-5 session meter. Zero and one mean always.
 	MinIntensity int `json:"minIntensity"`
@@ -84,35 +89,35 @@ var libbyActivities = []libbyActivity{
 	// ── idle ─────────────────────────────────────────────────────────────────
 	// Shown by the client while she is composing a reply — the art behind the "…"
 	// speech bubble — and never declared by her. See Auto.
-	{ID: "typing", Label: "Typing", Group: activityIdle, Says: "typing a reply to them", Auto: true},
-	{ID: "reading", Label: "Reading", Group: activityIdle, Says: "reading something, half paying attention"},
-	{ID: "gaming", Label: "Gaming", Group: activityIdle, Says: "playing something, controller or keyboard in hand"},
-	{ID: "lounging", Label: "Lounging", Group: activityIdle, Says: "sprawled out comfortably, doing nothing in particular"},
-	{ID: "drinking", Label: "Drinking", Group: activityIdle, Says: "holding a mug, drinking something warm"},
-	{ID: "eating", Label: "Eating", Group: activityIdle, Says: "eating, talking around a mouthful"},
-	{ID: "stretching", Label: "Stretching", Group: activityIdle, Says: "stretching, working a stiffness out"},
-	{ID: "napping", Label: "Napping", Group: activityIdle, Says: "curled up dozing, barely awake"},
-	{ID: "dancing", Label: "Dancing", Group: activityIdle, Says: "moving to something playing, not really dancing"},
-	{ID: "tidying", Label: "Tidying", Group: activityIdle, Says: "putting things away, keeping her hands busy"},
-	{ID: "drawing", Label: "Drawing", Group: activityIdle, Says: "drawing something, tongue between her teeth"},
-	{ID: "waving", Label: "Waving", Group: activityIdle, Says: "waving at them, glad they are here"},
+	{ID: "typing", Label: "Typing", Group: activityIdle, Says: "typing a reply to them", Auto: true, Gen: "holding phone, typing"},
+	{ID: "reading", Label: "Reading", Group: activityIdle, Says: "reading something, half paying attention", Gen: "reading, holding book"},
+	{ID: "gaming", Label: "Gaming", Group: activityIdle, Says: "playing something, controller or keyboard in hand", Gen: "playing games, holding controller"},
+	{ID: "lounging", Label: "Lounging", Group: activityIdle, Says: "sprawled out comfortably, doing nothing in particular", Gen: "lying on couch, relaxed, lounging"},
+	{ID: "drinking", Label: "Drinking", Group: activityIdle, Says: "holding a mug, drinking something warm", Gen: "holding mug, drinking, steam"},
+	{ID: "eating", Label: "Eating", Group: activityIdle, Says: "eating, talking around a mouthful", Gen: "eating, holding food, food in mouth"},
+	{ID: "stretching", Label: "Stretching", Group: activityIdle, Says: "stretching, working a stiffness out", Gen: "stretching, arms up, arched back"},
+	{ID: "napping", Label: "Napping", Group: activityIdle, Says: "curled up dozing, barely awake", Gen: "lying down, sleeping, closed eyes, blanket"},
+	{ID: "dancing", Label: "Dancing", Group: activityIdle, Says: "moving to something playing, not really dancing", Gen: "dancing, headphones, motion"},
+	{ID: "tidying", Label: "Tidying", Group: activityIdle, Says: "putting things away, keeping her hands busy", Gen: "tidying, holding box, shelves"},
+	{ID: "drawing", Label: "Drawing", Group: activityIdle, Says: "drawing something, tongue between her teeth", Gen: "drawing, holding pencil, sketchbook, tongue out"},
+	{ID: "waving", Label: "Waving", Group: activityIdle, Says: "waving at them, glad they are here", Gen: "waving, looking at viewer, smile"},
 
 	// ── intimate ─────────────────────────────────────────────────────────────
 	// The floors climb with how far in the state is. Three is where the meter sits
 	// once a conversation has gone somewhere on purpose, so that is the earliest
 	// anything here is available; the rest want a scene that is already underway.
-	{ID: "undressing", Label: "Undressing", Group: activityIntimate, Says: "taking her clothes off, slowly", MinIntensity: 3},
-	{ID: "teasing", Label: "Teasing", Group: activityIntimate, Says: "showing off for them, enjoying being looked at", MinIntensity: 3},
-	{ID: "touching", Label: "Touching herself", Group: activityIntimate, Says: "touching herself over her clothes, not hiding it", MinIntensity: 3},
-	{ID: "rubbing", Label: "Rubbing", Group: activityIntimate, Says: "rubbing herself, working up to it", MinIntensity: 4},
-	{ID: "fingering", Label: "Fingering", Group: activityIntimate, Says: "fingering herself, fully into it", MinIntensity: 4},
-	{ID: "spread", Label: "Spread", Group: activityIntimate, Says: "spread open for them, letting them look", MinIntensity: 4},
-	{ID: "vibrator", Label: "Vibrator", Group: activityIntimate, Says: "using a vibrator on herself", MinIntensity: 4},
-	{ID: "dildo", Label: "Dildo", Group: activityIntimate, Says: "using a dildo, taking her time with it", MinIntensity: 4},
-	{ID: "riding", Label: "Riding", Group: activityIntimate, Says: "riding it, working herself on it", MinIntensity: 5},
-	{ID: "grinding", Label: "Grinding", Group: activityIntimate, Says: "grinding against something, chasing it", MinIntensity: 4},
-	{ID: "climax", Label: "Climax", Group: activityIntimate, Says: "coming, and not quiet about it", MinIntensity: 5},
-	{ID: "afterglow", Label: "Afterglow", Group: activityIntimate, Says: "wrecked and boneless afterwards", MinIntensity: 3},
+	{ID: "undressing", Label: "Undressing", Group: activityIntimate, Says: "taking her clothes off, slowly", MinIntensity: 3, Gen: "undressing, clothes pull, partially undressed"},
+	{ID: "teasing", Label: "Teasing", Group: activityIntimate, Says: "showing off for them, enjoying being looked at", MinIntensity: 3, Gen: "seductive pose, presenting, looking at viewer, naughty face"},
+	{ID: "touching", Label: "Touching herself", Group: activityIntimate, Says: "touching herself over her clothes, not hiding it", MinIntensity: 3, Gen: "hand on own chest, hand between legs, clothed, blush"},
+	{ID: "rubbing", Label: "Rubbing", Group: activityIntimate, Says: "rubbing herself, working up to it", MinIntensity: 4, Gen: "masturbation, hand between legs, rubbing, blush, open mouth"},
+	{ID: "fingering", Label: "Fingering", Group: activityIntimate, Says: "fingering herself, fully into it", MinIntensity: 4, Gen: "female masturbation, fingering, spread legs, blush, heavy breathing"},
+	{ID: "spread", Label: "Spread", Group: activityIntimate, Says: "spread open for them, letting them look", MinIntensity: 4, Gen: "spread legs, spread pussy, presenting, looking at viewer"},
+	{ID: "vibrator", Label: "Vibrator", Group: activityIntimate, Says: "using a vibrator on herself", MinIntensity: 4, Gen: "vibrator, sex toy, female masturbation, trembling"},
+	{ID: "dildo", Label: "Dildo", Group: activityIntimate, Says: "using a dildo, taking her time with it", MinIntensity: 4, Gen: "dildo, sex toy, insertion, female masturbation"},
+	{ID: "riding", Label: "Riding", Group: activityIntimate, Says: "riding it, working herself on it", MinIntensity: 5, Gen: "riding dildo, squatting, sex toy, bouncing, ahegao"},
+	{ID: "grinding", Label: "Grinding", Group: activityIntimate, Says: "grinding against something, chasing it", MinIntensity: 4, Gen: "grinding, pillow humping, straddling, blush"},
+	{ID: "climax", Label: "Climax", Group: activityIntimate, Says: "coming, and not quiet about it", MinIntensity: 5, Gen: "orgasm, female ejaculation, trembling, ahegao, rolling eyes"},
+	{ID: "afterglow", Label: "Afterglow", Group: activityIntimate, Says: "wrecked and boneless afterwards", MinIntensity: 3, Gen: "after sex, lying down, exhausted, messy hair, satisfied smile, sweat"},
 }
 
 // libbyActivityByID indexes the vocabulary for lookup.
@@ -273,6 +278,87 @@ func allowedActivity(id string, intensity int) string {
 	return id
 }
 
+// ── the lines they have drawn ───────────────────────────────────────────────
+//
+// A boundary in her memory ("they asked me never to bring up toys") is already the
+// highest-ranked, never-evicted thing in her prompt, and a prompt is a request to a
+// model. The heat gate exists because a request is not a guarantee, and a boundary
+// deserves the same: a state that a remembered limit rules out is refused here, the
+// way one below the heat floor is, so "no toys" holds on the turn the model forgets it.
+//
+// The matching is by words, and deliberately generous: a limit is written in the
+// user's own terms by a model paraphrasing them, so "no toys", "doesn't like sex
+// toys", "not into penetration" all have to land on the vibrator. A false positive
+// costs one state she could have used; a false negative is a line crossed.
+
+// activityLimitWords is, per intimate state, the words a boundary about it uses.
+var activityLimitWords = map[string][]string{
+	"undressing": {"undress", "strip", "naked", "nude", "nudity"},
+	"teasing":    {"teasing", "tease", "showing off"},
+	"touching":   {"touching herself", "touch herself", "masturbat"},
+	"rubbing":    {"rubbing", "masturbat", "touching herself", "touch herself"},
+	"fingering":  {"fingering", "finger", "masturbat", "penetrat"},
+	"spread":     {"spread", "genital", "explicit"},
+	"vibrator":   {"vibrator", "toy", "toys", "wand"},
+	"dildo":      {"dildo", "toy", "toys", "penetrat", "insertion"},
+	"riding":     {"dildo", "toy", "toys", "riding", "penetrat"},
+	"grinding":   {"grinding", "humping", "masturbat"},
+	"climax":     {"orgasm", "climax", "cumming", "coming", "masturbat"},
+}
+
+// blanketLimitWords are a boundary that rules the whole intimate half out.
+var blanketLimitWords = []string{
+	"nothing sexual", "no sexual", "not sexual", "keep it clean", "no nsfw", "nothing explicit",
+	"no explicit", "not explicit", "sfw only", "no lewd", "nothing lewd", "no touching herself",
+	"no masturbat", "not to masturbate", "never masturbate",
+}
+
+// activityLimits reads the boundaries out of her memory and returns the states they
+// rule out. Only boundaries count: a preference ("they're not that into toys") is a
+// thing to lean away from, not a line, and treating it as one would make her refuse
+// things they merely said were not their favourite.
+func activityLimits(store libbyMemoryStore) map[string]bool {
+	out := map[string]bool{}
+	for _, m := range store.Memories {
+		if m.Kind != memoryBoundary {
+			continue
+		}
+		text := strings.ToLower(m.Text)
+		blanket := false
+		for _, phrase := range blanketLimitWords {
+			if strings.Contains(text, phrase) {
+				blanket = true
+				break
+			}
+		}
+		for _, a := range libbyActivities {
+			if a.Group != activityIntimate {
+				continue
+			}
+			if blanket {
+				out[a.ID] = true
+				continue
+			}
+			for _, word := range activityLimitWords[a.ID] {
+				if strings.Contains(text, word) {
+					out[a.ID] = true
+					break
+				}
+			}
+		}
+	}
+	return out
+}
+
+// withinLimits is allowedActivity's other half: the state, or "" when a line they
+// have drawn rules it out.
+func withinLimits(id string, limits map[string]bool) string {
+	if limits[id] {
+		return ""
+	}
+	return id
+}
+
 // activityDirective describes the MISC states and when to use them.
 //
 // Written as a standing fact about what she can be doing rather than as a menu to pick
@@ -293,10 +379,10 @@ func allowedActivity(id string, intensity int) string {
 // current is what she is already doing. When it is nothing, she is told to settle into
 // something *this* reply: written only as "tag it when it changes", a state that starts
 // empty never changes, and a conversation opened on a blank room stayed in one.
-func activityDirective(intensity int, current string) string {
+func activityDirective(intensity int, current string, limits map[string]bool) string {
 	var idle, intimate []string
 	for _, a := range libbyActivities {
-		if intensity < a.MinIntensity || a.Auto {
+		if intensity < a.MinIntensity || a.Auto || limits[a.ID] {
 			continue
 		}
 		if a.Group == activityIdle {

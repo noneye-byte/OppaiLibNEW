@@ -185,6 +185,23 @@ type InstallJob struct {
 	Error      string `json:"error,omitempty"`
 	Bytes      int64  `json:"bytes,omitempty"`
 	TotalBytes int64  `json:"totalBytes,omitempty"`
+	// ModelKey is the record InvokeAI registered, set once the job is completed. It
+	// is what lets the catalogue's cover and description be applied to the right
+	// model without guessing from the filename.
+	ModelKey string `json:"modelKey,omitempty"`
+}
+
+// ModelRecord is one installed model as InvokeAI holds it, of any type. Hash is
+// InvokeAI's "blake3:…" file hash, which Civitai also publishes for every file, so
+// the two catalogues can be matched without a download URL having been kept.
+type ModelRecord struct {
+	Key         string `json:"key"`
+	Name        string `json:"name"`
+	Type        string `json:"type"`
+	Base        string `json:"base,omitempty"`
+	Hash        string `json:"hash,omitempty"`
+	Description string `json:"description,omitempty"`
+	HasCover    bool   `json:"hasCover"`
 }
 
 // LoraWeight is one LoRA to apply to a generation, by selector name.
@@ -512,6 +529,26 @@ func (c *Client) InstallModel(ctx context.Context, base, source string) (*Instal
 		return nil, err
 	}
 	return c.invokeInstallModel(ctx, base, source)
+}
+
+// ModelRecords lists every model InvokeAI has registered, with the hashes that
+// let them be looked up on Civitai.
+func (c *Client) ModelRecords(ctx context.Context, base string) ([]ModelRecord, error) {
+	if err := c.requireInvoke(ctx, base, "model records"); err != nil {
+		return nil, err
+	}
+	records, err := c.invokeModelList(ctx, base)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ModelRecord, 0, len(records))
+	for _, r := range records {
+		out = append(out, ModelRecord{
+			Key: r.Key, Name: r.Name, Type: r.Type, Base: r.Base, Hash: r.Hash,
+			Description: r.Description, HasCover: r.CoverImage != "",
+		})
+	}
+	return out, nil
 }
 
 // InstallJobs lists InvokeAI's model-install queue, newest first.

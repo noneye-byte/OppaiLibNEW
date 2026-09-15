@@ -341,7 +341,7 @@ func userAskedForPhoto(text string) bool { return photoRequestWords.MatchString(
 // herselfWords is a request that is for *her* — a picture of her, not a thing from the
 // shelves — which is the difference between a selfie tag that meant the selfie and one
 // that was a model's word for the gif it had been asked for.
-var herselfWords = regexp.MustCompile(`(?i)(?:of you|of yourself|of u|yourself|see you|selfie|selfies|nude|nudes|your (?:face|body|tits|boobs|ass|pussy|room))`)
+var herselfWords = regexp.MustCompile(`(?i)\b(?:of you|of yourself|of u|yourself|see you|selfie|selfies|nude|nudes|your (?:face|body|tits|boobs|ass|pussy|room))\b`)
 
 func asksForHerself(text string) bool { return herselfWords.MatchString(text) }
 
@@ -759,6 +759,19 @@ func (s *Server) handleChatStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// feedUserID is whose per-user shelves the library feed may read — what they were
+// watching, what they bookmarked. Libby's alone: an imported card is somebody else's
+// character and is not shown what this user did in another tab.
+func feedUserID(s *Server, r *http.Request, characterID string) int64 {
+	if characterID != "libby" {
+		return 0
+	}
+	if u, ok := s.chatUser(r); ok {
+		return u.ID
+	}
+	return 0
+}
+
 func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	cur := s.settings.Get()
 	if cur.ChatURL == "" {
@@ -985,6 +998,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	//
 	// The self-directive is head, not a section: it is who she is, and a reply written
 	// without it is not a Libby reply at all.
+	// The states a remembered boundary rules out, read below with the memory and
+	// applied wherever the heat gate is. See activityLimits.
+	offLimits := map[string]bool{}
 	if character.ID == "libby" {
 		modePrompt += s.libbySelfDirective(cur, character)
 		// What she already knows about them, carried over from past conversations. Only
@@ -993,6 +1009,10 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		if u, userOK := s.chatUser(r); userOK {
 			s.chatMu.Lock()
 			store, _ := s.readLibbyMemory(u.ID)
+			offLimits = activityLimits(store)
+			// A state she arrived in that a line rules out is dropped on the way in, as
+			// one below the heat floor is: the limit may have been learned since.
+			in.Activity = withinLimits(in.Activity, offLimits)
 			// Her own standing wants, kept the same way and carried beside memory.
 			// See handlers_libby_wants.go.
 			wants, _ := s.readLibbyWants(u.ID)
@@ -1004,6 +1024,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			add("what she remembers about you", rankMemoryList, memoryPromptBlock(store))
 			add("her own wants", rankWantsList, wantsPromptBlock(wants))
 			add("your history together", rankBond, bondPromptBlock(bond, time.Now()))
+			// The morning-after turn, when the client says that is what this is. Core,
+			// not a section: it is the whole point of the message.
+			if chatTask(strings.ToLower(strings.TrimSpace(in.Task))) == taskAfterglow {
+				modePrompt += afterglowDirective(bond, time.Now())
+			}
 		}
 		// The other conversations she has had with this person. Not from a store of its
 		// own: they are already here in the workspace, and the only thing that was
@@ -1017,12 +1042,16 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			signals.past || len(in.Messages) <= 2,
 		)
 		// The library, fed for the turn rather than as one block. See chat_context_feed.go.
-		sections = append(sections, s.libraryFeed(r.Context(), signals, feedChoice{shown: sentMedia, taste: taste, weights: ws.SendWeights})...)
+		sections = append(sections, s.libraryFeed(r.Context(), signals, feedChoice{shown: sentMedia, taste: taste, weights: ws.SendWeights, userID: feedUserID(s, r, character.ID)})...)
 	}
 	// What is on screen is a different matter: browsing together is the user holding
 	// something up and saying "look at this", so any character they chose to do it
 	// with gets to see it. It is scoped to that screen, not to the whole collection.
-	viewing := s.viewingDirective(r.Context(), in.Viewing, in.Mode, in.Intensity, character.ID == "libby")
+	viewingUser := int64(0)
+	if u, userOK := s.chatUser(r); userOK && character.ID == "libby" {
+		viewingUser = u.ID
+	}
+	viewing := s.viewingDirective(r.Context(), in.Viewing, in.Mode, in.Intensity, character.ID == "libby", viewingUser)
 	// Being on camera is the same kind of fact as browsing together and is handled the
 	// same way: core, present only when it is true, and the frame the whole reply is
 	// written inside. See chat_call.go.
@@ -1137,7 +1166,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		// each, and putting that in the core would push her past a small window outright.
 		// Without it she simply stops changing states, which costs a feature rather than
 		// the character. See libby_activities.go.
-		add("what she is doing", rankActivity, "\n\n"+activityDirective(in.Intensity, in.Activity))
+		add("what she is doing", rankActivity, "\n\n"+activityDirective(in.Intensity, in.Activity, offLimits))
 		// Where she is. Shed-able like the activity vocabulary and for the same reason:
 		// it is a list, and without it she simply stays put. See libby_backgrounds.go.
 		//
@@ -1496,7 +1525,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		case declaredActivity == "":
 			// [doing: none]. A deliberate stop, and the only thing that empties the state.
 			activity = ""
-		case allowedActivity(declaredActivity, in.Intensity) != "":
+		case withinLimits(allowedActivity(declaredActivity, in.Intensity), offLimits) != "":
 			activity = declaredActivity
 		}
 		// The remaining case is a state the heat does not support. It is refused rather
@@ -1506,7 +1535,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		// No tag. If they asked her to do something and she narrated doing it — "can you
 		// wave" answered with "*waves slowly at camera*" — the state is what she wrote,
 		// tag or no tag. Same heat gate. See inferAskedActivity.
-		if inferred, ok := inferAskedActivity(latestUser, reply); ok && allowedActivity(inferred, in.Intensity) != "" {
+		if inferred, ok := inferAskedActivity(latestUser, reply); ok && withinLimits(allowedActivity(inferred, in.Intensity), offLimits) != "" {
 			activity = inferred
 		}
 	}

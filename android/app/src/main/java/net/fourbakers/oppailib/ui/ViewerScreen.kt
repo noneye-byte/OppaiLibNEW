@@ -9,6 +9,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculatePan
@@ -50,6 +51,7 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Favorite
@@ -1270,6 +1272,7 @@ private fun Chrome(
     controls: @Composable () -> Unit,
 ) {
     var tagging by remember { mutableStateOf(false) }
+    var describing by remember { mutableStateOf(false) }
     var menu by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
@@ -1366,6 +1369,28 @@ private fun Chrome(
                             }
                         },
                     )
+                    if (media.kind == "image" || media.kind == "gif" || media.kind == "video") {
+                        DropdownMenuItem(
+                            text = { Text(if (media.description.isNullOrBlank()) "Describe with the vision model" else "Describe again") },
+                            leadingIcon = { Icon(Icons.Filled.Description, contentDescription = null) },
+                            enabled = !describing,
+                            onClick = {
+                                menu = false
+                                describing = true
+                                scope.launch {
+                                    runCatching { repo.api.describe(media.id) }
+                                        .onSuccess {
+                                            val updated = media.copy(description = it.description)
+                                            onDetail(updated)
+                                            onChanged(updated)
+                                            Toast.makeText(context, "Described", Toast.LENGTH_SHORT).show()
+                                        }
+                                        .onFailure { Toast.makeText(context, "Describing failed: ${it.message ?: "unknown error"}", Toast.LENGTH_LONG).show() }
+                                    describing = false
+                                }
+                            },
+                        )
+                    }
                     DropdownMenuItem(
                         text = { Text("Edit details") },
                         leadingIcon = { Icon(Icons.Filled.Edit, contentDescription = null) },
@@ -1395,6 +1420,24 @@ private fun Chrome(
         ) {
             upNext()
             controls()
+            // What the vision model saw, when it has looked: a few lines, the whole
+            // thing on a tap. Shown here rather than behind the info sheet because it is
+            // the one line of text that says what you are looking at.
+            val description = media.description
+            if (!description.isNullOrBlank() || describing) {
+                var expanded by remember(media.id) { mutableStateOf(false) }
+                Text(
+                    if (describing) "Describing…" else description.orEmpty(),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.White,
+                    maxLines = if (expanded) Int.MAX_VALUE else 3,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { expanded = !expanded }
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                )
+            }
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,

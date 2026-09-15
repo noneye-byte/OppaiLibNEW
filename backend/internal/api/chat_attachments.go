@@ -66,6 +66,27 @@ type libbyAttachment struct {
 	// Self marks a picture of her, so a client can caption it as hers. Absent on an
 	// ordinary item, which is the common case.
 	Self bool `json:"self,omitempty"`
+	// At is a moment in a video, in seconds, when she handed over a bookmarked part
+	// rather than the whole thing — "[attach: the beach one @ 4:10]". The client opens
+	// the item there. Zero is the start, which is the same as no moment at all.
+	At float64 `json:"at,omitempty"`
+}
+
+// attachAtSuffix is the moment on the end of an attach request: " @ 4:10", "at 1:02:30".
+// Read off before the title is matched, so the time is not searched for as a word.
+var attachAtSuffix = regexp.MustCompile(`(?i)\s+(?:@|at)\s+(\d{1,2}(?::\d{2}){1,2})\s*$`)
+
+// splitAttachMoment separates the moment from an attach request, when it carries one.
+func splitAttachMoment(request string) (query string, at float64) {
+	match := attachAtSuffix.FindStringSubmatchIndex(request)
+	if match == nil {
+		return request, 0
+	}
+	seconds, ok := parseTimecode(request[match[2]:match[3]])
+	if !ok {
+		return request, 0
+	}
+	return strings.TrimSpace(request[:match[0]]), seconds
 }
 
 // attachTag captures the request to hand something over. Anchored nowhere in
@@ -172,6 +193,7 @@ func (s *Server) resolveLibraryAttachments(ctx context.Context, requests []strin
 	}
 	var words []string
 	for _, query := range queries {
+		query, _ = splitAttachMoment(query)
 		words = append(words, normalizeLookupWords(query)...)
 	}
 	candidates := s.libraryCandidates(ctx, words)
@@ -193,6 +215,7 @@ func (s *Server) resolveLibraryAttachments(ctx context.Context, requests []strin
 		if len(out) >= maxAttachmentsPerReply {
 			return
 		}
+		query, at := splitAttachMoment(query)
 		// Already-shown items are skipped inside the pick rather than after it, so a
 		// request that fits several things reaches for one she has not shown yet rather
 		// than landing on the one she has and giving up.
@@ -208,7 +231,12 @@ func (s *Server) resolveLibraryAttachments(ctx context.Context, requests []strin
 			return
 		}
 		picked[link.ID] = true
-		out = append(out, libbyAttachment{libbyLink: link})
+		// A moment only means something in a video; on anything else it is dropped
+		// rather than sent as a number the client would try to seek to.
+		if link.Kind != "video" {
+			at = 0
+		}
+		out = append(out, libbyAttachment{libbyLink: link, At: at})
 	}
 	for _, request := range requests {
 		take(request)

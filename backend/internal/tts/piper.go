@@ -216,9 +216,12 @@ func (p *Piper) Speak(ctx context.Context, req Request) ([]byte, error) {
 	if err := json.Unmarshal(raw, &cfg); err != nil || cfg.Audio.SampleRate <= 0 {
 		return nil, fmt.Errorf("voice config is unreadable: %s", filepath.Base(path))
 	}
-	lengthScale := 1.0
+	// The heat sets the delivery and the speed setting scales on top of it, so a
+	// user who likes her fast keeps her fast, only relatively slower when heated.
+	delivery := HeatDelivery(req.Heat)
+	lengthScale := delivery.LengthScale
 	if req.Speed > 0 {
-		lengthScale = 1 / req.Speed
+		lengthScale /= req.Speed
 	}
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
@@ -226,7 +229,9 @@ func (p *Piper) Speak(ctx context.Context, req Request) ([]byte, error) {
 		"--model", path,
 		"--output-raw",
 		"--length_scale", strconv.FormatFloat(lengthScale, 'f', 2, 64),
-		"--sentence_silence", "0.25",
+		"--noise_scale", strconv.FormatFloat(delivery.NoiseScale, 'f', 3, 64),
+		"--noise_w", strconv.FormatFloat(delivery.NoiseW, 'f', 3, 64),
+		"--sentence_silence", strconv.FormatFloat(delivery.SentenceSilence, 'f', 2, 64),
 	)
 	// The bundled espeak-ng-data sits beside the binary; piper looks there by
 	// default, but only when run from that directory on some builds.

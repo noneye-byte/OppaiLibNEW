@@ -29,6 +29,16 @@ import androidx.compose.material.icons.filled.Accessibility
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.Casino
+import androidx.compose.material.icons.filled.SwapHoriz
+import androidx.compose.material.icons.filled.Replay
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.HorizontalDivider
+import net.fourbakers.oppailib.data.PromptSettings
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
@@ -101,6 +111,25 @@ private val sizePresets = listOf(
     SizePreset("1216×832", 1216, 832),
 )
 
+/** InvokeAI's schedulers, the same list the web studio offers. */
+private val schedulers = listOf(
+    "" to "Default (Euler a)",
+    "euler" to "Euler", "euler_k" to "Euler Karras", "euler_a" to "Euler Ancestral",
+    "dpmpp_2m" to "DPM++ 2M", "dpmpp_2m_k" to "DPM++ 2M Karras",
+    "dpmpp_2m_sde" to "DPM++ 2M SDE", "dpmpp_2m_sde_k" to "DPM++ 2M SDE Karras",
+    "dpmpp_3m" to "DPM++ 3M", "dpmpp_3m_k" to "DPM++ 3M Karras",
+    "dpmpp_sde" to "DPM++ SDE", "dpmpp_sde_k" to "DPM++ SDE Karras",
+    "dpmpp_2s" to "DPM++ 2S", "dpmpp_2s_k" to "DPM++ 2S Karras",
+    "ddim" to "DDIM", "ddpm" to "DDPM", "deis" to "DEIS", "deis_k" to "DEIS Karras",
+    "heun" to "Heun", "heun_k" to "Heun Karras", "lms" to "LMS", "lms_k" to "LMS Karras",
+    "kdpm_2" to "KDPM 2", "kdpm_2_k" to "KDPM 2 Karras", "kdpm_2_a" to "KDPM 2 Ancestral",
+    "kdpm_2_a_k" to "KDPM 2 Ancestral Karras", "lcm" to "LCM", "pndm" to "PNDM",
+    "tcd" to "TCD", "unipc" to "UniPC", "unipc_k" to "UniPC Karras", "er_sde" to "ER-SDE",
+)
+
+/** Sizes the generator accepts: a multiple of eight between 64 and 2048. */
+private fun snapSize(n: Int): Int = (n.coerceIn(64, 2048) / 8) * 8
+
 /** A generated preview plus whether it has been saved into the library yet. */
 private typealias ShotState = GenSession.Shot
 
@@ -149,6 +178,14 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit) {
     var cfg by remember { mutableStateOf(draft.cfg) }
     var count by remember { mutableStateOf(draft.count) }
     var seedText by remember { mutableStateOf(draft.seed) }
+    var sampler by remember { mutableStateOf(draft.sampler) }
+    var clipSkip by remember { mutableStateOf(draft.clipSkip) }
+    // The width and height fields as typed, snapped to the generator's grid only
+    // when the form is read, so "10" on the way to "1024" is not snapped to 64.
+    var widthText by remember { mutableStateOf(draft.width.toString()) }
+    var heightText by remember { mutableStateOf(draft.height.toString()) }
+    // A long model list gets a filter box; typing narrows the row.
+    var modelFilter by remember { mutableStateOf("") }
     var detailerEnabled by remember { mutableStateOf(draft.detailerEnabled) }
     var detailerModel by remember { mutableStateOf(draft.detailerModel) }
     var detailerPrompt by remember { mutableStateOf(draft.detailerPrompt) }
@@ -189,6 +226,7 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit) {
         loraWeights = loraWeights, selectedTriggers = selectedTriggers.toList(),
         selectedChars = selectedChars.toList(), selectedPoses = selectedPoses.toList(),
         width = width, height = height, steps = steps, cfg = cfg, count = count, seed = seedText,
+        sampler = sampler, clipSkip = clipSkip,
         detailerEnabled = detailerEnabled, detailerModel = detailerModel, detailerPrompt = detailerPrompt,
         detailerNegative = detailerNegative, detailerConfidence = detailerConfidence,
         detailerDenoise = detailerDenoise, detailerMaskBlur = detailerMaskBlur, board = board,
@@ -203,14 +241,39 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit) {
     // Finished runs bump the gallery, whichever screen they finished on.
     LaunchedEffect(session.finished) { galleryRefresh = session.finished }
 
+    fun setSize(w: Int, h: Int) {
+        width = snapSize(w); height = snapSize(h)
+        widthText = width.toString(); heightText = height.toString()
+    }
+
     fun applyModel(m: GenModel) {
         checkpoint = m.title
         val d = m.defaults ?: return
         if (d.steps > 0) steps = d.steps
         if (d.cfgScale > 0) cfg = d.cfgScale
-        if (d.width > 0) width = d.width
-        if (d.height > 0) height = d.height
+        if (d.width > 0 && d.height > 0) setSize(d.width, d.height)
         if (d.vae.isNotEmpty()) vae = d.vae
+        if (d.scheduler.isNotEmpty()) sampler = d.scheduler
+    }
+
+    /**
+     * A prompt picked off a Civitai showcase picture. Only what the poster kept is
+     * written — a picture with no sampler leaves the sampler alone — and the
+     * checkpoint is never switched: theirs is on their box. The template and
+     * triggers are cleared, since the text is already the finished prompt.
+     */
+    fun usePrompt(p: PromptSettings) {
+        prompt = p.prompt
+        negative = p.negativePrompt
+        if (p.sampler.isNotEmpty()) sampler = p.sampler
+        if (p.steps > 0) steps = p.steps.coerceIn(1, 80)
+        if (p.cfgScale > 0) cfg = p.cfgScale.coerceIn(1.0, 30.0)
+        if (p.seed > 0) seedText = p.seed.toString()
+        if (p.width > 0 && p.height > 0) setSize(p.width, p.height)
+        templateId = ""
+        selectedTriggers = emptySet()
+        tab = 0
+        repo.report("Prompt loaded into the studio")
     }
 
     suspend fun reloadCharacters() {
@@ -288,10 +351,12 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit) {
                 negativePrompt = neg,
                 checkpoint = checkpoint,
                 vae = vae,
+                sampler = sampler,
                 steps = steps,
-                width = width,
-                height = height,
+                width = snapSize(widthText.toIntOrNull() ?: width),
+                height = snapSize(heightText.toIntOrNull() ?: height),
                 cfgScale = cfg,
+                clipSkip = clipSkip,
                 seed = seedText.toLongOrNull() ?: -1,
                 count = count,
                 board = board,
@@ -398,7 +463,7 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit) {
                         onBoardChange = { board = it },
                         onSaved = onSaved,
                     )
-                    invoke && tab == 2 -> CivitaiTab(repo)
+                    invoke && tab == 2 -> CivitaiTab(repo, onUsePrompt = { usePrompt(it) })
                     else -> Column(Modifier.weight(1f).fillMaxWidth()) {
                 if (generating) GenerationCard(repo, session, onCancel = { cancelGeneration() })
                 LazyColumn(
@@ -411,8 +476,19 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit) {
                 // ── model picker ────────────────────────────────────────────
                 item {
                     SectionLabel("Model")
+                    if (st.models.size > 8) {
+                        OutlinedTextField(
+                            value = modelFilter,
+                            onValueChange = { modelFilter = it },
+                            placeholder = { Text("Filter ${st.models.size} models…") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                        )
+                    }
+                    val shownModels = if (modelFilter.isBlank()) st.models
+                    else st.models.filter { it.modelName.contains(modelFilter, true) || it.title.contains(modelFilter, true) || it.base.contains(modelFilter, true) }
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        items(st.models, key = { it.title }) { m ->
+                        items(shownModels, key = { it.title }) { m ->
                             PickerCard(
                                 label = m.modelName.ifBlank { m.title },
                                 imageUrl = repo.modelThumbUrl(m.title),
@@ -685,9 +761,26 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit) {
                         sizePresets.forEach { p ->
                             FilterChip(
                                 selected = width == p.w && height == p.h,
-                                onClick = { width = p.w; height = p.h },
+                                onClick = { setSize(p.w, p.h) },
                                 label = { Text(p.label) },
                             )
+                        }
+                    }
+                    Row(
+                        Modifier.fillMaxWidth().padding(top = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        NumberField("Width", widthText, Modifier.weight(1f)) { v ->
+                            widthText = v
+                            v.toIntOrNull()?.let { if (it >= 64) width = snapSize(it) }
+                        }
+                        IconButton(onClick = { setSize(height, width) }) {
+                            Icon(Icons.Filled.SwapHoriz, contentDescription = "Swap width and height")
+                        }
+                        NumberField("Height", heightText, Modifier.weight(1f)) { v ->
+                            heightText = v
+                            v.toIntOrNull()?.let { if (it >= 64) height = snapSize(it) }
                         }
                     }
                 }
@@ -695,17 +788,48 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit) {
                 // ── settings ────────────────────────────────────────────────
                 item {
                     SectionLabel("Settings")
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        NumberField("Steps", steps.toString(), Modifier.weight(1f)) {
-                            steps = (it.toIntOrNull() ?: 25).coerceIn(1, 80)
+                    // Sliders rather than number boxes: a phone keyboard over a form
+                    // that then snaps "2" to 25 before the "5" arrives was the old way.
+                    SliderRow("Steps", steps.toString(), steps.toFloat(), 1f..80f, 79) { steps = it.toInt() }
+                    SliderRow("CFG", "%.1f".format(cfg), cfg.toFloat(), 1f..30f, 57) { cfg = (it * 2).toInt() / 2.0 }
+                    if (invoke) {
+                        SliderRow("CLIP skip", clipSkip.toString(), clipSkip.toFloat(), 0f..12f, 11) { clipSkip = it.toInt() }
+                    }
+                    var samplerOpen by remember { mutableStateOf(false) }
+                    ExposedDropdownMenuBox(expanded = samplerOpen, onExpandedChange = { samplerOpen = it }) {
+                        OutlinedTextField(
+                            value = schedulers.firstOrNull { it.first == sampler }?.second ?: sampler.ifBlank { schedulers[0].second },
+                            onValueChange = {},
+                            readOnly = true,
+                            label = { Text("Scheduler") },
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = samplerOpen) },
+                            modifier = Modifier.fillMaxWidth().menuAnchor(),
+                        )
+                        ExposedDropdownMenu(expanded = samplerOpen, onDismissRequest = { samplerOpen = false }) {
+                            schedulers.forEach { (id, label) ->
+                                DropdownMenuItem(text = { Text(label) }, onClick = { sampler = id; samplerOpen = false })
+                            }
                         }
-                        NumberField("CFG", cfg.toString(), Modifier.weight(1f)) {
-                            cfg = (it.toDoubleOrNull() ?: 7.0).coerceIn(1.0, 30.0)
+                    }
+                    Row(
+                        Modifier.fillMaxWidth().padding(top = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("Count", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        listOf(1, 2, 4, 8).forEach { n ->
+                            FilterChip(selected = count == n, onClick = { count = n }, label = { Text(n.toString()) })
                         }
-                        NumberField("Count", count.toString(), Modifier.weight(1f)) {
-                            count = (it.toIntOrNull() ?: 1).coerceIn(1, 8)
+                    }
+                    Row(
+                        Modifier.fillMaxWidth().padding(top = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        NumberField("Seed (-1 = random)", seedText, Modifier.weight(1f)) { seedText = it }
+                        IconButton(onClick = { seedText = "-1" }, enabled = seedText != "-1") {
+                            Icon(Icons.Filled.Casino, contentDescription = "Random seed")
                         }
-                        NumberField("Seed", seedText, Modifier.weight(1.2f)) { seedText = it }
                     }
                     if (st.detailerAvailable) {
                         Row(
@@ -763,34 +887,6 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit) {
                     }
                 }
 
-                item {
-                    if (generating) {
-                        // The run is shown on the card pinned above the form, which stays
-                        // in view however far down this is; here the button just says so.
-                        OutlinedButton(onClick = { cancelGeneration() }, enabled = progress?.cancelled != true, modifier = Modifier.fillMaxWidth()) {
-                            CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                            Text(if (progress?.cancelled == true) "  Stopping…" else "  Generating — cancel")
-                        }
-                    } else {
-                        Button(
-                            onClick = { generate() },
-                            enabled = prompt.isNotBlank(),
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Icon(Icons.Filled.AutoAwesome, contentDescription = null, Modifier.size(18.dp))
-                            Text("  Generate")
-                        }
-                    }
-                    if (error.isNotEmpty()) {
-                        Text(
-                            error,
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.padding(top = 6.dp).clickable { GenSession.clearError() },
-                        )
-                    }
-                }
-
                 // ── results ─────────────────────────────────────────────────
                 if (shots.isNotEmpty()) {
                     item { SectionLabel("Latest creation — save what you want to keep") }
@@ -810,17 +906,26 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit) {
                                             .background(MaterialTheme.colorScheme.surfaceVariant)
                                             .clickable { expandedShot = shot },
                                     )
-                                    Button(
-                                        onClick = { save(shot) },
-                                        enabled = !shot.saved,
-                                        modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
-                                    ) {
-                                        Icon(
-                                            if (shot.saved) Icons.Filled.Check else Icons.Filled.Save,
-                                            contentDescription = null,
-                                            Modifier.size(16.dp),
-                                        )
-                                        Text(if (shot.saved) "  Saved" else "  Save")
+                                    Row(Modifier.fillMaxWidth().padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        Button(
+                                            onClick = { save(shot) },
+                                            enabled = !shot.saved,
+                                            modifier = Modifier.weight(1f),
+                                        ) {
+                                            Icon(
+                                                if (shot.saved) Icons.Filled.Check else Icons.Filled.Save,
+                                                contentDescription = null,
+                                                Modifier.size(16.dp),
+                                            )
+                                            Text(if (shot.saved) "  Saved" else "  Save")
+                                        }
+                                        // The seed that made this one, back into the form, so a
+                                        // near-miss can be nudged rather than rolled again.
+                                        if (shot.preview.seed > 0) {
+                                            IconButton(onClick = { seedText = shot.preview.seed.toString(); repo.report("Seed ${shot.preview.seed} set") }) {
+                                                Icon(Icons.Filled.Replay, contentDescription = "Reuse this seed")
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -838,6 +943,35 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit) {
                     }
                 }
             }
+                // The Generate button lives under the form rather than at the end of
+                // it: the form is long, and scrolling past the detailer settings to
+                // find the one button that matters was the phone's worst habit.
+                HorizontalDivider()
+                Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp)) {
+                    if (error.isNotEmpty()) {
+                        Text(
+                            error,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(bottom = 6.dp).clickable { GenSession.clearError() },
+                        )
+                    }
+                    if (generating) {
+                        OutlinedButton(onClick = { cancelGeneration() }, enabled = progress?.cancelled != true, modifier = Modifier.fillMaxWidth()) {
+                            CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                            Text(if (progress?.cancelled == true) "  Stopping…" else "  Generating — cancel")
+                        }
+                    } else {
+                        Button(
+                            onClick = { generate() },
+                            enabled = prompt.isNotBlank(),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Icon(Icons.Filled.AutoAwesome, contentDescription = null, Modifier.size(18.dp))
+                            Text(if (count > 1) "  Generate ×$count" else "  Generate")
+                        }
+                    }
+                }
                     }
                 }
             }
@@ -911,6 +1045,11 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit) {
                     OutlinedButton(onClick = { sendAsLibby(current) }) {
                         Icon(Icons.AutoMirrored.Filled.Send, contentDescription = null, Modifier.size(16.dp))
                         Text("  As Libby")
+                    }
+                    if (current.preview.seed > 0) {
+                        IconButton(onClick = { seedText = current.preview.seed.toString(); expandedShot = null; repo.report("Seed ${current.preview.seed} set") }) {
+                            Icon(Icons.Filled.Replay, contentDescription = "Reuse this seed", tint = Color.White)
+                        }
                     }
                     IconButton(onClick = { expandedShot = null }) {
                         Icon(Icons.Filled.Close, contentDescription = "Close", tint = Color.White)
@@ -1087,6 +1226,24 @@ private fun NumberField(label: String, value: String, modifier: Modifier = Modif
         onValueChange = onChange,
         label = { Text(label) },
         singleLine = true,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
         modifier = modifier,
     )
+}
+
+/** A labelled slider with its value beside it — the phone's number box. */
+@Composable
+private fun SliderRow(
+    label: String,
+    shown: String,
+    value: Float,
+    range: ClosedFloatingPointRange<Float>,
+    steps: Int,
+    onChange: (Float) -> Unit,
+) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.width(64.dp))
+        Slider(value = value, onValueChange = onChange, valueRange = range, steps = steps, modifier = Modifier.weight(1f))
+        Text(shown, style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(36.dp))
+    }
 }

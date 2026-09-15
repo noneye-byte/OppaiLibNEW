@@ -68,6 +68,8 @@ export async function ttsStatus(force = false): Promise<TTSStatus | null> {
 
 interface Line {
   text: string;
+  /** How keyed up she is on this line, 1–5, for the server's delivery. */
+  heat: number;
   /** Resolves when the line has been played or skipped. */
   done: () => void;
 }
@@ -83,11 +85,11 @@ let generation = 0;
  * played; never rejects — a line that could not be spoken is simply skipped, since
  * a chat that errors because the speaker is off is worse than one that is quiet.
  */
-export function speak(text: string): Promise<void> {
+export function speak(text: string, heat = 0): Promise<void> {
   const clean = text.trim();
   if (!clean) return Promise.resolve();
   return new Promise<void>((resolve) => {
-    queue.push({ text: clean, done: resolve });
+    queue.push({ text: clean, heat, done: resolve });
     void drain();
   });
 }
@@ -116,7 +118,7 @@ async function drain(): Promise<void> {
       const line = queue.shift()!;
       const gen = generation;
       try {
-        await sayOne(line.text, gen);
+        await sayOne(line.text, line.heat, gen);
       } catch {
         /* skipped */
       } finally {
@@ -128,8 +130,8 @@ async function drain(): Promise<void> {
   }
 }
 
-async function sayOne(text: string, gen: number): Promise<void> {
-  const served = await fetchAudio(text);
+async function sayOne(text: string, heat: number, gen: number): Promise<void> {
+  const served = await fetchAudio(text, heat);
   if (gen !== generation) return;
   if (served) {
     await playBlob(served, gen);
@@ -139,14 +141,16 @@ async function sayOne(text: string, gen: number): Promise<void> {
 }
 
 /** Asks the server for the line; null when it has no engine. */
-async function fetchAudio(text: string): Promise<Blob | null> {
+async function fetchAudio(text: string, heat: number): Promise<Blob | null> {
   const known = await ttsStatus();
   if (known && !known.engine) return null;
   try {
+    // The heat rides along so piper reads a heated line slower and breathier; a
+    // server that predates it ignores the field.
     const res = await fetch("/api/tts/speak", {
       method: "POST", credentials: "same-origin",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ text, heat: heat || undefined }),
     });
     if (res.status === 503) { status = null; return null; }
     if (!res.ok) return null;

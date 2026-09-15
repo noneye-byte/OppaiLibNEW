@@ -95,6 +95,10 @@ type Config struct {
 	// when possible OppaiLib detects the model loaded by the backend itself.
 	ChatURL    string
 	ChatModel  string
+	// VisionURL and VisionModel are the optional vision-capable OpenAI-compatible
+	// endpoint that describes pictures in prose; see settings.Settings.VisionURL.
+	VisionURL   string
+	VisionModel string
 	ChatAPIKey string
 
 	// APKPath is the Android app the server offers for download. CI bakes the
@@ -149,6 +153,8 @@ func Load() *Config {
 		Rule34APIKey:        env("OPPAI_RULE34_API_KEY", ""),
 		ChatURL:             env("OPPAI_CHAT_URL", ""),
 		ChatModel:           env("OPPAI_CHAT_MODEL", ""),
+		VisionURL:           env("OPPAI_VISION_URL", ""),
+		VisionModel:         env("OPPAI_VISION_MODEL", ""),
 		ChatAPIKey:          env("OPPAI_CHAT_API_KEY", ""),
 		APKPath:             env("OPPAI_APK_PATH", "/app/apk/oppailib.apk"),
 		SessionTTL:          time.Duration(envInt("OPPAI_SESSION_TTL_HOURS", 720)) * time.Hour,

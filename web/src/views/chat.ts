@@ -19,7 +19,7 @@ import {
   type LibbyAutoDecision, type LibbyAutoSettings, type LibbyAutoState, type LibbyBond, type LibbyContext,
   type DiscordPlace, type DiscordState, type LibbyIdentity, type LibbyMemory, type LibbyThought, type LibbyWant, type SharedLink,
   type StoredChatMessage, type User, type ChatReplyRef, type LibbyAttachment, type LibbyBackground, type LibbyLink, type Media,
-  type LibbyActivityDef, type LibbyOutfit,
+  type LibbyActivityDef, type LibbyOutfit, type LibbyActContext,
   SEND_WEIGHTS,
 } from "../api.js";
 import { iconStyles, motionStyles } from "../theme.js";
@@ -587,7 +587,25 @@ export class OppaiChat extends LitElement {
   @state() private imageSubject = "self";
 
   /** Which of her offers have been decided this session; see ActionApprovals. */
-  private approvals = new ActionApprovals(() => this.requestUpdate());
+  private approvals = new ActionApprovals(() => this.requestUpdate(), () => this.actContext());
+
+  /**
+   * Her state on this device when an offer is approved: what she is wearing, doing,
+   * and how heated things are, and what she has already handed over. A picture she
+   * makes of herself is drawn in that state; a shelf she builds skips what they have
+   * seen. Read at approval time, not offer time — the user may press Allow a while
+   * after she asked.
+   */
+  private actContext(): LibbyActContext {
+    const conversation = this.activeConversation;
+    if (!conversation || conversation.characterId !== "libby") return {};
+    return {
+      outfit: loadLibbyOutfit() || undefined,
+      activity: conversation.activity || undefined,
+      intensity: conversation.intensity,
+      recentMediaIds: recentlyAttached(conversation.messages),
+    };
+  }
 
   static styles = [iconStyles, motionStyles, linkChipStyles, attachmentStyles, actionCardStyles, libbyMotion, css`
     :host { display:block; height:100%; color:var(--md-sys-color-on-surface);
@@ -1915,6 +1933,31 @@ export class OppaiChat extends LitElement {
     this.mobileNavOpen = false;
     this.autoTurns = AUTO_MAX_TURNS;
     setIntensity(conversation.intensity); this.armIdle(); this.scheduleAuto(); void this.scrollToEnd(false);
+    void this.sayWhatIsPending();
+  }
+
+  /**
+   * Anything she has been meaning to say — the morning after, so far. The server
+   * notices it from the bond; this only asks, on opening her conversation, and sends
+   * the one turn when the answer is yes. Once per open at most, and only into her
+   * own conversation with a model loaded: the offline voice has no morning after.
+   */
+  private pendingAsked = 0;
+  private async sayWhatIsPending() {
+    const conversation = this.activeConversation;
+    if (!conversation || conversation.characterId !== "libby" || !this.status?.enabled) return;
+    if (Date.now() - this.pendingAsked < 60_000) return;
+    this.pendingAsked = Date.now();
+    let pending;
+    try {
+      pending = (await api.libbyAutoPending()).pending;
+    } catch {
+      return; // an older server, or a blip: nothing was owed that we know of
+    }
+    const due = pending.find((item) => item.decision.allow);
+    if (!due || this.busy || this.conversationID !== conversation.id) return;
+    const sent = await this.generateReply(conversation.id, "", { continuation: true, task: due.trigger });
+    if (sent) void this.recordLibbySpoke(due.trigger, due.detail);
   }
 
   private newConversation(save = true) {
@@ -2380,7 +2423,7 @@ export class OppaiChat extends LitElement {
       live.updatedAt = Date.now(); this.touchWorkspace(); void this.scrollToEnd();
       // Read aloud as it lands, in order; the queue in speech.ts keeps bubbles from
       // talking over each other while the next one is still being typed.
-      if (this.speakOn && conversationID === this.conversationID) void speak(chunks[i]);
+      if (this.speakOn && conversationID === this.conversationID) void speak(chunks[i], live.intensity);
     }
     return true;
   }
@@ -2426,8 +2469,11 @@ export class OppaiChat extends LitElement {
     /** A one-off steer for this turn — "shorter", "don't change the subject" — sent
         as a bracketed note on the history and never stored. See regenerate. */
     nudge?: string;
+    /** What this turn is for, when the client knows more than "she speaks first":
+        the morning-after message is one. Overrides the continuation's "autonomous". */
+    task?: string;
   } = {}): Promise<boolean> {
-    const { continuation = false, photoTags = [], photoImageID = "", link = "", sharedMediaIds = [], nudge = "" } = options;
+    const { continuation = false, photoTags = [], photoImageID = "", link = "", sharedMediaIds = [], nudge = "", task = "" } = options;
     const conversation = this.liveConversation(conversationID);
     const character = conversation && this.liveCharacter(conversation.characterId);
     if (!conversation || !character || this.busy) return false;
@@ -2512,7 +2558,7 @@ export class OppaiChat extends LitElement {
         // The server cannot see that this turn is her speaking first — a continuation
         // reads as an ordinary message — and an unprompted line wants very different
         // sampling from a reply. Everything else it classifies itself.
-        task: continuation ? "autonomous" : undefined,
+        task: task || (continuation ? "autonomous" : undefined),
         // Only while the user has capture switched on. See exportConversation.
         debug: this.captureTurns || undefined,
       });
@@ -4763,7 +4809,7 @@ export class OppaiChat extends LitElement {
           ${message.content.trim() ? html`<div class="text">${formatted(message.content, message.links, (id) => requestOpenMedia(this, id))}</div>` : nothing}
           ${message.snap ? this.renderSnapTile(message, name) : html`
             ${message.imageId ? html`<img class="sent-image" src=${api.chatImageURL(message.imageId)} alt="Image sent by ${name}"/>` : nothing}
-            ${renderAttachments(message.attachments, (id) => requestOpenMedia(this, id), name)}`}
+            ${renderAttachments(message.attachments, (id, at) => requestOpenMedia(this, id, at), name)}`}
           ${renderLinkChips(message.links, (id) => requestOpenMedia(this, id))}
           ${renderActionCards(message.actions, this.approvals.stateOf, this.approvals.decide)}
           <div class="meta"><span>${timeOf(message.at)}</span></div>

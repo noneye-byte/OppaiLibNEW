@@ -77,6 +77,8 @@ func (s *Server) handleThumb(w http.ResponseWriter, r *http.Request) {
 // importer from accidentally creating permanently untagged media.
 func (s *Server) processIngestAsync(id int64, blobPath, kind string, size int64, knownDur float64) {
 	s.ai.TagMediaAsync(id, blobPath, kind)
+	// Described after tagging when the tagger runs, now when it will not.
+	s.ingestDescribe(id)
 	switch kind {
 	case "video":
 		s.generateThumbAsync(id, blobPath, kind, knownDur)

@@ -156,6 +156,10 @@ type putLibbyWIPReq struct {
 	Reviewed  bool            `json:"reviewed"`
 	Config    string          `json:"config"`
 	Info      json.RawMessage `json:"info"`
+	// Clothing is the outfit's terms as the studio sent them to the generator for this
+	// square. Recorded on the wardrobe (libbyOutfit.Prompt) so the outfit can be drawn
+	// again from chat; optional, and only written when it changes.
+	Clothing string `json:"clothing,omitempty"`
 }
 
 // handlePutLibbyOutfitWIP files one generated square. Writing the whole envelope on
@@ -167,7 +171,8 @@ func (s *Server) handlePutLibbyOutfitWIP(w http.ResponseWriter, r *http.Request)
 		writeErr(w, http.StatusBadRequest, "bad outfit id or slot")
 		return
 	}
-	if _, err := s.readLibbyOutfit(id); err != nil {
+	outfit, err := s.readLibbyOutfit(id)
+	if err != nil {
 		writeErr(w, http.StatusNotFound, "no such outfit")
 		return
 	}
@@ -175,6 +180,14 @@ func (s *Server) handlePutLibbyOutfitWIP(w http.ResponseWriter, r *http.Request)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ImageData == "" {
 		writeErr(w, http.StatusBadRequest, "imageData is required")
 		return
+	}
+	if clothing := cleanOutfitPrompt(req.Clothing); clothing != "" && clothing != outfit.Prompt {
+		outfit.Prompt = clothing
+		if raw, err := json.Marshal(outfit); err == nil {
+			if blob, err := crypto.SealBytes(s.kek, raw, []byte("libby-outfit")); err == nil {
+				_ = os.WriteFile(s.libbyOutfitPath(id), blob, 0o600)
+			}
+		}
 	}
 	image, err := decodeDataImage(req.ImageData)
 	if err != nil {

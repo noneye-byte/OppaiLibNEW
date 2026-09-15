@@ -25,6 +25,8 @@ data class Media(
     val size: Long,
     val title: String = "",
     val notes: String? = null,
+    /** What the vision model said the picture shows; only on a single fetched item. */
+    val description: String? = null,
     val source: String? = null,
     val rating: Int = 0,
     val favorite: Boolean = false,
@@ -80,6 +82,8 @@ data class ComicInfo(
 data class MediaPatch(
     val title: String? = null,
     val notes: String? = null,
+    /** The vision model's prose, edited by hand; "" clears it. */
+    val description: String? = null,
     /** Stars, 0–5. Zero means unrated; the server clamps anything out of range. */
     val rating: Int? = null,
     val favorite: Boolean? = null,
@@ -261,6 +265,9 @@ data class CompleteUploadResponse(
 data class AutotagResponse(val tags: List<MediaTag> = emptyList())
 
 @Serializable
+data class DescribeResponse(val description: String = "")
+
+@Serializable
 data class HealthResponse(
     val status: String,
     val aiEnabled: Boolean = false,
@@ -413,6 +420,9 @@ data class LibbyAttachment(
     val kind: String = "",
     val hasThumb: Boolean = false,
     val self: Boolean = false,
+    /** A moment in a video, in seconds, when she handed over a bookmarked part rather
+        than the whole thing. Kept here so the workspace round-trip does not drop it. */
+    val at: Double = 0.0,
 )
 
 /**
@@ -463,6 +473,14 @@ data class LibbyActRequest(
     val mediaId: Long = 0,
     val tags: List<String> = emptyList(),
     val title: String = "",
+    /** Her state on this device when Allow was pressed — what she is wearing, doing,
+        how heated things are, what she has already handed over — so a picture she
+        makes of herself is of her as she is now, and a shelf she builds skips what
+        they have seen. */
+    val outfit: String = "",
+    val activity: String = "",
+    val intensity: Int = 0,
+    val recentMediaIds: List<Long> = emptyList(),
 )
 
 /**
@@ -790,6 +808,17 @@ data class GalleryBoardRequest(val board: String, val names: List<String>)
 // ── Civitai catalogue ────────────────────────────────────────────────────────
 
 @Serializable
+data class CivitaiFile(
+    val name: String = "",
+    val sizeMB: Long = 0,
+    val type: String = "",
+    val format: String = "",
+    val precision: String = "",
+    val primary: Boolean = false,
+    val downloadUrl: String = "",
+)
+
+@Serializable
 data class CivitaiVersion(
     val id: Long,
     val name: String = "",
@@ -798,6 +827,13 @@ data class CivitaiVersion(
     val downloadUrl: String = "",
     val sizeMB: Long = 0,
     val images: List<String> = emptyList(),
+    /** Sanitized HTML; the model page only. */
+    val description: String = "",
+    val publishedAt: String = "",
+    val files: List<CivitaiFile> = emptyList(),
+    /** InvokeAI already holds this version's file, matched by hash. */
+    val installed: Boolean = false,
+    val installedKey: String = "",
 )
 
 @Serializable
@@ -806,10 +842,77 @@ data class CivitaiModel(
     val name: String = "",
     val type: String = "",
     val creator: String = "",
+    val creatorImage: String = "",
     val downloads: Long = 0,
     val likes: Long = 0,
+    val nsfw: Boolean = false,
+    val tags: List<String> = emptyList(),
+    /** Sanitized HTML; the model page only. */
+    val description: String = "",
     val versions: List<CivitaiVersion> = emptyList(),
+    val installed: Boolean = false,
 )
+
+/** One picture from Civitai's image feed, with the prompt behind it when kept. */
+@Serializable
+data class CivitaiImage(
+    val id: Long = 0,
+    val url: String = "",
+    val width: Int = 0,
+    val height: Int = 0,
+    val nsfwLevel: Int = 0,
+    val username: String = "",
+    val prompt: String = "",
+    val negativePrompt: String = "",
+    val sampler: String = "",
+    val steps: Int = 0,
+    val cfgScale: Double = 0.0,
+    val seed: Long = 0,
+    val model: String = "",
+    val size: String = "",
+)
+
+@Serializable
+data class CivitaiImagesResponse(
+    val items: List<CivitaiImage> = emptyList(),
+    val nextCursor: String = "",
+)
+
+@Serializable
+data class CivitaiMe(val id: Long = 0, val username: String = "", val image: String = "")
+
+/** What the studio holds on Civitai's side: one installed model's catalogue record. */
+@Serializable
+data class CivitaiLink(
+    val modelId: Long = 0,
+    val versionId: Long = 0,
+    val latestVersionId: Long = 0,
+    val updateAvailable: Boolean = false,
+    val modelName: String = "",
+    val versionName: String = "",
+    val modelType: String = "",
+    val baseModel: String = "",
+    val creator: String = "",
+    val description: String = "",
+    val trainedWords: List<String> = emptyList(),
+    val previews: List<String> = emptyList(),
+)
+
+@Serializable
+data class CivitaiInstalled(
+    val key: String,
+    val name: String = "",
+    val type: String = "",
+    val base: String = "",
+    val hasCover: Boolean = false,
+    val civitai: CivitaiLink? = null,
+)
+
+@Serializable
+data class CivitaiInstalledResponse(val models: List<CivitaiInstalled> = emptyList())
+
+@Serializable
+data class CivitaiSyncRequest(val key: String, val versionId: Long = 0)
 
 @Serializable
 data class CivitaiSearchResponse(
@@ -823,8 +926,10 @@ data class CivitaiCategory(val name: String, val count: Long = 0)
 @Serializable
 data class CivitaiCategoriesResponse(val categories: List<CivitaiCategory> = emptyList())
 
+/** The ids let the server dress the model with the catalogue's cover, description
+ *  and trigger words once InvokeAI has the file. */
 @Serializable
-data class CivitaiInstallRequest(val url: String)
+data class CivitaiInstallRequest(val url: String, val modelId: Long = 0, val versionId: Long = 0)
 
 /** One model download InvokeAI is running (or has finished). */
 @Serializable
@@ -1017,6 +1122,9 @@ data class GenDraft(
     val cfg: Double = 7.0,
     val count: Int = 1,
     val seed: String = "-1",
+    /** InvokeAI scheduler id; blank leaves the generator's default (Euler a). */
+    val sampler: String = "",
+    val clipSkip: Int = 0,
     val detailerEnabled: Boolean = false,
     val detailerModel: String = "face_yolov8n.pt",
     val detailerPrompt: String = "",
@@ -1069,6 +1177,7 @@ data class GenerateRequest(
     val width: Int = 512,
     val height: Int = 768,
     val cfgScale: Double = 7.0,
+    val clipSkip: Int = 0,
     val seed: Long = -1,
     val count: Int = 1,
     /** Which InvokeAI gallery board the finished images are filed into. */
@@ -1077,9 +1186,10 @@ data class GenerateRequest(
     val detailer: DetailerRequest? = null,
 )
 
-/** One line for the server to read aloud; see LibbySpeech. */
+/** One line for the server to read aloud; see LibbySpeech. `heat` is how keyed up
+    she is on it, 1–5, so the voice follows the conversation; 0 reads plainly. */
 @Serializable
-data class SpeakRequest(val text: String)
+data class SpeakRequest(val text: String, val heat: Int = 0)
 
 @Serializable
 data class GenPreview(val id: String, val seed: Long = 0)

@@ -54,6 +54,27 @@ func TestDirectPixeldrainURL(t *testing.T) {
 	}
 }
 
+func TestCatalogueDecodesEitherShape(t *testing.T) {
+	// The guest database was a bare array for years, then became a wrapped
+	// object with an "ads" sibling. Both must decode to the same records.
+	const record = `{"id":5,"name":"Yabai","slug":"yabai-2","tags":["hd"]}`
+	for _, tc := range []struct{ name, body string }{
+		{"a bare array", `[` + record + `]`},
+		{"the wrapped 2026 shape", `{"data":[` + record + `],"ads":{"search-m-banner-1":{}}}`},
+	} {
+		videos, err := decodeCatalogue([]byte(tc.body))
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if len(videos) != 1 || videos[0].Slug != "yabai-2" || videos[0].ID != 5 {
+			t.Fatalf("%s: decoded %+v", tc.name, videos)
+		}
+	}
+	if _, err := decodeCatalogue([]byte(`{"ads":{}}`)); err == nil {
+		t.Fatal("an object with no data list should be an error, not an empty catalogue")
+	}
+}
+
 func TestLiveGuestDownload(t *testing.T) {
 	if os.Getenv("HANIME_LIVE") != "1" {
 		t.Skip("set HANIME_LIVE=1 to check the current guest API")

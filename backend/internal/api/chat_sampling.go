@@ -43,6 +43,9 @@ const (
 	taskObservation chatTask = "observation"
 	// taskPlanning is working out an action to propose. Nearly deterministic on purpose.
 	taskPlanning chatTask = "planning"
+	// taskAfterglow is the morning-after message: autonomous, sampled like one, with the
+	// night before as its subject. See afterglowDirective.
+	taskAfterglow chatTask = "afterglow"
 )
 
 // samplingPreset is the full set of knobs for one task.
@@ -96,6 +99,8 @@ var samplingPresets = map[chatTask]samplingPreset{
 	// Opening a conversation from nothing. High penalties because unprompted messages are
 	// the ones that come out as the same greeting every time.
 	taskAutonomous: {Temperature: 0.92, TopP: 0.93, TopK: 50, MinP: 0.05, RepetitionPen: 1.18, RepetitionRange: 2048, MaxTokens: 288, PresencePenalty: 0.2},
+	// The morning after: autonomous sampling, a little warmer.
+	taskAfterglow: {Temperature: 0.95, TopP: 0.93, TopK: 50, MinP: 0.05, RepetitionPen: 1.18, RepetitionRange: 2048, MaxTokens: 288, PresencePenalty: 0.2},
 	// A private thought: short, plain, and not a performance.
 	taskObservation: {Temperature: 0.70, TopP: 0.90, TopK: 40, MinP: 0.08, RepetitionPen: 1.10, RepetitionRange: 1024, MaxTokens: 224},
 	// Working out an action to propose. Nearly deterministic: this output is parsed, and

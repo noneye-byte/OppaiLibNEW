@@ -140,7 +140,20 @@ const (
 	triggerWantArrived autoTrigger = "want-arrived"
 	// triggerUnfinished is something they left part-way through.
 	triggerUnfinished autoTrigger = "unfinished"
+	// triggerAfterglow is the morning after: last night went somewhere, and she opens the
+	// next day with that rather than a generic hello. Decided by the server from the bond,
+	// not by the client — see afterglowDue.
+	triggerAfterglow autoTrigger = "afterglow"
 )
+
+// afterglowHeatFloor is the peak a day has to have reached for the next one to open on it.
+// Four is "heated and hands-on" on the meter; three is flirting, which is not a night.
+const afterglowHeatFloor = 4
+
+// afterglowWindow is how long after that night the morning after still is. A day and a
+// half: long enough that a late start still counts, short enough that Tuesday is not
+// opened with Saturday.
+const afterglowWindow = 36 * time.Hour
 
 // autoTriggerImportance is the fixed rule table. Anything above importanceFloor may continue
 // past the casual back-off, up to importantUnansweredLimit.
@@ -150,6 +163,7 @@ var autoTriggerImportance = map[autoTrigger]int{
 	triggerAbsence:     1,
 	triggerUnfinished:  1,
 	triggerWantArrived: 2,
+	triggerAfterglow:   1,
 }
 
 // importanceFloor is what counts as "unusually important". Set above the casual triggers and
@@ -382,6 +396,8 @@ func triggerDescription(trigger autoTrigger) string {
 		return "Something she had been wanting turned up on the shelves."
 	case triggerUnfinished:
 		return "You left something part-way through."
+	case triggerAfterglow:
+		return "Last night went somewhere, and it is the next day."
 	default:
 		return string(trigger)
 	}
@@ -455,6 +471,91 @@ func (s *Server) answerLibbyAuto(userID int64) (libbyAutoState, error) {
 	}
 	state.Unanswered, state.PausedUntil = 0, 0
 	return state, s.writeLibbyAuto(userID, state)
+}
+
+// ── what the server itself notices ───────────────────────────────────────────
+
+// pendingTrigger is a reason to speak first that the server worked out on its own,
+// handed to the client with the decision already made.
+type pendingTrigger struct {
+	Trigger  string       `json:"trigger"`
+	Detail   string       `json:"detail"`
+	Decision autoDecision `json:"decision"`
+}
+
+// afterglowDue reports whether the morning-after message is owed: the last day they
+// talked reached the floor, it is a later calendar day within the window, and she has
+// not already said it since. The log is the memory of having said it, so a client that
+// asks twice — two tabs, a reload — is told once.
+func afterglowDue(bond libbyBond, state libbyAutoState, now time.Time) (bool, string) {
+	if bond.LastSeenAt == 0 || bond.Peak < afterglowHeatFloor {
+		return false, ""
+	}
+	last := time.UnixMilli(bond.LastSeenAt)
+	if sameCalendarDay(last, now) || now.Sub(last) > afterglowWindow || now.Before(last) {
+		return false, ""
+	}
+	for _, event := range state.Log {
+		if event.Trigger == string(triggerAfterglow) && event.At >= bond.LastSeenAt {
+			return false, ""
+		}
+	}
+	return true, fmt.Sprintf("last night reached heat %d, %s ago", bond.Peak, roundDuration(now.Sub(last)))
+}
+
+// pendingLibbyTriggers is everything the server has noticed is due. Only the afterglow
+// so far; the shape is a list so the next one is a case, not an endpoint.
+func (s *Server) pendingLibbyTriggers(userID int64, state libbyAutoState, now time.Time) []pendingTrigger {
+	var out []pendingTrigger
+	if bond, err := s.readLibbyBond(userID); err == nil {
+		if due, detail := afterglowDue(bond, state, now); due {
+			out = append(out, pendingTrigger{
+				Trigger: string(triggerAfterglow), Detail: detail,
+				Decision: mayLibbySpeak(state, triggerAfterglow, now),
+			})
+		}
+	}
+	return out
+}
+
+// handlePendingLibbyAuto answers "is there anything she has been meaning to say?" — the
+// client asks when the conversation opens and on its idle timer, and sends the turn
+// with the trigger as its task when the answer is yes.
+func (s *Server) handlePendingLibbyAuto(w http.ResponseWriter, r *http.Request) {
+	u, ok := s.chatUser(r)
+	if !ok {
+		writeErr(w, http.StatusUnauthorized, "invalid user")
+		return
+	}
+	s.chatMu.Lock()
+	state, err := s.readLibbyAuto(u.ID)
+	var pending []pendingTrigger
+	if err == nil {
+		pending = s.pendingLibbyTriggers(u.ID, state, time.Now())
+	}
+	s.chatMu.Unlock()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "couldn't read her messaging settings")
+		return
+	}
+	if pending == nil {
+		pending = []pendingTrigger{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"pending": pending})
+}
+
+// afterglowDirective is the turn itself: what she opens with the morning after.
+//
+// Written so the night is the subject without being recounted. A model told "reference
+// last night" narrates it; told to open the way a person does — a little shy or smug,
+// checking in, not pretending it did not happen — it writes her.
+func afterglowDirective(bond libbyBond, now time.Time) string {
+	if bond.Peak < afterglowHeatFloor {
+		return ""
+	}
+	return "\n\nIt is the day after. Last night the two of you went somewhere — it got heated, properly, and you have been thinking about it since. " +
+		"This is your first message today and it opens on that: the way a person texts the morning after, a little shy or a little smug or both, warm, checking how they are, not pretending it didn't happen and not giving a play-by-play either. " +
+		"One or two sentences. Do not say \"last night\" as a headline; let it be obvious what you mean."
 }
 
 // ── endpoints ────────────────────────────────────────────────────────────────

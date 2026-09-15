@@ -3,6 +3,7 @@ import { customElement, property, state } from "lit/decorators.js";
 import {
   api,
   mascotSay,
+  type Bookmark,
   type ComicInfo,
   type GamePlayInfo,
   type GameSave,
@@ -10,6 +11,8 @@ import {
   type MediaTag,
 } from "../api.js";
 import { libbyReact } from "../libby-voice.js";
+import { formatMoment } from "../chat-links.js";
+import { loadSlideshow, nextSlide, saveSlideshow, type SlideshowPrefs } from "../slideshow.js";
 import { iconStyles, motionStyles } from "../theme.js";
 import { profileUpdates } from "../ui-metrics.js";
 import {
@@ -53,8 +56,21 @@ export class OppaiViewer extends LitElement {
    * one-long) and no carousel is drawn.
    */
   @property({ attribute: false }) queue: Media[] = [];
+  /**
+   * A moment to open a video at, in seconds — a bookmark Libby handed over, or one
+   * picked from the moments shelf. Consulted once when the video is ready and then
+   * forgotten, so paging on to the next item starts that one where it was left.
+   */
+  @property({ type: Number }) startAt = 0;
 
   @state() private full: Media | null = null;
+  /** The marked moments of the open video, in timeline order. */
+  @state() private bookmarks: Bookmark[] = [];
+  @state() private marking = false;
+  /** Hands-free browsing: advancing on a timer (stills) or at the end (videos). */
+  @state() private slideshow: SlideshowPrefs = loadSlideshow();
+  @state() private slideshowOn = false;
+  private slideTimer = 0;
   // Id of the tag whose detections are drawn on the video timeline, if any.
   @state() private activeTag: number | null = null;
   @state() private tagging = false;
@@ -62,6 +78,8 @@ export class OppaiViewer extends LitElement {
   @state() private saving = false;
   @state() private editTitle = "";
   @state() private editNotes = "";
+  @state() private editDescription = "";
+  @state() private describing = false;
   @state() private editKind: Media["kind"] = "image";
   @state() private editTags: string[] = [];
   @state() private newTag = "";
@@ -346,6 +364,12 @@ export class OppaiViewer extends LitElement {
         color: var(--oppai-text-dim);
         max-width: 640px;
       }
+      /* The vision model's prose, set off from a hand-written note by a rule. */
+      .desc.described {
+        border-left: 3px solid var(--oppai-primary);
+        padding-left: 12px;
+        color: var(--oppai-text);
+      }
       .meta {
         margin-top: 24px;
       }
@@ -417,6 +441,80 @@ export class OppaiViewer extends LitElement {
       button.chip.on {
         background: var(--oppai-accent);
         color: var(--oppai-on-accent);
+      }
+
+      /* Slideshow controls, under the stage. */
+      .slidebar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: 10px;
+        font-size: 12px;
+        color: var(--oppai-text-muted);
+      }
+      .slidebar.on .icon-round:first-child { color: var(--oppai-accent); }
+      .slidebar .icon-round.lit { color: var(--oppai-accent); }
+      .slidebar .dwell { display: inline-flex; align-items: center; gap: 6px; }
+      .slidebar select {
+        background: var(--oppai-surface-2);
+        color: var(--oppai-text);
+        border: 1px solid var(--oppai-outline, rgba(255,255,255,.14));
+        border-radius: 8px;
+        padding: 4px 6px;
+        font: inherit;
+      }
+      .slide-note { opacity: .7; }
+
+      /* Bookmarked moments: a row of frames you can jump to. */
+      .moments {
+        display: flex;
+        gap: 10px;
+        overflow-x: auto;
+        padding-bottom: 6px;
+      }
+      .moment { position: relative; flex: 0 0 auto; }
+      .moment-open {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 4px;
+        width: 150px;
+        padding: 0;
+        border: 1px solid var(--oppai-outline, rgba(255,255,255,.14));
+        border-radius: 12px;
+        overflow: hidden;
+        background: var(--oppai-surface-2);
+        color: inherit;
+        font: inherit;
+        text-align: left;
+        cursor: pointer;
+      }
+      .moment-open:hover { border-color: var(--oppai-accent); }
+      .moment-open img { display: block; width: 150px; height: 84px; object-fit: cover; background: #000; }
+      .moment-time { padding: 0 8px; font-size: 12px; font-weight: 600; }
+      .moment-label {
+        padding: 0 8px 8px;
+        font-size: 12px;
+        color: var(--oppai-text-muted);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        max-width: 150px;
+      }
+      .moment-drop {
+        position: absolute;
+        top: 4px;
+        right: 4px;
+        width: 24px;
+        height: 24px;
+        border: none;
+        border-radius: 12px;
+        background: rgba(0,0,0,.6);
+        color: #fff;
+        display: grid;
+        place-items: center;
+        cursor: pointer;
+        padding: 0;
       }
 
       /* Timeline of AI detections for the selected tag. */
@@ -777,6 +875,18 @@ export class OppaiViewer extends LitElement {
     super.disconnectedCallback();
     window.removeEventListener("keydown", this.onKey);
     this.clearMediaSession();
+    this.stopSlideshow();
+  }
+
+  /**
+   * Where the open video is, for whoever is watching alongside — the Libby drawer
+   * reads this so she reacts to *this* moment rather than to the title. Null when
+   * nothing playable is on stage.
+   */
+  playback(): { position: number; duration: number; paused: boolean } | null {
+    const v = this.videoEl();
+    if (!v) return null;
+    return { position: v.currentTime, duration: Number.isFinite(v.duration) ? v.duration : 0, paused: v.paused };
   }
 
   // Re-fetch when the shell swaps in a different item without remounting.
@@ -792,6 +902,8 @@ export class OppaiViewer extends LitElement {
     if (changed.has("media") || changed.has("queue")) this.centerCurrentInQueue();
     // (Re)bind OS/hardware media controls to whatever video is now on stage.
     this.setupMediaSession();
+    // A new still on stage restarts the dwell; a video waits for its own end.
+    if (changed.has("media") && this.slideshowOn) this.armSlide();
   }
 
   /** Keep the playing video in view with its neighbours on both sides.
@@ -816,6 +928,10 @@ export class OppaiViewer extends LitElement {
       .catch(() => (this.full = m));
     this.comic = null;
     if (m.kind === "comic") this.loadComic(m.id);
+    this.bookmarks = [];
+    if (m.kind === "video" || m.kind === "gif") {
+      api.bookmarks(m.id).then((res) => { if (this.media.id === m.id) this.bookmarks = res.bookmarks; }).catch(() => {});
+    }
     this.userGallery = [];
     this.saves = [];
     this.saveError = "";
@@ -978,6 +1094,13 @@ export class OppaiViewer extends LitElement {
     const video = e.target as HTMLVideoElement;
     const id = this.media.id;
     this.lastReported = 0;
+    // A moment asked for outright wins over where it was left: this is "open the
+    // bit at 4:10", not "carry on".
+    if (this.startAt > 0) {
+      video.currentTime = this.startAt;
+      this.startAt = 0;
+      return;
+    }
     try {
       const saved = await api.getProgress(id);
       // The item may have been paged past while the request was out.
@@ -1013,7 +1136,127 @@ export class OppaiViewer extends LitElement {
   private onVideoEnded = () => {
     this.lastReported = 0;
     void api.clearProgress(this.media.id).catch(() => {});
+    if (this.slideshowOn) this.advanceSlide();
   };
+
+  // --- Slideshow ------------------------------------------------------------
+  //
+  // Hands-free browsing: a still stays for the dwell and a video plays through,
+  // then the next item comes on — the queue in order, or a draw from it. The state
+  // lives here rather than in the shell because the viewer is what knows when a
+  // video has ended, and it survives the shell swapping the item on stage.
+
+  private toggleSlideshow() {
+    if (this.slideshowOn) this.stopSlideshow();
+    else {
+      this.slideshowOn = true;
+      this.armSlide();
+      mascotSay(this.slideshow.shuffle ? "Shuffling through." : "Playing through, in order.");
+    }
+  }
+
+  private stopSlideshow() {
+    window.clearTimeout(this.slideTimer);
+    this.slideTimer = 0;
+    this.slideshowOn = false;
+  }
+
+  private setSlideshow(patch: Partial<SlideshowPrefs>) {
+    this.slideshow = saveSlideshow({ ...this.slideshow, ...patch });
+    if (this.slideshowOn) this.armSlide();
+  }
+
+  /** Starts the dwell for a still; a video advances from its own ended event. */
+  private armSlide() {
+    window.clearTimeout(this.slideTimer);
+    this.slideTimer = 0;
+    const m = this.full ?? this.media;
+    if (m.kind === "video") return;
+    this.slideTimer = window.setTimeout(() => this.advanceSlide(), this.slideshow.dwellSec * 1000);
+  }
+
+  private advanceSlide() {
+    if (!this.slideshowOn) return;
+    const next = nextSlide(this.queue.map((item) => item.id), this.media.id, this.slideshow.shuffle);
+    if (next == null) {
+      this.stopSlideshow();
+      mascotSay("That's the end of the run.");
+      return;
+    }
+    this.jumpTo(next);
+  }
+
+  private renderSlideshowBar() {
+    const m = this.full ?? this.media;
+    if (m.kind === "comic" || m.kind === "game" || this.queue.length < 2) return nothing;
+    return html`
+      <div class="slidebar ${this.slideshowOn ? "on" : ""}">
+        <button class="icon-round" title=${this.slideshowOn ? "Stop the slideshow" : "Play through from here"} @click=${() => this.toggleSlideshow()}>
+          <span class="material-symbols-rounded" style="font-size:22px;">${this.slideshowOn ? "pause" : "play_arrow"}</span>
+        </button>
+        <button class="icon-round ${this.slideshow.shuffle ? "lit" : ""}" title=${this.slideshow.shuffle ? "Shuffling — click for in order" : "In order — click to shuffle"}
+          @click=${() => this.setSlideshow({ shuffle: !this.slideshow.shuffle })}>
+          <span class="material-symbols-rounded" style="font-size:22px;">casino</span>
+        </button>
+        <label class="dwell">Stills for
+          <select .value=${String(this.slideshow.dwellSec)} @change=${(e: Event) => this.setSlideshow({ dwellSec: Number((e.target as HTMLSelectElement).value) })}>
+            ${[3, 5, 8, 12, 20, 30].map((s) => html`<option value=${s} ?selected=${s === this.slideshow.dwellSec}>${s}s</option>`)}
+          </select>
+        </label>
+        ${this.slideshowOn ? html`<span class="slide-note">videos play through, then the next one comes on</span>` : nothing}
+      </div>
+    `;
+  }
+
+  // --- Bookmarks ------------------------------------------------------------
+
+  /** Marks the moment the video is at, with a name if one is given. */
+  private async markMoment() {
+    const v = this.videoEl();
+    const m = this.full ?? this.media;
+    const at = v ? v.currentTime : 0;
+    const label = window.prompt(`Bookmark ${formatMoment(at)} of “${m.title}” as…`, "")?.trim();
+    if (label === undefined) return;
+    this.marking = true;
+    try {
+      const made = await api.addBookmark(m.id, at, label);
+      if (this.media.id === m.id) this.bookmarks = [...this.bookmarks, made].sort((a, b) => a.position - b.position);
+      mascotSay(`Marked ${formatMoment(at)}.`);
+    } catch (e) {
+      mascotSay((e as Error).message, "error");
+    } finally {
+      this.marking = false;
+    }
+  }
+
+  private async dropBookmark(mark: Bookmark) {
+    try {
+      await api.deleteBookmark(mark.id);
+      this.bookmarks = this.bookmarks.filter((b) => b.id !== mark.id);
+    } catch (e) {
+      mascotSay((e as Error).message, "error");
+    }
+  }
+
+  private renderBookmarks(m: Media) {
+    if (m.kind !== "video" || this.bookmarks.length === 0) return nothing;
+    return html`
+      <div class="section-label">Moments</div>
+      <div class="moments">
+        ${this.bookmarks.map((mark) => html`
+          <div class="moment">
+            <button class="moment-open" title="Jump to ${formatMoment(mark.position)}" @click=${() => this.seekTo(mark.position)}>
+              <img src=${api.bookmarkThumbURL(mark.id)} alt="" loading="lazy" @error=${(e: Event) => ((e.target as HTMLImageElement).style.visibility = "hidden")} />
+              <span class="moment-time">${formatMoment(mark.position)}</span>
+              ${mark.label ? html`<span class="moment-label">${mark.label}</span>` : nothing}
+            </button>
+            <button class="moment-drop" title="Remove this bookmark" @click=${() => void this.dropBookmark(mark)}>
+              <span class="material-symbols-rounded" style="font-size:16px;">close</span>
+            </button>
+          </div>`)}
+      </div>
+    `;
+  }
 
   private saveProgress(position: number, duration: number) {
     const id = this.media.id;
@@ -1057,6 +1300,9 @@ export class OppaiViewer extends LitElement {
         break;
       case "m":
         v.muted = !v.muted;
+        break;
+      case "b":
+        void this.markMoment();
         break;
       case "f":
         e.preventDefault();
@@ -1158,6 +1404,22 @@ export class OppaiViewer extends LitElement {
     this.dispatchEvent(new CustomEvent("toggle-favorite", { bubbles: true, composed: true }));
   }
 
+  /** Asks the vision model for a fresh description of what is on screen. */
+  private async describe() {
+    this.describing = true;
+    try {
+      const res = await api.describe(this.media.id);
+      if (this.full) this.full = { ...this.full, description: res.description };
+      this.dispatchEvent(new CustomEvent("changed", { bubbles: true, composed: true }));
+      mascotSay("Described.", "success");
+    } catch (e) {
+      console.error("describe", e);
+      mascotSay(`Describing failed: ${(e as Error).message}`, "error");
+    } finally {
+      this.describing = false;
+    }
+  }
+
   private async retag() {
     this.tagging = true;
     try {
@@ -1232,6 +1494,7 @@ export class OppaiViewer extends LitElement {
     const m = this.full ?? this.media;
     this.editTitle = m.title;
     this.editNotes = m.notes ?? "";
+    this.editDescription = m.description ?? "";
     this.editKind = m.kind;
     this.editTags = (m.tags ?? []).map((t) => t.name);
     this.newTag = "";
@@ -1265,6 +1528,7 @@ export class OppaiViewer extends LitElement {
       const updated = await api.updateMedia(m.id, {
         title: this.editTitle,
         notes: this.editNotes,
+        ...(this.editDescription !== (m.description ?? "") ? { description: this.editDescription } : {}),
         kind: this.editKind,
         addTags,
         removeTags,
@@ -1292,6 +1556,7 @@ export class OppaiViewer extends LitElement {
   }
 
   private renderEdit() {
+    const m = this.full ?? this.media;
     return html`
       <div class="edit">
         <div>
@@ -1319,6 +1584,16 @@ export class OppaiViewer extends LitElement {
             @input=${(e: Event) => (this.editNotes = (e.target as HTMLTextAreaElement).value)}
           ></textarea>
         </div>
+        ${m.kind !== "comic" && m.kind !== "game"
+          ? html`<div>
+              <label>Description</label>
+              <textarea
+                placeholder="What the picture shows — written by the vision model, or by you"
+                .value=${this.editDescription}
+                @input=${(e: Event) => (this.editDescription = (e.target as HTMLTextAreaElement).value)}
+              ></textarea>
+            </div>`
+          : nothing}
         <div>
           <label>Tags</label>
           <div class="tag-edit">
@@ -1458,8 +1733,10 @@ export class OppaiViewer extends LitElement {
     return html`
       <div class="wrap">
         ${this.renderStage(m, url)}
+        ${this.renderSlideshowBar()}
         ${m.kind === "video" || m.kind === "image" ? this.renderUpNext(m) : nothing}
         ${this.renderTimeline(m)}
+        ${this.renderBookmarks(m)}
         ${m.kind === "game" ? nothing : this.renderMeta(m)}
       </div>
       ${this.screenshot
@@ -1690,9 +1967,10 @@ export class OppaiViewer extends LitElement {
                   </button>
                 </div>
                 ${this.playing ? this.renderPlayer(m) : nothing}
+                ${m.description ? html`<p class="desc described">${m.description}</p>` : nothing}
                 ${m.notes
                   ? html`<p class="desc">${m.notes}</p>`
-                  : html`<p class="desc">A title from your library.</p>`}
+                  : m.description ? nothing : html`<p class="desc">A title from your library.</p>`}
                 ${this.renderTags(m)}
                 ${this.renderSaves(m)}
                 ${m.gallery && m.gallery.length
@@ -1832,10 +2110,23 @@ export class OppaiViewer extends LitElement {
             >
           </button>`
         : nothing}
+      ${showAutotag && this.media.kind !== "comic" && this.media.kind !== "game"
+        ? html`<button class="icon-round" title=${this.full?.description ? "Describe again with the vision model" : "Describe with the vision model"}
+            @click=${this.describe} ?disabled=${this.describing}>
+            <span class="material-symbols-rounded" style="font-size:22px; color:var(--oppai-text-dim);"
+              >${this.describing ? "hourglass_empty" : "description"}</span
+            >
+          </button>`
+        : nothing}
       ${studioEditable(this.media)
         ? html`<button class="icon-round" title="Edit in the studio — regenerate it with its own settings"
             @click=${() => this.dispatchEvent(new CustomEvent("edit-in-studio", { detail: { id: this.media!.id }, bubbles: true, composed: true }))}>
             <span class="material-symbols-rounded" style="font-size:22px; color:var(--oppai-text-dim);">brush</span>
+          </button>`
+        : nothing}
+      ${this.media.kind === "video"
+        ? html`<button class="icon-round" title="Bookmark this moment" @click=${() => void this.markMoment()} ?disabled=${this.marking}>
+            <span class="material-symbols-rounded" style="font-size:22px; color:var(--oppai-text-dim);">${this.marking ? "hourglass_empty" : "bookmarks"}</span>
           </button>`
         : nothing}
       <button class="icon-round" title="Edit" @click=${() => this.startEdit()}>
@@ -1864,6 +2155,9 @@ export class OppaiViewer extends LitElement {
                 <span class="chip chip-muted">${meta.typeLabel}</span>
               </div>
               ${this.renderTags(m)}
+              ${m.description
+                ? html`<p class="desc described" style="margin-top:16px;" title="What the vision model saw">${m.description}</p>`
+                : nothing}
               ${m.notes
                 ? html`<p class="desc" style="margin-top:16px;">${m.notes}</p>`
                 : nothing}

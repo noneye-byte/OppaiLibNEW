@@ -592,6 +592,9 @@ func installJobFromRaw(raw invokeInstallJobRaw) InstallJob {
 	} else if raw.Error != "" {
 		job.Error = raw.Error
 	}
+	if raw.ConfigOut != nil {
+		job.ModelKey = raw.ConfigOut.Key
+	}
 	return job
 }
 
@@ -605,6 +608,10 @@ type invokeInstallJobRaw struct {
 	ErrorReason string `json:"error_reason"`
 	Bytes       int64  `json:"bytes"`
 	TotalBytes  int64  `json:"total_bytes"`
+	// ConfigOut is the registered record, present only once the install completed.
+	ConfigOut *struct {
+		Key string `json:"key"`
+	} `json:"config_out"`
 }
 
 func (c *Client) invokeInstallModel(ctx context.Context, base, source string) (*InstallJob, error) {

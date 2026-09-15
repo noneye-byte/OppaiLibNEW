@@ -21,7 +21,15 @@ export function loadHideLibby(): boolean {
  * OppaiLib experience, including Libby.
  */
 export function libbyHidden(): boolean {
-  return loadHideLibby();
+  return loadHideLibby() || safeViewOn();
+}
+
+// The safe toggle (safe-mode.ts) takes her off the screen too. Read here directly
+// rather than imported: this module is unit-tested under node, where a runtime
+// import of a sibling has no .js to resolve to, and the key is the whole contract.
+const SAFE_KEY = "oppai.safe";
+function safeViewOn(): boolean {
+  try { return localStorage.getItem(SAFE_KEY) === "1"; } catch { return false; }
 }
 
 export function saveHideLibby(hide: boolean): void {

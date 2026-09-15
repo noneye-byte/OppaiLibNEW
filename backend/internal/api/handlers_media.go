@@ -140,6 +140,7 @@ func (s *Server) ingestBlob(ctx context.Context, src io.Reader, meta ingestMeta)
 //
 //	kind=video       one kind, or every kind when absent
 //	favorite=1       favourites only
+//	minRating=4      rated four stars or more
 //	q=blue hair      words that must all match a title, note or tag
 //	sort=newest      newest (default) | oldest | rating | largest
 //	limit / offset   the page, limit capped at 200
@@ -159,10 +160,15 @@ func (s *Server) handleListMedia(w http.ResponseWriter, r *http.Request) {
 	if offset < 0 {
 		offset = 0
 	}
+	minRating, _ := strconv.Atoi(q.Get("minRating"))
+	if minRating < 0 || minRating > 5 {
+		minRating = 0
+	}
 	filter := db.MediaFilter{
 		Kind:         q.Get("kind"),
 		FavoriteOnly: isTruthy(q.Get("favorite")),
 		Tag:          q.Get("tag"),
+		MinRating:    minRating,
 		Sort:         db.ParseMediaSort(q.Get("sort")),
 	}
 
@@ -180,6 +186,7 @@ func (s *Server) handleListMedia(w http.ResponseWriter, r *http.Request) {
 			kind:         filter.Kind,
 			favoriteOnly: filter.FavoriteOnly,
 			tag:          filter.Tag,
+			minRating:    filter.MinRating,
 			sort:         filter.Sort,
 		}, limit, offset)
 		rows, err = s.db.MediaByIDs(ctx, ids)
@@ -303,6 +310,7 @@ func (s *Server) handleGetMedia(w http.ResponseWriter, r *http.Request) {
 	if tags, err := s.db.TagsForMedia(r.Context(), row.ID); err == nil {
 		m.Tags = tags
 	}
+	m.Description = s.mediaDescription(r.Context(), row.ID)
 	writeJSON(w, http.StatusOK, m)
 }
 
@@ -312,7 +320,9 @@ func (s *Server) handleGetMedia(w http.ResponseWriter, r *http.Request) {
 type mediaPatchReq struct {
 	Title      *string  `json:"title"`
 	Notes      *string  `json:"notes"`
-	Kind       *string  `json:"kind"`
+	// Description edits the vision model's prose by hand; "" clears it.
+	Description *string `json:"description"`
+	Kind        *string `json:"kind"`
 	Rating     *int     `json:"rating"`
 	Favorite   *bool    `json:"favorite"`
 	AddTags    []string `json:"addTags"`
@@ -354,6 +364,11 @@ func (s *Server) updateMediaByID(r *http.Request, id int64, p mediaPatchReq) err
 	}
 	if err := s.db.UpdateMedia(ctx, id, patch); err != nil {
 		return err
+	}
+	if p.Description != nil {
+		if err := s.storeDescription(ctx, id, strings.TrimSpace(*p.Description)); err != nil {
+			return err
+		}
 	}
 	for _, t := range p.AddTags {
 		if t = strings.TrimSpace(t); t != "" {
@@ -427,6 +442,7 @@ func (s *Server) handleUpdateMedia(w http.ResponseWriter, r *http.Request) {
 	if tags, err := s.db.TagsForMedia(r.Context(), id); err == nil {
 		m.Tags = tags
 	}
+	m.Description = s.mediaDescription(r.Context(), id)
 	writeJSON(w, http.StatusOK, m)
 }
 

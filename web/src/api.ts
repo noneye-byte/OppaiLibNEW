@@ -27,6 +27,9 @@ export interface Media {
   size: number;
   title: string;
   notes?: string;
+  /** What the vision model said the picture shows (or a hand-written line).
+   *  Present on a single item (getMedia), not on list pages. */
+  description?: string;
   source?: string;
   rating: number;
   favorite: boolean;
@@ -60,6 +63,8 @@ export interface MediaQuery {
   /** One exact tag, as the filter chips use. */
   tag?: string;
   favorite?: boolean;
+  /** Rated at least this many stars (1–5); absent or 0 keeps everything. */
+  minRating?: number;
   sort?: MediaSort;
   limit?: number;
   offset?: number;
@@ -135,6 +140,8 @@ export interface GamePlayInfo {
 export interface MediaPatch {
   title?: string;
   notes?: string;
+  /** The vision model's prose, edited by hand; "" clears it. */
+  description?: string;
   kind?: Media["kind"];
   rating?: number;
   /** Starred. The column has always been here and the PATCH has always accepted it;
@@ -290,6 +297,13 @@ export interface Settings {
   chatModel: string;
   chatApiKey: string;
   chatApiKeySet: boolean;
+  /** A vision-capable OpenAI-compatible endpoint that describes pictures in prose. */
+  visionUrl: string;
+  visionModel: string;
+  visionApiKey: string;
+  visionApiKeySet: boolean;
+  visionAuto: boolean;
+  visionEnabled: boolean;
   chatEnabled: boolean;
   /** text-generation-webui's models folder, as the OppaiLib container sees it. Needed
       only to delete a model — that backend exposes no delete API, so it is a filesystem
@@ -458,6 +472,9 @@ export interface LibbyLink {
  */
 export interface LibbyAttachment extends LibbyLink {
   self?: boolean;
+  /** A moment in a video, in seconds, when she handed over a bookmarked part rather
+      than the whole thing. The viewer opens it there. */
+  at?: number;
 }
 
 /**
@@ -478,6 +495,11 @@ export interface ChatViewing {
   focusExternal?: ChatViewingItem;
   /** Where in the library they are — a section name or a search term. */
   section?: string;
+  /** Where in the open video they are, in seconds, and whether it is playing. Lets
+      her react to *this* moment rather than to the title. */
+  position?: number;
+  duration?: number;
+  paused?: boolean;
 }
 
 export interface ChatViewingItem {
@@ -1085,6 +1107,40 @@ export interface SourceProposal {
  * it is remote — the browser never fetches them directly, it asks the server to
  * proxy them (see `api.sourceStreamURL`).
  */
+/** One moment in a video, kept: where, what it is called, and whether a frame was
+    grabbed for it. Title and kind ride along on the cross-library list. */
+export interface Bookmark {
+  id: number;
+  mediaId: number;
+  position: number;
+  label: string;
+  hasThumb: boolean;
+  createdAt: number;
+  title?: string;
+  kind?: string;
+}
+
+/** A saved search on a browsable source, re-run by the server a few times a day. */
+export interface SavedFeed {
+  id: string;
+  name: string;
+  source: string;
+  feed: string;
+  query?: string;
+  sort?: string;
+  createdAt: number;
+  checkedAt?: number;
+  error?: string;
+  newCount: number;
+}
+
+/** A remote item a feed turned up since the shelf was last looked at. */
+export interface FeedNewItem extends SourceItem {
+  feedId: string;
+  feedName: string;
+  source: string;
+}
+
 export interface SourceItem {
   id: string;
   title: string;
@@ -1373,15 +1429,23 @@ export interface GalleryImageMetadata {
   backend: string;
 }
 
-/** One model from the Civitai catalogue (via civitai.red). */
+/** One model from the Civitai catalogue (via civitai.red). The search page carries
+ *  the light fields; `civitaiModel` fills in the description, files and gallery. */
 export interface CivitaiModel {
   id: number;
   name: string;
   type: string;
   creator?: string;
+  creatorImage?: string;
   downloads: number;
   likes: number;
+  nsfw: boolean;
+  tags: string[];
+  /** Sanitized HTML, detail only. */
+  description?: string;
   versions: CivitaiVersion[];
+  /** Some version of it is in InvokeAI already. */
+  installed: boolean;
 }
 
 export interface CivitaiVersion {
@@ -1392,6 +1456,83 @@ export interface CivitaiVersion {
   downloadUrl: string;
   sizeMB?: number;
   images: string[];
+  description?: string;
+  publishedAt?: string;
+  downloads?: number;
+  likes?: number;
+  files?: CivitaiFile[];
+  installed: boolean;
+  /** InvokeAI's key for the installed file, for opening it in the studio. */
+  installedKey?: string;
+}
+
+export interface CivitaiFile {
+  name: string;
+  sizeMB: number;
+  type: string;
+  format?: string;
+  precision?: string;
+  sha256?: string;
+  blake3?: string;
+  primary: boolean;
+  downloadUrl: string;
+}
+
+/** One picture from Civitai's image feed, with the prompt behind it when kept. */
+export interface CivitaiImage {
+  id: number;
+  url: string;
+  width: number;
+  height: number;
+  nsfwLevel: number;
+  username?: string;
+  prompt?: string;
+  negativePrompt?: string;
+  sampler?: string;
+  steps?: number;
+  cfgScale?: number;
+  seed?: number;
+  model?: string;
+  size?: string;
+}
+
+/** What the studio holds on Civitai's side of the ledger. */
+export interface CivitaiLink {
+  modelId: number;
+  versionId: number;
+  latestVersionId: number;
+  updateAvailable: boolean;
+  modelName: string;
+  versionName: string;
+  modelType: string;
+  baseModel: string;
+  creator: string;
+  description: string;
+  trainedWords: string[];
+  previews: string[];
+  checkedAt: number;
+}
+
+/** One of the studio's models with its Civitai record, when it has one. */
+export interface CivitaiInstalled {
+  key: string;
+  name: string;
+  type: string;
+  base?: string;
+  hasCover: boolean;
+  civitai?: CivitaiLink;
+}
+
+export interface CivitaiSearchOpts {
+  q?: string;
+  type?: string;
+  category?: string;
+  sort?: string;
+  period?: string;
+  base?: string;
+  creator?: string;
+  nsfw?: boolean;
+  cursor?: string;
 }
 
 export interface CivitaiCategory {
@@ -1461,6 +1602,18 @@ export interface LibbyAction {
   tags?: string[];
   /** A rename action's new title. */
   title?: string;
+}
+
+/**
+ * Her state on this device at the moment an action is approved — what she is
+ * wearing, doing, and how heated things are — so a picture she makes of herself is
+ * of her as she is now, and a shelf she builds skips what she has already shown.
+ */
+export interface LibbyActContext {
+  outfit?: string;
+  activity?: string;
+  intensity?: number;
+  recentMediaIds?: number[];
 }
 
 /** One durable fact Libby has kept, carried between conversations. */
@@ -1539,6 +1692,14 @@ export interface LibbyAutoState {
   /** Whether a plain idle nudge would be allowed right now, and why not if it would
       not — so the settings screen can explain her silence without waiting to find out. */
   idle: LibbyAutoDecision;
+}
+
+/** A reason to speak first that the server worked out on its own — the morning
+    after, so far — with the decision already made. */
+export interface LibbyPendingTrigger {
+  trigger: string;
+  detail: string;
+  decision: LibbyAutoDecision;
 }
 
 /** The answer to "may she say something now?". */
@@ -1909,6 +2070,7 @@ export const api = {
     if (query.q?.trim()) q.set("q", query.q.trim());
     if (query.tag) q.set("tag", query.tag);
     if (query.favorite) q.set("favorite", "1");
+    if (query.minRating) q.set("minRating", String(query.minRating));
     if (query.sort && query.sort !== "newest") q.set("sort", query.sort);
     q.set("limit", String(query.limit ?? MEDIA_PAGE_SIZE));
     q.set("offset", String(query.offset ?? 0));
@@ -1971,6 +2133,20 @@ export const api = {
     }),
   clearProgress: (mediaId: number) =>
     request<void>(`/api/media/${mediaId}/progress`, { method: "DELETE" }),
+
+  // --- Bookmarks -----------------------------------------------------------
+  /** Moments in a video worth coming back to, in timeline order. */
+  bookmarks: (mediaId: number, signal?: AbortSignal) =>
+    request<{ bookmarks: Bookmark[] }>(`/api/media/${mediaId}/bookmarks`, { signal }),
+  addBookmark: (mediaId: number, position: number, label = "") =>
+    request<Bookmark>(`/api/media/${mediaId}/bookmarks`, { method: "POST", body: JSON.stringify({ position, label }) }, 60_000),
+  relabelBookmark: (id: number, label: string) =>
+    request<Bookmark>(`/api/bookmarks/${id}`, { method: "PATCH", body: JSON.stringify({ label }) }),
+  deleteBookmark: (id: number) => request<void>(`/api/bookmarks/${id}`, { method: "DELETE" }),
+  /** The latest marks across the whole library, newest first, titled. */
+  recentBookmarks: (limit = 50, signal?: AbortSignal) =>
+    request<{ bookmarks: Bookmark[] }>(`/api/bookmarks?limit=${limit}`, { signal }),
+  bookmarkThumbURL: (id: number) => `/api/bookmarks/${id}/thumb`,
   /** What to carry on with: items left part-way through, most recent first. */
   resumeShelf: (signal?: AbortSignal) =>
     request<{ items: Media[]; progress: MediaProgress[] }>("/api/resume", { signal }),
@@ -2025,6 +2201,18 @@ export const api = {
 
   autotag: (id: number) =>
     request<{ tags: MediaTag[] }>(`/api/media/${id}/autotag`, { method: "POST" }),
+  /** Asks the vision model what a picture (or clip) shows and stores the prose.
+   *  Slow by nature — a CPU model — so it is given minutes. */
+  describe: (id: number) =>
+    request<{ description: string }>(`/api/media/${id}/describe`, { method: "POST" }, 6 * 60_000),
+  describeStatus: () =>
+    request<{ enabled: boolean; model: string; auto: boolean; undescribed: number; backfilling: boolean }>("/api/ai/describe"),
+  describeProbe: () =>
+    request<{ ok: boolean; description: string }>("/api/ai/describe/probe", { method: "POST" }, 3 * 60_000),
+  describeBackfill: () =>
+    request<{ started: boolean }>("/api/ai/describe/backfill", { method: "POST" }),
+  describeBackfillStop: () =>
+    request<void>("/api/ai/describe/backfill", { method: "DELETE" }),
   /** Runs the AI tagger over an uploaded image without importing it — used to
       derive booru tags for a character from a reference picture. */
   scanImage: (imageData: string) =>
@@ -2117,6 +2305,16 @@ export const api = {
   /** Remove a site that was added from the UI. Built-ins can't be removed. */
   deleteSource: (id: string) =>
     request<void>(`/api/sources/${encodeURIComponent(id)}`, { method: "DELETE" }),
+
+  // --- Saved searches --------------------------------------------------------
+  savedFeeds: (signal?: AbortSignal) => request<{ feeds: SavedFeed[] }>("/api/feeds", { signal }),
+  saveFeed: (body: { source: string; feed: string; query?: string; sort?: string; name?: string }) =>
+    request<SavedFeed>("/api/feeds", { method: "POST", body: JSON.stringify(body) }, 60_000),
+  deleteFeed: (id: string) => request<void>(`/api/feeds/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  checkFeeds: () => request<{ feeds: SavedFeed[] }>("/api/feeds/check", { method: "POST" }, 120_000),
+  newFromFeeds: (signal?: AbortSignal) => request<{ items: FeedNewItem[] }>("/api/feeds/new", { signal }),
+  markFeedsSeen: (id?: string) =>
+    request<void>(id ? `/api/feeds/${encodeURIComponent(id)}/seen` : "/api/feeds/seen", { method: "POST" }),
 
   browseSource: (
     id: string,
@@ -2465,12 +2663,16 @@ export const api = {
   // The public catalogue via civitai.red, proxied through the server. Install
   // hands a download URL to InvokeAI, which fetches the file itself.
 
-  civitaiSearch: (opts: { q?: string; type?: string; category?: string; sort?: string; cursor?: string } = {}) => {
+  civitaiSearch: (opts: CivitaiSearchOpts = {}) => {
     const p = new URLSearchParams();
     if (opts.q) p.set("q", opts.q);
     if (opts.type) p.set("type", opts.type);
     if (opts.category) p.set("category", opts.category);
     if (opts.sort) p.set("sort", opts.sort);
+    if (opts.period) p.set("period", opts.period);
+    if (opts.base) p.set("base", opts.base);
+    if (opts.creator) p.set("creator", opts.creator);
+    if (opts.nsfw === false) p.set("nsfw", "0");
     if (opts.cursor) p.set("cursor", opts.cursor);
     return request<{ items: CivitaiModel[]; nextCursor?: string }>(
       `/api/imagegen/civitai/search?${p}`,
@@ -2478,15 +2680,42 @@ export const api = {
       45_000,
     );
   },
+  civitaiModel: (id: number) =>
+    request<CivitaiModel>(`/api/imagegen/civitai/models/${id}`, {}, 45_000),
+  civitaiImages: (opts: { versionId?: number; modelId?: number; username?: string; sort?: string; period?: string; nsfw?: boolean; cursor?: string }) => {
+    const p = new URLSearchParams();
+    if (opts.versionId) p.set("versionId", String(opts.versionId));
+    if (opts.modelId) p.set("modelId", String(opts.modelId));
+    if (opts.username) p.set("username", opts.username);
+    if (opts.sort) p.set("sort", opts.sort);
+    if (opts.period) p.set("period", opts.period);
+    if (opts.nsfw === false) p.set("nsfw", "0");
+    if (opts.cursor) p.set("cursor", opts.cursor);
+    return request<{ items: CivitaiImage[]; nextCursor?: string; withPrompts: number; keySet: boolean }>(`/api/imagegen/civitai/images?${p}`, {}, 45_000);
+  },
   civitaiCategories: () =>
     request<{ categories: CivitaiCategory[] }>("/api/imagegen/civitai/categories", {}, 30_000),
   civitaiImageURL: (u: string) => `/api/imagegen/civitai/image?url=${encodeURIComponent(u)}`,
-  civitaiInstall: (url: string) =>
+  /** Who the configured API key belongs to; rejects when there is no key. */
+  civitaiMe: () => request<{ id: number; username: string; image?: string }>("/api/imagegen/civitai/me", {}, 30_000),
+  /** Install a version into InvokeAI. The ids let the server dress the model with
+   *  the catalogue's cover, description and trigger words once the file is in. */
+  civitaiInstall: (url: string, ids?: { modelId: number; versionId: number }) =>
     request<InstallJob>("/api/imagegen/civitai/install", {
       method: "POST",
-      body: JSON.stringify({ url }),
+      body: JSON.stringify({ url, ...ids }),
     }, 30_000),
   civitaiInstalls: () => request<{ jobs: InstallJob[] }>("/api/imagegen/civitai/installs", {}, 20_000),
+  /** The studio's models with their Civitai records, matched by file hash. The
+   *  first call after new models arrive asks the catalogue, so it is given time. */
+  civitaiInstalled: (refresh = false) =>
+    request<{ models: CivitaiInstalled[] }>(`/api/imagegen/civitai/installed${refresh ? "?refresh=1" : ""}`, {}, 100_000),
+  /** Apply the catalogue's cover, description and trigger words to one model now. */
+  civitaiSync: (key: string, versionId?: number) =>
+    request<CivitaiLink | Record<string, never>>("/api/imagegen/civitai/sync", {
+      method: "POST",
+      body: JSON.stringify({ key, versionId: versionId ?? 0 }),
+    }, 70_000),
 
   // ── Libby outfits ──────────────────────────────────────────────────────────
   // User-made wardrobes for the mascot: one image per emotion, stored encrypted
@@ -2526,6 +2755,9 @@ export const api = {
     request<{ status: string }>("/api/libby/auto/sent", { method: "POST", body: JSON.stringify(body) }, 10_000),
   libbyAutoAnswered: () =>
     request<{ status: string }>("/api/libby/auto/answered", { method: "POST" }, 10_000),
+  /** Anything she has been meaning to say that the server noticed on its own. */
+  libbyAutoPending: () =>
+    request<{ pending: LibbyPendingTrigger[] }>("/api/libby/auto/pending", {}, 10_000),
 
   // ── Libby wants ──────────────────────────────────────────────────────────
   // Her own standing desires, kept the same way as her memory. Written from her own
@@ -2600,12 +2832,13 @@ export const api = {
 
   /** Performs one action the user has approved. The only call in the app that acts
       on something Libby said, and it exists solely to be made by an Allow button. */
-  libbyAct: (action: LibbyAction) =>
+  libbyAct: (action: LibbyAction, context: LibbyActContext = {}) =>
     request<Record<string, unknown>>("/api/libby/act", {
       method: "POST",
       body: JSON.stringify({
         kind: action.kind, prompt: action.prompt, url: action.url,
         mediaId: action.mediaId, tags: action.tags, title: action.title,
+        ...context,
       }),
     }),
 
@@ -2625,7 +2858,7 @@ export const api = {
     }),
   libbyBackgroundURL: (id: string, v?: number) =>
     `/api/libby/backgrounds/${encodeURIComponent(id)}/image${v ? `?v=${v}` : ""}`,
-  saveLibbyOutfit: (body: { id?: string; name: string }) =>
+  saveLibbyOutfit: (body: { id?: string; name: string; prompt?: string }) =>
     request<LibbyOutfit>("/api/libby/outfits", { method: "POST", body: JSON.stringify(body) }),
   deleteLibbyOutfit: (id: string) =>
     request<{ status: string }>(`/api/libby/outfits/${encodeURIComponent(id)}`, { method: "DELETE" }),
@@ -2671,6 +2904,9 @@ export const api = {
       reviewed?: boolean;
       config?: string;
       info?: unknown;
+      /** The outfit's clothing terms as sent to the generator, so the wardrobe can be
+          drawn again from chat in the same clothes. */
+      clothing?: string;
     },
   ) =>
     request<LibbyWipSquare>(

@@ -77,6 +77,7 @@ fun EditMediaDialog(
 ) {
     var title by remember { mutableStateOf(media.title) }
     var notes by remember { mutableStateOf(media.notes.orEmpty()) }
+    var description by remember { mutableStateOf(media.description.orEmpty()) }
     var draft by remember { mutableStateOf("") }
 
     // Existing tags minus the ones struck off, plus the ones typed in. Names, because
@@ -109,6 +110,15 @@ fun EditMediaDialog(
                     label = { Text("Notes") },
                     modifier = Modifier.fillMaxWidth().heightIn(min = 88.dp).padding(top = 12.dp),
                 )
+                if (media.kind == "image" || media.kind == "gif" || media.kind == "video") {
+                    OutlinedTextField(
+                        value = description,
+                        onValueChange = { description = it },
+                        label = { Text("Description") },
+                        placeholder = { Text("What it shows — from the vision model, or you") },
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 88.dp).padding(top = 12.dp),
+                    )
+                }
 
                 Text(
                     "Tags",
@@ -164,6 +174,7 @@ fun EditMediaDialog(
                     MediaPatch(
                         title = title.takeIf { it != media.title },
                         notes = notes.takeIf { it != media.notes.orEmpty() },
+                        description = description.takeIf { it != media.description.orEmpty() },
                         addTags = added.toList(),
                         removeTags = removed,
                     ),

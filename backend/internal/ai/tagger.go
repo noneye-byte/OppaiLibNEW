@@ -502,23 +502,11 @@ func (m *Manager) tagVideo(ctx context.Context, id int64, blobPath string) ([]Su
 	}
 
 	// The configured frame count is a floor; a long clip earns more frames so it is
-	// not left as blind as a short one. See framesForDuration.
+	// not left as blind as a short one. See framesForDuration. Where to look is
+	// shared with the describer (describe_frames.go): by scene, on the clock as the
+	// fallback.
 	want := framesForDuration(m.frames, dur)
-	// Prefer sampling by scene. Detection decodes the whole stream, so it runs under
-	// its own timeout and any failure (including that deadline) drops us back to clock
-	// sampling — never to a partial scan, which would bias every frame toward the
-	// start. Without a probed duration there are no scenes to find, so skip it.
-	offsets := sampleOffsets(dur, want)
-	if dur > 0 {
-		sceneCtx, sceneCancel := context.WithTimeout(ctx, sceneDetectTimeout)
-		cuts, serr := thumbnail.Scenes(sceneCtx, tmpPath, sceneThreshold, sceneDetectWidth)
-		sceneCancel()
-		if serr != nil {
-			m.log.Debug("ai: scene detection failed, sampling on the clock", "media", id, "err", serr)
-		} else if len(cuts) > 0 {
-			offsets = sceneAwareOffsets(cuts, dur, want)
-		}
-	}
+	offsets := m.videoOffsets(ctx, tmpPath, dur, want)
 	frames := make([]framed, 0, len(offsets))
 	for _, at := range offsets {
 		if err := ctx.Err(); err != nil {

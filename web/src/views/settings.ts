@@ -649,6 +649,7 @@ export class OppaiSettings extends LitElement {
     this.load();
     void this.loadGenLists();
     void this.loadTTS();
+    void this.loadDescribe();
   }
 
   private async load() {
@@ -671,6 +672,11 @@ export class OppaiSettings extends LitElement {
 
   /** The server's speech status; undefined until asked, null when it did not answer. */
   @state() private tts: TTSStatus | null | undefined = undefined;
+  /** The vision model's state: how many items still lack prose, and whether the
+   *  backfill is walking. Loaded with the AI tab. */
+  @state() private describe: { enabled: boolean; model: string; auto: boolean; undescribed: number; backfilling: boolean } | null = null;
+  @state() private describeBusy = false;
+  @state() private describeNote = "";
   @state() private ttsErrors: Record<string, string> = {};
 
   private get canEdit(): boolean {
@@ -714,6 +720,7 @@ export class OppaiSettings extends LitElement {
       // icon change immediately, and the signed-out disguise is ready for the next logout.
       setIncognito(!!res.settings.incognito);
       void this.loadTTS(true);
+      void this.loadDescribe();
     } catch (e) {
       this.loadError = (e as Error).message;
     } finally {
@@ -1205,6 +1212,42 @@ export class OppaiSettings extends LitElement {
     if (this.tts?.downloading?.length) window.setTimeout(() => void this.loadTTS(true), 4000);
   }
 
+  private async loadDescribe() {
+    try {
+      this.describe = await api.describeStatus();
+    } catch {
+      this.describe = null;
+    }
+  }
+
+  /** Sends the vision model a generated test picture, so a wrong URL or a text-only
+   *  model is found out here rather than on the first import. */
+  private async probeVision() {
+    this.describeBusy = true;
+    this.describeNote = "";
+    try {
+      const res = await api.describeProbe();
+      this.describeNote = `The model answered: “${res.description}”`;
+    } catch (e) {
+      this.describeNote = (e as Error).message;
+    } finally {
+      this.describeBusy = false;
+    }
+  }
+
+  private async toggleBackfill() {
+    this.describeBusy = true;
+    try {
+      if (this.describe?.backfilling) await api.describeBackfillStop();
+      else await api.describeBackfill();
+      await this.loadDescribe();
+    } catch (e) {
+      this.describeNote = (e as Error).message;
+    } finally {
+      this.describeBusy = false;
+    }
+  }
+
   private async testVoice() {
     stopSpeaking();
     await speak("Hi. This is what I sound like. Saved to your library, by the way — nice pick.");
@@ -1458,6 +1501,100 @@ export class OppaiSettings extends LitElement {
                     )}
                   `
                 : nothing}
+            `}
+      </section>
+      ${this.renderVision()}
+    `;
+  }
+
+  /**
+   * The vision model: a local multimodal LLM that writes what a picture shows, in a
+   * sentence or three, where the tagger writes a word list. It is its own endpoint
+   * because Libby's chat model is usually a text-only build.
+   */
+  private renderVision() {
+    const s = this.settings;
+    const d = this.describe;
+    return html`
+      <section class="card">
+        <h3><span class="material-symbols-rounded">description</span>Describing pictures</h3>
+        <p class="card-sub">
+          A vision model on your own network writes what each picture or clip shows — who is where,
+          doing what, in what style. The prose is stored encrypted, searchable from the library's search box,
+          shown in the viewer, and given to Libby when a picture comes up. Any OpenAI-compatible server whose model
+          accepts images works: Ollama or LM Studio with a llava, qwen-vl or gemma3 build, llama.cpp server with an mmproj.
+        </p>
+        ${!s
+          ? html`<div class="field-help">Loading…</div>`
+          : html`
+              <div class="field stack">
+                <div class="field-text">
+                  <div class="field-label">Vision model</div>
+                  <div class="field-help">
+                    The server's base URL, such as <code>http://host:11434/v1</code>, and the model to ask for.
+                    Blank turns describing off.
+                  </div>
+                </div>
+                <div class="field-control">
+                  <input type="text" autocomplete="off" placeholder="http://host:11434/v1" .value=${s.visionUrl}
+                    ?disabled=${!this.canEdit}
+                    @change=${(e: Event) => this.edit({ visionUrl: (e.target as HTMLInputElement).value })} />
+                </div>
+                <div class="field-control">
+                  <input type="text" autocomplete="off" placeholder="Model name, e.g. qwen2.5vl:7b or llava" .value=${s.visionModel}
+                    ?disabled=${!this.canEdit}
+                    @change=${(e: Event) => this.edit({ visionModel: (e.target as HTMLInputElement).value })} />
+                </div>
+                <div class="field-control">
+                  <input type="password" autocomplete="new-password"
+                    placeholder=${s.visionApiKeySet ? "API key saved — enter to replace" : "API key (optional)"}
+                    .value=${s.visionApiKey} ?disabled=${!this.canEdit}
+                    @change=${(e: Event) => this.edit({ visionApiKey: (e.target as HTMLInputElement).value })} />
+                </div>
+              </div>
+              ${this.switchField(
+                "Describe on import",
+                "Describe every new picture and clip once it has been tagged; the tags steer the model. Off means only when you ask, from the viewer.",
+                s.visionAuto,
+                (v) => this.edit({ visionAuto: v }),
+                !s.visionUrl,
+              )}
+              <div class="field">
+                <div class="field-text">
+                  <div class="field-label">Check the model</div>
+                  <div class="field-help">
+                    Sends a generated test picture and shows what comes back. Save the URL first.
+                    ${this.describeNote ? html`<div style="margin-top:6px; color:var(--oppai-text);">${this.describeNote}</div>` : nothing}
+                  </div>
+                </div>
+                <div class="field-control">
+                  <button class="btn" ?disabled=${!s.visionEnabled || this.describeBusy || this.dirty} @click=${() => void this.probeVision()}>
+                    ${this.describeBusy ? "Asking…" : "Test"}
+                  </button>
+                </div>
+              </div>
+              <div class="field">
+                <div class="field-text">
+                  <div class="field-label">Describe what has none</div>
+                  <div class="field-help">
+                    ${d
+                      ? d.undescribed
+                        ? `${d.undescribed.toLocaleString()} ${d.undescribed === 1 ? "item has" : "items have"} no description yet.${d.backfilling ? " Working through them, one at a time." : ""}`
+                        : "Everything that can be described has been."
+                      : "Loading…"}
+                    Runs in the background, one item at a time; leave this page and it carries on.
+                  </div>
+                </div>
+                <div class="field-control" style="display:flex; gap:8px; align-items:center;">
+                  <button class="btn" ?disabled=${!s.visionEnabled || this.describeBusy || !d || (!d.undescribed && !d.backfilling)}
+                    @click=${() => void this.toggleBackfill()}>
+                    ${d?.backfilling ? "Stop" : "Start"}
+                  </button>
+                  <button class="btn" title="Refresh the count" @click=${() => void this.loadDescribe()}>
+                    <span class="material-symbols-rounded" style="font-size:18px;">refresh</span>
+                  </button>
+                </div>
+              </div>
             `}
       </section>
     `;

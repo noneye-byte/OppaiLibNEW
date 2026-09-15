@@ -79,6 +79,7 @@ import "./outfit-wardrobe.js";
 import { createZip, type ZipEntry } from "../zip.js";
 import "./imagegen-gallery.js";
 import "./civitai.js";
+import type { PromptSettings } from "../civitai-prompt.js";
 import type { OppaiInvokeGallery } from "./imagegen-gallery.js";
 
 // ── Web Speech typings ─────────────────────────────────────────────────────────
@@ -3357,6 +3358,9 @@ export class OppaiImageGen extends LitElement {
         reviewed,
         config: shot.outfitConfig,
         info: shot.info,
+        // The clothes as the generator was told them, so the wardrobe knows its own
+        // outfit and Libby can be drawn in it from chat. See libbyOutfit.Prompt.
+        clothing: [...this.equippedOutfitTerms(), this.outfitText.trim()].filter(Boolean).join(", "),
       });
       return wardrobeId;
     } catch (e) {
@@ -4579,7 +4583,10 @@ export class OppaiImageGen extends LitElement {
             : nothing}
         </div>
       </div>
-      ${this.civitaiOpen ? html`<oppai-civitai @close=${() => this.onCivitaiClose()}></oppai-civitai>` : nothing}
+      ${this.civitaiOpen
+        ? html`<oppai-civitai @close=${() => this.onCivitaiClose()}
+            @use-prompt=${(e: CustomEvent<PromptSettings>) => this.onCivitaiPrompt(e.detail)}></oppai-civitai>`
+        : nothing}
     `;
   }
 
@@ -5164,6 +5171,29 @@ export class OppaiImageGen extends LitElement {
   private onCivitaiClose() {
     this.civitaiOpen = false;
     void this.loadStatus();
+  }
+
+  /**
+   * A prompt picked off a Civitai showcase picture. Only what the poster kept is
+   * written: a picture with no sampler leaves the form's sampler alone, and the
+   * model is never switched — theirs is on their box, and the studio's checkpoint
+   * is the one being tried. The template, characters and triggers are cleared as
+   * they are for any reused prompt, since the text is already the finished prompt.
+   */
+  private onCivitaiPrompt(p: PromptSettings) {
+    this.prompt = p.prompt;
+    this.negative = p.negativePrompt ?? "";
+    if (p.sampler) this.scheduler = p.sampler;
+    if (p.steps) this.steps = p.steps;
+    if (p.cfgScale) this.cfg = p.cfgScale;
+    if (p.seed) this.seed = p.seed;
+    if (p.width && p.height) {
+      this.width = p.width;
+      this.height = p.height;
+    }
+    this.templateId = "";
+    this.selectedTriggers = [];
+    this.onCivitaiClose();
   }
 
   private section(id: string, label: string, count: string, body: unknown) {

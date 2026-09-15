@@ -74,7 +74,11 @@ type MediaFilter struct {
 	Kind         string // "" = every kind
 	FavoriteOnly bool
 	Tag          string // "" = any tag; the grid's filter chips
-	Sort         MediaSort
+	// MinRating keeps rows rated at least this many stars; 0 means unrated rows too.
+	// The header's Filters menu offers it, because "the good ones" is a question a
+	// sort by rating answers only for the first screenful.
+	MinRating int
+	Sort      MediaSort
 }
 
 // where builds the shared WHERE clause, so the count and the page can never
@@ -88,6 +92,10 @@ func (f MediaFilter) where() (string, []any) {
 	}
 	if f.FavoriteOnly {
 		clauses = append(clauses, "favorite = 1")
+	}
+	if f.MinRating > 0 {
+		clauses = append(clauses, "rating >= ?")
+		args = append(args, f.MinRating)
 	}
 	if f.Tag != "" {
 		// EXISTS rather than a join, so a row carrying the tag twice (a manual tag the

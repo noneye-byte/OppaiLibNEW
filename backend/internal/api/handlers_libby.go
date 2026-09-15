@@ -125,6 +125,12 @@ func (s *Server) libbySlotArtPath(id, slot string, level int) (string, bool) {
 type libbyOutfit struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
+	// Prompt is the outfit in generator words — the clothing terms the studio sent
+	// when it rendered these sprites — so a picture of her generated from chat can be
+	// drawn in what she is actually wearing. Written by the studio as it files squares;
+	// empty for a wardrobe that was uploaded by hand, which then falls back to being
+	// described by name alone.
+	Prompt string `json:"prompt,omitempty"`
 }
 
 // libbyOutfitView is what lists return: the record plus which slots have art, so
@@ -369,6 +375,9 @@ func (s *Server) handleListLibbyOutfits(w http.ResponseWriter, r *http.Request) 
 type saveLibbyOutfitReq struct {
 	ID   string `json:"id"` // empty creates, set renames
 	Name string `json:"name"`
+	// Prompt is optional: absent keeps what the record has, so a rename from the
+	// wardrobe screen does not wipe the clothing terms the studio wrote.
+	Prompt *string `json:"prompt,omitempty"`
 }
 
 func (s *Server) handleSaveLibbyOutfit(w http.ResponseWriter, r *http.Request) {
@@ -390,6 +399,12 @@ func (s *Server) handleSaveLibbyOutfit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	o := libbyOutfit{ID: id, Name: req.Name}
+	if existing, err := s.readLibbyOutfit(id); err == nil {
+		o.Prompt = existing.Prompt
+	}
+	if req.Prompt != nil {
+		o.Prompt = cleanOutfitPrompt(*req.Prompt)
+	}
 	raw, _ := json.Marshal(o)
 	blob, err := crypto.SealBytes(s.kek, raw, []byte("libby-outfit"))
 	if err != nil {
@@ -405,6 +420,19 @@ func (s *Server) handleSaveLibbyOutfit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, s.libbyOutfitView(&o))
+}
+
+// maxOutfitPrompt bounds the clothing terms kept on a wardrobe. A loadout's ten
+// slots with colours come to a couple of hundred characters; this is headroom, not
+// a place to store a whole studio prompt.
+const maxOutfitPrompt = 600
+
+func cleanOutfitPrompt(prompt string) string {
+	prompt = strings.Join(strings.Fields(prompt), " ")
+	if len(prompt) > maxOutfitPrompt {
+		prompt = strings.TrimSpace(prompt[:maxOutfitPrompt])
+	}
+	return prompt
 }
 
 func (s *Server) handleDeleteLibbyOutfit(w http.ResponseWriter, r *http.Request) {

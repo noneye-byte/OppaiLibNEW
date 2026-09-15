@@ -274,6 +274,31 @@ func TestFilterByFavouriteAndKind(t *testing.T) {
 	}
 }
 
+// The header's Filters menu: a minimum rating, on both the SQL path and the search
+// path, so the two cannot disagree about what "four stars or more" means.
+func TestMinRatingKeepsOnlyRowsRatedAtLeastThat(t *testing.T) {
+	s, token := newTestServer(t)
+	five := seedFull(t, s, seedRow{title: "Ranked Five", kind: "video", rating: 5, at: 100})
+	four := seedFull(t, s, seedRow{title: "Ranked Four", kind: "video", rating: 4, at: 200})
+	seedFull(t, s, seedRow{title: "Ranked Two", kind: "video", rating: 2, at: 300})
+	seedFull(t, s, seedRow{title: "Ranked Never", kind: "video", at: 400})
+
+	if items, total := listMedia(t, s, token, "minRating=4"); total != 2 || len(items) != 2 ||
+		items[0].ID != four || items[1].ID != five {
+		t.Errorf("minRating=4 returned %v (total %d)", titlesOf(items), total)
+	}
+	if items, total := listMedia(t, s, token, "q=ranked&minRating=5"); total != 1 || items[0].ID != five {
+		t.Errorf("query+minRating=5 returned %v (total %d)", titlesOf(items), total)
+	}
+	// Zero and nonsense mean "no minimum", so a stale client cannot hide the library.
+	if _, total := listMedia(t, s, token, "minRating=0"); total != 4 {
+		t.Errorf("minRating=0 total = %d, want 4", total)
+	}
+	if _, total := listMedia(t, s, token, "minRating=9"); total != 4 {
+		t.Errorf("minRating=9 total = %d, want 4", total)
+	}
+}
+
 // Home's numbers, which it used to derive from the whole library in browser memory —
 // including an "added this week" that compared milliseconds to seconds and so always
 // read zero.

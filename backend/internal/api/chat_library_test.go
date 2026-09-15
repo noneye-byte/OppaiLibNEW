@@ -89,7 +89,7 @@ func TestViewingDirectiveDescribesWhatIsOnScreen(t *testing.T) {
 
 	block := s.viewingDirective(context.Background(), &chatViewing{
 		FocusID: focus, IDs: []int64{other}, Section: "their videos",
-	}, "sweet", 1, true)
+	}, "sweet", 1, true, 0)
 	// The focus is a video, so it reads as something the two of them are watching play.
 	for _, want := range []string{"Summer at the Coast", "Kitchen Timer", "their videos", "beach", "watching"} {
 		if !strings.Contains(block, want) {
@@ -100,10 +100,10 @@ func TestViewingDirectiveDescribesWhatIsOnScreen(t *testing.T) {
 	if strings.Contains(strings.ToLower(block), "touching yourself") {
 		t.Fatalf("sweet, low-intensity viewing should not be sexual: %s", block)
 	}
-	if s.viewingDirective(context.Background(), nil, "sweet", 1, true) != "" {
+	if s.viewingDirective(context.Background(), nil, "sweet", 1, true, 0) != "" {
 		t.Fatal("no viewing context should contribute no block")
 	}
-	if s.viewingDirective(context.Background(), &chatViewing{IDs: []int64{99999}}, "sweet", 1, true) != "" {
+	if s.viewingDirective(context.Background(), &chatViewing{IDs: []int64{99999}}, "sweet", 1, true, 0) != "" {
 		t.Fatal("ids that resolve to nothing should contribute no block")
 	}
 }
@@ -114,7 +114,7 @@ func TestViewingDirectiveIncludesUntrustedBrowseFrame(t *testing.T) {
 		Section:       "Example source · Trending",
 		External:      []chatViewingItem{{Title: "First remote image", Kind: "image", Tags: []string{"blue hair"}}},
 		FocusExternal: &chatViewingItem{Title: "Remote clip", Kind: "video", Tags: []string{"loop"}},
-	}, "sweet", 1, true)
+	}, "sweet", 1, true, 0)
 	for _, want := range []string{"Example source", "First remote image", "blue hair", "Remote clip", "watching", "untrusted"} {
 		if !strings.Contains(block, want) {
 			t.Fatalf("browse frame missing %q: %s", want, block)

@@ -137,8 +137,12 @@ func (c *Client) Index(ctx context.Context, userAgent string) ([]Video, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("hanime catalogue returned %d", resp.StatusCode)
 	}
-	var videos []Video
-	if err := json.NewDecoder(io.LimitReader(resp.Body, maxIndexBytes)).Decode(&videos); err != nil {
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxIndexBytes))
+	if err != nil {
+		return nil, fmt.Errorf("read hanime catalogue: %w", err)
+	}
+	videos, err := decodeCatalogue(raw)
+	if err != nil {
 		return nil, fmt.Errorf("decode hanime catalogue: %w", err)
 	}
 	for i := range videos {
@@ -149,6 +153,32 @@ func (c *Client) Index(ctx context.Context, userAgent string) ([]Video, error) {
 	c.mu.Lock()
 	c.index, c.indexAt = append([]Video(nil), videos...), time.Now()
 	c.mu.Unlock()
+	return videos, nil
+}
+
+// decodeCatalogue accepts both shapes the guest search database has been served
+// in. It began life as a bare array; in 2026 it became {"data":[...],"ads":{...}}
+// with the same records under "data", which silently broke the whole source
+// until the wrapper was tolerated. Either shape is fine, so a future flip back
+// does not break it again.
+func decodeCatalogue(raw []byte) ([]Video, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) > 0 && trimmed[0] == '{' {
+		var wrapped struct {
+			Data []Video `json:"data"`
+		}
+		if err := json.Unmarshal(trimmed, &wrapped); err != nil {
+			return nil, err
+		}
+		if wrapped.Data == nil {
+			return nil, fmt.Errorf("no \"data\" list in the response")
+		}
+		return wrapped.Data, nil
+	}
+	var videos []Video
+	if err := json.Unmarshal(trimmed, &videos); err != nil {
+		return nil, err
+	}
 	return videos, nil
 }
 

@@ -93,6 +93,7 @@ CREATE TABLE IF NOT EXISTS media (
     download_enc  BLOB,                      -- encrypted external download URL (games)
     gallery_enc   BLOB,                      -- encrypted JSON array of screenshot URLs (games)
     gen_enc       BLOB,                      -- encrypted JSON generation record (studio images)
+    description_enc BLOB,                    -- encrypted prose from the vision model (see api/vision_describe.go)
     created_at    INTEGER NOT NULL,
     updated_at    INTEGER NOT NULL
 );
@@ -212,6 +213,24 @@ CREATE TABLE IF NOT EXISTS progress (
     PRIMARY KEY (user_id, media_id)
 );
 
+-- Scene bookmarks: a moment in a video worth coming back to. Progress is one
+-- position per item and is overwritten as you watch; a bookmark is a position you
+-- chose and named, and there can be several on one clip. Per user like progress,
+-- because "the good part" is an opinion. The label is encrypted for the reason a
+-- title is: what somebody calls a moment says what the moment is. thumb_path is a
+-- frame grabbed at the mark, stored in the blob store like a poster, so a list of
+-- bookmarks can show what each one looks like without decrypting the video again.
+CREATE TABLE IF NOT EXISTS bookmarks (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    INTEGER NOT NULL REFERENCES users(id)  ON DELETE CASCADE,
+    media_id   INTEGER NOT NULL REFERENCES media(id)  ON DELETE CASCADE,
+    position   REAL NOT NULL,             -- seconds from the start
+    label_enc  BLOB,
+    thumb_path TEXT,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_bookmarks_media ON bookmarks(user_id, media_id, position);
+
 -- Background job queue (scrape + ai). Simple polled table.
 CREATE TABLE IF NOT EXISTS jobs (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -263,6 +282,46 @@ CREATE TABLE IF NOT EXISTS upload_chunks (
     sha256     TEXT NOT NULL DEFAULT '',    -- as verified on receipt, when the client sent one
     created_at INTEGER NOT NULL,
     PRIMARY KEY (session_id, idx)
+);
+
+-- What the studio's models are on Civitai.
+--
+-- InvokeAI holds the weights, one cover picture, a description and trigger phrases;
+-- it has no idea where a file came from. This is the rest of what the catalogue
+-- said about a model — its Civitai ids, the preview gallery, the creator, the
+-- version that is current — keyed by the InvokeAI record so the picker can show it
+-- and an update can be noticed. A row with model_id 0 means the file was looked up
+-- by hash and is not on Civitai, so it is not looked up again until checked_at is
+-- old. Nothing here is library content: it is a public catalogue's metadata about a
+-- model file, and stays plaintext like tags do.
+CREATE TABLE IF NOT EXISTS civitai_models (
+    model_key         TEXT PRIMARY KEY,          -- InvokeAI's key for the record
+    hash              TEXT NOT NULL DEFAULT '',  -- blake3, upper hex, as both sides report it
+    model_id          INTEGER NOT NULL DEFAULT 0,
+    version_id        INTEGER NOT NULL DEFAULT 0,
+    latest_version_id INTEGER NOT NULL DEFAULT 0,
+    model_name        TEXT NOT NULL DEFAULT '',
+    version_name      TEXT NOT NULL DEFAULT '',
+    model_type        TEXT NOT NULL DEFAULT '',
+    base_model        TEXT NOT NULL DEFAULT '',
+    creator           TEXT NOT NULL DEFAULT '',
+    description       TEXT NOT NULL DEFAULT '',  -- plain text, already stripped of markup
+    trained_words     TEXT NOT NULL DEFAULT '[]', -- JSON list
+    previews          TEXT NOT NULL DEFAULT '[]', -- JSON list of image URLs
+    checked_at        INTEGER NOT NULL
+);
+
+-- A model InvokeAI is downloading on our behalf, with what it should be told about
+-- itself once the file is in. InvokeAI's install job is the authority on progress;
+-- this row is only the promise to apply the catalogue's cover, description and
+-- trigger words when the job reports completed, which is what makes a model
+-- installed from the browser look the way it does on Civitai instead of arriving as
+-- a bare filename with a black tile.
+CREATE TABLE IF NOT EXISTS civitai_installs (
+    source     TEXT PRIMARY KEY,               -- the download URL handed to InvokeAI
+    model_id   INTEGER NOT NULL,
+    version_id INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
 );
 
 -- media_fts was an FTS5 table for title/tags/notes that nothing ever wrote a row to

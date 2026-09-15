@@ -60,6 +60,10 @@ type historyDescriber struct {
 type historyMedia struct {
 	title, kind string
 	tags        []string
+	// description is the vision model's prose about the item, when it has been
+	// described: the difference between handing her six tags and handing her the
+	// sentence a person would say. See vision_describe.go.
+	description string
 	// self is whether the item is a picture of her — it carries the identity tag —
 	// rather than something from the shelves.
 	self bool
@@ -108,7 +112,7 @@ func (s *Server) newHistoryDescriber(ctx context.Context, ws chatWorkspace, mess
 			title = "Untitled"
 		}
 		names := make([]string, 0, maxHistoryAttachmentTags)
-		full := historyMedia{title: title, kind: brief.Kind}
+		full := historyMedia{title: title, kind: brief.Kind, description: s.decrypt(brief.DescriptionEnc, "description")}
 		for _, tag := range tagsByID[brief.ID] {
 			if strings.EqualFold(tag.Name, libbyIdentityTag) {
 				full.self = true

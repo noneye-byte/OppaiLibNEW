@@ -122,6 +122,19 @@ type Server struct {
 	// wholesale whenever the settings change. See discord_relay.go.
 	discord *discordRuntime
 
+	// Which files InvokeAI holds, by BLAKE3, so a Civitai search page can mark what
+	// is already installed without asking InvokeAI once per card. Keyed by the
+	// generator URL. See handlers_civitai.go.
+	installedHashCache *resolveCache[map[string]string]
+	// The one goroutine that follows Civitai installs through to their metadata.
+	// See civitai_installs.go.
+	civitaiMu       sync.Mutex
+	civitaiWatching bool
+
+	// Pictures being described by the vision model, one at a time. See
+	// vision_describe.go.
+	describe *describeQueue
+
 	// Every title and tag in the library, decrypted once and kept in memory so Libby
 	// can name something from any depth of the collection rather than only from the
 	// newest rows. Built lazily on her first lookup. See chat_library_index.go.
@@ -195,12 +208,20 @@ func NewServer(cfg *config.Config, database *db.DB, store *storage.Store, sc *sc
 		iconCache:    newResolveCache[favicon](faviconTTL),
 
 		library: newLibraryIndex(),
+
+		installedHashCache: newResolveCache[map[string]string](time.Minute),
+		describe:           newDescribeQueue(),
 	}
 	// A picture that has just been tagged is the moment to ask whether it is one of
 	// Libby. Registered here rather than inside the tagger because who Libby is, and
 	// what she looks like, is nothing the ai package should have to know.
 	// See handlers_libby_identity.go.
-	aiMgr.SetOnTagged(s.recognizeLibbyMedia)
+	// A freshly tagged picture is also the moment to describe it: the tags steer
+	// the vision model. See vision_describe.go.
+	aiMgr.SetOnTagged(func(id int64) {
+		s.recognizeLibbyMedia(id)
+		s.onTaggedDescribe(id)
+	})
 	return s
 }
 
@@ -224,6 +245,8 @@ func (s *Server) StartBackgroundJobs() {
 	// Only actually starts anything when a Discord connection is configured and on.
 	// See discord_relay.go.
 	go s.startDiscord()
+	// Saved searches are re-run a few times a day. See handlers_feeds.go.
+	go s.sweepSavedFeeds()
 	// Abandoned upload staging is the one thing here that grows without bound on the
 	// cache volume, so it is swept at startup and then periodically. See
 	// handlers_uploads.go.
@@ -323,6 +346,16 @@ func (s *Server) Handler() http.Handler {
 	// Only /save crosses over into the library.
 	mux.HandleFunc("GET /api/sources", s.requireAuth(s.handleListSources))
 	mux.HandleFunc("GET /api/sources/{id}/browse", s.requireAuth(s.handleBrowseSource))
+	// Saved searches, checked on a schedule into a "new from your feeds" shelf. See
+	// handlers_feeds.go.
+	mux.HandleFunc("GET /api/feeds", s.requireAuth(s.handleListSavedFeeds))
+	mux.HandleFunc("POST /api/feeds", s.requireAuth(s.handleSaveFeed))
+	mux.HandleFunc("GET /api/feeds/new", s.requireAuth(s.handleNewFromFeeds))
+	mux.HandleFunc("POST /api/feeds/check", s.requireAuth(s.handleCheckSavedFeeds))
+	mux.HandleFunc("POST /api/feeds/seen", s.requireAuth(s.handleMarkFeedsSeen))
+	mux.HandleFunc("DELETE /api/feeds/{id}", s.requireAuth(s.handleDeleteSavedFeed))
+	mux.HandleFunc("POST /api/feeds/{id}/check", s.requireAuth(s.handleCheckSavedFeeds))
+	mux.HandleFunc("POST /api/feeds/{id}/seen", s.requireAuth(s.handleMarkFeedsSeen))
 	mux.HandleFunc("GET /api/sources/{id}/item/{item}/pages", s.requireAuth(s.handleSourcePages))
 	// The conversation an item was posted in — a 4chan thread's comments.
 	mux.HandleFunc("GET /api/sources/{id}/item/{item}/comments", s.requireAuth(s.handleSourceComments))
@@ -378,6 +411,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/imagegen/wildcards/{id}", s.requireAuth(s.handleDeleteWildcard))
 	// How a saved image was made, for loading it back into the studio.
 	mux.HandleFunc("GET /api/media/{id}/generation", s.requireAuth(s.handleGetMediaGeneration))
+	// Prose from the vision model: what a picture shows, in a sentence or three.
+	// See vision_describe.go.
+	mux.HandleFunc("POST /api/media/{id}/describe", s.requireAuth(s.handleDescribeMedia))
+	mux.HandleFunc("GET /api/ai/describe", s.requireAuth(s.handleDescribeStatus))
+	mux.HandleFunc("POST /api/ai/describe/probe", s.requireAuth(s.handleDescribeProbe))
+	mux.HandleFunc("POST /api/ai/describe/backfill", s.requireAuth(s.handleDescribeBackfill))
+	mux.HandleFunc("DELETE /api/ai/describe/backfill", s.requireAuth(s.handleDescribeBackfillStop))
 
 	// Collections: a named, ordered list of items. The tables were in the schema from
 	// the beginning with nothing to reach them; see handlers_collections.go.
@@ -397,6 +437,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/media/{id}/progress", s.requireAuth(s.handleGetProgress))
 	mux.HandleFunc("PUT /api/media/{id}/progress", s.requireAuth(s.handleSetProgress))
 	mux.HandleFunc("DELETE /api/media/{id}/progress", s.requireAuth(s.handleClearProgress))
+	// Scene bookmarks: moments in a video worth coming back to, with a frame each.
+	// See handlers_bookmarks.go.
+	mux.HandleFunc("GET /api/bookmarks", s.requireAuth(s.handleRecentBookmarks))
+	mux.HandleFunc("GET /api/media/{id}/bookmarks", s.requireAuth(s.handleListBookmarks))
+	mux.HandleFunc("POST /api/media/{id}/bookmarks", s.requireAuth(s.handleAddBookmark))
+	mux.HandleFunc("PATCH /api/bookmarks/{bookmark}", s.requireAuth(s.handleRelabelBookmark))
+	mux.HandleFunc("DELETE /api/bookmarks/{bookmark}", s.requireAuth(s.handleDeleteBookmark))
+	mux.HandleFunc("GET /api/bookmarks/{bookmark}/thumb", s.requireAuth(s.handleBookmarkThumb))
 	// Model metadata: reads and writes InvokeAI's own model records, so edits here
 	// are the same edits its model manager would make.
 	mux.HandleFunc("GET /api/imagegen/model", s.requireAuth(s.handleGetModelMeta))
@@ -417,10 +465,17 @@ func (s *Server) Handler() http.Handler {
 	// Civitai catalogue (via the civitai.red mirror), proxied like every other
 	// remote source; install hands a download URL to InvokeAI.
 	mux.HandleFunc("GET /api/imagegen/civitai/search", s.requireAuth(s.handleCivitaiSearch))
+	mux.HandleFunc("GET /api/imagegen/civitai/models/{id}", s.requireAuth(s.handleCivitaiModel))
+	mux.HandleFunc("GET /api/imagegen/civitai/images", s.requireAuth(s.handleCivitaiImages))
 	mux.HandleFunc("GET /api/imagegen/civitai/categories", s.requireAuth(s.handleCivitaiCategories))
 	mux.HandleFunc("GET /api/imagegen/civitai/image", s.requireAuth(s.handleCivitaiImage))
+	mux.HandleFunc("GET /api/imagegen/civitai/me", s.requireAuth(s.handleCivitaiMe))
 	mux.HandleFunc("POST /api/imagegen/civitai/install", s.requireAuth(s.handleCivitaiInstall))
 	mux.HandleFunc("GET /api/imagegen/civitai/installs", s.requireAuth(s.handleCivitaiInstalls))
+	// The studio's models on Civitai: matched by file hash, dressed with the
+	// catalogue's cover, description and trigger words. See civitai_installs.go.
+	mux.HandleFunc("GET /api/imagegen/civitai/installed", s.requireAuth(s.handleCivitaiInstalled))
+	mux.HandleFunc("POST /api/imagegen/civitai/sync", s.requireAuth(s.handleCivitaiSync))
 
 	// Libby outfits: user-made wardrobes for the mascot, one image per emotion.
 	// Which outfit is worn is a per-device choice; the server only stores the art.
@@ -458,6 +513,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/libby/auto/check", s.requireAuth(s.handleCheckLibbyAuto))
 	mux.HandleFunc("POST /api/libby/auto/sent", s.requireAuth(s.handleRecordLibbyAuto))
 	mux.HandleFunc("POST /api/libby/auto/answered", s.requireAuth(s.handleAnswerLibbyAuto))
+	mux.HandleFunc("GET /api/libby/auto/pending", s.requireAuth(s.handlePendingLibbyAuto))
 
 	// Libby on Discord. The token is write-only from a client's point of view: it goes
 	// in through connect and is never returned by anything. See handlers_discord.go.

@@ -29,6 +29,9 @@ type speakRequest struct {
 	// Voice and Speed override the settings for this line; blank/zero use them.
 	Voice string  `json:"voice,omitempty"`
 	Speed float64 `json:"speed,omitempty"`
+	// Heat is how keyed up she is on this line, 1–5, so the voice can follow the
+	// conversation the way her face does. Zero reads plainly. See tts.HeatDelivery.
+	Heat int `json:"heat,omitempty"`
 }
 
 // ttsStatus is what the clients read to decide whether to ask the server or the
@@ -115,7 +118,7 @@ func (s *Server) handleTTSSpeak(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cur := s.settings.Get()
-	req := tts.Request{Text: in.Text, Voice: cur.TTSVoice, Speed: cur.TTSSpeed}
+	req := tts.Request{Text: in.Text, Voice: cur.TTSVoice, Speed: cur.TTSSpeed, Heat: in.Heat}
 	if in.Voice != "" {
 		req.Voice = in.Voice
 	}

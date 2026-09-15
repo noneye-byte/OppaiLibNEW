@@ -34,6 +34,7 @@ type librarySearch struct {
 	kind         string
 	favoriteOnly bool
 	tag          string
+	minRating    int
 	sort         db.MediaSort
 }
 
@@ -106,6 +107,8 @@ func (s *Server) searchLibraryPage(ctx context.Context, q librarySearch, limit, 
 		case q.favoriteOnly && !entry.favorite:
 			continue
 		case q.tag != "" && !hasTag(entry, q.tag):
+			continue
+		case q.minRating > 0 && entry.rating < q.minRating:
 			continue
 		}
 		entries = append(entries, entry)

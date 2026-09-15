@@ -117,12 +117,12 @@ func TestSheKnowsHerOwnPictureOnTheSharedScreen(t *testing.T) {
 		`{"mediaId":`+strconv.FormatInt(her, 10)+`,"isLibby":true}`); rec.Code != http.StatusOK {
 		t.Fatalf("mark: %d %s", rec.Code, rec.Body)
 	}
-	block := s.viewingDirective(context.Background(), &chatViewing{FocusID: her}, "sweet", 1, true)
+	block := s.viewingDirective(context.Background(), &chatViewing{FocusID: her}, "sweet", 1, true, 0)
 	if !strings.Contains(block, "picture of you") {
 		t.Errorf("she was not told the open item is her: %s", block)
 	}
 	// Somebody else's character does not get told they are looking at themselves.
-	if other := s.viewingDirective(context.Background(), &chatViewing{FocusID: her}, "sweet", 1, false); strings.Contains(other, "picture of you") {
+	if other := s.viewingDirective(context.Background(), &chatViewing{FocusID: her}, "sweet", 1, false, 0); strings.Contains(other, "picture of you") {
 		t.Errorf("an imported character was told a picture of Libby was them: %s", other)
 	}
 }

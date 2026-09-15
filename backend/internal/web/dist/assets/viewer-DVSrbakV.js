@@ -1,53 +1,92 @@
-import{a as x,w,e as n,m as u,ar as $,B as k,as as T,at as E,G as P,A as d,au as g,b as s,l as y,av as z,K as f,aw as m,ag as S,ax as R,ay as G,M as C,q as U,i as _,N as b,u as p,t as L}from"./index-CsG9DGtL.js";var N=Object.defineProperty,F=Object.getOwnPropertyDescriptor,l=(e,t,i,a)=>{for(var r=a>1?void 0:a?F(t,i):t,c=e.length-1,h;c>=0;c--)(h=e[c])&&(r=(a?h(t,i,r):h(r))||r);return a&&r&&N(t,i,r),r};let o=class extends x{constructor(){super(...arguments),this.favorite=!1,this.queue=[],this.full=null,this.activeTag=null,this.tagging=!1,this.editing=!1,this.saving=!1,this.editTitle="",this.editNotes="",this.editKind="image",this.editTags=[],this.newTag="",this.screenshot="",this.userGallery=[],this.galleryUploading=!1,this.saves=[],this.saveUploading=!1,this.saveError="",this.play=null,this.playing=!1,this.posterFrames=[],this.posterLoading=!1,this.posterSaving=-1,this.posterChosen=-1,this.posterError="",this.posterVersion=0,this.comic=null,this.page=1,this.fit=w(),this.lastReported=0,this.onVideoReady=async e=>{const t=e.target,i=this.media.id;this.lastReported=0;try{const a=await n.getProgress(i);if(this.media.id!==i||a.position<o.PROGRESS_FLOOR)return;const r=t.duration||a.duration;if(r>0&&a.position>r*o.PROGRESS_DONE)return;t.currentTime=a.position,u("Picking up where you left off.")}catch{}},this.onVideoTime=e=>{const t=e.target,i=t.currentTime;Math.abs(i-this.lastReported)<o.PROGRESS_INTERVAL||(this.lastReported=i,this.saveProgress(i,t.duration))},this.flushProgress=e=>{const t=e.target;this.lastReported=t.currentTime,this.saveProgress(t.currentTime,t.duration)},this.onVideoEnded=()=>{this.lastReported=0,n.clearProgress(this.media.id).catch(()=>{})},this.onKey=e=>{var a;if($(e))return;const t=this.full??this.media;if(t.kind==="comic"){this.onComicKey(e);return}if(t.kind!=="video")return;const i=this.videoEl();if(i)switch(e.key){case" ":case"k":e.preventDefault(),i.paused?i.play():i.pause();break;case"j":i.currentTime=Math.max(0,i.currentTime-10);break;case"l":i.currentTime=Math.min(i.duration||1/0,i.currentTime+10);break;case"m":i.muted=!i.muted;break;case"f":e.preventDefault(),document.fullscreenElement?document.exitFullscreen():(a=i.requestFullscreen)==null||a.call(i);break}},this.cancelEdit=()=>{this.editing=!1}}connectedCallback(){super.connectedCallback(),k(this,"viewer"),this.loadItem(),window.addEventListener("keydown",this.onKey)}disconnectedCallback(){super.disconnectedCallback(),window.removeEventListener("keydown",this.onKey),this.clearMediaSession()}updated(e){if(e.has("media")){const t=e.get("media");t&&t.id!==this.media.id&&(this.editing=!1,this.activeTag=null,this.loadItem())}(e.has("media")||e.has("queue"))&&this.centerCurrentInQueue(),this.setupMediaSession()}centerCurrentInQueue(){const e=this.renderRoot.querySelector(".upnext .strip"),t=e==null?void 0:e.querySelector(".strip-item.on");!e||!t||(e.scrollLeft=Math.max(0,t.offsetLeft-(e.clientWidth-t.offsetWidth)/2))}loadItem(){const e=this.media;this.full=e,n.getMedia(e.id).then(t=>this.full=t).catch(()=>this.full=e),this.comic=null,e.kind==="comic"&&this.loadComic(e.id),this.userGallery=[],this.saves=[],this.saveError="",this.play=null,this.playing=!1,e.kind==="game"&&(this.loadGameGallery(e.id),this.loadSaves(e.id),this.probePlayable(e.id))}async loadSaves(e){try{const t=await n.gameSaves(e);this.media.id===e&&(this.saves=t.items)}catch{this.media.id===e&&(this.saves=[])}}async probePlayable(e){try{const t=await n.gamePlayInfo(e);this.media.id===e&&(this.play=t.playable?t:null)}catch{this.media.id===e&&(this.play=null)}}async uploadSave(e,t){const i=e.target,a=[...i.files??[]];if(i.value="",!(!a.length||this.saveUploading)){this.saveUploading=!0,this.saveError="";try{for(const r of a){const c=await n.uploadGameSave(t,r);this.saves=[c,...this.saves]}}catch(r){this.saveError=r instanceof Error?r.message:"Couldn't upload that save."}finally{this.saveUploading=!1}}}async deleteSave(e,t){try{await n.deleteGameSave(e,t),this.saves=this.saves.filter(i=>i.id!==t)}catch(i){this.saveError=i instanceof Error?i.message:"Couldn't delete that save."}}async loadGameGallery(e){try{const t=await n.gameGallery(e);this.media.id===e&&(this.userGallery=t.items)}catch{this.userGallery=[]}}async uploadGameGallery(e,t){const i=e.target,a=[...i.files??[]];if(i.value="",!(!a.length||this.galleryUploading)){this.galleryUploading=!0;try{for(const r of a)this.userGallery=[...this.userGallery,await n.uploadGameGallery(t,r)]}finally{this.galleryUploading=!1}}}async removeGameGallery(e,t){await n.removeGameGallery(e,t),this.userGallery=this.userGallery.filter(i=>i.id!==t)}async loadComic(e){try{const t=await n.comicInfo(e);if(this.media.id!==e)return;if(this.comic=t,t.readable&&t.pages>0){this.page=Math.min(Math.max(T(e),1),t.pages),this.preloadPage(e,this.page+1);try{const i=await n.getProgress(e),a=Math.round(i.position);this.media.id===e&&a>=1&&a<=t.pages&&a!==this.page&&(this.page=a,this.preloadPage(e,a+1))}catch{}}}catch(t){if(this.media.id!==e)return;this.comic={readable:!1,pages:0,reason:t.message}}}preloadPage(e,t){var i;!((i=this.comic)!=null&&i.readable)||t<1||t>this.comic.pages||(new Image().src=n.pageURL(e,t))}goPage(e){var a,r;if(!((a=this.comic)!=null&&a.readable))return;const t=this.full??this.media,i=Math.min(Math.max(e,1),this.comic.pages);i!==this.page&&(this.page=i,E(t.id,i),n.setProgress(t.id,i).catch(()=>{}),this.preloadPage(t.id,i+1),this.fit==="width"&&((r=this.renderRoot.querySelector(".reader-stage"))==null||r.scrollIntoView({block:"start"})))}setFit(e){this.fit=e,P(e)}saveProgress(e,t){const i=this.media.id;if(e<o.PROGRESS_FLOOR||t>0&&e>t*o.PROGRESS_DONE){n.clearProgress(i).catch(()=>{});return}n.setProgress(i,e).catch(()=>{})}videoEl(){var e;return((e=this.renderRoot)==null?void 0:e.querySelector("video"))??null}onComicKey(e){var t;if((t=this.comic)!=null&&t.readable)switch(e.key){case"ArrowRight":case"PageDown":case" ":e.preventDefault(),this.goPage(this.page+1);break;case"ArrowLeft":case"PageUp":e.preventDefault(),this.goPage(this.page-1);break;case"Home":e.preventDefault(),this.goPage(1);break;case"End":e.preventDefault(),this.goPage(this.comic.pages);break}}emitNavigate(e){this.dispatchEvent(new CustomEvent("navigate",{detail:{dir:e},bubbles:!0,composed:!0}))}setupMediaSession(){const e=this.full??this.media;if(e.kind!=="video"||!("mediaSession"in navigator))return;const t=this.videoEl();if(!t)return;const i=navigator.mediaSession;try{i.metadata=new MediaMetadata({title:e.title,artist:"OppaiLib"})}catch{}const a=(r,c)=>{try{i.setActionHandler(r,c)}catch{}};a("play",()=>void t.play()),a("pause",()=>t.pause()),a("seekbackward",r=>{t.currentTime=Math.max(0,t.currentTime-(r.seekOffset??10))}),a("seekforward",r=>{t.currentTime=Math.min(t.duration||1/0,t.currentTime+(r.seekOffset??10))}),a("seekto",r=>{r.seekTime!=null&&(t.currentTime=r.seekTime)}),a("previoustrack",()=>this.emitNavigate(-1)),a("nexttrack",()=>this.emitNavigate(1))}clearMediaSession(){if(!("mediaSession"in navigator))return;const e=navigator.mediaSession,t=["play","pause","seekbackward","seekforward","seekto","previoustrack","nexttrack"];for(const i of t)try{e.setActionHandler(i,null)}catch{}e.metadata=null}toggleFav(){this.dispatchEvent(new CustomEvent("toggle-favorite",{bubbles:!0,composed:!0}))}async retag(){this.tagging=!0;try{const e=await n.autotag(this.media.id);this.full&&(this.full={...this.full,tags:e.tags}),this.activeTag=null,this.dispatchEvent(new CustomEvent("changed",{bubbles:!0,composed:!0})),u(e.tags.length?`Tags refreshed — ${e.tags.length} found.`:"Tagging finished, but nothing cleared your confidence threshold.","success")}catch(e){console.error("autotag",e),u(`Auto-tagging failed: ${e.message}`,"error")}finally{this.tagging=!1}}hasTimeline(e){var i;const t=this.full??this.media;return t.kind==="video"&&!!t.duration&&!!((i=e.moments)!=null&&i.length)}toggleTagTimeline(e){this.hasTimeline(e)&&(this.activeTag=this.activeTag===e.id?null:e.id)}seekTo(e){const t=this.videoEl();t&&(t.currentTime=e,t.play())}renderTimeline(e){var a;if(e.kind!=="video"||!e.duration)return d;const t=(e.tags??[]).find(r=>r.id===this.activeTag);if(!((a=t==null?void 0:t.moments)!=null&&a.length))return d;const i=e.duration;return s`
+import{a as S,w as E,e as n,m as h,av as z,B as P,aw as R,ax as O,G as C,A as l,b as a,ay as f,az as m,l as w,aA as G,K as v,aB as g,ak as U,aC as _,aD as D,M as L,q as N,i as M,N as b,u as p,t as F}from"./index-D3VFtMgd.js";const $="oppai.slideshow",x={dwellSec:8,shuffle:!1},A=2,j=120;function I(){try{const e=localStorage.getItem($);if(!e)return{...x};const t=JSON.parse(e);return k(t)}catch{return{...x}}}function K(e){const t=k(e);try{localStorage.setItem($,JSON.stringify(t))}catch{}return t}function k(e){const t=Number(e.dwellSec);return{dwellSec:Number.isFinite(t)?Math.min(j,Math.max(A,Math.round(t))):x.dwellSec,shuffle:!!e.shuffle}}function B(e,t,i,s=Math.random){const o=e.filter(u=>u!==t);if(o.length===0)return null;if(i)return o[Math.floor(s()*o.length)]??null;const c=e.indexOf(t);return c<0?e[0]??null:e[c+1]??null}var V=Object.defineProperty,q=Object.getOwnPropertyDescriptor,d=(e,t,i,s)=>{for(var o=s>1?void 0:s?q(t,i):t,c=e.length-1,u;c>=0;c--)(u=e[c])&&(o=(s?u(t,i,o):u(o))||o);return s&&o&&V(t,i,o),o};let r=class extends S{constructor(){super(...arguments),this.favorite=!1,this.queue=[],this.startAt=0,this.full=null,this.bookmarks=[],this.marking=!1,this.slideshow=I(),this.slideshowOn=!1,this.slideTimer=0,this.activeTag=null,this.tagging=!1,this.editing=!1,this.saving=!1,this.editTitle="",this.editNotes="",this.editDescription="",this.describing=!1,this.editKind="image",this.editTags=[],this.newTag="",this.screenshot="",this.userGallery=[],this.galleryUploading=!1,this.saves=[],this.saveUploading=!1,this.saveError="",this.play=null,this.playing=!1,this.posterFrames=[],this.posterLoading=!1,this.posterSaving=-1,this.posterChosen=-1,this.posterError="",this.posterVersion=0,this.comic=null,this.page=1,this.fit=E(),this.lastReported=0,this.onVideoReady=async e=>{const t=e.target,i=this.media.id;if(this.lastReported=0,this.startAt>0){t.currentTime=this.startAt,this.startAt=0;return}try{const s=await n.getProgress(i);if(this.media.id!==i||s.position<r.PROGRESS_FLOOR)return;const o=t.duration||s.duration;if(o>0&&s.position>o*r.PROGRESS_DONE)return;t.currentTime=s.position,h("Picking up where you left off.")}catch{}},this.onVideoTime=e=>{const t=e.target,i=t.currentTime;Math.abs(i-this.lastReported)<r.PROGRESS_INTERVAL||(this.lastReported=i,this.saveProgress(i,t.duration))},this.flushProgress=e=>{const t=e.target;this.lastReported=t.currentTime,this.saveProgress(t.currentTime,t.duration)},this.onVideoEnded=()=>{this.lastReported=0,n.clearProgress(this.media.id).catch(()=>{}),this.slideshowOn&&this.advanceSlide()},this.onKey=e=>{var s;if(z(e))return;const t=this.full??this.media;if(t.kind==="comic"){this.onComicKey(e);return}if(t.kind!=="video")return;const i=this.videoEl();if(i)switch(e.key){case" ":case"k":e.preventDefault(),i.paused?i.play():i.pause();break;case"j":i.currentTime=Math.max(0,i.currentTime-10);break;case"l":i.currentTime=Math.min(i.duration||1/0,i.currentTime+10);break;case"m":i.muted=!i.muted;break;case"b":this.markMoment();break;case"f":e.preventDefault(),document.fullscreenElement?document.exitFullscreen():(s=i.requestFullscreen)==null||s.call(i);break}},this.cancelEdit=()=>{this.editing=!1}}connectedCallback(){super.connectedCallback(),P(this,"viewer"),this.loadItem(),window.addEventListener("keydown",this.onKey)}disconnectedCallback(){super.disconnectedCallback(),window.removeEventListener("keydown",this.onKey),this.clearMediaSession(),this.stopSlideshow()}playback(){const e=this.videoEl();return e?{position:e.currentTime,duration:Number.isFinite(e.duration)?e.duration:0,paused:e.paused}:null}updated(e){if(e.has("media")){const t=e.get("media");t&&t.id!==this.media.id&&(this.editing=!1,this.activeTag=null,this.loadItem())}(e.has("media")||e.has("queue"))&&this.centerCurrentInQueue(),this.setupMediaSession(),e.has("media")&&this.slideshowOn&&this.armSlide()}centerCurrentInQueue(){const e=this.renderRoot.querySelector(".upnext .strip"),t=e==null?void 0:e.querySelector(".strip-item.on");!e||!t||(e.scrollLeft=Math.max(0,t.offsetLeft-(e.clientWidth-t.offsetWidth)/2))}loadItem(){const e=this.media;this.full=e,n.getMedia(e.id).then(t=>this.full=t).catch(()=>this.full=e),this.comic=null,e.kind==="comic"&&this.loadComic(e.id),this.bookmarks=[],(e.kind==="video"||e.kind==="gif")&&n.bookmarks(e.id).then(t=>{this.media.id===e.id&&(this.bookmarks=t.bookmarks)}).catch(()=>{}),this.userGallery=[],this.saves=[],this.saveError="",this.play=null,this.playing=!1,e.kind==="game"&&(this.loadGameGallery(e.id),this.loadSaves(e.id),this.probePlayable(e.id))}async loadSaves(e){try{const t=await n.gameSaves(e);this.media.id===e&&(this.saves=t.items)}catch{this.media.id===e&&(this.saves=[])}}async probePlayable(e){try{const t=await n.gamePlayInfo(e);this.media.id===e&&(this.play=t.playable?t:null)}catch{this.media.id===e&&(this.play=null)}}async uploadSave(e,t){const i=e.target,s=[...i.files??[]];if(i.value="",!(!s.length||this.saveUploading)){this.saveUploading=!0,this.saveError="";try{for(const o of s){const c=await n.uploadGameSave(t,o);this.saves=[c,...this.saves]}}catch(o){this.saveError=o instanceof Error?o.message:"Couldn't upload that save."}finally{this.saveUploading=!1}}}async deleteSave(e,t){try{await n.deleteGameSave(e,t),this.saves=this.saves.filter(i=>i.id!==t)}catch(i){this.saveError=i instanceof Error?i.message:"Couldn't delete that save."}}async loadGameGallery(e){try{const t=await n.gameGallery(e);this.media.id===e&&(this.userGallery=t.items)}catch{this.userGallery=[]}}async uploadGameGallery(e,t){const i=e.target,s=[...i.files??[]];if(i.value="",!(!s.length||this.galleryUploading)){this.galleryUploading=!0;try{for(const o of s)this.userGallery=[...this.userGallery,await n.uploadGameGallery(t,o)]}finally{this.galleryUploading=!1}}}async removeGameGallery(e,t){await n.removeGameGallery(e,t),this.userGallery=this.userGallery.filter(i=>i.id!==t)}async loadComic(e){try{const t=await n.comicInfo(e);if(this.media.id!==e)return;if(this.comic=t,t.readable&&t.pages>0){this.page=Math.min(Math.max(R(e),1),t.pages),this.preloadPage(e,this.page+1);try{const i=await n.getProgress(e),s=Math.round(i.position);this.media.id===e&&s>=1&&s<=t.pages&&s!==this.page&&(this.page=s,this.preloadPage(e,s+1))}catch{}}}catch(t){if(this.media.id!==e)return;this.comic={readable:!1,pages:0,reason:t.message}}}preloadPage(e,t){var i;!((i=this.comic)!=null&&i.readable)||t<1||t>this.comic.pages||(new Image().src=n.pageURL(e,t))}goPage(e){var s,o;if(!((s=this.comic)!=null&&s.readable))return;const t=this.full??this.media,i=Math.min(Math.max(e,1),this.comic.pages);i!==this.page&&(this.page=i,O(t.id,i),n.setProgress(t.id,i).catch(()=>{}),this.preloadPage(t.id,i+1),this.fit==="width"&&((o=this.renderRoot.querySelector(".reader-stage"))==null||o.scrollIntoView({block:"start"})))}setFit(e){this.fit=e,C(e)}toggleSlideshow(){this.slideshowOn?this.stopSlideshow():(this.slideshowOn=!0,this.armSlide(),h(this.slideshow.shuffle?"Shuffling through.":"Playing through, in order."))}stopSlideshow(){window.clearTimeout(this.slideTimer),this.slideTimer=0,this.slideshowOn=!1}setSlideshow(e){this.slideshow=K({...this.slideshow,...e}),this.slideshowOn&&this.armSlide()}armSlide(){window.clearTimeout(this.slideTimer),this.slideTimer=0,(this.full??this.media).kind!=="video"&&(this.slideTimer=window.setTimeout(()=>this.advanceSlide(),this.slideshow.dwellSec*1e3))}advanceSlide(){if(!this.slideshowOn)return;const e=B(this.queue.map(t=>t.id),this.media.id,this.slideshow.shuffle);if(e==null){this.stopSlideshow(),h("That's the end of the run.");return}this.jumpTo(e)}renderSlideshowBar(){const e=this.full??this.media;return e.kind==="comic"||e.kind==="game"||this.queue.length<2?l:a`
+      <div class="slidebar ${this.slideshowOn?"on":""}">
+        <button class="icon-round" title=${this.slideshowOn?"Stop the slideshow":"Play through from here"} @click=${()=>this.toggleSlideshow()}>
+          <span class="material-symbols-rounded" style="font-size:22px;">${this.slideshowOn?"pause":"play_arrow"}</span>
+        </button>
+        <button class="icon-round ${this.slideshow.shuffle?"lit":""}" title=${this.slideshow.shuffle?"Shuffling — click for in order":"In order — click to shuffle"}
+          @click=${()=>this.setSlideshow({shuffle:!this.slideshow.shuffle})}>
+          <span class="material-symbols-rounded" style="font-size:22px;">casino</span>
+        </button>
+        <label class="dwell">Stills for
+          <select .value=${String(this.slideshow.dwellSec)} @change=${t=>this.setSlideshow({dwellSec:Number(t.target.value)})}>
+            ${[3,5,8,12,20,30].map(t=>a`<option value=${t} ?selected=${t===this.slideshow.dwellSec}>${t}s</option>`)}
+          </select>
+        </label>
+        ${this.slideshowOn?a`<span class="slide-note">videos play through, then the next one comes on</span>`:l}
+      </div>
+    `}async markMoment(){var o;const e=this.videoEl(),t=this.full??this.media,i=e?e.currentTime:0,s=(o=window.prompt(`Bookmark ${f(i)} of “${t.title}” as…`,""))==null?void 0:o.trim();if(s!==void 0){this.marking=!0;try{const c=await n.addBookmark(t.id,i,s);this.media.id===t.id&&(this.bookmarks=[...this.bookmarks,c].sort((u,T)=>u.position-T.position)),h(`Marked ${f(i)}.`)}catch(c){h(c.message,"error")}finally{this.marking=!1}}}async dropBookmark(e){try{await n.deleteBookmark(e.id),this.bookmarks=this.bookmarks.filter(t=>t.id!==e.id)}catch(t){h(t.message,"error")}}renderBookmarks(e){return e.kind!=="video"||this.bookmarks.length===0?l:a`
+      <div class="section-label">Moments</div>
+      <div class="moments">
+        ${this.bookmarks.map(t=>a`
+          <div class="moment">
+            <button class="moment-open" title="Jump to ${f(t.position)}" @click=${()=>this.seekTo(t.position)}>
+              <img src=${n.bookmarkThumbURL(t.id)} alt="" loading="lazy" @error=${i=>i.target.style.visibility="hidden"} />
+              <span class="moment-time">${f(t.position)}</span>
+              ${t.label?a`<span class="moment-label">${t.label}</span>`:l}
+            </button>
+            <button class="moment-drop" title="Remove this bookmark" @click=${()=>void this.dropBookmark(t)}>
+              <span class="material-symbols-rounded" style="font-size:16px;">close</span>
+            </button>
+          </div>`)}
+      </div>
+    `}saveProgress(e,t){const i=this.media.id;if(e<r.PROGRESS_FLOOR||t>0&&e>t*r.PROGRESS_DONE){n.clearProgress(i).catch(()=>{});return}n.setProgress(i,e).catch(()=>{})}videoEl(){var e;return((e=this.renderRoot)==null?void 0:e.querySelector("video"))??null}onComicKey(e){var t;if((t=this.comic)!=null&&t.readable)switch(e.key){case"ArrowRight":case"PageDown":case" ":e.preventDefault(),this.goPage(this.page+1);break;case"ArrowLeft":case"PageUp":e.preventDefault(),this.goPage(this.page-1);break;case"Home":e.preventDefault(),this.goPage(1);break;case"End":e.preventDefault(),this.goPage(this.comic.pages);break}}emitNavigate(e){this.dispatchEvent(new CustomEvent("navigate",{detail:{dir:e},bubbles:!0,composed:!0}))}setupMediaSession(){const e=this.full??this.media;if(e.kind!=="video"||!("mediaSession"in navigator))return;const t=this.videoEl();if(!t)return;const i=navigator.mediaSession;try{i.metadata=new MediaMetadata({title:e.title,artist:"OppaiLib"})}catch{}const s=(o,c)=>{try{i.setActionHandler(o,c)}catch{}};s("play",()=>void t.play()),s("pause",()=>t.pause()),s("seekbackward",o=>{t.currentTime=Math.max(0,t.currentTime-(o.seekOffset??10))}),s("seekforward",o=>{t.currentTime=Math.min(t.duration||1/0,t.currentTime+(o.seekOffset??10))}),s("seekto",o=>{o.seekTime!=null&&(t.currentTime=o.seekTime)}),s("previoustrack",()=>this.emitNavigate(-1)),s("nexttrack",()=>this.emitNavigate(1))}clearMediaSession(){if(!("mediaSession"in navigator))return;const e=navigator.mediaSession,t=["play","pause","seekbackward","seekforward","seekto","previoustrack","nexttrack"];for(const i of t)try{e.setActionHandler(i,null)}catch{}e.metadata=null}toggleFav(){this.dispatchEvent(new CustomEvent("toggle-favorite",{bubbles:!0,composed:!0}))}async describe(){this.describing=!0;try{const e=await n.describe(this.media.id);this.full&&(this.full={...this.full,description:e.description}),this.dispatchEvent(new CustomEvent("changed",{bubbles:!0,composed:!0})),h("Described.","success")}catch(e){console.error("describe",e),h(`Describing failed: ${e.message}`,"error")}finally{this.describing=!1}}async retag(){this.tagging=!0;try{const e=await n.autotag(this.media.id);this.full&&(this.full={...this.full,tags:e.tags}),this.activeTag=null,this.dispatchEvent(new CustomEvent("changed",{bubbles:!0,composed:!0})),h(e.tags.length?`Tags refreshed — ${e.tags.length} found.`:"Tagging finished, but nothing cleared your confidence threshold.","success")}catch(e){console.error("autotag",e),h(`Auto-tagging failed: ${e.message}`,"error")}finally{this.tagging=!1}}hasTimeline(e){var i;const t=this.full??this.media;return t.kind==="video"&&!!t.duration&&!!((i=e.moments)!=null&&i.length)}toggleTagTimeline(e){this.hasTimeline(e)&&(this.activeTag=this.activeTag===e.id?null:e.id)}seekTo(e){const t=this.videoEl();t&&(t.currentTime=e,t.play())}renderTimeline(e){var s;if(e.kind!=="video"||!e.duration)return l;const t=(e.tags??[]).find(o=>o.id===this.activeTag);if(!((s=t==null?void 0:t.moments)!=null&&s.length))return l;const i=e.duration;return a`
       <div class="timeline">
         <div class="rail">
-          ${t.moments.map(r=>s`<button
+          ${t.moments.map(o=>a`<button
               class="marker"
-              style="left:${Math.min(100,r/i*100)}%"
-              title="Jump to ${g(r)}"
-              aria-label="Jump to ${g(r)}"
-              @click=${()=>this.seekTo(r)}
+              style="left:${Math.min(100,o/i*100)}%"
+              title="Jump to ${m(o)}"
+              aria-label="Jump to ${m(o)}"
+              @click=${()=>this.seekTo(o)}
             ></button>`)}
         </div>
         <div class="rail-legend">
           <span class="material-symbols-rounded" style="font-size:16px;">auto_awesome</span>
           <span
-            >“${t.name}” detected at ${t.moments.map(r=>g(r)).join(", ")} — click a
+            >“${t.name}” detected at ${t.moments.map(o=>m(o)).join(", ")} — click a
             marker to jump.</span
           >
         </div>
       </div>
-    `}startEdit(){const e=this.full??this.media;this.editTitle=e.title,this.editNotes=e.notes??"",this.editKind=e.kind,this.editTags=(e.tags??[]).map(t=>t.name),this.newTag="",this.editing=!0}removeEditTag(e){this.editTags=this.editTags.filter(t=>t!==e)}commitNewTag(){const e=this.newTag.trim();e&&!this.editTags.includes(e)&&(this.editTags=[...this.editTags,e]),this.newTag=""}onTagKeydown(e){(e.key==="Enter"||e.key===",")&&(e.preventDefault(),this.commitNewTag())}async saveEdit(){const e=this.full??this.media;this.commitNewTag();const t=(e.tags??[]).map(r=>r.name),i=this.editTags.filter(r=>!t.includes(r)),a=t.filter(r=>!this.editTags.includes(r));this.saving=!0;try{const r=await n.updateMedia(e.id,{title:this.editTitle,notes:this.editNotes,kind:this.editKind,addTags:i,removeTags:a});this.full=r,this.editing=!1,this.dispatchEvent(new CustomEvent("changed",{bubbles:!0,composed:!0}))}catch(r){console.error("save edit",r)}finally{this.saving=!1}}async doDelete(){const e=this.full??this.media;if(confirm(`Delete "${e.title}"? This cannot be undone.`))try{await n.deleteMedia(e.id);const t=y("libraryDelete");u(t.message,"success",{emotion:t.emotion,intensity:t.intensity}),this.dispatchEvent(new CustomEvent("deleted",{detail:{id:e.id},bubbles:!0,composed:!0}))}catch(t){console.error("delete",t)}}renderEdit(){return s`
+    `}startEdit(){const e=this.full??this.media;this.editTitle=e.title,this.editNotes=e.notes??"",this.editDescription=e.description??"",this.editKind=e.kind,this.editTags=(e.tags??[]).map(t=>t.name),this.newTag="",this.editing=!0}removeEditTag(e){this.editTags=this.editTags.filter(t=>t!==e)}commitNewTag(){const e=this.newTag.trim();e&&!this.editTags.includes(e)&&(this.editTags=[...this.editTags,e]),this.newTag=""}onTagKeydown(e){(e.key==="Enter"||e.key===",")&&(e.preventDefault(),this.commitNewTag())}async saveEdit(){const e=this.full??this.media;this.commitNewTag();const t=(e.tags??[]).map(o=>o.name),i=this.editTags.filter(o=>!t.includes(o)),s=t.filter(o=>!this.editTags.includes(o));this.saving=!0;try{const o=await n.updateMedia(e.id,{title:this.editTitle,notes:this.editNotes,...this.editDescription!==(e.description??"")?{description:this.editDescription}:{},kind:this.editKind,addTags:i,removeTags:s});this.full=o,this.editing=!1,this.dispatchEvent(new CustomEvent("changed",{bubbles:!0,composed:!0}))}catch(o){console.error("save edit",o)}finally{this.saving=!1}}async doDelete(){const e=this.full??this.media;if(confirm(`Delete "${e.title}"? This cannot be undone.`))try{await n.deleteMedia(e.id);const t=w("libraryDelete");h(t.message,"success",{emotion:t.emotion,intensity:t.intensity}),this.dispatchEvent(new CustomEvent("deleted",{detail:{id:e.id},bubbles:!0,composed:!0}))}catch(t){console.error("delete",t)}}renderEdit(){const e=this.full??this.media;return a`
       <div class="edit">
         <div>
           <label>Title</label>
           <input
             .value=${this.editTitle}
-            @input=${e=>this.editTitle=e.target.value}
+            @input=${t=>this.editTitle=t.target.value}
           />
         </div>
         <div>
           <label>Type</label>
           <select
             .value=${this.editKind}
-            @change=${e=>this.editKind=e.target.value}
+            @change=${t=>this.editKind=t.target.value}
           >
-            ${z.map(e=>s`<option value=${e} ?selected=${e===this.editKind}>${f[e].label}</option>`)}
+            ${G.map(t=>a`<option value=${t} ?selected=${t===this.editKind}>${v[t].label}</option>`)}
           </select>
         </div>
         <div>
           <label>Notes</label>
           <textarea
             .value=${this.editNotes}
-            @input=${e=>this.editNotes=e.target.value}
+            @input=${t=>this.editNotes=t.target.value}
           ></textarea>
         </div>
+        ${e.kind!=="comic"&&e.kind!=="game"?a`<div>
+              <label>Description</label>
+              <textarea
+                placeholder="What the picture shows — written by the vision model, or by you"
+                .value=${this.editDescription}
+                @input=${t=>this.editDescription=t.target.value}
+              ></textarea>
+            </div>`:l}
         <div>
           <label>Tags</label>
           <div class="tag-edit">
-            ${this.editTags.map(e=>s`<span class="tag-pill"
-                >${e}
-                <button title="Remove" @click=${()=>this.removeEditTag(e)}>
+            ${this.editTags.map(t=>a`<span class="tag-pill"
+                >${t}
+                <button title="Remove" @click=${()=>this.removeEditTag(t)}>
                   <span class="material-symbols-rounded" style="font-size:16px;">close</span>
                 </button></span
               >`)}
@@ -55,13 +94,13 @@ import{a as x,w,e as n,m as u,ar as $,B as k,as as T,at as E,G as P,A as d,au as
               class="tag-add"
               placeholder="Add tag…"
               .value=${this.newTag}
-              @input=${e=>this.newTag=e.target.value}
+              @input=${t=>this.newTag=t.target.value}
               @keydown=${this.onTagKeydown}
               @blur=${()=>this.commitNewTag()}
             />
           </div>
         </div>
-        ${(this.full??this.media).kind==="video"?this.renderPosterPicker():d}
+        ${(this.full??this.media).kind==="video"?this.renderPosterPicker():l}
         <div class="edit-actions">
           <button class="btn-primary" @click=${this.saveEdit} ?disabled=${this.saving}>
             <span class="material-symbols-rounded" style="font-size:20px;">save</span>
@@ -70,7 +109,7 @@ import{a as x,w,e as n,m as u,ar as $,B as k,as as T,at as E,G as P,A as d,au as
           <button class="btn-outline" @click=${this.cancelEdit} ?disabled=${this.saving}>Cancel</button>
         </div>
       </div>
-    `}async loadPosterFrames(){const e=this.full??this.media;if(!this.posterLoading){this.posterLoading=!0,this.posterError="";try{const t=await n.posterFrames(e.id);if((this.full??this.media).id!==e.id)return;this.posterFrames=t.frames}catch(t){this.posterError=t.message||"Couldn't read frames from this video."}finally{this.posterLoading=!1}}}async choosePoster(e){const t=this.full??this.media,i=this.posterFrames[e];if(!(!i||this.posterSaving>=0)){this.posterSaving=e,this.posterError="";try{await n.setPoster(t.id,i.at),this.posterChosen=e,this.posterVersion=Date.now();const a=y("save");u("New thumbnail set.","success",{emotion:a.emotion,intensity:a.intensity})}catch(a){this.posterError=a.message||"Couldn't set that frame as the thumbnail."}finally{this.posterSaving=-1}}}renderPosterPicker(){const e=this.full??this.media;return s`<div class="poster-picker">
+    `}async loadPosterFrames(){const e=this.full??this.media;if(!this.posterLoading){this.posterLoading=!0,this.posterError="";try{const t=await n.posterFrames(e.id);if((this.full??this.media).id!==e.id)return;this.posterFrames=t.frames}catch(t){this.posterError=t.message||"Couldn't read frames from this video."}finally{this.posterLoading=!1}}}async choosePoster(e){const t=this.full??this.media,i=this.posterFrames[e];if(!(!i||this.posterSaving>=0)){this.posterSaving=e,this.posterError="";try{await n.setPoster(t.id,i.at),this.posterChosen=e,this.posterVersion=Date.now();const s=w("save");h("New thumbnail set.","success",{emotion:s.emotion,intensity:s.intensity})}catch(s){this.posterError=s.message||"Couldn't set that frame as the thumbnail."}finally{this.posterSaving=-1}}}renderPosterPicker(){const e=this.full??this.media;return a`<div class="poster-picker">
       <label>Thumbnail</label>
       <div class="poster-head">
         <img
@@ -81,64 +120,66 @@ import{a as x,w,e as n,m as u,ar as $,B as k,as as T,at as E,G as P,A as d,au as
         />
         <div class="poster-copy">
           <span>Pick the frame this video shows in the library.</span>
-          ${this.posterFrames.length?d:s`<button class="btn-outline" ?disabled=${this.posterLoading} @click=${()=>this.loadPosterFrames()}>
+          ${this.posterFrames.length?l:a`<button class="btn-outline" ?disabled=${this.posterLoading} @click=${()=>this.loadPosterFrames()}>
                 ${this.posterLoading?"Reading frames…":"Choose a frame"}
               </button>`}
         </div>
       </div>
-      ${this.posterError?s`<div class="poster-error" role="alert">${this.posterError}</div>`:d}
-      ${this.posterFrames.length?s`<div class="poster-strip">
-            ${this.posterFrames.map((t,i)=>s`<button
+      ${this.posterError?a`<div class="poster-error" role="alert">${this.posterError}</div>`:l}
+      ${this.posterFrames.length?a`<div class="poster-strip">
+            ${this.posterFrames.map((t,i)=>a`<button
               class="poster-frame ${this.posterChosen===i?"on":""}"
-              title=${`Use the frame at ${g(t.at)}`}
+              title=${`Use the frame at ${m(t.at)}`}
               ?disabled=${this.posterSaving>=0}
               @click=${()=>this.choosePoster(i)}
             >
               <img src=${t.image} alt="" loading="lazy" />
               <span class="poster-time">
-                ${this.posterSaving===i?"Saving…":g(t.at)}
+                ${this.posterSaving===i?"Saving…":m(t.at)}
               </span>
             </button>`)}
-          </div>`:d}
-    </div>`}favIcon(){return s`<span
+          </div>`:l}
+    </div>`}favIcon(){return a`<span
       class="material-symbols-rounded fill-icon"
       style="font-size:22px; color:${this.favorite?"var(--oppai-fav)":"var(--oppai-text)"};"
       >${this.favorite?"favorite":"favorite_border"}</span
-    >`}render(){const e=this.full??this.media,t=n.streamURL(e.id);return s`
+    >`}render(){const e=this.full??this.media,t=n.streamURL(e.id);return a`
       <div class="wrap">
         ${this.renderStage(e,t)}
-        ${e.kind==="video"||e.kind==="image"?this.renderUpNext(e):d}
+        ${this.renderSlideshowBar()}
+        ${e.kind==="video"||e.kind==="image"?this.renderUpNext(e):l}
         ${this.renderTimeline(e)}
-        ${e.kind==="game"?d:this.renderMeta(e)}
+        ${this.renderBookmarks(e)}
+        ${e.kind==="game"?l:this.renderMeta(e)}
       </div>
-      ${this.screenshot?s`<button class="shot-lightbox" aria-label="Close screenshot" @click=${()=>this.screenshot=""}>
+      ${this.screenshot?a`<button class="shot-lightbox" aria-label="Close screenshot" @click=${()=>this.screenshot=""}>
             <img src=${this.screenshot} alt="Full-size game screenshot" />
-          </button>`:d}
-    `}renderUpNext(e){const t=this.queue.filter(a=>a.kind==="video"||a.kind==="image");if(t.some(a=>a.id===e.id)||t.unshift(e),t.length<2)return d;const i=t.findIndex(a=>a.id===e.id);return s`
+          </button>`:l}
+    `}renderUpNext(e){const t=this.queue.filter(s=>s.kind==="video"||s.kind==="image");if(t.some(s=>s.id===e.id)||t.unshift(e),t.length<2)return l;const i=t.findIndex(s=>s.id===e.id);return a`
       <div class="upnext">
         <div class="upnext-label">Videos & images</div>
         <div class="strip">
-          ${t.map((a,r)=>s`
+          ${t.map((s,o)=>a`
               <button
-                class="strip-item ${a.id===e.id?"on":""}"
-                title=${a.title}
-                aria-current=${a.id===e.id}
-                @click=${()=>this.jumpTo(a.id)}
+                class="strip-item ${s.id===e.id?"on":""}"
+                title=${s.title}
+                aria-current=${s.id===e.id}
+                @click=${()=>this.jumpTo(s.id)}
               >
-                ${a.hasThumb?s`<img src=${n.thumbURL(a.id)} loading="lazy" alt=${a.title} />`:s`<span class="strip-blank" style="background:${m(a)};"></span>`}
-                ${a.kind==="video"?s`<span class="strip-play material-symbols-rounded">play_circle</span>`:d}
-                ${r===i+1?s`<span class="strip-next">Next</span>`:d}
+                ${s.hasThumb?a`<img src=${n.thumbURL(s.id)} loading="lazy" alt=${s.title} />`:a`<span class="strip-blank" style="background:${g(s)};"></span>`}
+                ${s.kind==="video"?a`<span class="strip-play material-symbols-rounded">play_circle</span>`:l}
+                ${o===i+1?a`<span class="strip-next">Next</span>`:l}
               </button>
             `)}
         </div>
       </div>
-    `}jumpTo(e){e!==this.media.id&&this.dispatchEvent(new CustomEvent("jump",{detail:{id:e},bubbles:!0,composed:!0}))}renderStage(e,t){switch(e.kind){case"video":const i=e.width&&e.height?e.width/e.height:1.7777777777777777;return s`<div
+    `}jumpTo(e){e!==this.media.id&&this.dispatchEvent(new CustomEvent("jump",{detail:{id:e},bubbles:!0,composed:!0}))}renderStage(e,t){switch(e.kind){case"video":const i=e.width&&e.height?e.width/e.height:1.7777777777777777;return a`<div
           class="stage video-stage"
-          style="aspect-ratio:${i}; width:100%; max-width:${76*i}vh; background:${m(e)};"
+          style="aspect-ratio:${i}; width:100%; max-width:${76*i}vh; background:${g(e)};"
         >
           <video
             src=${t}
-            poster=${e.hasThumb?n.thumbURL(e.id):d}
+            poster=${e.hasThumb?n.thumbURL(e.id):l}
             controls
             autoplay
             playsinline
@@ -148,15 +189,15 @@ import{a as x,w,e as n,m as u,ar as $,B as k,as as T,at as E,G as P,A as d,au as
             @pause=${this.flushProgress}
             @ended=${this.onVideoEnded}
           ></video>
-        </div>`;case"gif":case"image":return s`<div class="stage-fit">
+        </div>`;case"gif":case"image":return a`<div class="stage-fit">
           <img src=${t} alt=${e.title} />
-        </div>`;case"comic":return this.renderComic(e);case"game":return this.renderGame(e,t);default:return d}}renderComic(e){return s`
+        </div>`;case"comic":return this.renderComic(e);case"game":return this.renderGame(e,t);default:return l}}renderComic(e){return a`
       <div class="reader">
-        ${this.comic===null?s`<div class="reader-fallback" style="background:${m(e)};">
+        ${this.comic===null?a`<div class="reader-fallback" style="background:${g(e)};">
               <span class="mono" style="color:#fff;">OPENING…</span>
             </div>`:this.comic.readable?this.renderReader(e,this.comic):this.renderComicFallback(e,this.comic)}
       </div>
-    `}renderReader(e,t){const i=this.page<=1,a=this.page>=t.pages;return s`
+    `}renderReader(e,t){const i=this.page<=1,s=this.page>=t.pages;return a`
       <div class="reader-stage">
         <img
           class="page-img ${this.fit==="width"?"fit-width":"fit-page"}"
@@ -169,15 +210,15 @@ import{a as x,w,e as n,m as u,ar as $,B as k,as as T,at as E,G as P,A as d,au as
           ?disabled=${i}
           @click=${()=>this.goPage(this.page-1)}
         >
-          ${i?d:s`<span class="material-symbols-rounded" style="font-size:28px;">chevron_left</span>`}
+          ${i?l:a`<span class="material-symbols-rounded" style="font-size:28px;">chevron_left</span>`}
         </button>
         <button
           class="turn next"
           title="Next page"
-          ?disabled=${a}
+          ?disabled=${s}
           @click=${()=>this.goPage(this.page+1)}
         >
-          ${a?d:s`<span class="material-symbols-rounded" style="font-size:28px;">chevron_right</span>`}
+          ${s?l:a`<span class="material-symbols-rounded" style="font-size:28px;">chevron_right</span>`}
         </button>
       </div>
 
@@ -190,11 +231,11 @@ import{a as x,w,e as n,m as u,ar as $,B as k,as as T,at as E,G as P,A as d,au as
           min="1"
           max=${t.pages}
           .value=${String(this.page)}
-          @input=${r=>this.goPage(Number(r.target.value))}
+          @input=${o=>this.goPage(Number(o.target.value))}
           aria-label="Page"
         />
         <span class="mono">${this.page} / ${t.pages}</span>
-        <button class="round-btn" title="Next page" ?disabled=${a} @click=${()=>this.goPage(this.page+1)}>
+        <button class="round-btn" title="Next page" ?disabled=${s} @click=${()=>this.goPage(this.page+1)}>
           <span class="material-symbols-rounded" style="font-size:22px;">chevron_right</span>
         </button>
         <button
@@ -207,8 +248,8 @@ import{a as x,w,e as n,m as u,ar as $,B as k,as as T,at as E,G as P,A as d,au as
           >
         </button>
       </div>
-    `}renderComicFallback(e,t){return s`
-      <div class="reader-fallback" style="background:${m(e)};">
+    `}renderComicFallback(e,t){return a`
+      <div class="reader-fallback" style="background:${g(e)};">
         <span class="material-symbols-rounded" style="font-size:40px; color:#fff;">auto_stories</span>
         <span class="mono" style="color:#fff;">CAN'T READ IN APP</span>
         <span style="font-size:12px; color:rgba(255,255,255,0.75);">
@@ -218,31 +259,31 @@ import{a as x,w,e as n,m as u,ar as $,B as k,as as T,at as E,G as P,A as d,au as
           >Download the file</a
         >
       </div>
-    `}renderGame(e,t){const i=e.download?this.hostOf(e.download):"";return s`
+    `}renderGame(e,t){const i=e.download?this.hostOf(e.download):"";return a`
       <div class="game">
-        <div class="game-cover" style="background:${m(e)};">
-          ${e.hasThumb?s`<img
+        <div class="game-cover" style="background:${g(e)};">
+          ${e.hasThumb?a`<img
                 src=${n.thumbURL(e.id)}
                 alt=${e.title}
                 style="width:100%; height:100%; object-fit:cover;"
-              />`:s`<span class="material-symbols-rounded" style="font-size:48px; color:#fff;">sports_esports</span>`}
+              />`:a`<span class="material-symbols-rounded" style="font-size:48px; color:#fff;">sports_esports</span>`}
         </div>
         <div style="flex:1; min-width:260px; padding-top:8px;">
           <div class="meta-head">
             <h2 class="meta-title">${e.title}</h2>
             ${this.renderActions(!1)}
           </div>
-          ${this.editing?this.renderEdit():s`
-                <div class="sub">${f.game.label.replace(/s$/,"")}</div>
+          ${this.editing?this.renderEdit():a`
+                <div class="sub">${v.game.label.replace(/s$/,"")}</div>
                 <div class="actions">
-                  ${this.play?s`<button class="btn-primary" @click=${()=>this.playing=!0}>
+                  ${this.play?a`<button class="btn-primary" @click=${()=>this.playing=!0}>
                         <span class="material-symbols-rounded fill-icon" style="font-size:20px;">play_arrow</span>
                         Play in browser
-                      </button>`:d}
-                  ${e.download?s`<a class="btn-primary" href=${e.download} target="_blank" rel="noreferrer">
+                      </button>`:l}
+                  ${e.download?a`<a class="btn-primary" href=${e.download} target="_blank" rel="noreferrer">
                         <span class="material-symbols-rounded fill-icon" style="font-size:20px;">open_in_new</span>
                         ${i?`Get it on ${i}`:"Get it"}
-                      </a>`:s`<a class="btn-primary" href=${t} download>
+                      </a>`:a`<a class="btn-primary" href=${t} download>
                         <span class="material-symbols-rounded fill-icon" style="font-size:20px;">download</span>
                         Download
                       </a>`}
@@ -255,51 +296,52 @@ import{a as x,w,e as n,m as u,ar as $,B as k,as as T,at as E,G as P,A as d,au as
                     Favorite
                   </button>
                 </div>
-                ${this.playing?this.renderPlayer(e):d}
-                ${e.notes?s`<p class="desc">${e.notes}</p>`:s`<p class="desc">A title from your library.</p>`}
+                ${this.playing?this.renderPlayer(e):l}
+                ${e.description?a`<p class="desc described">${e.description}</p>`:l}
+                ${e.notes?a`<p class="desc">${e.notes}</p>`:e.description?l:a`<p class="desc">A title from your library.</p>`}
                 ${this.renderTags(e)}
                 ${this.renderSaves(e)}
-                ${e.gallery&&e.gallery.length?s`<div class="shots">
-                      ${e.gallery.map(a=>s`<button
+                ${e.gallery&&e.gallery.length?a`<div class="shots">
+                      ${e.gallery.map(s=>a`<button
                         class="shot"
                         title="Open full-size screenshot"
-                        @click=${()=>this.screenshot=n.proxyURL(a)}
-                      ><img loading="lazy" src=${n.proxyURL(a)} alt="screenshot" /></button>`)}
-                    </div>`:d}
+                        @click=${()=>this.screenshot=n.proxyURL(s)}
+                      ><img loading="lazy" src=${n.proxyURL(s)} alt="screenshot" /></button>`)}
+                    </div>`:l}
                 <div class="section-label">User gallery</div>
                 <div class="shots">
-                  ${this.userGallery.map(a=>s`<div class="shot user-shot">
-                    ${a.kind==="video"?s`<video controls preload="metadata" src=${n.streamURL(a.id)}></video>`:s`<button class="shot" title="Open full-size upload"
-                          @click=${()=>this.screenshot=n.streamURL(a.id)}>
-                          <img loading="lazy" src=${n.thumbURL(a.id)} alt=${a.title} />
+                  ${this.userGallery.map(s=>a`<div class="shot user-shot">
+                    ${s.kind==="video"?a`<video controls preload="metadata" src=${n.streamURL(s.id)}></video>`:a`<button class="shot" title="Open full-size upload"
+                          @click=${()=>this.screenshot=n.streamURL(s.id)}>
+                          <img loading="lazy" src=${n.thumbURL(s.id)} alt=${s.title} />
                         </button>`}
                     <button class="remove-shot" title="Remove from game gallery"
-                      @click=${()=>void this.removeGameGallery(e.id,a.id)}>×</button>
+                      @click=${()=>void this.removeGameGallery(e.id,s.id)}>×</button>
                   </div>`)}
                 </div>
                 <label class="btn-outline gallery-upload">
                   <span class="material-symbols-rounded">add_photo_alternate</span>
                   ${this.galleryUploading?"Uploading…":"Add photos or videos"}
                   <input type="file" accept="image/*,video/*" multiple hidden ?disabled=${this.galleryUploading}
-                    @change=${a=>void this.uploadGameGallery(a,e.id)} />
+                    @change=${s=>void this.uploadGameGallery(s,e.id)} />
                 </label>
-                ${e.source?s`<div class="meta-note">
+                ${e.source?a`<div class="meta-note">
                       Source:
                       <a href=${e.source} target="_blank" rel="noreferrer" style="color:var(--oppai-primary-bright);">link</a>
-                    </div>`:d}
+                    </div>`:l}
               `}
         </div>
       </div>
-    `}renderPlayer(e){const t=this.play;if(!t)return d;const i=t.mode==="embed"&&t.embedUrl;return s`
+    `}renderPlayer(e){const t=this.play;if(!t)return l;const i=t.mode==="embed"&&t.embedUrl;return a`
       <div class="play-stage">
         <button class="play-close" title="Stop playing" @click=${()=>this.playing=!1}>×</button>
-        ${i?s`<iframe
+        ${i?a`<iframe
               src=${t.embedUrl}
               title=${e.title}
               allow="fullscreen; gamepad; autoplay; cross-origin-isolated"
               sandbox="allow-scripts allow-same-origin allow-pointer-lock allow-popups"
               referrerpolicy="no-referrer"
-            ></iframe>`:s`<iframe
+            ></iframe>`:a`<iframe
               src=${n.gamePlayURL(e.id)}
               title=${e.title}
               allow="fullscreen; gamepad; autoplay"
@@ -307,16 +349,16 @@ import{a as x,w,e as n,m as u,ar as $,B as k,as as T,at as E,G as P,A as d,au as
             ></iframe>`}
       </div>
       <p class="play-note">
-        ${i?s`Streaming from itch.io — this game has no downloadable build, so it
-              isn't stored in your library and needs a connection to play.`:s`Running sandboxed, so the game can't reach the rest of your library —
+        ${i?a`Streaming from itch.io — this game has no downloadable build, so it
+              isn't stored in your library and needs a connection to play.`:a`Running sandboxed, so the game can't reach the rest of your library —
               which also means it can't save to browser storage. Back its saves up below.`}
       </p>
-    `}renderSaves(e){return s`
+    `}renderSaves(e){return a`
       <div class="section-label">Save files</div>
-      ${this.saves.length?s`<div class="saves">
-            ${this.saves.map(t=>s`<div class="save-row">
+      ${this.saves.length?a`<div class="saves">
+            ${this.saves.map(t=>a`<div class="save-row">
                 <span class="save-name" title=${t.label}>${t.label}</span>
-                <span class="save-meta">${S(t.size)} · ${O(t.createdAt)}</span>
+                <span class="save-meta">${U(t.size)} · ${H(t.createdAt)}</span>
                 <a class="save-act" title="Download this save" href=${n.gameSaveURL(e.id,t.id)} download>
                   <span class="material-symbols-rounded" style="font-size:20px;">download</span>
                 </a>
@@ -325,24 +367,33 @@ import{a as x,w,e as n,m as u,ar as $,B as k,as as T,at as E,G as P,A as d,au as
                   <span class="material-symbols-rounded" style="font-size:20px;">delete</span>
                 </button>
               </div>`)}
-          </div>`:s`<div class="save-empty">No saves backed up yet.</div>`}
-      ${this.saveError?s`<div class="save-error">${this.saveError}</div>`:d}
+          </div>`:a`<div class="save-empty">No saves backed up yet.</div>`}
+      ${this.saveError?a`<div class="save-error">${this.saveError}</div>`:l}
       <label class="btn-outline gallery-upload">
         <span class="material-symbols-rounded">backup</span>
         ${this.saveUploading?"Uploading…":"Back up a save"}
         <input type="file" multiple hidden ?disabled=${this.saveUploading}
           @change=${t=>void this.uploadSave(t,e.id)} />
       </label>
-    `}hostOf(e){try{return new URL(e).hostname.replace(/^www\./,"")}catch{return""}}renderActions(e=!0){return s`
-      ${e?s`<button class="icon-round" title="Auto-tag" @click=${this.retag} ?disabled=${this.tagging}>
+    `}hostOf(e){try{return new URL(e).hostname.replace(/^www\./,"")}catch{return""}}renderActions(e=!0){var t;return a`
+      ${e?a`<button class="icon-round" title="Auto-tag" @click=${this.retag} ?disabled=${this.tagging}>
             <span class="material-symbols-rounded" style="font-size:22px; color:var(--oppai-text-dim);"
               >${this.tagging?"hourglass_empty":"auto_awesome"}</span
             >
-          </button>`:d}
-      ${R(this.media)?s`<button class="icon-round" title="Edit in the studio — regenerate it with its own settings"
+          </button>`:l}
+      ${e&&this.media.kind!=="comic"&&this.media.kind!=="game"?a`<button class="icon-round" title=${(t=this.full)!=null&&t.description?"Describe again with the vision model":"Describe with the vision model"}
+            @click=${this.describe} ?disabled=${this.describing}>
+            <span class="material-symbols-rounded" style="font-size:22px; color:var(--oppai-text-dim);"
+              >${this.describing?"hourglass_empty":"description"}</span
+            >
+          </button>`:l}
+      ${_(this.media)?a`<button class="icon-round" title="Edit in the studio — regenerate it with its own settings"
             @click=${()=>this.dispatchEvent(new CustomEvent("edit-in-studio",{detail:{id:this.media.id},bubbles:!0,composed:!0}))}>
             <span class="material-symbols-rounded" style="font-size:22px; color:var(--oppai-text-dim);">brush</span>
-          </button>`:d}
+          </button>`:l}
+      ${this.media.kind==="video"?a`<button class="icon-round" title="Bookmark this moment" @click=${()=>void this.markMoment()} ?disabled=${this.marking}>
+            <span class="material-symbols-rounded" style="font-size:22px; color:var(--oppai-text-dim);">${this.marking?"hourglass_empty":"bookmarks"}</span>
+          </button>`:l}
       <button class="icon-round" title="Edit" @click=${()=>this.startEdit()}>
         <span class="material-symbols-rounded" style="font-size:22px; color:var(--oppai-text-dim);">edit</span>
       </button>
@@ -350,43 +401,44 @@ import{a as x,w,e as n,m as u,ar as $,B as k,as as T,at as E,G as P,A as d,au as
         <span class="material-symbols-rounded" style="font-size:22px; color:var(--oppai-error, #f2b8b5);">delete</span>
       </button>
       <button class="icon-round" title="Favorite" @click=${this.toggleFav}>${this.favIcon()}</button>
-    `}renderMeta(e){const t=f[e.kind];return s`
+    `}renderMeta(e){const t=v[e.kind];return a`
       <div class="meta">
         <div class="meta-head">
           <h2 class="meta-title">${e.title}</h2>
           ${this.renderActions()}
         </div>
-        ${this.editing?this.renderEdit():s`
+        ${this.editing?this.renderEdit():a`
               <div class="chips">
-                <span class="chip chip-accent">${G(e)||t.label}</span>
+                <span class="chip chip-accent">${D(e)||t.label}</span>
                 <span class="chip chip-muted">${t.typeLabel}</span>
               </div>
               ${this.renderTags(e)}
-              ${e.notes?s`<p class="desc" style="margin-top:16px;">${e.notes}</p>`:d}
-              ${e.source?s`<div class="meta-note">
+              ${e.description?a`<p class="desc described" style="margin-top:16px;" title="What the vision model saw">${e.description}</p>`:l}
+              ${e.notes?a`<p class="desc" style="margin-top:16px;">${e.notes}</p>`:l}
+              ${e.source?a`<div class="meta-note">
                     Source:
                     <a href=${e.source} target="_blank" rel="noreferrer" style="color:var(--oppai-primary-bright);">link</a>
-                  </div>`:d}
+                  </div>`:l}
             `}
       </div>
-    `}renderTags(e){const t=[...e.tags??[]].sort((a,r)=>v(r)-v(a));if(t.length===0)return s`<div class="meta-note" style="margin-top:14px;">
+    `}renderTags(e){const t=[...e.tags??[]].sort((s,o)=>y(o)-y(s));if(t.length===0)return a`<div class="meta-note" style="margin-top:14px;">
         No tags yet — use the ✨ auto-tag button.
-      </div>`;const i=t.some(a=>this.hasTimeline(a));return s`
+      </div>`;const i=t.some(s=>this.hasTimeline(s));return a`
       <div class="chips">
-        ${t.map(a=>this.renderTagChip(a))}
+        ${t.map(s=>this.renderTagChip(s))}
       </div>
-      ${i&&this.activeTag==null?s`<div class="meta-note" style="margin-top:10px;">
+      ${i&&this.activeTag==null?a`<div class="meta-note" style="margin-top:10px;">
             Tap a ✨ tag to see where it appears in this video.
-          </div>`:d}
-    `}renderTagChip(e){const t=v(e),i=t<1,a=i?`${Math.max(1,Math.round(t*100))}%`:"",r=`${e.category}${e.source?" · "+e.source:""}${i?` · in about ${a} of the sampled frames`:""}`;if(!this.hasTimeline(e))return s`<span class="chip chip-muted" title=${r}>${e.name}${i?s`<span class="chip-share">${a}</span>`:d}</span>`;const c=this.activeTag===e.id,h=e.moments.length;return s`<button
+          </div>`:l}
+    `}renderTagChip(e){const t=y(e),i=t<1,s=i?`${Math.max(1,Math.round(t*100))}%`:"",o=`${e.category}${e.source?" · "+e.source:""}${i?` · in about ${s} of the sampled frames`:""}`;if(!this.hasTimeline(e))return a`<span class="chip chip-muted" title=${o}>${e.name}${i?a`<span class="chip-share">${s}</span>`:l}</span>`;const c=this.activeTag===e.id,u=e.moments.length;return a`<button
       class="chip ${c?"on":"chip-muted"}"
-      title="${r} · seen at ${h} point${h===1?"":"s"}"
+      title="${o} · seen at ${u} point${u===1?"":"s"}"
       aria-pressed=${c}
       @click=${()=>this.toggleTagTimeline(e)}
     >
       <span class="material-symbols-rounded" style="font-size:14px;">auto_awesome</span>
-      ${e.name}${i?s`<span class="chip-share">${a}</span>`:d}
-    </button>`}};o.styles=[C,U,_`
+      ${e.name}${i?a`<span class="chip-share">${s}</span>`:l}
+    </button>`}};r.styles=[L,N,M`
       :host {
         display: block;
       }
@@ -633,6 +685,12 @@ import{a as x,w,e as n,m as u,ar as $,B as k,as as T,at as E,G as P,A as d,au as
         color: var(--oppai-text-dim);
         max-width: 640px;
       }
+      /* The vision model's prose, set off from a hand-written note by a rule. */
+      .desc.described {
+        border-left: 3px solid var(--oppai-primary);
+        padding-left: 12px;
+        color: var(--oppai-text);
+      }
       .meta {
         margin-top: 24px;
       }
@@ -704,6 +762,80 @@ import{a as x,w,e as n,m as u,ar as $,B as k,as as T,at as E,G as P,A as d,au as
       button.chip.on {
         background: var(--oppai-accent);
         color: var(--oppai-on-accent);
+      }
+
+      /* Slideshow controls, under the stage. */
+      .slidebar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: 10px;
+        font-size: 12px;
+        color: var(--oppai-text-muted);
+      }
+      .slidebar.on .icon-round:first-child { color: var(--oppai-accent); }
+      .slidebar .icon-round.lit { color: var(--oppai-accent); }
+      .slidebar .dwell { display: inline-flex; align-items: center; gap: 6px; }
+      .slidebar select {
+        background: var(--oppai-surface-2);
+        color: var(--oppai-text);
+        border: 1px solid var(--oppai-outline, rgba(255,255,255,.14));
+        border-radius: 8px;
+        padding: 4px 6px;
+        font: inherit;
+      }
+      .slide-note { opacity: .7; }
+
+      /* Bookmarked moments: a row of frames you can jump to. */
+      .moments {
+        display: flex;
+        gap: 10px;
+        overflow-x: auto;
+        padding-bottom: 6px;
+      }
+      .moment { position: relative; flex: 0 0 auto; }
+      .moment-open {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 4px;
+        width: 150px;
+        padding: 0;
+        border: 1px solid var(--oppai-outline, rgba(255,255,255,.14));
+        border-radius: 12px;
+        overflow: hidden;
+        background: var(--oppai-surface-2);
+        color: inherit;
+        font: inherit;
+        text-align: left;
+        cursor: pointer;
+      }
+      .moment-open:hover { border-color: var(--oppai-accent); }
+      .moment-open img { display: block; width: 150px; height: 84px; object-fit: cover; background: #000; }
+      .moment-time { padding: 0 8px; font-size: 12px; font-weight: 600; }
+      .moment-label {
+        padding: 0 8px 8px;
+        font-size: 12px;
+        color: var(--oppai-text-muted);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        max-width: 150px;
+      }
+      .moment-drop {
+        position: absolute;
+        top: 4px;
+        right: 4px;
+        width: 24px;
+        height: 24px;
+        border: none;
+        border-radius: 12px;
+        background: rgba(0,0,0,.6);
+        color: #fff;
+        display: grid;
+        place-items: center;
+        cursor: pointer;
+        padding: 0;
       }
 
       /* Timeline of AI detections for the selected tag. */
@@ -1050,4 +1182,4 @@ import{a as x,w,e as n,m as u,ar as $,B as k,as as T,at as E,G as P,A as d,au as
         color:#fff; background:rgba(0,0,0,.75);
       }
       .play-note { color:var(--oppai-text-dim); font-size:12px; margin-top:6px; max-width:640px; }
-    `];o.PROGRESS_INTERVAL=10;o.PROGRESS_FLOOR=15;o.PROGRESS_DONE=.97;l([b({attribute:!1})],o.prototype,"media",2);l([b({type:Boolean})],o.prototype,"favorite",2);l([b({attribute:!1})],o.prototype,"queue",2);l([p()],o.prototype,"full",2);l([p()],o.prototype,"activeTag",2);l([p()],o.prototype,"tagging",2);l([p()],o.prototype,"editing",2);l([p()],o.prototype,"saving",2);l([p()],o.prototype,"editTitle",2);l([p()],o.prototype,"editNotes",2);l([p()],o.prototype,"editKind",2);l([p()],o.prototype,"editTags",2);l([p()],o.prototype,"newTag",2);l([p()],o.prototype,"screenshot",2);l([p()],o.prototype,"userGallery",2);l([p()],o.prototype,"galleryUploading",2);l([p()],o.prototype,"saves",2);l([p()],o.prototype,"saveUploading",2);l([p()],o.prototype,"saveError",2);l([p()],o.prototype,"play",2);l([p()],o.prototype,"playing",2);l([p()],o.prototype,"posterFrames",2);l([p()],o.prototype,"posterLoading",2);l([p()],o.prototype,"posterSaving",2);l([p()],o.prototype,"posterChosen",2);l([p()],o.prototype,"posterError",2);l([p()],o.prototype,"posterVersion",2);l([p()],o.prototype,"comic",2);l([p()],o.prototype,"page",2);l([p()],o.prototype,"fit",2);o=l([L("oppai-viewer")],o);function v(e){return e.weight&&e.weight>0?Math.min(1,e.weight):1}function O(e){return e?new Date(e*1e3).toLocaleString(void 0,{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"}):""}export{o as OppaiViewer,R as studioEditable};
+    `];r.PROGRESS_INTERVAL=10;r.PROGRESS_FLOOR=15;r.PROGRESS_DONE=.97;d([b({attribute:!1})],r.prototype,"media",2);d([b({type:Boolean})],r.prototype,"favorite",2);d([b({attribute:!1})],r.prototype,"queue",2);d([b({type:Number})],r.prototype,"startAt",2);d([p()],r.prototype,"full",2);d([p()],r.prototype,"bookmarks",2);d([p()],r.prototype,"marking",2);d([p()],r.prototype,"slideshow",2);d([p()],r.prototype,"slideshowOn",2);d([p()],r.prototype,"activeTag",2);d([p()],r.prototype,"tagging",2);d([p()],r.prototype,"editing",2);d([p()],r.prototype,"saving",2);d([p()],r.prototype,"editTitle",2);d([p()],r.prototype,"editNotes",2);d([p()],r.prototype,"editDescription",2);d([p()],r.prototype,"describing",2);d([p()],r.prototype,"editKind",2);d([p()],r.prototype,"editTags",2);d([p()],r.prototype,"newTag",2);d([p()],r.prototype,"screenshot",2);d([p()],r.prototype,"userGallery",2);d([p()],r.prototype,"galleryUploading",2);d([p()],r.prototype,"saves",2);d([p()],r.prototype,"saveUploading",2);d([p()],r.prototype,"saveError",2);d([p()],r.prototype,"play",2);d([p()],r.prototype,"playing",2);d([p()],r.prototype,"posterFrames",2);d([p()],r.prototype,"posterLoading",2);d([p()],r.prototype,"posterSaving",2);d([p()],r.prototype,"posterChosen",2);d([p()],r.prototype,"posterError",2);d([p()],r.prototype,"posterVersion",2);d([p()],r.prototype,"comic",2);d([p()],r.prototype,"page",2);d([p()],r.prototype,"fit",2);r=d([F("oppai-viewer")],r);function y(e){return e.weight&&e.weight>0?Math.min(1,e.weight):1}function H(e){return e?new Date(e*1e3).toLocaleString(void 0,{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"}):""}export{r as OppaiViewer,_ as studioEditable};

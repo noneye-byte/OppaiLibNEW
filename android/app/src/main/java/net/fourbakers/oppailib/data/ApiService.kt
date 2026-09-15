@@ -206,6 +206,10 @@ interface ApiService {
     @POST("api/media/{id}/autotag")
     suspend fun autotag(@Path("id") id: Long): AutotagResponse
 
+    /** Asks the server's vision model what a picture or clip shows. Slow: a CPU model. */
+    @POST("api/media/{id}/describe")
+    suspend fun describe(@Path("id") id: Long): DescribeResponse
+
     /** Probes a comic's archive. Page images come from [Repository.pageUrl]. */
     @GET("api/media/{id}/comic")
     suspend fun comicInfo(@Path("id") id: Long): ComicInfo
@@ -355,11 +359,41 @@ interface ApiService {
         @Query("type") type: String? = null,
         @Query("category") category: String? = null,
         @Query("sort") sort: String? = null,
+        @Query("period") period: String? = null,
+        @Query("base") base: String? = null,
+        @Query("creator") creator: String? = null,
+        @Query("nsfw") nsfw: String? = null,
         @Query("cursor") cursor: String? = null,
     ): CivitaiSearchResponse
 
+    /** One model's page: description, every version with files, what is installed. */
+    @GET("api/imagegen/civitai/models/{id}")
+    suspend fun civitaiModel(@Path("id") id: Long): CivitaiModel
+
+    /** Pictures posted with a version (or by a user), with their prompts. */
+    @GET("api/imagegen/civitai/images")
+    suspend fun civitaiImages(
+        @Query("versionId") versionId: Long? = null,
+        @Query("username") username: String? = null,
+        @Query("sort") sort: String? = null,
+        @Query("nsfw") nsfw: String? = null,
+        @Query("cursor") cursor: String? = null,
+    ): CivitaiImagesResponse
+
     @GET("api/imagegen/civitai/categories")
     suspend fun civitaiCategories(): CivitaiCategoriesResponse
+
+    /** Who the configured API key belongs to; fails when there is no key. */
+    @GET("api/imagegen/civitai/me")
+    suspend fun civitaiMe(): CivitaiMe
+
+    /** The studio's models with their Civitai records, matched by file hash. */
+    @GET("api/imagegen/civitai/installed")
+    suspend fun civitaiInstalled(@Query("refresh") refresh: String? = null): CivitaiInstalledResponse
+
+    /** Writes the catalogue's cover, description and trigger words onto one model now. */
+    @POST("api/imagegen/civitai/sync")
+    suspend fun civitaiSync(@Body body: CivitaiSyncRequest): CivitaiLink
 
     /** Hands a Civitai download URL to InvokeAI; the box downloads it itself. */
     @POST("api/imagegen/civitai/install")

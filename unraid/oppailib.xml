@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <Container version="2">
   <Name>OppaiLib</Name>
-  <Version>0.42.0</Version>
+  <Version>0.43.0</Version>
   <Repository>ghcr.io/noneye-byte/oppailib:latest</Repository>
   <Registry>https://github.com/noneye-byte/OppaiLibNEW/pkgs/container/oppailib</Registry>
   <Network>bridge</Network>
@@ -61,6 +61,8 @@
        container can be pointed at an LLM when it is first created. -->
   <Config Name="Chat LLM URL" Target="OPPAI_CHAT_URL" Default="" Mode="" Description="OpenAI-compatible endpoint for Libby chat — LM Studio, llama.cpp, Ollama's /v1 bridge, or text-generation-webui. Example: http://192.168.1.10:5000/v1 . Blank disables chat (Libby falls back to built-in local replies). Chat becomes ready once that API reports a loaded model; load models in its own UI." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
   <Config Name="Chat Model" Target="OPPAI_CHAT_MODEL" Default="" Mode="" Description="Optional fallback model name, for chat servers that require a model field in the request." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
+  <Config Name="Vision model URL" Target="OPPAI_VISION_URL" Default="" Mode="" Description="OpenAI-compatible endpoint whose model accepts images, for describing pictures in prose — Ollama or LM Studio with a llava/qwen-vl/gemma3 build, llama.cpp with an mmproj. Example: http://192.168.1.10:11434/v1 . Blank disables describing. Can also be set under Settings." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
+  <Config Name="Vision model" Target="OPPAI_VISION_MODEL" Default="" Mode="" Description="The vision model to ask for, e.g. qwen2.5vl:7b." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
   <Config Name="Chat API Key" Target="OPPAI_CHAT_API_KEY" Default="" Mode="" Description="Optional. Needed only when your chat server was started with an API key (e.g. text-generation-webui's --api-key)." Type="Variable" Display="advanced" Required="false" Mask="true"></Config>
   <Config Name="Text-generation models (optional)" Target="/textgen-models" Default="" Mode="rw" Description="Optional, and only needed if you want to DELETE text-generation models from OppaiLib's UI — that backend exposes no delete API, so it has to be a file operation. Point this at the same host folder text-generation-webui loads its models from, then set the matching path (/textgen-models) in Settings → Libby. Leave both blank and the delete controls simply do not appear. Deleting moves a model to a recoverable .oppailib-trash folder inside this directory unless you explicitly ask for a permanent delete, and it will never touch the model that is currently loaded." Type="Path" Display="advanced" Required="false" Mask="false"></Config>
 

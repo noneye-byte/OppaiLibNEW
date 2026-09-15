@@ -4,7 +4,9 @@ import { customElement, property, state } from "lit/decorators.js";
 import { iconStyles, motionStyles } from "../theme.js";
 import {
   api,
+  type FeedNewItem,
   type RemoteSource,
+  type SavedFeed,
   type SourceComment,
   type SourceFeed,
   type SourceItem,
@@ -77,6 +79,14 @@ export class OppaiBrowse extends LitElement {
   @state() private threadQuery = "";
   @state() private threadDraft = "";
 
+  // Saved searches. The server re-runs each a few times a day and keeps what it
+  // has not shown; this screen lists them, offers to keep the search on screen, and
+  // draws the unseen pile as a shelf above the site tabs. See handlers_feeds.go.
+  @state() private feeds: SavedFeed[] = [];
+  @state() private feedNew: FeedNewItem[] = [];
+  @state() private feedBusy = false;
+  @state() private feedsOpen = false;
+
   /**
    * Stamps each browse request so a late reply from a board we've left can't land in
    * the grid of the board we're on. Not reactive — nothing renders it. See `load`.
@@ -121,6 +131,38 @@ export class OppaiBrowse extends LitElement {
       }
 
       /* Chips — same shape as the library's filter chips. */
+      /* The "new from your feeds" shelf above the site tabs. */
+      .feed-shelf {
+        margin: 0 0 18px;
+        padding: 12px 14px;
+        border-radius: 16px;
+        background: var(--oppai-surface-1);
+        border: 1px solid var(--oppai-border, rgba(255,255,255,.08));
+      }
+      .feed-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+      .feed-title { margin: 0; font-size: 15px; font-weight: 600; }
+      .feed-head .count { font-size: 12px; color: var(--oppai-text-muted); flex: 1; }
+      .feed-chip { display: inline-flex; align-items: center; gap: 6px; }
+      .feed-drop {
+        border: none; background: transparent; color: inherit; padding: 0; margin-left: 2px;
+        display: inline-grid; place-items: center; cursor: pointer; opacity: .7;
+      }
+      .feed-drop:hover { opacity: 1; }
+      .feed-strip { display: flex; gap: 10px; overflow-x: auto; padding: 12px 0 4px; }
+      .feed-tile {
+        position: relative; flex: 0 0 auto; width: 140px; height: 140px; padding: 0;
+        border: 1px solid var(--oppai-border, rgba(255,255,255,.1)); border-radius: 12px; overflow: hidden;
+        background: var(--oppai-surface-2); color: var(--oppai-text-dim); cursor: pointer;
+        display: grid; place-items: center;
+      }
+      .feed-tile img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+      .feed-tile .play { position: absolute; color: #fff; filter: drop-shadow(0 2px 6px rgba(0,0,0,.6)); }
+      .feed-from {
+        position: absolute; left: 0; right: 0; bottom: 0; padding: 4px 8px; font-size: 11px; color: #fff;
+        background: linear-gradient(transparent, rgba(0,0,0,.75)); text-align: left;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      }
+
       .chips {
         display: flex;
         gap: 8px;
@@ -745,6 +787,138 @@ export class OppaiBrowse extends LitElement {
       }, { rootMargin: "500px 0px" });
     }
     this.loadSources();
+    void this.loadFeeds();
+  }
+
+  // --- Saved searches -------------------------------------------------------
+
+  private async loadFeeds() {
+    try {
+      const [{ feeds }, { items }] = await Promise.all([api.savedFeeds(), api.newFromFeeds()]);
+      this.feeds = feeds;
+      this.feedNew = items;
+    } catch {
+      /* An older server, or a blip: the shelf simply is not drawn. */
+    }
+  }
+
+  /** The saved search that matches what is on screen, if any. */
+  private get watchedHere(): SavedFeed | undefined {
+    if (!this.isSearch || !this.query) return undefined;
+    const sort = this.sort || "";
+    return this.feeds.find((f) =>
+      f.source === this.sourceId && f.feed === this.feedId && (f.query ?? "").toLowerCase() === this.query.toLowerCase() && (f.sort ?? "") === sort);
+  }
+
+  private async watchThisSearch() {
+    if (!this.isSearch || !this.query || this.feedBusy) return;
+    this.feedBusy = true;
+    try {
+      const made = await api.saveFeed({ source: this.sourceId, feed: this.feedId, query: this.query, sort: this.sort || undefined });
+      if (!this.feeds.some((f) => f.id === made.id)) this.feeds = [...this.feeds, made];
+      this.showToast(`Watching “${made.name}” — new results land on the shelf above.`);
+    } catch (e) {
+      this.showToast((e as Error).message);
+    } finally {
+      this.feedBusy = false;
+    }
+  }
+
+  private async unwatch(feed: SavedFeed) {
+    try {
+      await api.deleteFeed(feed.id);
+      this.feeds = this.feeds.filter((f) => f.id !== feed.id);
+      this.feedNew = this.feedNew.filter((item) => item.feedId !== feed.id);
+    } catch (e) {
+      this.showToast((e as Error).message);
+    }
+  }
+
+  private async checkFeedsNow() {
+    if (this.feedBusy) return;
+    this.feedBusy = true;
+    try {
+      const { feeds } = await api.checkFeeds();
+      this.feeds = feeds;
+      this.feedNew = (await api.newFromFeeds()).items;
+      const count = this.feedNew.length;
+      this.showToast(count ? `${count} new since you last looked.` : "Nothing new yet.");
+    } catch (e) {
+      this.showToast((e as Error).message);
+    } finally {
+      this.feedBusy = false;
+    }
+  }
+
+  /** Clears the shelf: it has been looked at. */
+  private async markFeedsSeen() {
+    try {
+      await api.markFeedsSeen();
+      this.feedNew = [];
+      this.feeds = this.feeds.map((f) => ({ ...f, newCount: 0 }));
+    } catch (e) {
+      this.showToast((e as Error).message);
+    }
+  }
+
+  /**
+   * Opens a shelf item where it lives: the item's own source and search, so the
+   * overlay's stream, save and comments all resolve against the right site. The
+   * feed's search is loaded behind it, which is also where "more like this" is.
+   */
+  private openFeedItem(item: FeedNewItem) {
+    const feed = this.feeds.find((f) => f.id === item.feedId);
+    if (feed && (feed.source !== this.sourceId || feed.feed !== this.feedId || feed.query !== this.query)) {
+      this.sourceId = feed.source;
+      this.feedId = feed.feed;
+      this.container = null;
+      this.sort = feed.sort ?? "";
+      this.query = feed.query ?? "";
+      this.draft = this.query;
+      this.reset();
+    }
+    void this.open(item);
+  }
+
+  private renderFeedShelf() {
+    if (!this.feeds.length) return nothing;
+    const unseen = this.feedNew;
+    return html`
+      <section class="feed-shelf">
+        <div class="feed-head">
+          <span class="material-symbols-rounded" style="font-size:22px; color:var(--oppai-primary-bright);">new_releases</span>
+          <h3 class="feed-title">New from your feeds</h3>
+          <span class="count">${unseen.length ? `${unseen.length} new` : "nothing new"}</span>
+          <button class="chip" ?disabled=${this.feedBusy} @click=${() => void this.checkFeedsNow()}>
+            <span class="material-symbols-rounded" style="font-size:16px;">refresh</span>${this.feedBusy ? "Checking…" : "Check now"}
+          </button>
+          ${unseen.length ? html`<button class="chip" @click=${() => void this.markFeedsSeen()}>
+            <span class="material-symbols-rounded" style="font-size:16px;">check</span>Seen</button>` : nothing}
+          <button class="chip" aria-pressed=${this.feedsOpen} @click=${() => (this.feedsOpen = !this.feedsOpen)}>
+            ${this.feeds.length} ${this.feeds.length === 1 ? "feed" : "feeds"}
+          </button>
+        </div>
+        ${this.feedsOpen ? html`<div class="chips tight">
+          ${this.feeds.map((f) => html`<span class="chip feed-chip" title=${f.error ? `Last check failed: ${f.error}` : f.checkedAt ? `Checked ${new Date(f.checkedAt).toLocaleString()}` : "Not checked yet"}>
+            ${f.error ? html`<span class="material-symbols-rounded" style="font-size:16px;">warning</span>` : nothing}
+            ${f.name}${f.newCount ? html` · ${f.newCount}` : nothing}
+            <button class="feed-drop" title="Stop watching" @click=${() => void this.unwatch(f)}>
+              <span class="material-symbols-rounded" style="font-size:16px;">close</span>
+            </button>
+          </span>`)}
+        </div>` : nothing}
+        ${unseen.length ? html`<div class="feed-strip">
+          ${unseen.slice(0, 40).map((item) => html`
+            <button class="feed-tile" title=${`${item.title} — from ${item.feedName}`} @click=${() => this.openFeedItem(item)}>
+              ${item.thumbUrl
+                ? html`<img src=${api.sourceStreamURL(item.thumbUrl)} loading="lazy" alt=${item.title} />`
+                : html`<span class="material-symbols-rounded" style="font-size:36px;">image</span>`}
+              ${item.kind === "video" ? html`<span class="play material-symbols-rounded" style="font-size:36px;">play_circle</span>` : nothing}
+              <span class="feed-from">${item.feedName}</span>
+            </button>`)}
+        </div>` : nothing}
+      </section>
+    `;
   }
 
   disconnectedCallback() {
@@ -1538,6 +1712,7 @@ export class OppaiBrowse extends LitElement {
               <span class="count">${this.items.length ? `${this.items.length} shown` : ""}</span>
             </div>
 
+            ${this.renderFeedShelf()}
             ${this.renderSiteTabs()}
 
             ${this.isFourChan
@@ -1591,6 +1766,17 @@ export class OppaiBrowse extends LitElement {
                       />
                     </label>
                     <button class="chip" type="submit">Search</button>
+                    ${this.query
+                      ? this.watchedHere
+                        ? html`<button class="chip" type="button" aria-pressed="true" title="Stop watching this search"
+                            @click=${() => void this.unwatch(this.watchedHere!)}>
+                            <span class="material-symbols-rounded" style="font-size:16px;">check</span>Watching
+                          </button>`
+                        : html`<button class="chip" type="button" ?disabled=${this.feedBusy} title="Check this search a few times a day and shelve what is new"
+                            @click=${() => void this.watchThisSearch()}>
+                            <span class="material-symbols-rounded" style="font-size:16px;">playlist_add</span>Watch this search
+                          </button>`
+                      : nothing}
                   </form>
                   ${sorts.length
                     ? html`<div class="chips tight">

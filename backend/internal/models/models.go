@@ -22,7 +22,10 @@ type Media struct {
 	Size      int64     `json:"size"`
 	Title     string    `json:"title"`
 	Notes     string    `json:"notes,omitempty"`
-	Source    string    `json:"source,omitempty"`
+	// Description is the vision model's prose about the picture (or a hand-written
+	// one). Carried on a single item, not on list pages.
+	Description string `json:"description,omitempty"`
+	Source      string `json:"source,omitempty"`
 	Rating    int       `json:"rating"`
 	Favorite  bool      `json:"favorite"`
 	Duration  float64   `json:"duration,omitempty"`

@@ -32,7 +32,7 @@ import kotlin.coroutines.resume
  */
 class LibbySpeech(private val context: Context, private val repo: Repository) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-    private val queue = Channel<Pair<String, Long>>(Channel.UNLIMITED)
+    private val queue = Channel<Triple<String, Int, Long>>(Channel.UNLIMITED)
     private val generation = AtomicLong(0)
     private var player: MediaPlayer? = null
     private var device: TextToSpeech? = null
@@ -42,18 +42,19 @@ class LibbySpeech(private val context: Context, private val repo: Repository) {
 
     init {
         scope.launch {
-            for ((text, gen) in queue) {
+            for ((text, heat, gen) in queue) {
                 if (gen != generation.get()) continue
-                runCatching { sayOne(text, gen) }
+                runCatching { sayOne(text, heat, gen) }
             }
         }
     }
 
-    /** Says a line after whatever is already being said. */
-    fun speak(text: String) {
+    /** Says a line after whatever is already being said. `heat` shapes the server's
+        delivery — slower and breathier as it climbs; see tts.HeatDelivery. */
+    fun speak(text: String, heat: Int = 0) {
         val clean = text.trim()
         if (clean.isEmpty()) return
-        queue.trySend(clean to generation.get())
+        queue.trySend(Triple(clean, heat, generation.get()))
     }
 
     /** Stops the current line and forgets the rest. */
@@ -64,15 +65,15 @@ class LibbySpeech(private val context: Context, private val repo: Repository) {
         device?.stop()
     }
 
-    private suspend fun sayOne(text: String, gen: Long) {
-        val audio = if (System.currentTimeMillis() - serverSilentAt > 60_000) fetchAudio(text) else null
+    private suspend fun sayOne(text: String, heat: Int, gen: Long) {
+        val audio = if (System.currentTimeMillis() - serverSilentAt > 60_000) fetchAudio(text, heat) else null
         if (gen != generation.get()) return
         if (audio != null) playBytes(audio, gen) else speakWithDevice(cleanForDevice(text), gen)
     }
 
-    private suspend fun fetchAudio(text: String): ByteArray? = withContext(Dispatchers.IO) {
+    private suspend fun fetchAudio(text: String, heat: Int): ByteArray? = withContext(Dispatchers.IO) {
         try {
-            repo.api.ttsSpeak(SpeakRequest(text)).bytes()
+            repo.api.ttsSpeak(SpeakRequest(text, heat)).bytes()
         } catch (e: HttpException) {
             if (e.code() == 503) serverSilentAt = System.currentTimeMillis()
             null

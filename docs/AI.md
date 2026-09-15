@@ -305,10 +305,65 @@ With an InvokeAI backend the studio also offers:
   model manager holds it: name, description, trigger phrases, and recommended
   settings (steps, CFG, size, scheduler, VAE; a LoRA's recommended weight).
   Edits are written back to InvokeAI, so both UIs stay in sync.
-- **A Civitai browser** — search the Civitai catalogue (proxied through the
-  server via the civitai.red mirror), preview images and trigger words, and
-  install a version straight into InvokeAI; the download runs on the generator
-  box and its progress is shown in the browser.
+- **A Civitai browser** — the catalogue, proxied through the server via the
+  civitai.red mirror, on three pages. *Browse* searches with the site's own
+  filters (type, base model, period, category, creator, NSFW, seven sorts) and
+  opens a model's page: its description, tags, every version with its files,
+  hashes and trigger words, and the pictures people posted with it — each with
+  the prompt and settings behind it, which "Use in the studio" loads into the
+  form. *My account* is whoever the API key belongs to, with their models and
+  posted pictures. *Installed* is the studio's own models seen from the
+  catalogue's side, matched by file hash (InvokeAI and Civitai both publish
+  BLAKE3), with a note when a newer version has been published.
+
+  **Installing** hands a version's download URL to InvokeAI, which fetches the
+  file on its own box. Once the download completes, the server writes the
+  catalogue's description (as plain text), the version's trained words (as
+  trigger phrases) and its first showcase image (as cover art) onto the InvokeAI
+  record, so the model arrives looking the way it did on the site rather than
+  as a bare filename with a black tile. The same dressing is one click away for
+  models that were already there ("Fetch from Civitai"), and a file the
+  catalogue does not know by hash can be linked by pasting a version id.
+
+  Two things the public API does not offer, so neither does this: **uploading**
+  (the site's own uploads go through an internal tRPC/S3 flow), and the
+  **prompts behind posted pictures without an API key** — add yours under
+  Settings → Image generation and the gallery shows them.
+
+## Describing pictures in prose
+
+The tagger says what is in a picture as a word list. A **vision model** — a
+local multimodal LLM — says it as a sentence or three: who is where, doing
+what, in what style. Configure one under **Settings → AI → Describing
+pictures**, or set a startup default:
+
+```env
+OPPAI_VISION_URL=http://192.168.1.10:11434/v1
+OPPAI_VISION_MODEL=qwen2.5vl:7b
+```
+
+Any OpenAI-compatible chat endpoint whose model accepts images works: Ollama or
+LM Studio with a llava, qwen-vl, minicpm-v or gemma3 build, llama.cpp server
+with an mmproj, vLLM. It is a separate endpoint from Libby's chat backend
+because her text model is picked for obedience inside an 8K window and is
+usually a text-only build. Frames are sent as base64 JPEGs downsized to 1024px;
+nothing leaves the LAN.
+
+What it describes: a picture as itself; a GIF as four composited frames; a
+video as six frames chosen by scene, the same way the tagger chooses them,
+shown to the model as a sequence so it narrates the clip rather than describing
+six unrelated pictures. The tagger's tags ride along as hints, which makes a
+small vision model markedly more accurate — so on import, with **Describe on
+import** on, describing runs after tagging. Comics and games are not pictures.
+
+The description is stored like a note — AES-256-GCM-encrypted, `description_enc`
+— decrypted into the search index (so "red dress balcony" finds the picture the
+model described that way), shown in the viewer with a **Describe** button beside
+**Auto-tag**, editable by hand, and handed to Libby beside the tags when a
+picture comes up in chat, so she answers about what is in it rather than reading
+six tags back. **Describe what has none** on the settings page walks the library
+in the background, one item at a time; **Test** sends the model a generated
+picture so a wrong URL or a text-only model is found out before the first import.
 
 ## What gets tagged
 

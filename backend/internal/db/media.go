@@ -95,6 +95,45 @@ func (d *DB) Generation(ctx context.Context, id int64) ([]byte, error) {
 	return blob, err
 }
 
+// SetDescription stores what the vision model said a picture shows, encrypted.
+// Nil clears it.
+func (d *DB) SetDescription(ctx context.Context, id int64, descEnc []byte) error {
+	_, err := d.sql.ExecContext(ctx,
+		`UPDATE media SET description_enc = ?, updated_at = ? WHERE id = ?`, nullBytes(descEnc), now(), id)
+	return err
+}
+
+// Description reads the encrypted description, nil when the row has none.
+func (d *DB) Description(ctx context.Context, id int64) ([]byte, error) {
+	var blob []byte
+	err := d.sql.QueryRowContext(ctx, `SELECT description_enc FROM media WHERE id = ?`, id).Scan(&blob)
+	return blob, err
+}
+
+// Undescribed lists the pictures and clips that have no description yet, oldest
+// first, for the backfill. Comics and games are not pictures and are skipped.
+func (d *DB) Undescribed(ctx context.Context, limit int) ([]*MediaRow, error) {
+	if limit <= 0 || limit > 1000 {
+		limit = 200
+	}
+	rows, err := d.sql.QueryContext(ctx,
+		`SELECT `+mediaColumns+` FROM media
+		 WHERE description_enc IS NULL AND kind IN ('image','gif','video')
+		 ORDER BY created_at ASC, id ASC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	return scanMediaRows(rows)
+}
+
+// CountUndescribed is how many pictures and clips still lack a description.
+func (d *DB) CountUndescribed(ctx context.Context) (int, error) {
+	var n int
+	err := d.sql.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM media WHERE description_enc IS NULL AND kind IN ('image','gif','video')`).Scan(&n)
+	return n, err
+}
+
 // SetThumbPath records the relative store path of a generated thumbnail blob.
 func (d *DB) SetThumbPath(ctx context.Context, id int64, rel string) error {
 	_, err := d.sql.ExecContext(ctx,

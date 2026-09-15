@@ -51,7 +51,7 @@ is WebAuthn working as designed.
 
 | Method | Path | Notes |
 |--------|------|-------|
-| GET | `/api/media?kind=&q=&tag=&favorite=&sort=&limit=&offset=` | one page of the library → `{items, total}`. See below. |
+| GET | `/api/media?kind=&q=&tag=&favorite=&minRating=&sort=&limit=&offset=` | one page of the library → `{items, total}`. See below. |
 | GET | `/api/media/stats` | the library's shape without its rows → `{total, byKind, favorites, thisWeek, bytes}` |
 | GET | `/api/tags/top?kind=&limit=` | the most-used tags, for filter chips → `{items:[{name,count}]}` |
 | POST | `/api/media` | multipart: `file` (required), `title`, `source`, `kind`. → `{id, sha256, deduped}` |
@@ -59,6 +59,11 @@ is WebAuthn working as designed.
 | GET | `/api/media/{id}/stream` | decrypts + streams the blob (browser uses cookie auth) |
 | GET | `/api/media/{id}/thumb` | poster frame (video), comic cover, or the item's own bytes |
 | POST | `/api/media/{id}/autotag` | runs the AI tagger synchronously → `{tags}`. Videos and GIFs are sampled across several frames, so this can take a while. |
+| POST | `/api/media/{id}/describe` | asks the vision model what the picture shows and stores the prose → `{description}`. Pictures, GIFs and videos only; 503 when no vision model is configured. Minutes, not seconds, on a CPU. |
+| GET | `/api/ai/describe` | → `{enabled, model, auto, undescribed, backfilling}` |
+| POST | `/api/ai/describe/probe` | sends the vision model a generated test picture → `{ok, description}` |
+| POST | `/api/ai/describe/backfill` | describes everything that has no description, one at a time, in the background → `{started}` |
+| DELETE | `/api/ai/describe/backfill` | stops the walk. 204 |
 
 ### Listing, searching and sorting
 
@@ -70,6 +75,7 @@ is WebAuthn working as designed.
 | `q` | words that must **all** match a title, note, tag name or tag category |
 | `tag` | one exact tag, as the filter chips use |
 | `favorite` | `1` for favourites only |
+| `minRating` | `1`–`5`: rated at least this many stars. `0`, absent or out of range keeps everything |
 | `sort` | `newest` (default), `oldest`, `rating`, `largest` |
 | `limit` | capped at 200, default 50 |
 | `offset` | where the page starts |
@@ -306,6 +312,42 @@ nothing generated is compiled or executed. Saving validates the id (it becomes a
 filename), the scheme, and refuses a bare `*` in `hosts`, since that list is the
 streaming proxy's allowlist.
 
+### Saved searches
+
+A search on a source, kept and re-run by the server every six hours. Nothing is
+downloaded: what turns up that has not been shown before lands on a "new from your
+feeds" shelf as remote tiles, and reading the shelf is what marks it seen. Per user,
+encrypted, at most 24.
+
+| Method | Path | Notes |
+|--------|------|-------|
+| GET | `/api/feeds` | → `{feeds:[{id,name,source,feed,query,sort,createdAt,checkedAt,error,newCount}]}` |
+| POST | `/api/feeds` | `{source, feed, query?, sort?, name?}` → 201 the feed, checked once to seed it. An identical search already kept is returned instead |
+| DELETE | `/api/feeds/{id}` | 204 |
+| POST | `/api/feeds/check`, `/api/feeds/{id}/check` | run now → the list |
+| GET | `/api/feeds/new` | → `{items:[SourceItem + {feedId, feedName, source}]}`, newest feed first |
+| POST | `/api/feeds/seen`, `/api/feeds/{id}/seen` | 204 — clears the pile |
+
+The first check of a new feed seeds what it has seen without calling any of it new,
+so subscribing to a search does not present its whole first page as arrivals.
+
+## Libby
+
+Her endpoints are many and mostly documented beside their handlers
+(`backend/internal/api/handlers_libby*.go`, `chat_*.go`); what is listed here is the
+part a client has to send or read to keep up with her.
+
+| Method | Path | Notes |
+|--------|------|-------|
+| POST | `/api/chat` | `viewing` may carry `position`, `duration` (seconds) and `paused` for the open video, so she reacts to this moment of it. `task: "afterglow"` marks the morning-after turn — see below |
+| POST | `/api/libby/act` | an approved offer. Besides the action's own fields, send `outfit`, `activity`, `intensity` and `recentMediaIds` as they stand when Allow is pressed: a picture she makes of herself is drawn in that state and filed as a picture of her, tagged with the subject; a `shelf` action rebuilds the collection "Libby's pick" → `{collectionId, name, count}` |
+| GET | `/api/libby/auto/pending` | → `{pending:[{trigger, detail, decision}]}`: reasons to speak first the server noticed itself. Only `afterglow` so far — owed once, the calendar day after a conversation whose heat peaked at 4 or more. Send the turn with the trigger as `task`, then record it with `/api/libby/auto/sent` |
+| POST | `/api/tts/speak` | `{text, voice?, speed?, heat?}`; `heat` 1–5 makes piper read slower and breathier from 3 up |
+
+A remembered boundary (memory kind `boundary`) rules intimate states out server-side
+the way the heat floor does: "no toys" refuses `[doing: vibrator]` on the turn the
+model forgets it, and the state is left out of her vocabulary for the turn.
+
 ## Text-generation models
 
 | Method | Path | Notes |
@@ -350,7 +392,34 @@ the alternative is removing weights from under a running model because a probe t
 }
 ```
 `title`, `notes`, and `source` are stored AES-256-GCM-encrypted at rest and
-decrypted for the response.
+decrypted for the response. So is `description` — the vision model's prose about
+the picture, or a hand-written one — which a single item carries (`GET
+/api/media/{id}`, and the `PATCH` answer) but list pages leave out. `PATCH` accepts
+`description`; `""` clears it. The search box matches it like a note.
+
+## Civitai
+
+The catalogue, proxied through the server (the `civitai.red` mirror by default; the
+API key, when set, goes in a header and never in a URL). Everything the studio's
+Civitai browser does is here. Uploading is not: Civitai has no public upload API.
+
+| Method | Path | Notes |
+|--------|------|-------|
+| GET | `/api/imagegen/civitai/search?q=&type=&category=&base=&period=&sort=&creator=&nsfw=&cursor=` | one page → `{items, nextCursor}`. `type` ∈ checkpoint, lora, embedding, vae, controlnet, upscaler; `period` ∈ day, week, month, year, all; `sort` ∈ downloaded (default), rated, newest, liked, discussed, collected, images; `nsfw=0` hides adult models. Each version carries `installed` when InvokeAI holds its file (matched by BLAKE3). |
+| GET | `/api/imagegen/civitai/models/{id}` | one model's page: sanitized HTML `description`, every version with `files`, showcase `images`, `publishedAt`, and the same `installed` flags |
+| GET | `/api/imagegen/civitai/images?versionId=\|modelId=\|username=&sort=&period=&nsfw=&cursor=` | posted pictures → `{items, nextCursor, withPrompts, keySet}`. Each item carries the prompt and settings behind it when the poster kept them — which Civitai shares only with an API key, hence `withPrompts` and `keySet` |
+| GET | `/api/imagegen/civitai/categories` | the catalogue's most-used tags → `{categories:[{name,count}]}` |
+| GET | `/api/imagegen/civitai/image?url=` | streams one preview through the server; Civitai hosts only |
+| GET | `/api/imagegen/civitai/me` | who the API key belongs to → `{id, username, image}`; 400 without a key |
+| POST | `/api/imagegen/civitai/install` | `{url, modelId, versionId}` → InvokeAI's install job. With the ids, the server writes the catalogue's description, trigger words and first preview onto the InvokeAI record once the download completes |
+| GET | `/api/imagegen/civitai/installs` | InvokeAI's install queue → `{jobs}`; a completed job carries `modelKey` |
+| GET | `/api/imagegen/civitai/installed?refresh=` | the studio's models with their catalogue records → `{models:[{key,name,type,base,hasCover,civitai?}]}`. `civitai` holds the ids, creator, previews, trained words and `updateAvailable`. Looked up by file hash and remembered for a day; `refresh=1` asks again |
+| POST | `/api/imagegen/civitai/sync` | `{key, versionId?}` → applies the catalogue's cover, description and trigger words to one installed model now, by hash or by the version given → the record, or `{}` when the file is not on Civitai |
+
+Model descriptions are HTML written by whoever uploaded the model. The server keeps
+paragraphs, headings, lists, emphasis, code and http(s) links and drops everything
+else — scripts, styles, images, event attributes — so a client can render
+`description` as markup.
 
 ## Collections
 
@@ -385,6 +454,26 @@ and server-side, so a film started on the sofa carries on in bed.
 Anything at or past 97% of its duration is treated as finished and is left off
 `/api/resume`: a "carry on with" shelf whose first tile is something you finished last
 night is worse than an empty one.
+
+## Bookmarks
+
+A moment in a video worth coming back to: chosen, named, and several per clip, where
+progress is one overwritten number. Per user. A frame is grabbed at the mark when
+ffmpeg is available (a full decrypt to a temp file, as the poster picker pays); without
+one the mark still lands and the thumb endpoint serves the item's poster instead.
+
+| Method | Path | Notes |
+|--------|------|-------|
+| GET | `/api/media/{id}/bookmarks` | → `{bookmarks:[{id,mediaId,position,label,hasThumb,createdAt}]}`, in timeline order |
+| POST | `/api/media/{id}/bookmarks` | `{position, label?}` → the bookmark. Videos and gifs only; the label is encrypted at rest, ≤80 chars |
+| PATCH | `/api/bookmarks/{bookmark}` | `{label}` → the bookmark |
+| DELETE | `/api/bookmarks/{bookmark}` | 204 |
+| GET | `/api/bookmarks/{bookmark}/thumb` | the frame, JPEG |
+| GET | `/api/bookmarks?limit=` | the user's latest marks across the library, with `title` and `kind` on each |
+
+Libby reads them: the open video's marks are in her "watching together" context with
+where they sit relative to the current position, and an attachment she writes as
+`[attach: <title> @ 4:10]` resolves with `at` set, which the clients open the viewer at.
 
 ## Scraping
 

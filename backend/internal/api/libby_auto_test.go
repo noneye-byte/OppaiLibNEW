@@ -191,3 +191,34 @@ func TestLibbyAutoEndpoints(t *testing.T) {
 		t.Errorf("the log should record that she was answered: %s", rec.Body)
 	}
 }
+
+// The morning after is owed once: a heated night, a later day, and not yet said.
+func TestTheMorningAfterIsOwedOnceAfterAHeatedNight(t *testing.T) {
+	night := time.Date(2026, 3, 14, 23, 30, 0, 0, time.Local)
+	morning := night.Add(10 * time.Hour)
+	bond := libbyBond{LastSeenAt: night.UnixMilli(), Peak: 4, Heat: 3.5}
+	state := libbyAutoState{}
+
+	if due, _ := afterglowDue(bond, state, morning); !due {
+		t.Fatal("a heated night followed by a morning should be due")
+	}
+	if due, _ := afterglowDue(bond, state, night.Add(10*time.Minute)); due {
+		t.Error("the same night is not the morning after")
+	}
+	if due, _ := afterglowDue(bond, state, night.Add(3*24*time.Hour)); due {
+		t.Error("three days later is not the morning after")
+	}
+	if due, _ := afterglowDue(libbyBond{LastSeenAt: night.UnixMilli(), Peak: 3}, state, morning); due {
+		t.Error("flirting is not a night")
+	}
+	said := libbyAutoState{Log: []libbyAutoEvent{{At: morning.Add(-time.Hour).UnixMilli(), Trigger: string(triggerAfterglow)}}}
+	if due, _ := afterglowDue(bond, said, morning); due {
+		t.Error("said once already, yet owed again")
+	}
+	if directive := afterglowDirective(bond, morning); !strings.Contains(directive, "day after") {
+		t.Errorf("directive = %q", directive)
+	}
+	if afterglowDirective(libbyBond{Peak: 2}, morning) != "" {
+		t.Error("a calm bond got the morning-after opening")
+	}
+}

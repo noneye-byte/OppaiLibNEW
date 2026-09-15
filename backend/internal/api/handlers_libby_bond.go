@@ -61,6 +61,11 @@ type libbyBond struct {
 	Warmth float64 `json:"warmth"`
 	// Petname is the endearment she has settled on for the user, if any.
 	Petname string `json:"petname"`
+	// Peak is the highest heat any turn reached on the last day they talked, 1–5.
+	// Heat above eases toward each turn and so remembers the evening's *average*; this
+	// remembers whether it went somewhere at all, which is what the morning after is
+	// about. Reset on the first turn of a new day. See afterglowDue.
+	Peak int `json:"peak,omitempty"`
 	// UpdatedAt is the last write, UnixMilli.
 	UpdatedAt int64 `json:"updatedAt"`
 }
@@ -151,6 +156,10 @@ func (s *Server) updateLibbyBond(userID int64, emotion string, intensity int, pe
 		if bond.Warmth > warmthMax {
 			bond.Warmth = warmthMax
 		}
+		bond.Peak = 0
+	}
+	if intensity > bond.Peak {
+		bond.Peak = intensity
 	}
 	if bond.Heat <= 0 {
 		bond.Heat = float64(intensity)

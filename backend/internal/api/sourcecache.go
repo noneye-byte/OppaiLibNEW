@@ -81,6 +81,14 @@ func (c *resolveCache[T]) put(key string, val T) {
 	c.mu.Unlock()
 }
 
+// forget drops a key so the next get resolves afresh, for when the caller knows
+// the world changed — a model was just installed — rather than waiting out the TTL.
+func (c *resolveCache[T]) forget(key string) {
+	c.mu.Lock()
+	delete(c.entries, key)
+	c.mu.Unlock()
+}
+
 // get returns the cached value for key, resolving it with fn if it is missing or
 // stale. Concurrent callers for the same key share one resolution.
 func (c *resolveCache[T]) get(ctx context.Context, key string, fn func(context.Context) (T, error)) (T, error) {

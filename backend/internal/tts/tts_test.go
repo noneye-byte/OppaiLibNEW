@@ -121,3 +121,23 @@ func TestPiperSpeak(t *testing.T) {
 		t.Fatalf("audio = %d bytes", len(audio))
 	}
 }
+
+// The voice follows the heat: the same voice at 1 and 2, slower and breathier from 3
+// up, and never faster than plain.
+func TestHeatShapesTheDeliveryOnlyOnceSheIsFlirting(t *testing.T) {
+	plain := HeatDelivery(0)
+	if HeatDelivery(1) != plain || HeatDelivery(2) != plain {
+		t.Fatalf("an ordinary evening should sound like every other: %+v %+v", HeatDelivery(1), HeatDelivery(2))
+	}
+	last := plain
+	for heat := 3; heat <= 5; heat++ {
+		d := HeatDelivery(heat)
+		if d.LengthScale <= last.LengthScale || d.NoiseScale <= last.NoiseScale || d.SentenceSilence <= last.SentenceSilence {
+			t.Errorf("heat %d is not slower and breathier than the level below: %+v vs %+v", heat, d, last)
+		}
+		last = d
+	}
+	if HeatDelivery(9) != plain || HeatDelivery(-1) != plain {
+		t.Errorf("an unknown heat should read plainly")
+	}
+}

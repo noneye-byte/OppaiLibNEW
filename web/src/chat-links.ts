@@ -6,7 +6,7 @@
 // items a reply named.
 
 import { css, html, nothing, type TemplateResult } from "lit";
-import { api, type LibbyAction, type LibbyAttachment, type LibbyLink, type StoredChatMessage } from "./api.js";
+import { api, type LibbyActContext, type LibbyAction, type LibbyAttachment, type LibbyLink, type StoredChatMessage } from "./api.js";
 
 /**
  * The pictures already seen in this conversation, oldest first.
@@ -78,10 +78,18 @@ export function recentHeat(messages: StoredChatMessage[], limit = 8): number[] {
     knows how to route it; nothing below here needs to know that. */
 export const OPEN_MEDIA_EVENT = "oppai-open-media";
 
-export function requestOpenMedia(source: EventTarget, id: number): void {
-  source.dispatchEvent(new CustomEvent<{ id: number }>(OPEN_MEDIA_EVENT, {
-    detail: { id }, bubbles: true, composed: true,
+export function requestOpenMedia(source: EventTarget, id: number, at?: number): void {
+  source.dispatchEvent(new CustomEvent<{ id: number; at?: number }>(OPEN_MEDIA_EVENT, {
+    detail: { id, at }, bubbles: true, composed: true,
   }));
+}
+
+/** m:ss or h:mm:ss, the way a person names a moment in a video. */
+export function formatMoment(seconds: number): string {
+  const total = Math.max(0, Math.round(seconds));
+  const h = Math.floor(total / 3600), m = Math.floor((total % 3600) / 60), s = total % 60;
+  const mm = h > 0 ? String(m).padStart(2, "0") : String(m);
+  return `${h > 0 ? `${h}:` : ""}${mm}:${String(s).padStart(2, "0")}`;
 }
 
 /** Icon per library kind, matching the nav so a chip reads as the same object. */
@@ -206,8 +214,9 @@ export function renderActionCards(
 export class ActionApprovals {
   private states = new Map<string, { state: ActionState; message?: string }>();
 
-  /** `onChange` is the host's requestUpdate: this is plain state, not reactive. */
-  constructor(private onChange: () => void) {}
+  /** `onChange` is the host's requestUpdate: this is plain state, not reactive.
+      `context` is read when Allow is pressed — see LibbyActContext. */
+  constructor(private onChange: () => void, private context: () => LibbyActContext = () => ({})) {}
 
   stateOf = (action: LibbyAction) => this.states.get(action.id) ?? { state: "pending" as ActionState };
 
@@ -223,8 +232,12 @@ export class ActionApprovals {
     }
     this.set(action.id, "running");
     try {
-      await api.libbyAct(action);
-      this.set(action.id, "done", SUCCESS_STATUS[action.kind]);
+      const result = await api.libbyAct(action, this.context());
+      let status = SUCCESS_STATUS[action.kind];
+      if (action.kind === "shelf" && typeof result.count === "number") {
+        status = `${result.count} things on “${result.name ?? "Libby's pick"}” — it's in your collections.`;
+      }
+      this.set(action.id, "done", status);
     } catch (error) {
       this.set(action.id, "failed", (error as Error).message);
     }
@@ -244,6 +257,7 @@ const SUCCESS_STATUS: Record<string, string> = {
   tag: "Tags added.",
   favorite: "Favorited.",
   rename: "Renamed.",
+  shelf: "The shelf is in your collections.",
 };
 
 const DEFAULT_STATUS: Record<ActionState, string> = {
@@ -304,7 +318,7 @@ export const attachmentStyles = css`
  */
 export function renderAttachments(
   attachments: LibbyAttachment[] | undefined,
-  open: (id: number) => void,
+  open: (id: number, at?: number) => void,
   from = "your library",
 ): TemplateResult | typeof nothing {
   if (!attachments?.length) return nothing;
@@ -318,11 +332,14 @@ export function renderAttachments(
         ${item.self ? nothing : html`<figcaption>${item.title}</figcaption>`}
       </figure>`;
     }
-    return html`<button class="attached-item" title=${`Open ${item.title}`} @click=${() => open(item.id)}>
+    // A moment she handed over opens the video there, and the card says so: "Open
+    // video at 4:10" is the difference between the whole thing and the part.
+    const at = item.at && item.at > 0 ? item.at : undefined;
+    return html`<button class="attached-item" title=${`Open ${item.title}`} @click=${() => open(item.id, at)}>
       ${item.hasThumb
         ? html`<img src=${api.thumbURL(item.id)} alt="" loading="lazy"/>`
         : html`<span class="attached-icon"><span class="material-symbols-rounded" style="font-size:24px">${KIND_ICONS[item.kind] ?? "folder"}</span></span>`}
-      <span class="attached-copy"><strong>${item.title}</strong><span>Open ${item.kind}</span></span>
+      <span class="attached-copy"><strong>${item.title}</strong><span>Open ${item.kind}${at ? ` at ${formatMoment(at)}` : ""}</span></span>
     </button>`;
   })}</div>`;
 }
