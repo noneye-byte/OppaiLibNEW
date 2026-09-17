@@ -133,6 +133,8 @@ import kotlinx.coroutines.launch
 import net.fourbakers.oppailib.data.ComicInfo
 import net.fourbakers.oppailib.data.GamePlayInfo
 import net.fourbakers.oppailib.data.GameSave
+import net.fourbakers.oppailib.data.LaunchRequest
+import net.fourbakers.oppailib.data.LaunchyStatus
 import net.fourbakers.oppailib.data.Media
 import net.fourbakers.oppailib.data.MediaPatch
 import net.fourbakers.oppailib.data.Repository
@@ -345,11 +347,18 @@ private fun GamePage(repo: Repository, media: Media) {
     // reads as "no Play button" rather than as an error.
     var playInfo by remember(media.id) { mutableStateOf<GamePlayInfo?>(null) }
     var playing by remember(media.id) { mutableStateOf(false) }
+    // The desktop launcher, and the site the game came from. `remote` starts as what
+    // the item carried and is replaced by a fresh read when the user asks for one.
+    var launchy by remember(media.id) { mutableStateOf<LaunchyStatus?>(null) }
+    var remote by remember(media.id, media.remote) { mutableStateOf(media.remote) }
+    var launching by remember(media.id) { mutableStateOf(false) }
+    var checking by remember(media.id) { mutableStateOf(false) }
     LaunchedEffect(media.id) {
         runCatching { repo.api.gameGallery(media.id).items }.onSuccess { userGallery = it }
         runCatching { repo.api.gameSaves(media.id).items }.onSuccess { saves = it }
         runCatching { repo.api.gamePlayInfo(media.id) }
             .onSuccess { playInfo = it.takeIf { info -> info.playable } }
+        runCatching { repo.api.launchyStatus() }.onSuccess { launchy = it }
     }
 
     // Backing a save up: pick any file, send it as-is. No type filter — a save is
@@ -472,6 +481,100 @@ private fun GamePage(repo: Repository, media: Media) {
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.align(Alignment.Start).padding(top = 6.dp),
                 )
+            }
+        }
+
+        // Launch on the PC. Offered only while Launchy is connected and has the game
+        // installed: a button that queues a launch for a launcher that is not there
+        // would start the game unbidden hours later.
+        media.launchy?.takeIf { it.installed }?.let { link ->
+            val connected = launchy?.connected == true
+            val runningNow = launchy?.running?.contains(media.id) == true
+            Button(
+                enabled = connected && !launching,
+                onClick = {
+                    launching = true
+                    scope.launch {
+                        try {
+                            val cmd = repo.api.launchyLaunch(LaunchRequest(media.id))
+                            val started = System.currentTimeMillis()
+                            while (System.currentTimeMillis() - started < 30_000) {
+                                delay(1500)
+                                val st = repo.api.launchyLaunchStatus(cmd.id)
+                                if (st.status == "done") { repo.report("Launchy started it.", "happy"); break }
+                                if (st.status == "failed") { repo.report(st.error.ifBlank { "Launchy could not start it." }); break }
+                            }
+                        } catch (_: Exception) {
+                            // The shared client already surfaced the failure through the mascot.
+                        } finally {
+                            launching = false
+                            runCatching { repo.api.launchyStatus() }.onSuccess { launchy = it }
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth().padding(top = 20.dp),
+            ) {
+                Icon(Icons.Filled.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+                Text(
+                    when {
+                        launching -> "Starting…"
+                        !connected -> "Launchy is offline"
+                        runningNow -> "Running on PC"
+                        else -> "Launch on PC"
+                    },
+                    modifier = Modifier.padding(start = 8.dp),
+                )
+            }
+            val hours = if (link.playSeconds >= 3600) "%.1f h".format(link.playSeconds / 3600.0) else "${link.playSeconds / 60} min"
+            Text(
+                "$hours played on the PC · ${link.launchCount} launches" + (if (link.version.isNotBlank()) " · v${link.version}" else ""),
+                color = Color.White.copy(alpha = 0.6f),
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.align(Alignment.Start).padding(top = 6.dp),
+            )
+        }
+
+        // Where the game came from, and whether the site has moved on.
+        remote?.let { r ->
+            Column(Modifier.fillMaxWidth().padding(top = 16.dp)) {
+                Text(
+                    if (r.hasUpdate) "Update available: ${r.knownVersion.ifBlank { "your version" }} → ${r.latestVersion}"
+                    else "${r.knownVersion.ifBlank { r.latestVersion.ifBlank { "Version unknown" } }} on ${r.label}",
+                    color = if (r.hasUpdate) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = 0.8f),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                if (r.hasUpdate && r.changelog.isNotBlank()) {
+                    Text(
+                        r.changelog,
+                        color = Color.White.copy(alpha = 0.6f),
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 8,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
+                    TextButton(
+                        enabled = !checking,
+                        onClick = {
+                            checking = true
+                            scope.launch {
+                                try {
+                                    val result = repo.api.checkGameRemote(media.id)
+                                    remote = result.remote
+                                    if (result.error.isNotBlank()) repo.report(result.error)
+                                    else repo.report(if (result.changed) "A newer version is out: ${result.remote.latestVersion}." else "You have the latest version.", "happy")
+                                } catch (_: Exception) {
+                                } finally { checking = false }
+                            }
+                        },
+                    ) { Text(if (checking) "Checking…" else "Check for update") }
+                    if (r.hasUpdate) {
+                        TextButton(onClick = {
+                            scope.launch { runCatching { repo.api.acknowledgeGameRemote(media.id) }.onSuccess { remote = it } }
+                        }) { Text("I have it") }
+                    }
+                    TextButton(onClick = { uriHandler.openUri(r.url) }) { Text("Open page") }
+                }
             }
         }
 

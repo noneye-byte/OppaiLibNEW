@@ -33,10 +33,17 @@ import net.fourbakers.oppailib.data.Repository
  * proxy, so the change lands in InvokeAI's model manager, not in some local copy.
  */
 @Composable
-fun ModelEditDialog(repo: Repository, name: String, onDismiss: () -> Unit, onSaved: () -> Unit) {
+fun ModelEditDialog(
+    repo: Repository,
+    name: String,
+    onDismiss: () -> Unit,
+    onSaved: () -> Unit,
+    onDeleted: (key: String) -> Unit = {},
+) {
     var meta by remember { mutableStateOf<GenModelMeta?>(null) }
     var error by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
+    var confirmDelete by remember { mutableStateOf(false) }
 
     var displayName by remember { mutableStateOf("") }
     var description by remember { mutableStateOf("") }
@@ -104,6 +111,35 @@ fun ModelEditDialog(repo: Repository, name: String, onDismiss: () -> Unit, onSav
         }
     }
 
+    /** Removes the record from InvokeAI — file included when InvokeAI manages it. */
+    fun delete() {
+        val m = meta ?: return
+        if (busy) return
+        busy = true
+        scope.launch {
+            runCatching { repo.api.deleteModel(m.key) }
+                .onSuccess {
+                    repo.report(if (m.type == "lora") "LoRA deleted" else "Model deleted")
+                    onDeleted(m.key)
+                    onDismiss()
+                }
+                .onFailure { error = it.message ?: "Couldn't delete the model" }
+            busy = false
+            confirmDelete = false
+        }
+    }
+
+    if (confirmDelete) {
+        val m = meta
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text("Delete ${if (m?.type == "lora") "LoRA" else "model"}?") },
+            text = { Text("“${m?.name ?: name}” is removed from InvokeAI, and its file with it.") },
+            confirmButton = { TextButton(onClick = { delete() }, enabled = !busy) { Text("Delete") } },
+            dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } },
+        )
+    }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (meta?.type == "lora") "Edit LoRA" else "Edit model") },
@@ -157,6 +193,13 @@ fun ModelEditDialog(repo: Repository, name: String, onDismiss: () -> Unit, onSav
         confirmButton = {
             TextButton(onClick = { save() }, enabled = meta != null && !busy) { Text("Save") }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = {
+            Row {
+                TextButton(onClick = { confirmDelete = true }, enabled = meta != null && !busy) {
+                    Text("Delete", color = MaterialTheme.colorScheme.error)
+                }
+                TextButton(onClick = onDismiss) { Text("Cancel") }
+            }
+        },
     )
 }

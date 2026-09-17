@@ -76,6 +76,12 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 	if next.CivitaiAPIKey == "" && next.CivitaiKeySet {
 		next.CivitaiAPIKey = current.CivitaiAPIKey
 	}
+	if next.ItchCookie == "" && next.ItchCookieSet {
+		next.ItchCookie = current.ItchCookie
+	}
+	if next.F95Cookie == "" && next.F95CookieSet {
+		next.F95Cookie = current.F95Cookie
+	}
 	if next.Rule34APIKey == "" && next.Rule34APIKeySet {
 		next.Rule34APIKey = current.Rule34APIKey
 	}
@@ -116,6 +122,7 @@ func (s *Server) ApplySettings(cur settings.Settings) {
 	s.scraper.SetOptions(cur.ScrapeUserAgent, cur.ScrapeDelay(), cur.ScrapeRespectRobots)
 	s.scraper.SetF95Credentials(cur.F95Username, cur.F95Password)
 	s.sources.SetRule34Credentials(cur.Rule34UserID, cur.Rule34APIKey)
+	s.applyGameSiteSettings(cur)
 	s.applyTTSSettings(cur)
 	if (!previous.Enabled || !previous.AutoTag) && cur.AIEnabled && cur.AIAutoTag {
 		go s.backfillAutoTags()

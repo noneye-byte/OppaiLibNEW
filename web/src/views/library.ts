@@ -77,11 +77,14 @@ const VIEW_MODULES: Record<ViewKey, () => Promise<unknown>> = {
   // opening a picture does not also fetch the dialog's text fields and chips.
   viewer: () => import("./viewer.js"),
   scrape: () => import("./scrape-dialog.js"),
+  // The Games section's other faces — itch.io, F95zone, updates waiting — are one
+  // module, fetched when a face other than the library is first picked.
+  gamebrowse: () => import("./game-browse.js"),
 };
 
 /** Which chunk a section lives in. Create and the studio are one module in two modes,
  *  so both map to the same key. */
-type ViewKey = "settings" | "browse" | "imagegen" | "chat" | "viewer" | "scrape";
+type ViewKey = "settings" | "browse" | "imagegen" | "chat" | "viewer" | "scrape" | "gamebrowse";
 function viewKey(section: string): ViewKey | null {
   if (section === "studio") return "imagegen";
   return section in VIEW_MODULES ? (section as ViewKey) : null;
@@ -129,6 +132,15 @@ interface NavSection {
   label: string;
   icon: string;
 }
+
+type GameFace = "library" | "itch" | "f95" | "updates";
+
+const GAME_FACES: { id: GameFace; label: string; icon: string }[] = [
+  { id: "library", label: "Library", icon: "sports_esports" },
+  { id: "itch", label: "itch.io", icon: "travel_explore" },
+  { id: "f95", label: "F95zone", icon: "travel_explore" },
+  { id: "updates", label: "Updates", icon: "update" },
+];
 
 const NAV_SECTIONS: NavSection[] = [
   { id: "home", label: "Home", icon: "home" },
@@ -195,6 +207,12 @@ export class OppaiLibrary extends LitElement {
   /** Named, ordered lists. The tables were in the schema from the first commit with
    *  nothing to reach them; see handlers_collections.go. */
   @state() private collections: Collection[] = [];
+  /** Which face of the Games section is showing: the shelf, one of the two
+   *  catalogues, or the updates waiting. The catalogues are not the library — nothing
+   *  is in it until added — but they are how games get onto the shelf, and a game's
+   *  update is a fact about the shelf, so all four live under the one tab. */
+  @state() private gameFace: GameFace = "library";
+
   /** Which collection is open, when the section is "collections". */
   @state() private openCollection: Collection | null = null;
   /** What has been opened on this device, newest first. Feeds Home's hero and its
@@ -721,6 +739,10 @@ export class OppaiLibrary extends LitElement {
         gap: 8px;
         margin: 18px 0 24px;
         flex-wrap: wrap;
+      }
+      /* The Games section's face strip sits tight under the title, above the tag chips. */
+      .chips.game-faces {
+        margin: 6px 0 14px;
       }
       .chip {
         height: 36px;
@@ -2811,6 +2833,21 @@ export class OppaiLibrary extends LitElement {
         }))
       : [];
 
+    const faces = kind === "game" ? this.renderGameFaces() : nothing;
+    if (kind === "game" && this.gameFace !== "library") {
+      return html`
+        <div>
+          <div class="grid-head">
+            <h2 class="grid-title">${title}</h2>
+          </div>
+          ${faces}
+          ${this.ready("gamebrowse")
+            ? html`<oppai-game-browse .site=${this.gameFace} @imported=${() => this.refresh()}></oppai-game-browse>`
+            : this.renderViewLoading()}
+        </div>
+      `;
+    }
+
     return html`
       <div>
         <div class="grid-head">
@@ -2818,6 +2855,7 @@ export class OppaiLibrary extends LitElement {
           <span class="grid-count">${count}</span>
           ${this.renderSort()}
         </div>
+        ${faces}
 
         ${chips.length > 1
           ? html`<div class="chips" role="group" aria-label="Filter by tag">
@@ -2863,6 +2901,31 @@ export class OppaiLibrary extends LitElement {
               ${this.renderMore()}`}
       </div>
     `;
+  }
+
+  /** The Games section's face strip. Picking a catalogue starts its chunk loading;
+   *  the element is written out once the chunk is in (see ready). */
+  private renderGameFaces() {
+    return html`<div class="chips game-faces" role="tablist" aria-label="Games">
+      ${GAME_FACES.map((f) => html`<button
+        class="chip"
+        role="tab"
+        aria-selected=${this.gameFace === f.id ? "true" : "false"}
+        aria-pressed=${this.gameFace === f.id ? "true" : "false"}
+        @click=${() => this.pickGameFace(f.id)}
+        style="background:${this.gameFace === f.id ? "var(--oppai-accent)" : "transparent"}; color:${this.gameFace === f.id
+          ? "var(--oppai-on-accent)"
+          : "var(--oppai-text-dim)"}; border:1px solid ${this.gameFace === f.id ? "var(--oppai-accent)" : "var(--oppai-border-strong)"};"
+      >
+        <span aria-hidden="true" class="material-symbols-rounded" style="font-size:16px;">${f.icon}</span>
+        ${f.label}
+      </button>`)}
+    </div>`;
+  }
+
+  private pickGameFace(face: GameFace) {
+    if (face !== "library") this.ensureView("gamebrowse");
+    this.gameFace = face;
   }
 
   /** The gap between asking for a screen and having its code. */

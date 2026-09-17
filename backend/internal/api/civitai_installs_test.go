@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -21,6 +22,7 @@ type fakeInvoke struct {
 	coverBytes  int
 	coverKey    string
 	description string
+	deleted     []string
 }
 
 func newFakeInvoke(t *testing.T) (*fakeInvoke, *httptest.Server) {
@@ -50,6 +52,9 @@ func newFakeInvoke(t *testing.T) (*fakeInvoke, *httptest.Server) {
 			f.coverBytes = len(body)
 			f.coverKey = strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/v2/models/i/"), "/image")
 			fmt.Fprint(w, `{}`)
+		case strings.HasPrefix(r.URL.Path, "/api/v2/models/i/") && r.Method == http.MethodDelete:
+			f.deleted = append(f.deleted, strings.TrimPrefix(r.URL.Path, "/api/v2/models/i/"))
+			w.WriteHeader(http.StatusNoContent)
 		case strings.HasPrefix(r.URL.Path, "/api/v2/models/i/") && r.Method == http.MethodPatch:
 			var body map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&body)
@@ -64,9 +69,17 @@ func newFakeInvoke(t *testing.T) (*fakeInvoke, *httptest.Server) {
 	return f, srv
 }
 
-// A fake Civitai that knows one model with two versions and answers by hash.
-func newFakeCivitai(t *testing.T) *httptest.Server {
+// A fake Civitai that knows one model with two versions and answers by hash. It
+// remembers which preview it was asked for, so a test can tell the chosen cover
+// from the default one.
+type fakeCivitai struct {
+	mu       sync.Mutex
+	previews []string
+}
+
+func newFakeCivitai(t *testing.T) (*fakeCivitai, *httptest.Server) {
 	t.Helper()
+	f := &fakeCivitai{}
 	const model = `{"id":4384,"name":"DreamShaper","type":"Checkpoint","nsfw":false,
 		"description":"<h1>DreamShaper</h1><p>A <b>versatile</b> model.<script>x()</script></p>",
 		"tags":["base model","anime"],"creator":{"username":"Lykon","image":"https://image.civitai.com/a.jpeg"},
@@ -100,7 +113,16 @@ func newFakeCivitai(t *testing.T) *httptest.Server {
 				return
 			}
 			fmt.Fprint(w, `{"id":5,"username":"Lykon","image":"https://image.civitai.com/a.jpeg"}`)
+		case r.URL.Path == "/users/5":
+			fmt.Fprint(w, `{"id":5,"username":"Lykon","profile":{"coverImage":{"id":"cover-uuid"}}}`)
+		case r.URL.Path == "/collections":
+			fmt.Fprintf(w, `{"items":[{"id":18010391,"name":"Challenge Entries","description":" ","type":"Image","nsfwLevel":1,"itemCount":1,"coverImageUrl":null,"user":{"id":2803593,"username":"hermes7"}},
+				{"id":18009922,"name":"Clothes","type":"Model","nsfwLevel":29,"itemCount":117,"coverImageUrl":"https://image.civitai.com/c.jpeg","user":{"id":11,"username":"tripsix"}}],
+				"metadata":{"nextCursor":17981229}}`)
 		case r.URL.Path == "/preview.jpeg":
+			f.mu.Lock()
+			f.previews = append(f.previews, r.URL.Query().Get("from"))
+			f.mu.Unlock()
 			w.Header().Set("Content-Type", "image/jpeg")
 			_, _ = w.Write([]byte("jpegjpegjpeg"))
 		default:
@@ -108,12 +130,17 @@ func newFakeCivitai(t *testing.T) *httptest.Server {
 		}
 	}))
 	t.Cleanup(srv.Close)
-	return srv
+	return f, srv
 }
 
 func civitaiTestServer(t *testing.T) (*Server, string, *fakeInvoke) {
+	s, token, inv, _ := civitaiTestServerFull(t)
+	return s, token, inv
+}
+
+func civitaiTestServerFull(t *testing.T) (*Server, string, *fakeInvoke, *fakeCivitai) {
 	t.Helper()
-	civ := newFakeCivitai(t)
+	civFake, civ := newFakeCivitai(t)
 	inv, invSrv := newFakeInvoke(t)
 	s, token := newTestServer(t)
 	set := s.settings.Get()
@@ -126,16 +153,19 @@ func civitaiTestServer(t *testing.T) (*Server, string, *fakeInvoke) {
 	orig := civitaiHTTP.Transport
 	civitaiHTTP.Transport = rewriteTransport{to: civ.URL}
 	t.Cleanup(func() { civitaiHTTP.Transport = orig })
-	return s, token, inv
+	return s, token, inv, civFake
 }
 
-// rewriteTransport sends every image.civitai.com request to the fake's /preview.jpeg.
+// rewriteTransport sends every image.civitai.com request to the fake's
+// /preview.jpeg, naming the picture that was asked for in ?from=.
 type rewriteTransport struct{ to string }
 
 func (rt rewriteTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	if strings.HasSuffix(r.URL.Host, "civitai.com") {
+		from := r.URL.String()
 		u := strings.TrimPrefix(rt.to, "http://")
 		r.URL.Scheme, r.URL.Host, r.URL.Path = "http", u, "/preview.jpeg"
+		r.URL.RawQuery = "from=" + url.QueryEscape(from)
 	}
 	return http.DefaultTransport.RoundTrip(r)
 }

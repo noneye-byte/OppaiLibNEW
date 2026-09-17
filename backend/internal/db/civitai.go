@@ -26,6 +26,10 @@ type CivitaiLink struct {
 	TrainedWords    []string
 	Previews        []string
 	CheckedAt       int64
+	// CoverURL is the showcase picture chosen as the InvokeAI cover, when someone
+	// chose one rather than taking the first. Kept so re-fetching from the
+	// catalogue does not quietly put the first picture back.
+	CoverURL string
 }
 
 // PutCivitaiLink records or replaces what is known about one model.
@@ -35,18 +39,26 @@ func (d *DB) PutCivitaiLink(ctx context.Context, l CivitaiLink) error {
 	_, err := d.sql.ExecContext(ctx, `
 		INSERT INTO civitai_models(model_key, hash, model_id, version_id, latest_version_id,
 			model_name, version_name, model_type, base_model, creator, description,
-			trained_words, previews, checked_at)
-		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			trained_words, previews, checked_at, cover_url)
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(model_key) DO UPDATE SET
 			hash = excluded.hash, model_id = excluded.model_id, version_id = excluded.version_id,
 			latest_version_id = excluded.latest_version_id, model_name = excluded.model_name,
 			version_name = excluded.version_name, model_type = excluded.model_type,
 			base_model = excluded.base_model, creator = excluded.creator,
 			description = excluded.description, trained_words = excluded.trained_words,
-			previews = excluded.previews, checked_at = excluded.checked_at`,
+			previews = excluded.previews, checked_at = excluded.checked_at,
+			cover_url = excluded.cover_url`,
 		l.ModelKey, l.Hash, l.ModelID, l.VersionID, l.LatestVersionID,
 		l.ModelName, l.VersionName, l.ModelType, l.BaseModel, l.Creator, l.Description,
-		string(words), string(previews), now())
+		string(words), string(previews), now(), l.CoverURL)
+	return err
+}
+
+// SetCivitaiCover records which picture is a model's cover. Nothing else about
+// the link changes.
+func (d *DB) SetCivitaiCover(ctx context.Context, modelKey, coverURL string) error {
+	_, err := d.sql.ExecContext(ctx, `UPDATE civitai_models SET cover_url = ? WHERE model_key = ?`, coverURL, modelKey)
 	return err
 }
 
@@ -55,7 +67,7 @@ func (d *DB) CivitaiLinks(ctx context.Context) (map[string]CivitaiLink, error) {
 	rows, err := d.sql.QueryContext(ctx, `
 		SELECT model_key, hash, model_id, version_id, latest_version_id, model_name,
 			version_name, model_type, base_model, creator, description, trained_words,
-			previews, checked_at
+			previews, checked_at, cover_url
 		FROM civitai_models`)
 	if err != nil {
 		return nil, err
@@ -67,7 +79,7 @@ func (d *DB) CivitaiLinks(ctx context.Context) (map[string]CivitaiLink, error) {
 		var words, previews string
 		if err := rows.Scan(&l.ModelKey, &l.Hash, &l.ModelID, &l.VersionID, &l.LatestVersionID,
 			&l.ModelName, &l.VersionName, &l.ModelType, &l.BaseModel, &l.Creator, &l.Description,
-			&words, &previews, &l.CheckedAt); err != nil {
+			&words, &previews, &l.CheckedAt, &l.CoverURL); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal([]byte(words), &l.TrainedWords)
@@ -100,24 +112,29 @@ type CivitaiInstall struct {
 	ModelID   int64
 	VersionID int64
 	CreatedAt int64
+	// ReplaceKey is the InvokeAI record this download supersedes — set when the
+	// install is an update to a newer version — and is deleted once the new file
+	// is registered and dressed. Empty for a plain install.
+	ReplaceKey string
 }
 
 // AddCivitaiInstall promises to dress a model once InvokeAI has fetched it. Keyed by
 // the download URL, which is also how InvokeAI names the job's source, so the two
 // can be matched without InvokeAI having told us the job id first.
-func (d *DB) AddCivitaiInstall(ctx context.Context, source string, modelID, versionID int64) error {
+func (d *DB) AddCivitaiInstall(ctx context.Context, source string, modelID, versionID int64, replaceKey string) error {
 	_, err := d.sql.ExecContext(ctx, `
-		INSERT INTO civitai_installs(source, model_id, version_id, created_at) VALUES(?, ?, ?, ?)
+		INSERT INTO civitai_installs(source, model_id, version_id, created_at, replace_key) VALUES(?, ?, ?, ?, ?)
 		ON CONFLICT(source) DO UPDATE SET model_id = excluded.model_id,
-			version_id = excluded.version_id, created_at = excluded.created_at`,
-		source, modelID, versionID, now())
+			version_id = excluded.version_id, created_at = excluded.created_at,
+			replace_key = excluded.replace_key`,
+		source, modelID, versionID, now(), replaceKey)
 	return err
 }
 
 // CivitaiInstalls lists the promises still outstanding.
 func (d *DB) CivitaiInstalls(ctx context.Context) ([]CivitaiInstall, error) {
 	rows, err := d.sql.QueryContext(ctx,
-		`SELECT source, model_id, version_id, created_at FROM civitai_installs ORDER BY created_at`)
+		`SELECT source, model_id, version_id, created_at, replace_key FROM civitai_installs ORDER BY created_at`)
 	if err != nil {
 		return nil, err
 	}
@@ -125,7 +142,7 @@ func (d *DB) CivitaiInstalls(ctx context.Context) ([]CivitaiInstall, error) {
 	var out []CivitaiInstall
 	for rows.Next() {
 		var in CivitaiInstall
-		if err := rows.Scan(&in.Source, &in.ModelID, &in.VersionID, &in.CreatedAt); err != nil {
+		if err := rows.Scan(&in.Source, &in.ModelID, &in.VersionID, &in.CreatedAt, &in.ReplaceKey); err != nil {
 			return nil, err
 		}
 		out = append(out, in)

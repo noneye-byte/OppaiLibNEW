@@ -119,6 +119,15 @@ func Open(path string) (*DB, error) {
 	if err := ensureColumn(sqldb, "media", "description_enc", "BLOB"); err != nil {
 		return nil, err
 	}
+	// Which showcase picture was chosen as a model's cover, so fetching the
+	// catalogue again keeps the choice; and which record an install replaces, so
+	// updating a model retires the old file once the new one is in.
+	if err := ensureColumn(sqldb, "civitai_models", "cover_url", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return nil, err
+	}
+	if err := ensureColumn(sqldb, "civitai_installs", "replace_key", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return nil, err
+	}
 	return &DB{sql: sqldb, wal: wal}, nil
 }
 

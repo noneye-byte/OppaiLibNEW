@@ -172,7 +172,9 @@ func cursorString(v any) string {
 	case string:
 		return c
 	case float64:
-		return strings.TrimSuffix(fmt.Sprintf("%v", c), ".0")
+		// Not %v: a collection cursor is an id in the tens of millions, which %v
+		// writes in exponent form and the catalogue then rejects.
+		return strconv.FormatFloat(c, 'f', -1, 64)
 	default:
 		return ""
 	}
@@ -593,6 +595,11 @@ type civitaiImageOut struct {
 	Height         int     `json:"height"`
 	NSFWLevel      int     `json:"nsfwLevel"`
 	Username       string  `json:"username,omitempty"`
+	// PostID groups the pictures someone uploaded together; CreatedAt is when.
+	// The catalogue has no endpoint for posts, so a person's posts are rebuilt
+	// from their image feed by these two (civitai_account.go).
+	PostID    int64  `json:"postId,omitempty"`
+	CreatedAt string `json:"createdAt,omitempty"`
 	Prompt         string  `json:"prompt,omitempty"`
 	NegativePrompt string  `json:"negativePrompt,omitempty"`
 	Sampler        string  `json:"sampler,omitempty"`
@@ -631,27 +638,45 @@ func metaNumber(m map[string]any, keys ...string) float64 {
 	return 0
 }
 
-// handleCivitaiImages lists posted images: a version's showcase, a model's, or a
-// user's, newest or most-reacted first. The image URLs come back for the proxy.
-//
-//	versionId= | modelId= | username=   what to list (one of)
-//	sort=newest | reactions | comments   default reactions
-//	period=… nsfw=0 cursor=…             as for search
-func (s *Server) handleCivitaiImages(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-	params := url.Values{"limit": {"30"}}
-	params.Set("nsfw", map[bool]string{true: "X", false: "None"}[q.Get("nsfw") == "" || isTruthy(q.Get("nsfw"))])
-	if id, _ := strconv.ParseInt(q.Get("versionId"), 10, 64); id > 0 {
-		params.Set("modelVersionId", strconv.FormatInt(id, 10))
-	} else if id, _ := strconv.ParseInt(q.Get("modelId"), 10, 64); id > 0 {
-		params.Set("modelId", strconv.FormatInt(id, 10))
-	} else if user := strings.TrimSpace(q.Get("username")); user != "" {
-		params.Set("username", user)
-	} else {
-		writeErr(w, http.StatusBadRequest, "versionId, modelId or username is required")
-		return
+// civitaiImageQuery is one request to the catalogue's image feed: what to list
+// and how, as the handler and the posts feed both build it.
+type civitaiImageQuery struct {
+	VersionID, ModelID, PostID, CollectionID int64
+	Username                                 string
+	Sort, Period, Cursor                     string
+	NSFW                                     bool
+	Limit                                    int
+}
+
+// civitaiImagePage is one page of the feed, decoded and filtered to what the
+// proxy will serve.
+type civitaiImagePage struct {
+	Items      []civitaiImageOut
+	NextCursor string
+}
+
+// civitaiImages fetches one page of posted images. Which subject to list is the
+// caller's to have checked; without one the catalogue lists everything.
+func (s *Server) civitaiImages(ctx context.Context, q civitaiImageQuery) (*civitaiImagePage, error) {
+	limit := q.Limit
+	if limit <= 0 {
+		limit = 30
 	}
-	switch q.Get("sort") {
+	params := url.Values{"limit": {strconv.Itoa(limit)}}
+	params.Set("nsfw", map[bool]string{true: "X", false: "None"}[q.NSFW])
+	switch {
+	case q.VersionID > 0:
+		params.Set("modelVersionId", strconv.FormatInt(q.VersionID, 10))
+	case q.ModelID > 0:
+		params.Set("modelId", strconv.FormatInt(q.ModelID, 10))
+	case q.PostID > 0:
+		params.Set("postId", strconv.FormatInt(q.PostID, 10))
+	case q.CollectionID > 0:
+		params.Set("collectionId", strconv.FormatInt(q.CollectionID, 10))
+	case q.Username != "":
+		params.Set("username", q.Username)
+	}
+	switch q.Sort {
 	case "newest":
 		params.Set("sort", "Newest")
 	case "comments":
@@ -659,20 +684,22 @@ func (s *Server) handleCivitaiImages(w http.ResponseWriter, r *http.Request) {
 	default:
 		params.Set("sort", "Most Reactions")
 	}
-	if period, ok := civitaiPeriods[strings.ToLower(q.Get("period"))]; ok {
+	if period, ok := civitaiPeriods[strings.ToLower(q.Period)]; ok {
 		params.Set("period", period)
 	}
-	if cursor := q.Get("cursor"); cursor != "" {
-		if page, ok := strings.CutPrefix(cursor, "page:"); ok {
+	if q.Cursor != "" {
+		if page, ok := strings.CutPrefix(q.Cursor, "page:"); ok {
 			params.Set("page", page)
 		} else {
-			params.Set("cursor", cursor)
+			params.Set("cursor", q.Cursor)
 		}
 	}
 	var listing struct {
 		Items []struct {
-			ID       int64  `json:"id"`
-			Username string `json:"username"`
+			ID        int64  `json:"id"`
+			Username  string `json:"username"`
+			PostID    int64  `json:"postId"`
+			CreatedAt string `json:"createdAt"`
 			civitaiRawImage
 		} `json:"items"`
 		Metadata struct {
@@ -680,9 +707,8 @@ func (s *Server) handleCivitaiImages(w http.ResponseWriter, r *http.Request) {
 			NextPage   string `json:"nextPage"`
 		} `json:"metadata"`
 	}
-	if err := s.civitaiGet(r.Context(), "/images", params, &listing, 8<<20); err != nil {
-		writeErr(w, civitaiStatus(err), err.Error())
-		return
+	if err := s.civitaiGet(ctx, "/images", params, &listing, 16<<20); err != nil {
+		return nil, err
 	}
 	out := make([]civitaiImageOut, 0, len(listing.Items))
 	for _, it := range listing.Items {
@@ -692,6 +718,7 @@ func (s *Server) handleCivitaiImages(w http.ResponseWriter, r *http.Request) {
 		img := civitaiImageOut{
 			ID: it.ID, URL: it.URL, Width: it.Width, Height: it.Height,
 			NSFWLevel: int(it.NSFWLevel), Username: it.Username,
+			PostID: it.PostID, CreatedAt: it.CreatedAt,
 		}
 		if m := it.Meta; m != nil {
 			img.Prompt = metaString(m, "prompt")
@@ -705,18 +732,46 @@ func (s *Server) handleCivitaiImages(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, img)
 	}
+	return &civitaiImagePage{Items: out, NextCursor: nextCursorOf(listing.Metadata)}, nil
+}
+
+// handleCivitaiImages lists posted images: a version's showcase, a model's, a
+// post's, a collection's, or a user's, newest or most-reacted first. The image
+// URLs come back for the proxy.
+//
+//	versionId= | modelId= | postId= | collectionId= | username=   what to list (one of)
+//	sort=newest | reactions | comments   default reactions
+//	period=… nsfw=0 cursor=…             as for search
+func (s *Server) handleCivitaiImages(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	num := func(k string) int64 { n, _ := strconv.ParseInt(q.Get(k), 10, 64); return max(n, 0) }
+	query := civitaiImageQuery{
+		VersionID: num("versionId"), ModelID: num("modelId"), PostID: num("postId"), CollectionID: num("collectionId"),
+		Username: strings.TrimSpace(q.Get("username")),
+		Sort:     q.Get("sort"), Period: q.Get("period"), Cursor: q.Get("cursor"),
+		NSFW:     q.Get("nsfw") == "" || isTruthy(q.Get("nsfw")),
+	}
+	if query.VersionID == 0 && query.ModelID == 0 && query.PostID == 0 && query.CollectionID == 0 && query.Username == "" {
+		writeErr(w, http.StatusBadRequest, "versionId, modelId, postId, collectionId or username is required")
+		return
+	}
+	page, err := s.civitaiImages(r.Context(), query)
+	if err != nil {
+		writeErr(w, civitaiStatus(err), err.Error())
+		return
+	}
 	// The catalogue shares generation data (the prompt behind a picture) only with
 	// an API key; without one every meta comes back null. Say so, so the client can
 	// explain an empty prompt panel rather than look broken.
 	withPrompts := 0
-	for _, img := range out {
+	for _, img := range page.Items {
 		if img.Prompt != "" {
 			withPrompts++
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"items":       out,
-		"nextCursor":  nextCursorOf(listing.Metadata),
+		"items":       page.Items,
+		"nextCursor":  page.NextCursor,
 		"withPrompts": withPrompts,
 		"keySet":      s.settings.Get().CivitaiAPIKey != "",
 	})
@@ -808,7 +863,12 @@ func (s *Server) handleCivitaiMe(w http.ResponseWriter, r *http.Request) {
 	if !civitaiHostAllowed(me.Image) {
 		me.Image = ""
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"id": me.ID, "username": me.Username, "image": me.Image})
+	// The profile's cover photo is not part of /me; civitai_account.go asks the
+	// user record for it and comes back empty when the catalogue keeps it to itself.
+	writeJSON(w, http.StatusOK, map[string]any{
+		"id": me.ID, "username": me.Username, "image": me.Image,
+		"cover": s.civitaiProfileCover(r.Context(), me.ID),
+	})
 }
 
 // ── installs ────────────────────────────────────────────────────────────────
@@ -845,7 +905,7 @@ func (s *Server) handleCivitaiInstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.ModelID > 0 && req.VersionID > 0 {
-		if err := s.db.AddCivitaiInstall(r.Context(), req.URL, req.ModelID, req.VersionID); err != nil {
+		if err := s.db.AddCivitaiInstall(r.Context(), req.URL, req.ModelID, req.VersionID, ""); err != nil {
 			s.log.Warn("civitai: record install", "err", err)
 		} else {
 			s.civitaiWatchInstalls()

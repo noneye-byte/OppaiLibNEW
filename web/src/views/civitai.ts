@@ -5,12 +5,16 @@ import { iconStyles, motionStyles } from "../theme.js";
 import {
   api,
   type CivitaiCategory,
+  type CivitaiCollection,
   type CivitaiImage,
   type CivitaiInstalled,
+  type CivitaiMe,
   type CivitaiModel,
+  type CivitaiPost,
   type CivitaiVersion,
   type InstallJob,
 } from "../api.js";
+import { mergeCivitaiPosts, postDate } from "../civitai-posts.js";
 import { promptSettingsFrom, type PromptSettings } from "../civitai-prompt.js";
 
 /**
@@ -20,21 +24,27 @@ import { promptSettingsFrom, type PromptSettings } from "../civitai-prompt.js";
  * Three pages. Browse searches the catalogue with the site's own filters and opens
  * a model's page: its description, versions, files, trigger words and the gallery
  * of pictures people posted with it, each with the prompt that made it — "use this
- * prompt" hands that to the studio. Account is the person the API key belongs to:
- * their models and their posted images. Installed is the studio's own models seen
- * from the catalogue's side — matched by file hash, with the cover, description and
- * trigger words a click away, and a note when a newer version has been published.
+ * prompt" hands that to the studio. Account is the person the API key belongs to,
+ * laid out like their profile on the site: models, posts, images and collections,
+ * newest first. Installed is the studio's own models seen from the catalogue's
+ * side — matched by file hash, with the cover, description and trigger words a
+ * click away, a note when a newer version has been published, and, per model, the
+ * version to follow, which showcase picture is the cover, an update to a newer
+ * version, and deletion.
  *
  * Installing hands a version's download URL to InvokeAI, which fetches the file on
  * its own box; the server then writes the catalogue's cover, description and
  * trigger words onto the record once the download completes, so a model arrives
- * looking the way it did on the site.
+ * looking the way it did on the site. An update is the same, plus the old record
+ * is deleted once the new one is in. The install log stays folded away until
+ * asked for: a finished download is not news the next time the browser opens.
  *
  * The host mounts it conditionally; closing dispatches "close", and picking a
  * prompt dispatches "use-prompt" with PromptSettings.
  */
 
 type Tab = "browse" | "account" | "installed";
+type AccountTab = "models" | "posts" | "images" | "collections";
 
 const TYPES: { id: string; label: string }[] = [
   { id: "", label: "All" },
@@ -110,13 +120,33 @@ export class OppaiCivitai extends LitElement {
   // ── installs ──
   @state() private jobs: InstallJob[] = [];
   @state() private installing = false;
+  /** The install log is folded by default; a chip in the top bar opens it. */
+  @state() private jobsOpen = false;
 
   // ── the account ──
-  @state() private me: { username: string; image?: string } | null = null;
+  @state() private me: CivitaiMe | null = null;
   @state() private meError = "";
   @state() private meLoading = false;
+  @state() private accountTab: AccountTab = "models";
   @state() private myImages: CivitaiImage[] = [];
   @state() private myImagesCursor = "";
+  @state() private myModels: CivitaiModel[] = [];
+  @state() private myModelsCursor = "";
+  @state() private myModelsLoading = false;
+  @state() private posts: CivitaiPost[] = [];
+  @state() private postsCursor = "";
+  @state() private postsLoading = false;
+  /** A post opened to see every picture in it. */
+  @state() private openPost: CivitaiPost | null = null;
+  @state() private collections: CivitaiCollection[] = [];
+  @state() private collectionsCursor = "";
+  @state() private collectionsLoading = false;
+  @state() private collectionQuery = "";
+  @state() private collectionSort: "newest" | "followers" = "newest";
+  /** A collection opened to its pictures, which load into `collectionImages`. */
+  @state() private openCollection: CivitaiCollection | null = null;
+  @state() private collectionImages: CivitaiImage[] = [];
+  @state() private collectionImagesCursor = "";
 
   // ── installed ──
   @state() private installed: CivitaiInstalled[] = [];
@@ -128,6 +158,12 @@ export class OppaiCivitai extends LitElement {
   /** Sync by hand: the model key whose version id is being typed. */
   @state() private pinning = "";
   @state() private pinVersion = "";
+  /** The installed model whose management panel is open, with its catalogue page
+   *  (every version and its showcase pictures) once loaded. */
+  @state() private manageKey = "";
+  @state() private managePage: CivitaiModel | null = null;
+  @state() private manageVersion = 0;
+  @state() private manageBusy = false;
 
   private jobTimer?: number;
 
@@ -419,12 +455,66 @@ export class OppaiCivitai extends LitElement {
       .pane .p { white-space: pre-wrap; word-break: break-word; background: var(--oppai-surface); border-radius: 8px; padding: 8px 10px; }
       .pane .kv { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; font-size: 12px; color: var(--oppai-text-dim); }
 
-      /* Account. */
-      .who { display: flex; align-items: center; gap: 12px; margin: 6px 0 16px; }
-      .who img { width: 48px; height: 48px; border-radius: 50%; object-fit: cover; background: var(--oppai-surface); }
-      .who .n { font-size: 16px; font-weight: 600; }
+      /* Account: a banner with the profile picture over its bottom edge, the way
+         the site lays it out, then the profile's own tabs. */
+      .banner { position: relative; margin: 4px 0 52px; }
+      /* The picture clips to its rounded corners; the profile picture, hanging
+         over the bottom edge, is a sibling so the clip does not cut it. */
+      .banner .art {
+        position: relative; border-radius: 16px; overflow: hidden; background: var(--oppai-surface-2);
+        aspect-ratio: 4 / 1; min-height: 120px; max-height: 260px;
+      }
+      .banner img.cover { width: 100%; height: 100%; object-fit: cover; display: block; }
+      .banner .fade { position: absolute; inset: 0; background: linear-gradient(to top, rgba(0,0,0,.55), transparent 60%); }
+      .who {
+        position: absolute; left: 18px; bottom: -44px; display: flex; align-items: flex-end; gap: 14px;
+      }
+      .who img, .who .noface {
+        width: 88px; height: 88px; border-radius: 50%; object-fit: cover; background: var(--oppai-surface);
+        border: 4px solid var(--oppai-bg, #141218); display: grid; place-items: center; color: var(--oppai-text-muted);
+      }
+      .who .n { font-size: 18px; font-weight: 700; padding-bottom: 10px; }
       .who .s { font-size: 12px; color: var(--oppai-text-muted); }
+      .banner .profile-link { position: absolute; right: 12px; bottom: 12px; }
       h3.sec { font-size: 14px; margin: 18px 0 8px; color: var(--oppai-text-dim); }
+      .subtabs { display: flex; gap: 4px; margin: 0 0 12px; border-bottom: 1px solid var(--oppai-border); }
+      .subtabs button {
+        border: none; background: none; color: var(--oppai-text-dim); font: inherit; font-size: 13px;
+        padding: 9px 12px; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px;
+      }
+      .subtabs button.on { color: var(--oppai-text); font-weight: 600; border-bottom-color: var(--oppai-accent); }
+      .post-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; }
+      .post {
+        border: none; padding: 0; background: var(--oppai-surface-2); border-radius: 12px; overflow: hidden;
+        cursor: pointer; position: relative; text-align: left; color: var(--oppai-text); font: inherit;
+      }
+      .post img { width: 100%; aspect-ratio: 3 / 4; object-fit: cover; display: block; background: var(--oppai-surface); }
+      .post .pm { padding: 6px 9px 8px; font-size: 11px; color: var(--oppai-text-muted); display: flex; justify-content: space-between; gap: 6px; }
+      .coll {
+        display: grid; grid-template-columns: 64px minmax(0, 1fr) auto; gap: 12px; align-items: center;
+        background: var(--oppai-surface-2); border-radius: 12px; padding: 8px 10px; border: none; color: inherit; font: inherit;
+        text-align: left; width: 100%; cursor: pointer;
+      }
+      .coll img, .coll .noimg { width: 64px; height: 64px; border-radius: 8px; object-fit: cover; background: var(--oppai-surface); display: grid; place-items: center; color: var(--oppai-text-muted); }
+      .coll .t { font-size: 13px; font-weight: 600; }
+      .coll .d { font-size: 12px; color: var(--oppai-text-muted); margin-top: 2px; }
+      .coll:disabled { cursor: default; }
+      .jobs-chip { position: relative; }
+      .jobs-chip .dot {
+        position: absolute; top: -2px; right: -2px; width: 8px; height: 8px; border-radius: 50%;
+        background: var(--oppai-primary-bright); animation: pulse 1.2s ease-in-out infinite;
+      }
+      @keyframes pulse { 50% { opacity: .3; } }
+
+      /* Managing an installed model: its versions and the pictures to choose a cover from. */
+      .manage { grid-column: 1 / -1; background: var(--oppai-surface); border-radius: 10px; padding: 10px 12px; margin-top: 4px; }
+      .manage .vlabel { margin-top: 8px; }
+      .covers { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 6px; }
+      .covers button { border: 2px solid transparent; padding: 0; border-radius: 10px; overflow: hidden; background: var(--oppai-surface-2); cursor: pointer; position: relative; }
+      .covers button.on { border-color: var(--oppai-accent); }
+      .covers img { width: 100%; aspect-ratio: 3 / 4; object-fit: cover; display: block; }
+      .covers .tick { position: absolute; top: 4px; right: 4px; background: var(--oppai-accent); color: var(--oppai-on-accent); border-radius: 50%; width: 18px; height: 18px; display: grid; place-items: center; }
+      .ghost.danger { color: var(--oppai-error, #f2b8b5); }
 
       /* Installed. */
       .rows { display: flex; flex-direction: column; gap: 8px; }
@@ -432,6 +522,7 @@ export class OppaiCivitai extends LitElement {
         display: grid; grid-template-columns: 64px minmax(0, 1fr) auto; gap: 12px; align-items: center;
         background: var(--oppai-surface-2); border-radius: 12px; padding: 8px 10px;
       }
+      .row .ghost.on { background: var(--oppai-surface); }
       @media (max-width: 600px) { .row { grid-template-columns: 64px minmax(0, 1fr); } .row .rb { grid-column: 1 / -1; } }
       .row img, .row .noimg { width: 64px; height: 84px; border-radius: 8px; object-fit: cover; background: var(--oppai-surface); display: grid; place-items: center; color: var(--oppai-text-muted); }
       .row .t { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -639,18 +730,136 @@ export class OppaiCivitai extends LitElement {
   // ── the account ──
 
   private async loadMe() {
-    if (this.me || this.meLoading) return;
+    if (this.meLoading) return;
+    if (this.me) {
+      void this.loadAccountTab(false);
+      return;
+    }
     this.meLoading = true;
     this.meError = "";
     try {
       this.me = await api.civitaiMe();
       this.myImages = [];
       this.myImagesCursor = "";
-      void this.loadGallery(true, this.me.username);
+      // The feed's newest picture stands in for a cover the API keeps to itself,
+      // so it is fetched first whichever tab is open.
+      void this.loadMyImages(true).then(() => this.loadAccountTab(false));
     } catch (e) {
       this.meError = (e as Error).message;
     } finally {
       this.meLoading = false;
+    }
+  }
+
+  private selectAccountTab(tab: AccountTab) {
+    this.accountTab = tab;
+    this.openPost = null;
+    this.openCollection = null;
+    void this.loadAccountTab(false);
+  }
+
+  /** Fills the open account tab the first time it is shown; `more` pages on. */
+  private loadAccountTab(more: boolean): Promise<void> {
+    if (!this.me) return Promise.resolve();
+    switch (this.accountTab) {
+      case "models":
+        return more || this.myModels.length === 0 ? this.loadMyModels(!more) : Promise.resolve();
+      case "posts":
+        return more || this.posts.length === 0 ? this.loadPosts(!more) : Promise.resolve();
+      case "images":
+        return more || this.myImages.length === 0 ? this.loadMyImages(!more) : Promise.resolve();
+      case "collections":
+        return more || this.collections.length === 0 ? this.loadCollections(!more) : Promise.resolve();
+    }
+  }
+
+  private async loadMyImages(reset: boolean) {
+    if (!this.me || this.galleryLoading) return;
+    this.galleryLoading = true;
+    try {
+      const res = await api.civitaiImages({
+        username: this.me.username, sort: "newest", nsfw: this.nsfw,
+        cursor: reset ? undefined : this.myImagesCursor || undefined,
+      });
+      this.myImages = reset ? res.items : [...this.myImages, ...res.items];
+      this.myImagesCursor = res.nextCursor ?? "";
+    } catch (e) {
+      this.meError = (e as Error).message;
+    } finally {
+      this.galleryLoading = false;
+    }
+  }
+
+  private async loadMyModels(reset: boolean) {
+    if (!this.me || this.myModelsLoading) return;
+    this.myModelsLoading = true;
+    try {
+      const res = await api.civitaiSearch({
+        creator: this.me.username, sort: "newest", nsfw: this.nsfw,
+        cursor: reset ? undefined : this.myModelsCursor || undefined,
+      });
+      this.myModels = reset ? res.items : [...this.myModels, ...res.items];
+      this.myModelsCursor = res.nextCursor ?? "";
+    } catch (e) {
+      this.meError = (e as Error).message;
+    } finally {
+      this.myModelsLoading = false;
+    }
+  }
+
+  private async loadPosts(reset: boolean) {
+    if (!this.me || this.postsLoading) return;
+    this.postsLoading = true;
+    try {
+      const res = await api.civitaiPosts({
+        username: this.me.username, nsfw: this.nsfw,
+        cursor: reset ? undefined : this.postsCursor || undefined,
+      });
+      this.posts = reset ? res.items : mergeCivitaiPosts(this.posts, res.items);
+      this.postsCursor = res.nextCursor ?? "";
+    } catch (e) {
+      this.meError = (e as Error).message;
+    } finally {
+      this.postsLoading = false;
+    }
+  }
+
+  private async loadCollections(reset: boolean) {
+    if (this.collectionsLoading) return;
+    this.collectionsLoading = true;
+    try {
+      const res = await api.civitaiCollections({
+        q: this.collectionQuery || undefined, sort: this.collectionSort,
+        cursor: reset ? undefined : this.collectionsCursor || undefined,
+      });
+      this.collections = reset ? res.items : [...this.collections, ...res.items];
+      this.collectionsCursor = res.nextCursor ?? "";
+    } catch (e) {
+      this.meError = (e as Error).message;
+    } finally {
+      this.collectionsLoading = false;
+    }
+  }
+
+  private async openCollectionPictures(c: CivitaiCollection, reset: boolean) {
+    if (this.galleryLoading) return;
+    if (reset) {
+      this.openCollection = c;
+      this.collectionImages = [];
+      this.collectionImagesCursor = "";
+    }
+    this.galleryLoading = true;
+    try {
+      const res = await api.civitaiImages({
+        collectionId: c.id, sort: "newest", nsfw: this.nsfw,
+        cursor: reset ? undefined : this.collectionImagesCursor || undefined,
+      });
+      this.collectionImages = reset ? res.items : [...this.collectionImages, ...res.items];
+      this.collectionImagesCursor = res.nextCursor ?? "";
+    } catch (e) {
+      this.meError = (e as Error).message;
+    } finally {
+      this.galleryLoading = false;
     }
   }
 
@@ -689,6 +898,81 @@ export class OppaiCivitai extends LitElement {
     }
   }
 
+  /** Opens the management panel under an installed model: the catalogue page is
+   *  fetched for its versions and their showcase pictures. */
+  private async manage(m: CivitaiInstalled) {
+    if (this.manageKey === m.key) {
+      this.manageKey = "";
+      this.managePage = null;
+      return;
+    }
+    const c = m.civitai;
+    if (!c) return;
+    this.manageKey = m.key;
+    this.managePage = null;
+    this.manageVersion = c.versionId;
+    try {
+      const page = await api.civitaiModel(c.modelId);
+      if (this.manageKey === m.key) this.managePage = page;
+    } catch (e) {
+      this.syncNote = `${m.name}: ${(e as Error).message}`;
+    }
+  }
+
+  private async chooseCover(m: CivitaiInstalled, url: string) {
+    if (this.manageBusy) return;
+    this.manageBusy = true;
+    try {
+      await api.civitaiCover(m.key, url);
+      this.syncNote = `${m.name}: cover set.`;
+      await this.loadInstalled(false);
+    } catch (e) {
+      this.syncNote = `${m.name}: ${(e as Error).message}`;
+    } finally {
+      this.manageBusy = false;
+    }
+  }
+
+  /** Moves the model to another version: InvokeAI downloads it, and the record
+   *  this one is deleted once the new file is in. */
+  private async updateModel(m: CivitaiInstalled, versionId?: number) {
+    if (this.manageBusy) return;
+    const target = this.managePage?.versions.find((v) => v.id === (versionId ?? m.civitai?.latestVersionId));
+    const label = target ? `version ${target.name}` : "the newest version";
+    if (!confirm(`Update “${m.name}” to ${label}? InvokeAI downloads it, then the current file is deleted.`)) return;
+    this.manageBusy = true;
+    try {
+      await api.civitaiUpdate(m.key, versionId);
+      this.syncNote = `${m.name}: downloading ${label}; the current file goes once it is in.`;
+      this.manageKey = "";
+      this.managePage = null;
+      await this.pollJobs();
+    } catch (e) {
+      this.syncNote = `${m.name}: ${(e as Error).message}`;
+    } finally {
+      this.manageBusy = false;
+    }
+  }
+
+  private async deleteInstalled(m: CivitaiInstalled) {
+    if (this.manageBusy) return;
+    if (!confirm(`Delete “${m.name}” from InvokeAI? The file goes with it.`)) return;
+    this.manageBusy = true;
+    try {
+      await api.deleteModel(m.key);
+      this.syncNote = `${m.name}: deleted.`;
+      if (this.manageKey === m.key) {
+        this.manageKey = "";
+        this.managePage = null;
+      }
+      this.installed = this.installed.filter((x) => x.key !== m.key);
+    } catch (e) {
+      this.syncNote = `${m.name}: ${(e as Error).message}`;
+    } finally {
+      this.manageBusy = false;
+    }
+  }
+
   private selectTab(tab: Tab) {
     this.tab = tab;
     this.closeDetail();
@@ -719,11 +1003,14 @@ export class OppaiCivitai extends LitElement {
               </button>`,
             )}
           </div>
-          <button class="close" @click=${() => this.dispatchEvent(new CustomEvent("close"))}>
-            <span class="material-symbols-rounded" style="font-size:17px;">close</span> Back to studio
-          </button>
+          <div style="margin-left:auto; display:flex; gap:8px; align-items:center;">
+            ${this.jobs.length ? this.renderJobsChip() : nothing}
+            <button class="close" style="margin-left:0;" @click=${() => this.dispatchEvent(new CustomEvent("close"))}>
+              <span class="material-symbols-rounded" style="font-size:17px;">close</span> Back to studio
+            </button>
+          </div>
         </div>
-        ${this.jobs.length
+        ${this.jobs.length && this.jobsOpen
           ? html`<div class="jobs">
               ${this.jobs.map(
                 (j) => html`<div class="job">
@@ -743,6 +1030,22 @@ export class OppaiCivitai extends LitElement {
           </div>`
         : nothing}
     `;
+  }
+
+  /** The install log, folded: one chip saying how many downloads there are and
+   *  whether one is still running, which opens the log. */
+  private renderJobsChip() {
+    const active = this.jobs.filter((j) => j.status === "downloading" || j.status === "running" || j.status === "waiting");
+    const failed = this.jobs.some((j) => j.status === "error");
+    const label = active.length
+      ? active.length === 1 ? this.jobLabel(active[0]) : `${active.length} downloading`
+      : `${this.jobs.length} download${this.jobs.length === 1 ? "" : "s"}`;
+    return html`<button class="chip small jobs-chip ${this.jobsOpen ? "on" : ""}"
+      title=${this.jobsOpen ? "Hide the install log" : "Show the install log"} aria-expanded=${this.jobsOpen ? "true" : "false"}
+      @click=${() => (this.jobsOpen = !this.jobsOpen)}>
+      <span class="material-symbols-rounded" style="font-size:15px;">${failed ? "error" : "download"}</span> ${label}
+      ${active.length ? html`<span class="dot"></span>` : nothing}
+    </button>`;
   }
 
   private renderBrowse() {
@@ -1012,52 +1315,193 @@ export class OppaiCivitai extends LitElement {
       return html`<div class="note">
         ${this.meError || "No account to show."}
         <div style="margin-top:8px; font-size:12px;">
-          Add your Civitai API key under Settings → Image generation and this page shows your models and posted pictures.
+          Add your Civitai API key under Settings → Image generation and this page shows your models, posts, pictures and collections.
         </div>
       </div>`;
     }
+    const me = this.me;
+    // The profile cover when the catalogue shares it; the newest posted picture
+    // when it does not, which is most of the time.
+    const cover = me.cover || this.myImages[0]?.url || "";
     return html`
-      <div class="who">
-        ${this.me.image
-          ? html`<img src=${api.civitaiImageURL(this.me.image)} alt="" />`
-          : html`<span class="material-symbols-rounded" style="font-size:44px; color:var(--oppai-text-muted);">account_circle</span>`}
-        <div>
-          <div class="n">${this.me.username}</div>
-          <div class="s">The account the API key belongs to</div>
+      <div class="banner">
+        <div class="art">
+          ${cover ? html`<img class="cover" src=${api.civitaiImageURL(cover)} alt="" />` : nothing}
+          <div class="fade"></div>
+          <a class="ghost profile-link" style="text-decoration:none; background:rgba(0,0,0,.4);" target="_blank" rel="noopener noreferrer"
+            href=${`https://civitai.com/user/${encodeURIComponent(me.username)}`}>
+            <span class="material-symbols-rounded" style="font-size:16px;">open_in_new</span> Profile on civitai.com
+          </a>
         </div>
-        <a class="ghost" style="margin-left:auto; text-decoration:none;" target="_blank" rel="noopener noreferrer" href=${`https://civitai.com/user/${encodeURIComponent(this.me.username)}`}>
-          <span class="material-symbols-rounded" style="font-size:16px;">open_in_new</span> Profile
-        </a>
+        <div class="who">
+          ${me.image
+            ? html`<img src=${api.civitaiImageURL(me.image)} alt="" />`
+            : html`<div class="noface"><span class="material-symbols-rounded" style="font-size:44px;">account_circle</span></div>`}
+          <div class="n">${me.username}</div>
+        </div>
       </div>
-      <div class="controls">
-        <button class="chip on" @click=${() => this.setAnd("creator", this.me?.username ?? "")}>
-          <span class="material-symbols-rounded" style="font-size:15px;">deployed_code</span> My models
-        </button>
-        <span style="font-size:12px; color:var(--oppai-text-muted);">
-          Uploading goes through civitai.com itself — the site has no public API for it.
-        </span>
+      <div class="subtabs" role="tablist">
+        ${([["models", "Models"], ["posts", "Posts"], ["images", "Images"], ["collections", "Collections"]] as [AccountTab, string][]).map(
+          ([id, label]) => html`<button role="tab" aria-selected=${this.accountTab === id ? "true" : "false"}
+            class=${this.accountTab === id ? "on" : ""} @click=${() => this.selectAccountTab(id)}>${label}</button>`,
+        )}
       </div>
-      <h3 class="sec">Pictures I posted</h3>
-      ${this.myImages.length
-        ? html`<div class="gal-grid">
-            ${this.myImages.map(
-              (img) => html`<button @click=${() => (this.picked = img)}>
-                <img src=${api.civitaiImageURL(img.url)} alt="" loading="lazy" />
-                ${img.prompt ? html`<span class="has">prompt</span>` : nothing}
-              </button>`,
-            )}
-          </div>`
-        : nothing}
+      ${this.meError ? html`<div class="err">${this.meError}</div>` : nothing}
+      ${this.accountTab === "models" ? this.renderMyModels()
+        : this.accountTab === "posts" ? this.renderPosts()
+        : this.accountTab === "images" ? this.renderMyImages()
+        : this.renderCollections()}
+    `;
+  }
+
+  private renderMyModels() {
+    return html`
+      <div class="grid">${this.myModels.map((m) => this.renderCard(m))}</div>
+      ${this.myModelsLoading
+        ? html`<div class="note">Loading models…</div>`
+        : this.myModels.length
+          ? this.myModelsCursor
+            ? html`<button class="more" @click=${() => this.loadMyModels(false)}>More models</button>`
+            : nothing
+          : html`<div class="note">No models published.
+              <div style="margin-top:6px; font-size:12px;">Uploading goes through civitai.com itself — the site has no public API for it.</div>
+            </div>`}
+    `;
+  }
+
+  private renderPosts() {
+    if (this.openPost) {
+      const p = this.openPost;
+      return html`
+        <div class="controls">
+          <button class="ghost" @click=${() => (this.openPost = null)}>
+            <span class="material-symbols-rounded" style="font-size:16px;">arrow_back</span> All posts
+          </button>
+          <span style="font-size:12px; color:var(--oppai-text-muted);">
+            ${p.images.length} picture${p.images.length === 1 ? "" : "s"}${postDate(p) ? ` · ${postDate(p)}` : ""}
+          </span>
+          ${p.id > 0
+            ? html`<a class="ghost" style="margin-left:auto; text-decoration:none;" target="_blank" rel="noopener noreferrer" href=${`https://civitai.com/posts/${p.id}`}>
+                <span class="material-symbols-rounded" style="font-size:16px;">open_in_new</span> civitai.com
+              </a>`
+            : nothing}
+        </div>
+        ${this.renderImageGrid(p.images)}
+      `;
+    }
+    return html`
+      <div class="post-grid">
+        ${this.posts.map(
+          (p) => html`<button class="post" @click=${() => (this.openPost = p)}>
+            ${p.images[0] ? html`<img src=${api.civitaiImageURL(p.images[0].url)} alt="" loading="lazy" />` : nothing}
+            ${p.images.length > 1 ? html`<span class="badge right"><span class="material-symbols-rounded" style="font-size:13px;">photo_library</span> ${p.images.length}</span>` : nothing}
+            <div class="pm"><span>${postDate(p)}</span>${p.images.some((i) => i.prompt) ? html`<span>prompt</span>` : nothing}</div>
+          </button>`,
+        )}
+      </div>
+      ${this.postsLoading
+        ? html`<div class="note">Loading posts…</div>`
+        : this.posts.length
+          ? this.postsCursor
+            ? html`<button class="more" @click=${() => this.loadPosts(false)}>More posts</button>`
+            : nothing
+          : html`<div class="note">No posts.</div>`}
+    `;
+  }
+
+  private renderMyImages() {
+    return html`
+      ${this.renderImageGrid(this.myImages)}
       ${this.galleryLoading
         ? html`<div class="note" style="padding:12px 0;">Loading pictures…</div>`
         : this.myImages.length
           ? this.myImagesCursor
-            ? html`<button class="more" @click=${() => this.loadGallery(false, this.me?.username)}>More pictures</button>`
+            ? html`<button class="more" @click=${() => this.loadMyImages(false)}>More pictures</button>`
             : nothing
           : html`<div class="note" style="padding:12px 0;">No posted pictures.</div>`}
     `;
   }
 
+  /** Pictures as tiles; a tile opens the picture with its prompt. */
+  private renderImageGrid(images: CivitaiImage[]) {
+    if (!images.length) return nothing;
+    return html`<div class="gal-grid">
+      ${images.map(
+        (img) => html`<button title=${img.prompt ? "Has a prompt" : "No prompt kept"} @click=${() => (this.picked = img)}>
+          <img src=${api.civitaiImageURL(img.url)} alt="" loading="lazy" />
+          ${img.prompt ? html`<span class="has">prompt</span>` : nothing}
+        </button>`,
+      )}
+    </div>`;
+  }
+
+  private renderCollections() {
+    if (this.openCollection) {
+      const c = this.openCollection;
+      return html`
+        <div class="controls">
+          <button class="ghost" @click=${() => (this.openCollection = null)}>
+            <span class="material-symbols-rounded" style="font-size:16px;">arrow_back</span> Collections
+          </button>
+          <span style="font-size:13px; font-weight:600;">${c.name}</span>
+          <span style="font-size:12px; color:var(--oppai-text-muted);">${c.username ? `by ${c.username} · ` : ""}${c.count} item${c.count === 1 ? "" : "s"}</span>
+          <a class="ghost" style="margin-left:auto; text-decoration:none;" target="_blank" rel="noopener noreferrer" href=${`https://civitai.com/collections/${c.id}`}>
+            <span class="material-symbols-rounded" style="font-size:16px;">open_in_new</span> civitai.com
+          </a>
+        </div>
+        ${c.description ? html`<div class="sub" style="margin-bottom:8px;">${c.description}</div>` : nothing}
+        ${this.renderImageGrid(this.collectionImages)}
+        ${this.galleryLoading
+          ? html`<div class="note" style="padding:12px 0;">Loading pictures…</div>`
+          : this.collectionImages.length
+            ? this.collectionImagesCursor
+              ? html`<button class="more" @click=${() => this.openCollectionPictures(c, false)}>More pictures</button>`
+              : nothing
+            : html`<div class="note" style="padding:12px 0;">Nothing the feed will show for this collection.</div>`}
+      `;
+    }
+    return html`
+      <div class="controls">
+        <input type="search" placeholder="Search public collections…" .value=${this.collectionQuery}
+          @input=${(e: Event) => (this.collectionQuery = (e.target as HTMLInputElement).value)}
+          @keydown=${(e: KeyboardEvent) => { if (e.key === "Enter") void this.loadCollections(true); }} />
+        ${([["newest", "Newest"], ["followers", "Most followed"]] as const).map(
+          ([id, label]) => html`<button class="chip ${this.collectionSort === id ? "on" : ""}"
+            @click=${() => { this.collectionSort = id; void this.loadCollections(true); }}>${label}</button>`,
+        )}
+        <button class="ghost" @click=${() => this.loadCollections(true)}>
+          <span class="material-symbols-rounded" style="font-size:16px;">search</span> Search
+        </button>
+      </div>
+      <div class="sub" style="margin-bottom:10px;">
+        Civitai's public API lists collections by name only, never by owner — your own are on
+        <a style="color:var(--oppai-primary-bright);" target="_blank" rel="noopener noreferrer"
+          href=${`https://civitai.com/user/${encodeURIComponent(this.me?.username ?? "")}/collections`}>civitai.com</a>.
+        Image and post collections open here; model collections the API will not list.
+      </div>
+      <div class="rows">
+        ${this.collections.map(
+          (c) => html`<button class="coll" ?disabled=${c.type !== "Image" && c.type !== "Post"} @click=${() => this.openCollectionPictures(c, true)}>
+            ${c.cover
+              ? html`<img src=${api.civitaiImageURL(c.cover)} alt="" loading="lazy" />`
+              : html`<div class="noimg"><span class="material-symbols-rounded" style="font-size:26px;">collections_bookmark</span></div>`}
+            <div style="min-width:0;">
+              <div class="t">${c.name}${c.nsfw ? html` <span style="font-weight:400; color:var(--oppai-text-muted);">18+</span>` : nothing}</div>
+              <div class="d">${c.type} · ${c.count} item${c.count === 1 ? "" : "s"}${c.username ? ` · by ${c.username}` : ""}</div>
+            </div>
+            <span class="material-symbols-rounded" style="font-size:18px; color:var(--oppai-text-muted);">${c.type === "Image" || c.type === "Post" ? "chevron_right" : "block"}</span>
+          </button>`,
+        )}
+      </div>
+      ${this.collectionsLoading
+        ? html`<div class="note">Loading collections…</div>`
+        : this.collections.length
+          ? this.collectionsCursor
+            ? html`<button class="more" @click=${() => this.loadCollections(false)}>More collections</button>`
+            : nothing
+          : html`<div class="note">No collections matched.</div>`}
+    `;
+  }
   private renderInstalled() {
     const rows = this.installed.filter((m) => {
       switch (this.installedFilter) {
@@ -1098,6 +1542,7 @@ export class OppaiCivitai extends LitElement {
   private renderInstalledRow(m: CivitaiInstalled) {
     const c = m.civitai;
     const thumb = m.hasCover ? (m.type === "lora" ? api.loraThumbURL(m.name) : api.modelThumbURL(m.key)) : "";
+    const open = this.manageKey === m.key;
     return html`
       <div class="row">
         ${thumb
@@ -1115,7 +1560,7 @@ export class OppaiCivitai extends LitElement {
                     : nothing}`
               : html`<span>· not found on Civitai by hash</span>`}
           </div>
-          ${c?.previews.length
+          ${c?.previews.length && !open
             ? html`<div class="previews">
                 ${c.previews.slice(0, 6).map((u) => html`<img src=${api.civitaiImageURL(u)} alt="" loading="lazy" @click=${() => (this.zoomed = u)} />`)}
               </div>`
@@ -1135,17 +1580,77 @@ export class OppaiCivitai extends LitElement {
                 <span class="material-symbols-rounded" style="font-size:16px;">travel_explore</span> Page
               </button>`
             : nothing}
+          ${c?.updateAvailable
+            ? html`<button class="ghost" title="Download the newest version and delete this one once it is in"
+                ?disabled=${this.manageBusy} @click=${() => this.updateModel(m)}>
+                <span class="material-symbols-rounded" style="font-size:16px;">published_with_changes</span> Update
+              </button>`
+            : nothing}
           <button class="ghost" ?disabled=${this.syncing === m.key} title="Write the cover, description and trigger words from Civitai onto this model"
             @click=${() => this.sync(m)}>
             <span class="material-symbols-rounded" style="font-size:16px;">${this.syncing === m.key ? "downloading" : "sync"}</span>
             ${c ? "Fetch again" : "Fetch from Civitai"}
           </button>
-          ${!c
-            ? html`<button class="ghost" title="Link by a version id from the site" @click=${() => { this.pinning = m.key; this.pinVersion = ""; }}>
-                <span class="material-symbols-rounded" style="font-size:16px;">link</span>
+          ${c
+            ? html`<button class="ghost ${open ? "on" : ""}" title="Choose the version and the cover picture" aria-expanded=${open ? "true" : "false"}
+                @click=${() => this.manage(m)}>
+                <span class="material-symbols-rounded" style="font-size:16px;">tune</span> ${open ? "Close" : "Version & cover"}
               </button>`
-            : nothing}
+            : html`<button class="ghost" title="Link by a version id from the site" @click=${() => { this.pinning = m.key; this.pinVersion = ""; }}>
+                <span class="material-symbols-rounded" style="font-size:16px;">link</span>
+              </button>`}
+          <button class="ghost danger" title="Delete from InvokeAI, file included" ?disabled=${this.manageBusy} @click=${() => this.deleteInstalled(m)}>
+            <span class="material-symbols-rounded" style="font-size:16px;">delete</span>
+          </button>
         </div>
+        ${open && c ? this.renderManage(m) : nothing}
+      </div>
+    `;
+  }
+
+  /** The panel under an installed model: which version to follow, an update to
+   *  another version, and which of that version's showcase pictures is the cover. */
+  private renderManage(m: CivitaiInstalled) {
+    const c = m.civitai!;
+    const page = this.managePage;
+    if (!page) return html`<div class="manage"><div class="note" style="padding:8px 0;">Loading the model page…</div></div>`;
+    const ver = page.versions.find((v) => v.id === this.manageVersion) ?? page.versions[0];
+    const current = ver?.id === c.versionId;
+    const chosen = c.coverUrl || c.previews[0] || "";
+    return html`
+      <div class="manage">
+        <div class="vlabel" style="margin-top:0;">Version</div>
+        <div class="versions">
+          ${page.versions.map(
+            (v) => html`<button class="chip small ${v.id === ver?.id ? "on" : ""}" @click=${() => (this.manageVersion = v.id)}>
+              ${v.id === c.versionId ? html`<span class="material-symbols-rounded" style="font-size:14px;">check</span>` : nothing}
+              ${v.name}<span style="opacity:.7;"> · ${v.base}</span>
+            </button>`,
+          )}
+        </div>
+        ${ver && !current
+          ? html`<div class="actions" style="margin-top:8px;">
+              <button class="ghost" ?disabled=${this.manageBusy} title="Download this version into InvokeAI and delete the current file once it is in"
+                @click=${() => this.updateModel(m, ver.id)}>
+                <span class="material-symbols-rounded" style="font-size:16px;">published_with_changes</span> Install ${ver.name}, replacing the current file
+              </button>
+              <button class="ghost" ?disabled=${this.syncing === m.key} title="Keep the current file, but take this version's description, trigger words and pictures"
+                @click=${() => this.sync(m, ver.id)}>
+                <span class="material-symbols-rounded" style="font-size:16px;">link</span> Link to ${ver.name} without downloading
+              </button>
+            </div>`
+          : nothing}
+        ${ver?.images.length
+          ? html`<div class="vlabel">Cover${current ? "" : ` (from ${ver.name})`}</div>
+              <div class="covers">
+                ${ver.images.map(
+                  (u) => html`<button class=${u === chosen ? "on" : ""} title="Use as the cover" ?disabled=${this.manageBusy} @click=${() => this.chooseCover(m, u)}>
+                    <img src=${api.civitaiImageURL(u)} alt="" loading="lazy" />
+                    ${u === chosen ? html`<span class="tick"><span class="material-symbols-rounded" style="font-size:13px;">check</span></span>` : nothing}
+                  </button>`,
+                )}
+              </div>`
+          : html`<div class="sub" style="margin-top:8px;">This version has no showcase pictures.</div>`}
       </div>
     `;
   }

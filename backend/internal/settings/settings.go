@@ -36,6 +36,19 @@ type Settings struct {
 	F95Password    string `json:"f95Password"`
 	F95PasswordSet bool   `json:"f95PasswordSet"`
 
+	// Game-site sessions for the Games tab's itch.io and F95zone browsers. itch.io
+	// cannot be signed in to with a password from a server — its login page sits
+	// behind a browser challenge — so it is signed in by its session cookie, pasted
+	// from a browser or handed over by Launchy. F95zone signs in with the login
+	// above, and accepts a cookie too for an account with two-step verification.
+	// Both are write-only like the password; the Set flags say whether one is on
+	// file. ItchNSFW asks itch.io for its adult listing rather than the safe one.
+	ItchCookie    string `json:"itchCookie"`
+	ItchCookieSet bool   `json:"itchCookieSet"`
+	F95Cookie     string `json:"f95Cookie"`
+	F95CookieSet  bool   `json:"f95CookieSet"`
+	ItchNSFW      bool   `json:"itchNsfw"`
+
 	// Image generation. ImageGenURL points at a local Automatic1111 / SD.Next WebUI;
 	// empty disables the feature. ImageGenEnabled is a derived, read-only convenience
 	// for the UI (true when a URL is set) — it isn't stored separately.
@@ -154,6 +167,9 @@ const (
 	keyScrapeRespectRobots = "scrape.respect_robots"
 	keyF95Username         = "f95.username"
 	keyF95Password         = "f95.password"
+	keyF95Cookie           = "f95.cookie"
+	keyItchCookie          = "itch.cookie"
+	keyItchNSFW            = "itch.nsfw"
 	keyImageGenURL         = "imagegen.url"
 	keyCivitaiAPIURL       = "civitai.api_url"
 	keyCivitaiAPIKey       = "civitai.api_key"
@@ -253,6 +269,15 @@ func Merge(base Settings, stored map[string]string) Settings {
 	}
 	if v, ok := stored[keyF95Password]; ok {
 		s.F95Password = v
+	}
+	if v, ok := stored[keyF95Cookie]; ok {
+		s.F95Cookie = v
+	}
+	if v, ok := stored[keyItchCookie]; ok {
+		s.ItchCookie = v
+	}
+	if v, ok := parseBool(stored[keyItchNSFW]); ok {
+		s.ItchNSFW = v
 	}
 	// Presence wins here too: clearing the URL from the Settings screen is a real
 	// choice (disable image generation), not a fall-back to the env default.
@@ -361,6 +386,9 @@ func (s Settings) Map() map[string]string {
 		keyScrapeRespectRobots: strconv.FormatBool(s.ScrapeRespectRobots),
 		keyF95Username:         s.F95Username,
 		keyF95Password:         s.F95Password,
+		keyF95Cookie:           s.F95Cookie,
+		keyItchCookie:          s.ItchCookie,
+		keyItchNSFW:            strconv.FormatBool(s.ItchNSFW),
 		keyImageGenURL:         s.ImageGenURL,
 		keyCivitaiAPIURL:       s.CivitaiAPIURL,
 		keyCivitaiAPIKey:       s.CivitaiAPIKey,
@@ -402,6 +430,10 @@ func (s Settings) Map() map[string]string {
 func (s Settings) Redacted() Settings {
 	s.F95PasswordSet = s.F95Password != ""
 	s.F95Password = ""
+	s.F95CookieSet = s.F95Cookie != ""
+	s.F95Cookie = ""
+	s.ItchCookieSet = s.ItchCookie != ""
+	s.ItchCookie = ""
 	s.CivitaiKeySet = s.CivitaiAPIKey != ""
 	s.CivitaiAPIKey = ""
 	s.Rule34APIKeySet = s.Rule34APIKey != ""
@@ -450,6 +482,8 @@ func (s *Settings) Clamp() {
 		s.CivitaiAPIURL = "https://civitai.red/api/v1"
 	}
 	s.CivitaiAPIKey = strings.TrimSpace(s.CivitaiAPIKey)
+	s.F95Cookie = strings.TrimSpace(s.F95Cookie)
+	s.ItchCookie = strings.TrimSpace(s.ItchCookie)
 	s.Rule34UserID = strings.TrimSpace(s.Rule34UserID)
 	s.Rule34APIKey = strings.TrimSpace(s.Rule34APIKey)
 	s.ChatURL = strings.TrimRight(strings.TrimSpace(s.ChatURL), "/")

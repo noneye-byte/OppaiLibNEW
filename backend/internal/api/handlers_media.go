@@ -311,6 +311,11 @@ func (s *Server) handleGetMedia(w http.ResponseWriter, r *http.Request) {
 		m.Tags = tags
 	}
 	m.Description = s.mediaDescription(r.Context(), row.ID)
+	// A game carries where it came from and the launcher's side of it, so the detail
+	// screen can offer "update available" and "launch on PC" from one read.
+	if m.Kind == models.KindGame {
+		m.Remote, m.Launchy = s.gameSides(r.Context(), row.ID)
+	}
 	writeJSON(w, http.StatusOK, m)
 }
 

@@ -40,9 +40,145 @@ export interface Media {
   hasThumb?: boolean;
   download?: string; // external download URL (games)
   gallery?: string[]; // screenshot URLs (games)
+  /** Where a game came from and what the site last said, and the desktop
+   *  launcher's side of it. Present on a single game (getMedia), not on list pages. */
+  remote?: GameRemote;
+  launchy?: GameLaunchy;
   tags?: MediaTag[];
   createdAt: number;
   updatedAt: number;
+}
+
+/** One of the two game catalogues the Games tab can browse. */
+export type GameSite = "itch" | "f95";
+
+/** Where a game came from — an itch.io page or an F95zone thread — and what the
+ *  site said about it the last time anyone looked. `knownVersion` is what you have;
+ *  `latestVersion` is what the site reports; `hasUpdate` compares them leniently. */
+export interface GameRemote {
+  site: GameSite;
+  label: string;
+  id?: string;
+  url: string;
+  knownVersion: string;
+  latestVersion: string;
+  changelog?: string;
+  checkedAt: number;
+  updateSeenAt?: number;
+  hasUpdate: boolean;
+}
+
+/** Launchy's side of a game: installed on the PC, played this long, this entry. */
+export interface GameLaunchy {
+  launchyId: string;
+  installed: boolean;
+  version?: string;
+  playSeconds: number;
+  lastPlayed?: number;
+  launchCount: number;
+  updatedAt: number;
+}
+
+/** Whether a game site is signed in, and as whom when it will say. `password` is
+ *  true for a site that takes a username and password here; itch.io does not — its
+ *  login page is behind a browser check — and is signed in by cookie instead. */
+export interface GameSiteAccount {
+  site: GameSite;
+  label: string;
+  signedIn: boolean;
+  user?: string;
+  password: boolean;
+}
+
+export interface GameSitesResponse {
+  sites: GameSiteAccount[];
+  sorts: Record<GameSite, { key: string; label: string }[]>;
+  itchNsfw: boolean;
+}
+
+/** One search result on a game site. Nothing here is in the library unless
+ *  `libraryId` says which entry it already is. */
+export interface GameSiteItem {
+  site: GameSite;
+  id: string;
+  title: string;
+  developer?: string;
+  version?: string;
+  description?: string;
+  url: string;
+  thumbnail?: string;
+  images: string[];
+  tags: string[];
+  rating?: number;
+  webPlayable?: boolean;
+  nsfw?: boolean;
+  libraryId?: number;
+}
+
+export interface GameSiteListing {
+  items: GameSiteItem[];
+  page: number;
+  hasMore: boolean;
+}
+
+/** One way to get a build, off the game's own page. Opens in the browser: the
+ *  file hosts want your cookies and their captchas, not the server's. */
+export interface GameDownloadSource {
+  id: string;
+  label: string;
+  host: string;
+  url: string;
+  platform?: string;
+  version?: string;
+  size?: string;
+  kind: "direct" | "external";
+}
+
+export interface GameSourceReport {
+  url: string;
+  version: string;
+  changelog: string;
+  sources: GameDownloadSource[];
+  degraded: boolean;
+  /** Whether the page was read as a member. An empty `sources` means "none listed"
+   *  when true and "none a guest may see" when false — F95zone serves the thread to
+   *  anyone but hides every download link. */
+  signedIn: boolean;
+}
+
+export interface GameUpdateSweep {
+  running: boolean;
+  done: number;
+  total: number;
+  current?: string;
+  lastRun?: number;
+  found: number;
+  errors: number;
+}
+
+export interface GameUpdatesResponse {
+  items: { id: number; title: string; hasThumb: boolean; remote: GameRemote }[];
+  tracked: number;
+  sweep: GameUpdateSweep;
+}
+
+/** Whether Launchy is connected, and what it is running. */
+export interface LaunchyStatus {
+  connected: boolean;
+  name?: string;
+  lastSeen?: number;
+  running: number[];
+  pending: number;
+}
+
+export interface LaunchCommand {
+  id: string;
+  action: string;
+  gameId: number;
+  status: "pending" | "sent" | "done" | "failed";
+  error?: string;
+  createdAt: number;
+  doneAt?: number;
 }
 
 /** How many items one page of the grid asks for. The server caps a page at 200; this
@@ -283,6 +419,13 @@ export interface Settings {
   f95Username: string;
   f95Password: string;
   f95PasswordSet: boolean;
+  /** The game sites' session cookies, write-only like the password. */
+  itchCookie: string;
+  itchCookieSet: boolean;
+  f95Cookie: string;
+  f95CookieSet: boolean;
+  /** Ask itch.io for its adult listing rather than the safe one. */
+  itchNsfw: boolean;
   // Image generation: the base URL of a local Automatic1111 / SD.Next WebUI. Empty
   // disables the feature; imageGenEnabled is a derived, read-only mirror of "URL set".
   imageGenUrl: string;
@@ -1494,6 +1637,41 @@ export interface CivitaiImage {
   seed?: number;
   model?: string;
   size?: string;
+  /** The upload this picture was part of, and when. Absent on showcase stills. */
+  postId?: number;
+  createdAt?: string;
+}
+
+/** One upload of several pictures, rebuilt from someone's image feed (Civitai's
+ *  public API has no endpoint for posts, but every picture names its post). */
+export interface CivitaiPost {
+  id: number;
+  username?: string;
+  createdAt?: string;
+  images: CivitaiImage[];
+}
+
+/** A public collection. Only Image and Post collections can be opened here: the
+ *  image feed lists their pictures, while the model search rejects a collection. */
+export interface CivitaiCollection {
+  id: number;
+  name: string;
+  description?: string;
+  type: string;
+  count: number;
+  cover?: string;
+  username?: string;
+  userId?: number;
+  nsfw: boolean;
+}
+
+/** Whose the API key is. `cover` is the profile's cover photo when the catalogue
+ *  shares it, which its public API mostly does not. */
+export interface CivitaiMe {
+  id: number;
+  username: string;
+  image?: string;
+  cover?: string;
 }
 
 /** What the studio holds on Civitai's side of the ledger. */
@@ -1511,6 +1689,8 @@ export interface CivitaiLink {
   trainedWords: string[];
   previews: string[];
   checkedAt: number;
+  /** The preview chosen as the cover; absent when the first was taken. */
+  coverUrl?: string;
 }
 
 /** One of the studio's models with its Civitai record, when it has one. */
@@ -2396,6 +2576,56 @@ export const api = {
   // A plain link: the response is an attachment, and auth rides the session cookie.
   gameSaveURL: (gameId: number, saveId: number) => `/api/media/${gameId}/saves/${saveId}`,
 
+  // The Games tab's catalogues: itch.io and F95zone, browsed signed in. See the
+  // gamesites package for why a site is browsed signed in or not at all.
+  gameSites: () => request<GameSitesResponse>("/api/games/sites"),
+  gameSiteLogin: (site: GameSite, body: { username?: string; password?: string; cookie?: string }) =>
+    request<GameSiteAccount>(`/api/games/sites/${site}/login`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    }, 60_000),
+  gameSiteLogout: (site: GameSite) =>
+    request<GameSiteAccount>(`/api/games/sites/${site}/logout`, { method: "POST" }),
+  gameBrowse: (site: GameSite, q: string, sort: string, page: number) =>
+    request<GameSiteListing>(
+      `/api/games/browse?site=${site}&q=${encodeURIComponent(q)}&sort=${encodeURIComponent(sort)}&page=${page}`,
+      {}, 60_000,
+    ),
+  gameBrowseDetail: (item: GameSiteItem) =>
+    request<{ item: GameSiteItem; degraded: boolean }>("/api/games/browse/detail", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ item }),
+    }, 60_000),
+  /** Files a browsed game away. Minutes of downloads: the server carries on even
+   *  if this request is abandoned. */
+  gameBrowseAdd: (item: { url: string; id?: string; version?: string }) =>
+    request<{ id: number; created: boolean; media: Media; remote?: GameRemote }>("/api/games/browse/add", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(item),
+    }, 20 * 60_000),
+  gameUpdates: () => request<GameUpdatesResponse>("/api/games/updates"),
+  gameUpdatesCheck: () =>
+    request<{ started: boolean; sweep: GameUpdateSweep }>("/api/games/updates/check", { method: "POST" }),
+  gameRemote: (gameId: number) => request<GameRemote>(`/api/media/${gameId}/remote`),
+  setGameRemote: (gameId: number, body: { url: string; knownVersion?: string; latestVersion?: string }) =>
+    request<GameRemote>(`/api/media/${gameId}/remote`, {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    }),
+  clearGameRemote: (gameId: number) => request<void>(`/api/media/${gameId}/remote`, { method: "DELETE" }),
+  /** Reads the game's page now. `error` is set when the page would not load. */
+  checkGameRemote: (gameId: number) =>
+    request<{ remote: GameRemote; changed: boolean; error?: string }>(`/api/media/${gameId}/remote/check`, { method: "POST" }, 90_000),
+  /** The newest version is the one installed: clears the update badge. */
+  acknowledgeGameRemote: (gameId: number) =>
+    request<GameRemote>(`/api/media/${gameId}/remote/acknowledge`, { method: "POST" }),
+  gameSources: (gameId: number) => request<GameSourceReport>(`/api/media/${gameId}/sources`, {}, 90_000),
+
+  // Launchy, the desktop launcher. Nothing here reaches the PC directly: a launch
+  // is queued on the server and the launcher picks it up on its next poll.
+  launchyStatus: () => request<LaunchyStatus>("/api/launchy"),
+  launchyLaunch: (gameId: number) =>
+    request<LaunchCommand>("/api/launchy/launch", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ gameId }),
+    }),
+  launchyLaunchStatus: (cmdId: string) => request<LaunchCommand>(`/api/launchy/launch/${cmdId}`),
+
   // HTML5 game builds. playInfo 404s for a game that is only a download, which is
   // how the viewer decides whether to offer a Play button at all.
   gamePlayInfo: (gameId: number) => request<GamePlayInfo>(`/api/media/${gameId}/play`),
@@ -2682,10 +2912,12 @@ export const api = {
   },
   civitaiModel: (id: number) =>
     request<CivitaiModel>(`/api/imagegen/civitai/models/${id}`, {}, 45_000),
-  civitaiImages: (opts: { versionId?: number; modelId?: number; username?: string; sort?: string; period?: string; nsfw?: boolean; cursor?: string }) => {
+  civitaiImages: (opts: { versionId?: number; modelId?: number; postId?: number; collectionId?: number; username?: string; sort?: string; period?: string; nsfw?: boolean; cursor?: string }) => {
     const p = new URLSearchParams();
     if (opts.versionId) p.set("versionId", String(opts.versionId));
     if (opts.modelId) p.set("modelId", String(opts.modelId));
+    if (opts.postId) p.set("postId", String(opts.postId));
+    if (opts.collectionId) p.set("collectionId", String(opts.collectionId));
     if (opts.username) p.set("username", opts.username);
     if (opts.sort) p.set("sort", opts.sort);
     if (opts.period) p.set("period", opts.period);
@@ -2697,7 +2929,23 @@ export const api = {
     request<{ categories: CivitaiCategory[] }>("/api/imagegen/civitai/categories", {}, 30_000),
   civitaiImageURL: (u: string) => `/api/imagegen/civitai/image?url=${encodeURIComponent(u)}`,
   /** Who the configured API key belongs to; rejects when there is no key. */
-  civitaiMe: () => request<{ id: number; username: string; image?: string }>("/api/imagegen/civitai/me", {}, 30_000),
+  civitaiMe: () => request<CivitaiMe>("/api/imagegen/civitai/me", {}, 30_000),
+  /** Someone's posts, newest first. A page is a page of their pictures grouped by
+   *  post, so a post can continue onto the next page. */
+  civitaiPosts: (opts: { username: string; nsfw?: boolean; cursor?: string }) => {
+    const p = new URLSearchParams({ username: opts.username });
+    if (opts.nsfw === false) p.set("nsfw", "0");
+    if (opts.cursor) p.set("cursor", opts.cursor);
+    return request<{ items: CivitaiPost[]; nextCursor?: string }>(`/api/imagegen/civitai/posts?${p}`, {}, 45_000);
+  },
+  /** Public collections by name — the only filter the catalogue honours. */
+  civitaiCollections: (opts: { q?: string; sort?: "newest" | "followers"; cursor?: string } = {}) => {
+    const p = new URLSearchParams();
+    if (opts.q) p.set("q", opts.q);
+    if (opts.sort) p.set("sort", opts.sort);
+    if (opts.cursor) p.set("cursor", opts.cursor);
+    return request<{ items: CivitaiCollection[]; nextCursor?: string }>(`/api/imagegen/civitai/collections?${p}`, {}, 45_000);
+  },
   /** Install a version into InvokeAI. The ids let the server dress the model with
    *  the catalogue's cover, description and trigger words once the file is in. */
   civitaiInstall: (url: string, ids?: { modelId: number; versionId: number }) =>
@@ -2716,6 +2964,20 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ key, versionId: versionId ?? 0 }),
     }, 70_000),
+  /** Make one of the catalogue's pictures the model's cover; the choice survives
+   *  a later fetch of the same version. */
+  civitaiCover: (key: string, url: string) =>
+    request<void>("/api/imagegen/civitai/cover", { method: "POST", body: JSON.stringify({ key, url }) }, 70_000),
+  /** Install another version (the newest when unsaid) and delete the current
+   *  record once the new file is in and dressed. */
+  civitaiUpdate: (key: string, versionId?: number) =>
+    request<InstallJob>("/api/imagegen/civitai/update", {
+      method: "POST",
+      body: JSON.stringify({ key, versionId: versionId ?? 0 }),
+    }, 70_000),
+  /** Remove a model or LoRA from InvokeAI, file included when InvokeAI manages it. */
+  deleteModel: (key: string) =>
+    request<void>(`/api/imagegen/model?key=${encodeURIComponent(key)}`, { method: "DELETE" }, 40_000),
 
   // ── Libby outfits ──────────────────────────────────────────────────────────
   // User-made wardrobes for the mascot: one image per emotion, stored encrypted

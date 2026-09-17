@@ -9,6 +9,8 @@ import {
   type GameSave,
   type Media,
   type MediaTag,
+  type GameSourceReport,
+  type LaunchyStatus,
 } from "../api.js";
 import { libbyReact } from "../libby-voice.js";
 import { formatMoment } from "../chat-links.js";
@@ -96,6 +98,16 @@ export class OppaiViewer extends LitElement {
   // appears once rather than flickering in for every game and then out again.
   @state() private play: GamePlayInfo | null = null;
   @state() private playing = false;
+
+  // The desktop launcher. `launchy` is whether it is connected right now; a launch
+  // is a request queued on the server, so `launching` holds the request id while
+  // the outcome is polled. `checking` is a read of the game's page for a new
+  // version; `sources` the builds that page lists, fetched on demand.
+  @state() private launchy: LaunchyStatus | null = null;
+  @state() private launching = "";
+  @state() private checking = false;
+  @state() private sources: GameSourceReport | null = null;
+  @state() private sourcesLoading = false;
 
   // Poster picker (videos only). `posterFrames` is empty until the strip is asked
   // for — reading it costs a full decrypt of the video server-side, so it is never
@@ -848,6 +860,26 @@ export class OppaiViewer extends LitElement {
       .save-empty { color:var(--oppai-text-dim); font-size:13px; margin-top:8px; }
       .save-error { color:var(--oppai-danger, #ff6b6b); font-size:13px; margin-top:8px; }
 
+      /* Where the game came from, and the PC it lives on. */
+      .remote {
+        margin: 4px 0 18px; padding: 12px 14px; border-radius: 14px; max-width: 640px;
+        background: var(--oppai-surface-1); border: 1px solid var(--oppai-border, rgba(255,255,255,.08));
+        font-size: 13px; color: var(--oppai-text-dim);
+      }
+      .remote.update { border-color: var(--oppai-accent); }
+      .remote-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+      .remote-head b { color: var(--oppai-text); font-weight: 500; }
+      .remote-acts { margin-left: auto; display: flex; gap: 4px; }
+      .remote .log { white-space: pre-wrap; margin-top: 8px; max-height: 160px; overflow: auto; font-size: 12px; }
+      .remote .srcs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+      .remote .src {
+        display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 10px;
+        background: var(--oppai-surface-2); color: var(--oppai-text); text-decoration: none; font-size: 12px;
+        border: 1px solid var(--oppai-border-strong);
+      }
+      .remote .src:hover { background: var(--oppai-nav-hover); }
+      .pc-stat { display: inline-flex; align-items: center; gap: 4px; margin-right: 12px; }
+
       /* HTML5 game player */
       .play-stage {
         position:relative; margin-top:14px; width:100%; max-width:960px;
@@ -937,10 +969,70 @@ export class OppaiViewer extends LitElement {
     this.saveError = "";
     this.play = null;
     this.playing = false;
+    this.sources = null;
+    this.launching = "";
     if (m.kind === "game") {
       void this.loadGameGallery(m.id);
       void this.loadSaves(m.id);
       void this.probePlayable(m.id);
+      api.launchyStatus().then((st) => (this.launchy = st)).catch(() => (this.launchy = null));
+    }
+  }
+
+  /** Reads the game's page now and refreshes what the site said. */
+  private async checkRemote(id: number) {
+    this.checking = true;
+    try {
+      const result = await api.checkGameRemote(id);
+      if (result.error) mascotSay(result.error, "error");
+      else mascotSay(result.changed ? `A newer version is out: ${result.remote.latestVersion}.` : "You have the latest version.");
+      if (this.full && this.full.id === id) this.full = { ...this.full, remote: result.remote };
+      this.dispatchEvent(new CustomEvent("changed", { bubbles: true, composed: true }));
+    } catch (err) {
+      mascotSay((err as Error).message, "error");
+    } finally {
+      this.checking = false;
+    }
+  }
+
+  private async acknowledgeRemote(id: number) {
+    try {
+      const remote = await api.acknowledgeGameRemote(id);
+      if (this.full && this.full.id === id) this.full = { ...this.full, remote };
+      this.dispatchEvent(new CustomEvent("changed", { bubbles: true, composed: true }));
+    } catch (err) {
+      mascotSay((err as Error).message, "error");
+    }
+  }
+
+  private async loadSources(id: number) {
+    this.sourcesLoading = true;
+    try {
+      this.sources = await api.gameSources(id);
+    } catch (err) {
+      mascotSay((err as Error).message, "error");
+    } finally {
+      this.sourcesLoading = false;
+    }
+  }
+
+  /** Asks Launchy to start the game, then watches the request until it reports. */
+  private async launchOnPC(id: number) {
+    try {
+      const cmd = await api.launchyLaunch(id);
+      this.launching = cmd.id;
+      const started = Date.now();
+      while (this.launching === cmd.id && Date.now() - started < 30_000) {
+        await new Promise((r) => setTimeout(r, 1500));
+        const st = await api.launchyLaunchStatus(cmd.id);
+        if (st.status === "done") { mascotSay("Launchy started it."); break; }
+        if (st.status === "failed") { mascotSay(st.error || "Launchy could not start it.", "error"); break; }
+      }
+    } catch (err) {
+      mascotSay((err as Error).message, "error");
+    } finally {
+      this.launching = "";
+      api.launchyStatus().then((st) => (this.launchy = st)).catch(() => {});
     }
   }
 
@@ -1957,6 +2049,13 @@ export class OppaiViewer extends LitElement {
                         <span class="material-symbols-rounded fill-icon" style="font-size:20px;">download</span>
                         Download
                       </a>`}
+                  ${m.launchy?.installed && this.launchy?.connected
+                    ? html`<button class="btn-primary" ?disabled=${!!this.launching} title="Start it in Launchy on your PC"
+                        @click=${() => void this.launchOnPC(m.id)}>
+                        <span class="material-symbols-rounded fill-icon" style="font-size:20px;">${this.launching ? "hourglass_top" : "play_arrow"}</span>
+                        ${this.launching ? "Starting…" : this.launchy.running.includes(m.id) ? "Running on PC" : "Launch on PC"}
+                      </button>`
+                    : nothing}
                   <button class="btn-outline" @click=${this.toggleFav}>
                     <span
                       class="material-symbols-rounded"
@@ -1967,6 +2066,8 @@ export class OppaiViewer extends LitElement {
                   </button>
                 </div>
                 ${this.playing ? this.renderPlayer(m) : nothing}
+                ${this.renderRemote(m)}
+                ${this.renderLaunchy(m)}
                 ${m.description ? html`<p class="desc described">${m.description}</p>` : nothing}
                 ${m.notes
                   ? html`<p class="desc">${m.notes}</p>`
@@ -2088,6 +2189,74 @@ export class OppaiViewer extends LitElement {
         <input type="file" multiple hidden ?disabled=${this.saveUploading}
           @change=${(e: Event) => void this.uploadSave(e, m.id)} />
       </label>
+    `;
+  }
+
+  /** Where the game came from, what version the site is on, and the builds its
+   *  page lists. Nothing for a game that was uploaded rather than added from a site. */
+  private renderRemote(m: Media) {
+    const r = m.remote;
+    if (!r) return nothing;
+    return html`
+      <div class="remote ${r.hasUpdate ? "update" : ""}">
+        <div class="remote-head">
+          <span class="material-symbols-rounded" style="font-size:18px; color:${r.hasUpdate ? "var(--oppai-accent)" : "inherit"};"
+            >${r.hasUpdate ? "new_releases" : "check_circle"}</span>
+          ${r.hasUpdate
+            ? html`<b>Update available:</b> ${r.knownVersion || "your version"} → ${r.latestVersion}`
+            : html`<b>${r.knownVersion || r.latestVersion || "Version unknown"}</b> on ${r.label}${r.checkedAt ? html` · checked ${saveDate(r.checkedAt)}` : nothing}`}
+          <div class="remote-acts">
+            <button class="icon-round" title="Check for a new version" ?disabled=${this.checking} @click=${() => void this.checkRemote(m.id)}>
+              <span class="material-symbols-rounded" style="font-size:20px; color:var(--oppai-text-dim);">${this.checking ? "hourglass_empty" : "update"}</span>
+            </button>
+            ${r.hasUpdate
+              ? html`<button class="icon-round" title="I have this version now" @click=${() => void this.acknowledgeRemote(m.id)}>
+                  <span class="material-symbols-rounded" style="font-size:20px; color:var(--oppai-text-dim);">done</span>
+                </button>`
+              : nothing}
+            <button class="icon-round" title="Where to get it" ?disabled=${this.sourcesLoading} @click=${() => void this.loadSources(m.id)}>
+              <span class="material-symbols-rounded" style="font-size:20px; color:var(--oppai-text-dim);">${this.sourcesLoading ? "hourglass_empty" : "download"}</span>
+            </button>
+          </div>
+        </div>
+        ${r.hasUpdate && r.changelog ? html`<div class="log">${r.changelog}</div>` : nothing}
+        ${this.sources
+          ? this.sources.degraded
+            ? html`<div class="log">The page could not be read just now — <a href=${r.url} target="_blank" rel="noreferrer" style="color:var(--oppai-primary-bright);">open it yourself</a>.</div>`
+            : html`<div class="srcs">
+                ${this.sources.sources.map((src) => html`<a class="src" href=${src.url} target="_blank" rel="noreferrer" title=${src.url}>
+                  <span class="material-symbols-rounded" style="font-size:16px;">open_in_new</span>${src.label}
+                </a>`)}
+                ${!this.sources.sources.length
+                  ? this.sources.signedIn
+                    ? html`<span>No downloads are listed on the page.</span>`
+                    : html`<span>${r.label} hides its download links from guests — sign in on the Games tab to see them.</span>`
+                  : nothing}
+              </div>`
+          : nothing}
+      </div>
+    `;
+  }
+
+  /** Launchy's side: installed, played this long. Shown once the game is paired,
+   *  whether or not the launcher is connected right now. */
+  private renderLaunchy(m: Media) {
+    const l = m.launchy;
+    if (!l) return nothing;
+    const hours = l.playSeconds >= 3600 ? `${(l.playSeconds / 3600).toFixed(1)} h` : `${Math.round(l.playSeconds / 60)} min`;
+    return html`
+      <div class="remote">
+        <div class="remote-head">
+          <span class="material-symbols-rounded" style="font-size:18px;">${this.launchy?.connected ? "cloud_done" : "cloud_off"}</span>
+          <b>${this.launchy?.connected ? "Launchy is connected" : "Launchy is offline"}</b>
+          <span>· ${l.installed ? "installed on the PC" : "in Launchy, not installed"}${l.version ? ` · v${l.version}` : ""}</span>
+        </div>
+        <div style="margin-top:6px;">
+          <span class="pc-stat"><span class="material-symbols-rounded" style="font-size:16px;">history</span>${hours} played</span>
+          <span class="pc-stat"><span class="material-symbols-rounded" style="font-size:16px;">play_circle</span>${l.launchCount} launches</span>
+          ${l.lastPlayed ? html`<span class="pc-stat">last played ${saveDate(l.lastPlayed)}</span>` : nothing}
+        </div>
+      </div>
     `;
   }
 

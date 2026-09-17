@@ -198,6 +198,27 @@ interface ApiService {
         @Path("save") saveId: Long,
     ): ResponseBody
 
+    // ── Game updates and Launchy ──────────────────────────────────────────
+    // A game that came from itch.io or F95zone remembers its page; the server reads
+    // it again on request and says whether a newer version is posted. Launchy is
+    // the desktop launcher: a launch is a request queued on the server, picked up on
+    // the launcher's next poll, so the phone never has to reach the PC itself.
+
+    @POST("api/media/{id}/remote/check")
+    suspend fun checkGameRemote(@Path("id") gameId: Long): GameCheckResponse
+
+    @POST("api/media/{id}/remote/acknowledge")
+    suspend fun acknowledgeGameRemote(@Path("id") gameId: Long): GameRemote
+
+    @GET("api/launchy")
+    suspend fun launchyStatus(): LaunchyStatus
+
+    @POST("api/launchy/launch")
+    suspend fun launchyLaunch(@Body body: LaunchRequest): LaunchCommand
+
+    @GET("api/launchy/launch/{cmd}")
+    suspend fun launchyLaunchStatus(@Path("cmd") cmdId: String): LaunchCommand
+
     /** 404s when a game has no browser build, which is how the viewer decides
      *  whether to offer Play at all. */
     @GET("api/media/{id}/play")
@@ -318,6 +339,10 @@ interface ApiService {
     @PATCH("api/imagegen/model")
     suspend fun patchModelMeta(@Body body: GenModelMetaPatch): GenModelMeta
 
+    /** Removes a model or LoRA from InvokeAI, file included when InvokeAI manages it. */
+    @DELETE("api/imagegen/model")
+    suspend fun deleteModel(@Query("key") key: String)
+
     // ── InvokeAI gallery ─────────────────────────────────────────────────
     // The generator keeps every finished image in its own gallery; these browse
     // and prune it. Images stream via Repository.galleryThumbUrl/galleryFullUrl.
@@ -370,15 +395,34 @@ interface ApiService {
     @GET("api/imagegen/civitai/models/{id}")
     suspend fun civitaiModel(@Path("id") id: Long): CivitaiModel
 
-    /** Pictures posted with a version (or by a user), with their prompts. */
+    /** Pictures posted with a version, in a post or collection, or by a user, with
+        their prompts. */
     @GET("api/imagegen/civitai/images")
     suspend fun civitaiImages(
         @Query("versionId") versionId: Long? = null,
         @Query("username") username: String? = null,
+        @Query("postId") postId: Long? = null,
+        @Query("collectionId") collectionId: Long? = null,
         @Query("sort") sort: String? = null,
         @Query("nsfw") nsfw: String? = null,
         @Query("cursor") cursor: String? = null,
     ): CivitaiImagesResponse
+
+    /** Someone's posts, newest first: a page of their pictures grouped by post. */
+    @GET("api/imagegen/civitai/posts")
+    suspend fun civitaiPosts(
+        @Query("username") username: String,
+        @Query("nsfw") nsfw: String? = null,
+        @Query("cursor") cursor: String? = null,
+    ): CivitaiPostsResponse
+
+    /** Public collections by name — the only filter the catalogue honours. */
+    @GET("api/imagegen/civitai/collections")
+    suspend fun civitaiCollections(
+        @Query("q") q: String? = null,
+        @Query("sort") sort: String? = null,
+        @Query("cursor") cursor: String? = null,
+    ): CivitaiCollectionsResponse
 
     @GET("api/imagegen/civitai/categories")
     suspend fun civitaiCategories(): CivitaiCategoriesResponse
@@ -394,6 +438,16 @@ interface ApiService {
     /** Writes the catalogue's cover, description and trigger words onto one model now. */
     @POST("api/imagegen/civitai/sync")
     suspend fun civitaiSync(@Body body: CivitaiSyncRequest): CivitaiLink
+
+    /** Makes one of the catalogue's pictures the model's cover; the choice survives
+        a later fetch of the same version. */
+    @POST("api/imagegen/civitai/cover")
+    suspend fun civitaiCover(@Body body: CivitaiCoverRequest)
+
+    /** Installs another version (the newest when unsaid) and deletes the current
+        record once the new file is in and dressed. */
+    @POST("api/imagegen/civitai/update")
+    suspend fun civitaiUpdate(@Body body: CivitaiUpdateRequest): InstallJob
 
     /** Hands a Civitai download URL to InvokeAI; the box downloads it itself. */
     @POST("api/imagegen/civitai/install")

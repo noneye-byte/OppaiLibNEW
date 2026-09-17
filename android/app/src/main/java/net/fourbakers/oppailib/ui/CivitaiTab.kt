@@ -26,14 +26,20 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
@@ -70,13 +76,20 @@ import androidx.compose.ui.window.DialogProperties
 import coil.compose.AsyncImage
 import kotlinx.coroutines.launch
 import net.fourbakers.oppailib.data.CivitaiCategory
+import net.fourbakers.oppailib.data.CivitaiCollection
+import net.fourbakers.oppailib.data.CivitaiCoverRequest
 import net.fourbakers.oppailib.data.CivitaiImage
 import net.fourbakers.oppailib.data.CivitaiInstallRequest
 import net.fourbakers.oppailib.data.CivitaiInstalled
+import net.fourbakers.oppailib.data.CivitaiMe
 import net.fourbakers.oppailib.data.CivitaiModel
+import net.fourbakers.oppailib.data.CivitaiPost
 import net.fourbakers.oppailib.data.CivitaiPrompt
 import net.fourbakers.oppailib.data.CivitaiSyncRequest
+import net.fourbakers.oppailib.data.CivitaiUpdateRequest
 import net.fourbakers.oppailib.data.CivitaiVersion
+import net.fourbakers.oppailib.data.dateLabel
+import net.fourbakers.oppailib.data.mergeCivitaiPosts
 import net.fourbakers.oppailib.data.InstallJob
 import net.fourbakers.oppailib.data.PromptSettings
 import net.fourbakers.oppailib.data.Repository
@@ -87,8 +100,9 @@ private val civitaiTypes = listOf(
 )
 private val civitaiSorts = listOf(
     "" to "Most downloaded", "rated" to "Highest rated", "liked" to "Most liked", "newest" to "Newest",
-    "collected" to "Most collected",
+    "collected" to "Most collected", "discussed" to "Most discussed", "images" to "Most images",
 )
+private val civitaiImageSorts = listOf("" to "Most reactions", "newest" to "Newest", "comments" to "Most comments")
 private val civitaiPeriods = listOf(
     "" to "All time", "year" to "Year", "month" to "Month", "week" to "Week", "day" to "Today",
 )
@@ -101,15 +115,20 @@ private val civitaiBases = listOf(
  *
  * Browse searches with the site's own filters and opens a model's page — its
  * description, versions, files, trigger words and the pictures people posted with
- * it, whose prompts can be handed straight to the Create tab. Installed is the
- * studio's models seen from the catalogue's side, matched by file hash, with the
- * cover, description and trigger words one tap away. Installing hands a version to
- * InvokeAI; the server dresses the model once the download completes.
+ * it, whose prompts can be handed straight to the Create tab. Account is whoever
+ * the API key belongs to, laid out like their profile on the site: models, posts,
+ * pictures and collections, newest first. Installed is the studio's models seen
+ * from the catalogue's side, matched by file hash, with the cover, description and
+ * trigger words one tap away, and per model the version to follow, the cover to
+ * use, an update to a newer version, and deletion. Installing hands a version to
+ * InvokeAI; the server dresses the model once the download completes. The download
+ * log stays folded until asked for.
  */
 @Composable
 fun CivitaiTab(repo: Repository, onUsePrompt: (PromptSettings) -> Unit) {
     var page by remember { mutableStateOf(0) }
     var jobs by remember { mutableStateOf<List<InstallJob>>(emptyList()) }
+    var jobsOpen by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     suspend fun pollJobs() {
@@ -131,29 +150,55 @@ fun CivitaiTab(repo: Repository, onUsePrompt: (PromptSettings) -> Unit) {
 
     Column(Modifier.fillMaxSize().padding(horizontal = 14.dp)) {
         SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(top = 6.dp)) {
-            listOf("Browse", "Installed").forEachIndexed { i, label ->
+            listOf("Browse", "Account", "Installed").forEachIndexed { i, label ->
                 SegmentedButton(
                     selected = page == i,
                     onClick = { page = i },
-                    shape = SegmentedButtonDefaults.itemShape(index = i, count = 2),
+                    shape = SegmentedButtonDefaults.itemShape(index = i, count = 3),
                 ) { Text(label) }
             }
         }
-        jobs.forEach { j ->
-            val pct = if (j.totalBytes > 0) " ${(j.bytes * 100 / j.totalBytes)}%" else ""
-            Text(
-                "⤓ ${j.status}$pct — ${j.error.ifBlank { j.source }}",
-                style = MaterialTheme.typography.labelSmall,
-                color = if (j.status == "error") MaterialTheme.colorScheme.error
-                else MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(top = 4.dp),
-            )
+        if (jobs.isNotEmpty()) {
+            // One line says how the downloads are doing; the log itself only unfolds
+            // on request, since a finished download is not news every time the tab opens.
+            val active = jobs.filter { it.status == "downloading" || it.status == "running" || it.status == "waiting" }
+            val summary = when {
+                active.size == 1 -> {
+                    val j = active[0]
+                    if (j.totalBytes > 0) "downloading ${(j.bytes * 100 / j.totalBytes)}%" else j.status
+                }
+                active.isNotEmpty() -> "${active.size} downloading"
+                else -> "${jobs.size} download${if (jobs.size == 1) "" else "s"}"
+            }
+            Row(
+                Modifier.fillMaxWidth().clickable { jobsOpen = !jobsOpen }.padding(top = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Filled.Download, contentDescription = null, Modifier.size(14.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(" $summary", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Icon(
+                    if (jobsOpen) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                    contentDescription = if (jobsOpen) "Hide the download log" else "Show the download log",
+                    Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (jobsOpen) jobs.forEach { j ->
+                val pct = if (j.totalBytes > 0) " ${(j.bytes * 100 / j.totalBytes)}%" else ""
+                Text(
+                    "⤓ ${j.status}$pct — ${j.error.ifBlank { j.source }}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (j.status == "error") MaterialTheme.colorScheme.error
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+            }
         }
         when (page) {
             0 -> CivitaiBrowse(repo, onInstall = ::install, onUsePrompt = onUsePrompt)
-            else -> CivitaiInstalledList(repo)
+            1 -> CivitaiAccount(repo, onUsePrompt = onUsePrompt)
+            else -> CivitaiInstalledList(repo, onJobs = { scope.launch { pollJobs() } })
         }
     }
 }
@@ -199,7 +244,9 @@ private fun CivitaiBrowse(
                 cursor = if (reset) null else cursor.ifBlank { null },
             )
         }.onSuccess { res ->
-            items = if (reset) res.items else items + res.items
+            // The grid is keyed by id, and a cursor that shifts under a "load more"
+            // can hand back a model already shown — a repeat key crashes the app.
+            items = (if (reset) res.items else items + res.items).distinctBy { it.id }
             cursor = res.nextCursor
         }.onFailure { error = it.message ?: "Civitai is unreachable" }
         loading = false
@@ -250,12 +297,13 @@ private fun CivitaiBrowse(
             )
         }
     }
-    if (showFilters) {
-        Row(Modifier.horizontalScroll(rememberScrollState()).padding(bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            civitaiSorts.forEach { (id, label) ->
-                FilterChip(selected = sort == id, onClick = { sort = id; scope.launch { search(reset = true) } }, label = { Text(label) })
-            }
+    // Sorting is the filter people reach for most, so it stays out of the fold.
+    Row(Modifier.horizontalScroll(rememberScrollState()).padding(bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        civitaiSorts.forEach { (id, label) ->
+            FilterChip(selected = sort == id, onClick = { sort = id; scope.launch { search(reset = true) } }, label = { Text(label) })
         }
+    }
+    if (showFilters) {
         Row(Modifier.horizontalScroll(rememberScrollState()).padding(bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             civitaiPeriods.forEach { (id, label) ->
                 FilterChip(selected = period == id, onClick = { period = id; scope.launch { search(reset = true) } }, label = { Text(label) })
@@ -287,55 +335,7 @@ private fun CivitaiBrowse(
         modifier = Modifier.fillMaxSize().padding(top = 4.dp),
     ) {
         items(items, key = { it.id }) { m ->
-            Surface(
-                shape = RoundedCornerShape(12.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant,
-                modifier = Modifier.clickable { detailSeed = m; detailId = m.id },
-            ) {
-                Column {
-                    Box {
-                        val img = m.versions.firstOrNull()?.images?.firstOrNull()
-                        if (img != null) {
-                            AsyncImage(
-                                model = repo.civitaiImageUrl(img),
-                                imageLoader = repo.imageLoader,
-                                contentDescription = m.name,
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier.fillMaxWidth().aspectRatio(3f / 4f),
-                            )
-                        } else {
-                            Box(Modifier.fillMaxWidth().aspectRatio(3f / 4f)) {}
-                        }
-                        if (m.installed) {
-                            Text(
-                                "Installed",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onPrimary,
-                                modifier = Modifier
-                                    .padding(6.dp)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(MaterialTheme.colorScheme.primary)
-                                    .padding(horizontal = 6.dp, vertical = 2.dp),
-                            )
-                        }
-                    }
-                    Text(
-                        m.name,
-                        style = MaterialTheme.typography.labelMedium,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                    )
-                    Text(
-                        "${typeLabel(m.type)} · ${m.versions.firstOrNull()?.base ?: ""} · ⤓ ${m.downloads}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(start = 8.dp, end = 8.dp, bottom = 6.dp),
-                    )
-                }
-            }
+            CivitaiModelCard(repo, m) { detailSeed = m; detailId = m.id }
         }
         if (!loading && cursor.isNotEmpty()) {
             item(span = { GridItemSpan(maxLineSpan) }) {
@@ -573,21 +573,21 @@ private fun CivitaiGalleryDialog(
     var images by remember { mutableStateOf<List<CivitaiImage>>(emptyList()) }
     var cursor by remember { mutableStateOf("") }
     var loading by remember { mutableStateOf(false) }
+    var sort by remember { mutableStateOf("") }
     var picked by remember { mutableStateOf<CivitaiImage?>(null) }
     val scope = rememberCoroutineScope()
-    val clipboard = LocalClipboardManager.current
 
     suspend fun load(reset: Boolean) {
         loading = true
         runCatching {
-            repo.api.civitaiImages(versionId = versionId, nsfw = if (nsfw) null else "0", cursor = if (reset) null else cursor.ifBlank { null })
+            repo.api.civitaiImages(versionId = versionId, sort = sort.ifBlank { null }, nsfw = if (nsfw) null else "0", cursor = if (reset) null else cursor.ifBlank { null })
         }.onSuccess { res ->
-            images = if (reset) res.items else images + res.items
+            images = (if (reset) res.items else images + res.items).distinctBy { it.id }
             cursor = res.nextCursor
         }.onFailure { repo.report(it.message ?: "Couldn't load the pictures") }
         loading = false
     }
-    LaunchedEffect(versionId) { load(reset = true) }
+    LaunchedEffect(versionId, sort) { load(reset = true) }
 
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth(0.94f).fillMaxHeight(0.92f)) {
@@ -596,6 +596,11 @@ private fun CivitaiGalleryDialog(
                     Text("Posted pictures", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
                     IconButton(onClick = onDismiss) { Icon(Icons.Filled.Close, contentDescription = "Close") }
                 }
+                Row(Modifier.horizontalScroll(rememberScrollState()).padding(bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    civitaiImageSorts.forEach { (id, label) ->
+                        FilterChip(selected = sort == id, onClick = { sort = id }, label = { Text(label) })
+                    }
+                }
                 LazyVerticalGrid(
                     columns = GridCells.Adaptive(minSize = 110.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -603,25 +608,7 @@ private fun CivitaiGalleryDialog(
                     modifier = Modifier.weight(1f),
                 ) {
                     items(images, key = { it.id }) { img ->
-                        Box(Modifier.clip(RoundedCornerShape(10.dp)).clickable { picked = img }) {
-                            AsyncImage(
-                                model = repo.civitaiImageUrl(img.url),
-                                imageLoader = repo.imageLoader,
-                                contentDescription = null,
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier.fillMaxWidth().aspectRatio(3f / 4f),
-                            )
-                            if (img.prompt.isNotBlank()) {
-                                Text(
-                                    "prompt",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = Color.White,
-                                    modifier = Modifier.align(Alignment.BottomEnd).padding(6.dp)
-                                        .clip(RoundedCornerShape(6.dp)).background(Color.Black.copy(alpha = .6f))
-                                        .padding(horizontal = 6.dp, vertical = 2.dp),
-                                )
-                            }
-                        }
+                        CivitaiImageTile(repo, img, onClick = { picked = img })
                     }
                     if (!loading && cursor.isNotEmpty()) {
                         item(span = { GridItemSpan(maxLineSpan) }) {
@@ -644,9 +631,41 @@ private fun CivitaiGalleryDialog(
         }
     }
 
-    picked?.let { img ->
+    picked?.let { img -> CivitaiPickedDialog(repo, img, onUsePrompt = onUsePrompt, onDismiss = { picked = null }) }
+}
+
+/** One picture in a grid, flagged when the poster kept the prompt. */
+@Composable
+private fun CivitaiImageTile(repo: Repository, img: CivitaiImage, onClick: () -> Unit, badge: String? = null) {
+    Box(Modifier.clip(RoundedCornerShape(10.dp)).clickable(onClick = onClick)) {
+        AsyncImage(
+            model = repo.civitaiImageUrl(img.url),
+            imageLoader = repo.imageLoader,
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.fillMaxWidth().aspectRatio(3f / 4f),
+        )
+        val label = badge ?: if (img.prompt.isNotBlank()) "prompt" else null
+        if (label != null) {
+            Text(
+                label,
+                style = MaterialTheme.typography.labelSmall,
+                color = Color.White,
+                modifier = Modifier.align(Alignment.BottomEnd).padding(6.dp)
+                    .clip(RoundedCornerShape(6.dp)).background(Color.Black.copy(alpha = .6f))
+                    .padding(horizontal = 6.dp, vertical = 2.dp),
+            )
+        }
+    }
+}
+
+/** One posted picture, full size, with everything the poster kept about it. */
+@Composable
+private fun CivitaiPickedDialog(repo: Repository, img: CivitaiImage, onUsePrompt: (PromptSettings) -> Unit, onDismiss: () -> Unit) {
+    val clipboard = LocalClipboardManager.current
+    run {
         val settings = CivitaiPrompt.from(img)
-        Dialog(onDismissRequest = { picked = null }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
             Surface(shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth(0.94f).fillMaxHeight(0.92f)) {
                 Column(Modifier.fillMaxSize()) {
                     Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -693,7 +712,7 @@ private fun CivitaiGalleryDialog(
                             }
                         }
                         Spacer(Modifier.weight(1f))
-                        TextButton(onClick = { picked = null }) { Text("Close") }
+                        TextButton(onClick = onDismiss) { Text("Close") }
                     }
                 }
             }
@@ -702,33 +721,441 @@ private fun CivitaiGalleryDialog(
 }
 
 /**
- * The studio's models seen from Civitai's side: matched by file hash, with the
- * catalogue's cover, description and trigger words a tap away, and a note when a
- * newer version has been published.
+ * The account the API key belongs to, laid out like the profile on the site: a
+ * banner (the profile cover when the catalogue shares it, else the newest posted
+ * picture), the profile picture, and the profile's own tabs — models, posts,
+ * pictures, collections — newest first. Posts are rebuilt from the picture feed
+ * (the public API has none), and collections can only be searched by name, never
+ * listed by owner, so the tab searches public collections and links to the
+ * person's own on the site.
  */
 @Composable
-private fun CivitaiInstalledList(repo: Repository) {
+private fun CivitaiAccount(repo: Repository, onUsePrompt: (PromptSettings) -> Unit) {
+    var me by remember { mutableStateOf<CivitaiMe?>(null) }
+    var error by remember { mutableStateOf("") }
+    var loadingMe by remember { mutableStateOf(true) }
+    var tab by remember { mutableStateOf(0) }
+    var models by remember { mutableStateOf<List<CivitaiModel>>(emptyList()) }
+    var modelsCursor by remember { mutableStateOf("") }
+    var posts by remember { mutableStateOf<List<CivitaiPost>>(emptyList()) }
+    var postsCursor by remember { mutableStateOf("") }
+    var images by remember { mutableStateOf<List<CivitaiImage>>(emptyList()) }
+    var imagesCursor by remember { mutableStateOf("") }
+    var collections by remember { mutableStateOf<List<CivitaiCollection>>(emptyList()) }
+    var collectionsCursor by remember { mutableStateOf("") }
+    var collectionQuery by remember { mutableStateOf("") }
+    var collectionSort by remember { mutableStateOf("newest") }
+    var openCollection by remember { mutableStateOf<CivitaiCollection?>(null) }
+    var collectionImages by remember { mutableStateOf<List<CivitaiImage>>(emptyList()) }
+    var collectionImagesCursor by remember { mutableStateOf("") }
+    var openPost by remember { mutableStateOf<CivitaiPost?>(null) }
+    var loading by remember { mutableStateOf(false) }
+    var picked by remember { mutableStateOf<CivitaiImage?>(null) }
+    var detailId by remember { mutableStateOf(0L) }
+    var detailSeed by remember { mutableStateOf<CivitaiModel?>(null) }
+    val scope = rememberCoroutineScope()
+
+    suspend fun loadModels(reset: Boolean) {
+        val user = me?.username ?: return
+        loading = true
+        runCatching { repo.api.civitaiSearch(creator = user, sort = "newest", cursor = if (reset) null else modelsCursor.ifBlank { null }) }
+            .onSuccess { res -> models = (if (reset) res.items else models + res.items).distinctBy { it.id }; modelsCursor = res.nextCursor }
+            .onFailure { error = it.message ?: "Couldn't load the models" }
+        loading = false
+    }
+    suspend fun loadPosts(reset: Boolean) {
+        val user = me?.username ?: return
+        loading = true
+        runCatching { repo.api.civitaiPosts(username = user, cursor = if (reset) null else postsCursor.ifBlank { null }) }
+            .onSuccess { res -> posts = if (reset) res.items.distinctBy { it.id } else mergeCivitaiPosts(posts, res.items); postsCursor = res.nextCursor }
+            .onFailure { error = it.message ?: "Couldn't load the posts" }
+        loading = false
+    }
+    suspend fun loadImages(reset: Boolean) {
+        val user = me?.username ?: return
+        loading = true
+        runCatching { repo.api.civitaiImages(username = user, sort = "newest", cursor = if (reset) null else imagesCursor.ifBlank { null }) }
+            .onSuccess { res -> images = (if (reset) res.items else images + res.items).distinctBy { it.id }; imagesCursor = res.nextCursor }
+            .onFailure { error = it.message ?: "Couldn't load the pictures" }
+        loading = false
+    }
+    suspend fun loadCollections(reset: Boolean) {
+        loading = true
+        runCatching { repo.api.civitaiCollections(q = collectionQuery.ifBlank { null }, sort = collectionSort, cursor = if (reset) null else collectionsCursor.ifBlank { null }) }
+            .onSuccess { res -> collections = (if (reset) res.items else collections + res.items).distinctBy { it.id }; collectionsCursor = res.nextCursor }
+            .onFailure { error = it.message ?: "Couldn't load the collections" }
+        loading = false
+    }
+    suspend fun loadCollectionImages(c: CivitaiCollection, reset: Boolean) {
+        loading = true
+        runCatching { repo.api.civitaiImages(collectionId = c.id, sort = "newest", cursor = if (reset) null else collectionImagesCursor.ifBlank { null }) }
+            .onSuccess { res -> collectionImages = (if (reset) res.items else collectionImages + res.items).distinctBy { it.id }; collectionImagesCursor = res.nextCursor }
+            .onFailure { error = it.message ?: "Couldn't load the collection" }
+        loading = false
+    }
+    suspend fun loadTab() {
+        error = ""
+        when (tab) {
+            0 -> if (models.isEmpty()) loadModels(reset = true)
+            1 -> if (posts.isEmpty()) loadPosts(reset = true)
+            2 -> if (images.isEmpty()) loadImages(reset = true)
+            else -> if (collections.isEmpty()) loadCollections(reset = true)
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        runCatching { repo.api.civitaiMe() }
+            .onSuccess { me = it }
+            .onFailure { error = it.message ?: "No account to show" }
+        loadingMe = false
+        // The newest picture stands in for a cover the API keeps to itself.
+        loadImages(reset = true)
+        loadTab()
+    }
+
+    val m = me
+    if (loadingMe) {
+        Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+        return
+    }
+    if (m == null) {
+        Text(
+            "${error.ifBlank { "No account to show." }}\nAdd your Civitai API key under Settings → Image generation and this page shows your models, posts, pictures and collections.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(16.dp),
+        )
+        return
+    }
+
+    Column(Modifier.fillMaxSize()) {
+        // The banner, with the profile picture over its bottom edge.
+        val cover = m.cover.ifBlank { images.firstOrNull()?.url ?: "" }
+        Box(Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 8.dp)) {
+            Box(
+                Modifier.fillMaxWidth().aspectRatio(3f).clip(RoundedCornerShape(14.dp)).background(MaterialTheme.colorScheme.surfaceVariant),
+            ) {
+                if (cover.isNotEmpty()) {
+                    AsyncImage(
+                        model = repo.civitaiImageUrl(cover),
+                        imageLoader = repo.imageLoader,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+                Row(
+                    Modifier.align(Alignment.BottomStart).fillMaxWidth().background(Color.Black.copy(alpha = .45f)).padding(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    if (m.image.isNotEmpty()) {
+                        AsyncImage(
+                            model = repo.civitaiImageUrl(m.image),
+                            imageLoader = repo.imageLoader,
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.size(44.dp).clip(RoundedCornerShape(22.dp)),
+                        )
+                    }
+                    Text(m.username, style = MaterialTheme.typography.titleMedium, color = Color.White)
+                }
+            }
+        }
+        Row(Modifier.horizontalScroll(rememberScrollState()).padding(bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf("Models", "Posts", "Images", "Collections").forEachIndexed { i, label ->
+                FilterChip(
+                    selected = tab == i,
+                    onClick = { tab = i; openPost = null; openCollection = null; scope.launch { loadTab() } },
+                    label = { Text(label) },
+                )
+            }
+        }
+        if (error.isNotEmpty()) Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+
+        val post = openPost
+        val coll = openCollection
+        when {
+            tab == 1 && post != null -> {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = { openPost = null }) { Icon(Icons.Filled.ArrowBack, contentDescription = "All posts") }
+                    Text(
+                        "${post.images.size} picture${if (post.images.size == 1) "" else "s"}${post.dateLabel().let { if (it.isEmpty()) "" else " · $it" }}",
+                        style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                CivitaiImageGrid(repo, post.images, loading = false, cursor = "", onMore = {}, onPick = { picked = it }, empty = "")
+            }
+            tab == 3 && coll != null -> {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = { openCollection = null }) { Icon(Icons.Filled.ArrowBack, contentDescription = "Collections") }
+                    Column(Modifier.weight(1f)) {
+                        Text(coll.name, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(
+                            "${if (coll.username.isNotEmpty()) "by ${coll.username} · " else ""}${coll.count} item${if (coll.count == 1L) "" else "s"}",
+                            style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                CivitaiImageGrid(
+                    repo, collectionImages, loading = loading, cursor = collectionImagesCursor,
+                    onMore = { scope.launch { loadCollectionImages(coll, reset = false) } }, onPick = { picked = it },
+                    empty = "Nothing the feed will show for this collection.",
+                )
+            }
+            tab == 0 -> LazyVerticalGrid(
+                columns = GridCells.Adaptive(minSize = 130.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                items(models, key = { it.id }) { mod -> CivitaiModelCard(repo, mod) { detailSeed = mod; detailId = mod.id } }
+                if (!loading && modelsCursor.isNotEmpty()) {
+                    item(span = { GridItemSpan(maxLineSpan) }) {
+                        OutlinedButton(onClick = { scope.launch { loadModels(reset = false) } }, modifier = Modifier.fillMaxWidth()) { Text("More models") }
+                    }
+                }
+                if (loading) item(span = { GridItemSpan(maxLineSpan) }) {
+                    Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+                }
+                if (!loading && models.isEmpty()) item(span = { GridItemSpan(maxLineSpan) }) {
+                    Text("No models published. Uploading goes through civitai.com itself — the site has no public API for it.",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp))
+                }
+            }
+            tab == 1 -> LazyVerticalGrid(
+                columns = GridCells.Adaptive(minSize = 130.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                items(posts, key = { it.id }) { p ->
+                    Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.clickable { openPost = p }) {
+                        Column {
+                            p.images.firstOrNull()?.let { first ->
+                                CivitaiImageTile(repo, first, onClick = { openPost = p }, badge = if (p.images.size > 1) "${p.images.size} pictures" else null)
+                            }
+                            Text(
+                                p.dateLabel().ifBlank { "Post" },
+                                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                            )
+                        }
+                    }
+                }
+                if (!loading && postsCursor.isNotEmpty()) {
+                    item(span = { GridItemSpan(maxLineSpan) }) {
+                        OutlinedButton(onClick = { scope.launch { loadPosts(reset = false) } }, modifier = Modifier.fillMaxWidth()) { Text("More posts") }
+                    }
+                }
+                if (loading) item(span = { GridItemSpan(maxLineSpan) }) {
+                    Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+                }
+                if (!loading && posts.isEmpty()) item(span = { GridItemSpan(maxLineSpan) }) {
+                    Text("No posts.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp))
+                }
+            }
+            tab == 2 -> CivitaiImageGrid(
+                repo, images, loading = loading, cursor = imagesCursor,
+                onMore = { scope.launch { loadImages(reset = false) } }, onPick = { picked = it }, empty = "No posted pictures.",
+            )
+            else -> {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(
+                        value = collectionQuery,
+                        onValueChange = { collectionQuery = it },
+                        placeholder = { Text("Search public collections…") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                    )
+                    IconButton(onClick = { scope.launch { loadCollections(reset = true) } }) {
+                        Icon(Icons.Filled.Search, contentDescription = "Search")
+                    }
+                }
+                Row(Modifier.horizontalScroll(rememberScrollState()).padding(vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf("newest" to "Newest", "followers" to "Most followed").forEach { (id, label) ->
+                        FilterChip(selected = collectionSort == id, onClick = { collectionSort = id; scope.launch { loadCollections(reset = true) } }, label = { Text(label) })
+                    }
+                }
+                Text(
+                    "Civitai's public API lists collections by name only, never by owner — your own are at civitai.com/user/${m.username}/collections. Image and post collections open here.",
+                    style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 6.dp),
+                )
+                LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(collections, key = { it.id }) { c ->
+                        Surface(
+                            shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceVariant,
+                            modifier = Modifier.clickable(enabled = c.openable) { scope.launch { openCollection = c; loadCollectionImages(c, reset = true) } },
+                        ) {
+                            Row(Modifier.padding(8.dp), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                                if (c.cover.isNotEmpty()) {
+                                    AsyncImage(
+                                        model = repo.civitaiImageUrl(c.cover), imageLoader = repo.imageLoader, contentDescription = null,
+                                        contentScale = ContentScale.Crop, modifier = Modifier.size(56.dp).clip(RoundedCornerShape(8.dp)),
+                                    )
+                                } else {
+                                    Box(Modifier.size(56.dp).clip(RoundedCornerShape(8.dp)).background(MaterialTheme.colorScheme.surface))
+                                }
+                                Column(Modifier.weight(1f)) {
+                                    Text(c.name + if (c.nsfw) "  18+" else "", style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(
+                                        "${c.type} · ${c.count} item${if (c.count == 1L) "" else "s"}${if (c.username.isNotEmpty()) " · by ${c.username}" else ""}${if (c.openable) "" else " · not listable"}",
+                                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    if (!loading && collectionsCursor.isNotEmpty()) {
+                        item { OutlinedButton(onClick = { scope.launch { loadCollections(reset = false) } }, modifier = Modifier.fillMaxWidth()) { Text("More collections") } }
+                    }
+                    if (loading) item { Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() } }
+                    if (!loading && collections.isEmpty()) {
+                        item { Text("No collections matched.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp)) }
+                    }
+                }
+            }
+        }
+    }
+
+    picked?.let { img -> CivitaiPickedDialog(repo, img, onUsePrompt = { onUsePrompt(it); picked = null }, onDismiss = { picked = null }) }
+    if (detailId != 0L) {
+        CivitaiDetailDialog(
+            repo = repo, id = detailId, seed = detailSeed, nsfw = true,
+            onInstall = { mod, v ->
+                scope.launch {
+                    runCatching { repo.api.civitaiInstall(CivitaiInstallRequest(v.downloadUrl, mod.id, v.id)) }
+                        .onSuccess { repo.report("InvokeAI is downloading the model; its cover and description follow") }
+                        .onFailure { repo.report(it.message ?: "Couldn't start the install") }
+                }
+            },
+            onUsePrompt = onUsePrompt,
+            onCreator = { detailId = 0L },
+            onTag = { detailId = 0L },
+            onDismiss = { detailId = 0L },
+        )
+    }
+}
+
+/** A grid of pictures with a "more" button; a tile opens the picture and its prompt. */
+@Composable
+private fun CivitaiImageGrid(
+    repo: Repository,
+    images: List<CivitaiImage>,
+    loading: Boolean,
+    cursor: String,
+    onMore: () -> Unit,
+    onPick: (CivitaiImage) -> Unit,
+    empty: String,
+) {
+    LazyVerticalGrid(
+        columns = GridCells.Adaptive(minSize = 110.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.fillMaxSize(),
+    ) {
+        items(images, key = { it.id }) { img -> CivitaiImageTile(repo, img, onClick = { onPick(img) }) }
+        if (!loading && cursor.isNotEmpty()) {
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                OutlinedButton(onClick = onMore, modifier = Modifier.fillMaxWidth()) { Text("More") }
+            }
+        }
+        if (loading) item(span = { GridItemSpan(maxLineSpan) }) {
+            Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+        }
+        if (!loading && images.isEmpty() && empty.isNotEmpty()) item(span = { GridItemSpan(maxLineSpan) }) {
+            Text(empty, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp))
+        }
+    }
+}
+
+/** One model of the catalogue as a card: first preview, name, type and base. */
+@Composable
+private fun CivitaiModelCard(repo: Repository, m: CivitaiModel, onClick: () -> Unit) {
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        modifier = Modifier.clickable(onClick = onClick),
+    ) {
+        Column {
+            Box {
+                val img = m.versions.firstOrNull()?.images?.firstOrNull()
+                if (img != null) {
+                    AsyncImage(
+                        model = repo.civitaiImageUrl(img),
+                        imageLoader = repo.imageLoader,
+                        contentDescription = m.name,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxWidth().aspectRatio(3f / 4f),
+                    )
+                } else {
+                    Box(Modifier.fillMaxWidth().aspectRatio(3f / 4f)) {}
+                }
+                if (m.installed) {
+                    Text(
+                        "Installed",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onPrimary,
+                        modifier = Modifier
+                            .padding(6.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(MaterialTheme.colorScheme.primary)
+                            .padding(horizontal = 6.dp, vertical = 2.dp),
+                    )
+                }
+            }
+            Text(
+                m.name,
+                style = MaterialTheme.typography.labelMedium,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+            )
+            Text(
+                "${typeLabel(m.type)} · ${m.versions.firstOrNull()?.base ?: ""} · ⤓ ${m.downloads}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(start = 8.dp, end = 8.dp, bottom = 6.dp),
+            )
+        }
+    }
+}
+
+/**
+ * The studio's models seen from Civitai's side: matched by file hash, with the
+ * catalogue's cover, description and trigger words a tap away, and a note when a
+ * newer version has been published. Tapping a linked model opens its management
+ * sheet: the version to follow, the cover to use, an update, deletion.
+ */
+@Composable
+private fun CivitaiInstalledList(repo: Repository, onJobs: () -> Unit) {
     var models by remember { mutableStateOf<List<CivitaiInstalled>>(emptyList()) }
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
     var syncing by remember { mutableStateOf("") }
     var zoomed by remember { mutableStateOf("") }
+    var managing by remember { mutableStateOf<CivitaiInstalled?>(null) }
+    var deleting by remember { mutableStateOf<CivitaiInstalled?>(null) }
     val scope = rememberCoroutineScope()
 
     suspend fun load(refresh: Boolean) {
         loading = true
         error = ""
         runCatching { repo.api.civitaiInstalled(if (refresh) "1" else null) }
-            .onSuccess { models = it.models }
+            .onSuccess { models = it.models.distinctBy { m -> m.key } }
             .onFailure { error = it.message ?: "Couldn't read the studio's models" }
         loading = false
     }
     LaunchedEffect(Unit) { load(refresh = false) }
 
-    fun sync(m: CivitaiInstalled) {
+    fun sync(m: CivitaiInstalled, versionId: Long = 0) {
         scope.launch {
             syncing = m.key
-            runCatching { repo.api.civitaiSync(CivitaiSyncRequest(m.key)) }
+            runCatching { repo.api.civitaiSync(CivitaiSyncRequest(m.key, versionId)) }
                 .onSuccess { link ->
                     repo.report(
                         if (link.modelId > 0) "${m.name}: cover, description and trigger words set from “${link.modelName}”"
@@ -741,9 +1168,22 @@ private fun CivitaiInstalledList(repo: Repository) {
         }
     }
 
+    fun delete(m: CivitaiInstalled) {
+        scope.launch {
+            runCatching { repo.api.deleteModel(m.key) }
+                .onSuccess {
+                    repo.report("${m.name} deleted")
+                    models = models.filter { it.key != m.key }
+                    if (managing?.key == m.key) managing = null
+                }
+                .onFailure { repo.report(it.message ?: "Couldn't delete the model") }
+            deleting = null
+        }
+    }
+
     Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(
-            "Matched to Civitai by file hash. Fetch writes the catalogue's cover, description and trigger words onto the InvokeAI record.",
+            "Matched to Civitai by file hash. Fetch writes the catalogue's cover, description and trigger words onto the InvokeAI record; tap a model for its version and cover.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.weight(1f),
@@ -759,7 +1199,10 @@ private fun CivitaiInstalledList(repo: Repository) {
     LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         items(models, key = { it.key }) { m ->
             val c = m.civitai
-            Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
+            Surface(
+                shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceVariant,
+                modifier = Modifier.clickable(enabled = c != null) { managing = m },
+            ) {
                 Row(Modifier.padding(8.dp), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
                     val thumb = if (m.hasCover) (if (m.type == "lora") repo.loraThumbUrl(m.name) else repo.modelThumbUrl(m.key)) else null
                     if (thumb != null) {
@@ -791,7 +1234,7 @@ private fun CivitaiInstalledList(repo: Repository) {
                             overflow = TextOverflow.Ellipsis,
                         )
                         if (c?.updateAvailable == true) {
-                            Text("Newer version on Civitai", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                            Text("Newer version on Civitai — tap to update", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
                         }
                         if (c != null && c.previews.isNotEmpty()) {
                             Row(Modifier.horizontalScroll(rememberScrollState()).padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -810,6 +1253,11 @@ private fun CivitaiInstalledList(repo: Repository) {
                     IconButton(onClick = { sync(m) }, enabled = syncing != m.key) {
                         if (syncing == m.key) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
                         else Icon(Icons.Filled.Sync, contentDescription = "Fetch from Civitai")
+                    }
+                    if (c != null) {
+                        IconButton(onClick = { managing = m }) { Icon(Icons.Filled.Tune, contentDescription = "Version and cover") }
+                    } else {
+                        IconButton(onClick = { deleting = m }) { Icon(Icons.Filled.Delete, contentDescription = "Delete from InvokeAI") }
                     }
                 }
             }
@@ -830,6 +1278,183 @@ private fun CivitaiInstalledList(repo: Repository) {
                 contentScale = ContentScale.Fit,
                 modifier = Modifier.fillMaxSize().background(Color.Black).clickable { zoomed = "" },
             )
+        }
+    }
+    managing?.let { m ->
+        CivitaiManageDialog(
+            repo = repo,
+            model = m,
+            busy = syncing == m.key,
+            onSync = { versionId -> sync(m, versionId) },
+            onUpdated = { managing = null; onJobs(); scope.launch { load(refresh = false) } },
+            onCoverSet = { scope.launch { load(refresh = false) } },
+            onDelete = { deleting = m },
+            onDismiss = { managing = null },
+        )
+    }
+    deleting?.let { m ->
+        AlertDialog(
+            onDismissRequest = { deleting = null },
+            title = { Text("Delete ${if (m.type == "lora") "LoRA" else "model"}?") },
+            text = { Text("“${m.name}” is removed from InvokeAI, and its file with it.") },
+            confirmButton = { TextButton(onClick = { delete(m) }) { Text("Delete") } },
+            dismissButton = { TextButton(onClick = { deleting = null }) { Text("Cancel") } },
+        )
+    }
+}
+
+/**
+ * One installed model's management sheet: every version the catalogue lists, an
+ * update to another one (InvokeAI downloads it, then the current file is
+ * deleted), a link to another version without downloading, and the showcase
+ * pictures of the chosen version to pick a cover from.
+ */
+@Composable
+private fun CivitaiManageDialog(
+    repo: Repository,
+    model: CivitaiInstalled,
+    busy: Boolean,
+    onSync: (versionId: Long) -> Unit,
+    onUpdated: () -> Unit,
+    onCoverSet: () -> Unit,
+    onDelete: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val c = model.civitai ?: return
+    var page by remember { mutableStateOf<CivitaiModel?>(null) }
+    var error by remember { mutableStateOf("") }
+    var versionId by remember { mutableStateOf(c.versionId) }
+    var working by remember { mutableStateOf(false) }
+    var confirmUpdate by remember { mutableStateOf<CivitaiVersion?>(null) }
+    var cover by remember { mutableStateOf(c.coverUrl.ifBlank { c.previews.firstOrNull() ?: "" }) }
+    val scope = rememberCoroutineScope()
+
+    LaunchedEffect(c.modelId) {
+        runCatching { repo.api.civitaiModel(c.modelId) }
+            .onSuccess { page = it }
+            .onFailure { error = it.message ?: "Couldn't load the model page" }
+    }
+
+    fun setCover(url: String) {
+        if (working) return
+        working = true
+        scope.launch {
+            runCatching { repo.api.civitaiCover(CivitaiCoverRequest(model.key, url)) }
+                .onSuccess { cover = url; repo.report("${model.name}: cover set"); onCoverSet() }
+                .onFailure { error = it.message ?: "Couldn't set the cover" }
+            working = false
+        }
+    }
+
+    fun update(v: CivitaiVersion) {
+        if (working) return
+        working = true
+        scope.launch {
+            runCatching { repo.api.civitaiUpdate(CivitaiUpdateRequest(model.key, v.id)) }
+                .onSuccess { repo.report("${model.name}: downloading ${v.name}; the current file goes once it is in"); onUpdated() }
+                .onFailure { error = it.message ?: "Couldn't start the update" }
+            working = false
+            confirmUpdate = null
+        }
+    }
+
+    confirmUpdate?.let { v ->
+        AlertDialog(
+            onDismissRequest = { confirmUpdate = null },
+            title = { Text("Update to ${v.name}?") },
+            text = { Text("InvokeAI downloads version ${v.name} of “${c.modelName}”, then the current file is deleted.") },
+            confirmButton = { TextButton(onClick = { update(v) }, enabled = !working) { Text("Update") } },
+            dismissButton = { TextButton(onClick = { confirmUpdate = null }) { Text("Cancel") } },
+        )
+    }
+
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Surface(shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth(0.94f).fillMaxHeight(0.92f)) {
+            val p = page
+            Column(Modifier.fillMaxSize()) {
+                Column(
+                    Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(model.name, style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "${c.modelName}${if (c.versionName.isNotEmpty()) " · ${c.versionName}" else ""}${if (c.creator.isNotEmpty()) " · by ${c.creator}" else ""}",
+                        style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (error.isNotEmpty()) Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                    if (p == null && error.isEmpty()) {
+                        Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+                    }
+                    if (p != null) {
+                        val v = p.versions.find { it.id == versionId } ?: p.versions.firstOrNull()
+                        val current = v?.id == c.versionId
+                        Text("Version", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            p.versions.forEach { ver ->
+                                FilterChip(
+                                    selected = v?.id == ver.id,
+                                    onClick = { versionId = ver.id },
+                                    leadingIcon = if (ver.id == c.versionId) ({ Icon(Icons.Filled.Check, null, Modifier.size(14.dp)) }) else null,
+                                    label = { Text("${ver.name} · ${ver.base}") },
+                                )
+                            }
+                        }
+                        if (v != null && !current) {
+                            Button(onClick = { confirmUpdate = v }, enabled = !working && !busy && v.downloadUrl.isNotEmpty()) {
+                                Icon(Icons.Filled.Download, contentDescription = null, Modifier.size(16.dp))
+                                Text("  Install ${v.name}, replacing the current file")
+                            }
+                            OutlinedButton(onClick = { onSync(v.id) }, enabled = !working && !busy) {
+                                Text("Link to ${v.name} without downloading")
+                            }
+                        }
+                        if (v != null && v.images.isNotEmpty()) {
+                            Text(
+                                if (current) "Cover" else "Cover (from ${v.name})",
+                                style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            // A wrapped grid inside the scrolling column: rows of three.
+                            v.images.chunked(3).forEach { row ->
+                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    row.forEach { u ->
+                                        Box(
+                                            Modifier.weight(1f).aspectRatio(3f / 4f).clip(RoundedCornerShape(10.dp))
+                                                .background(MaterialTheme.colorScheme.surfaceVariant)
+                                                .clickable(enabled = !working) { setCover(u) },
+                                        ) {
+                                            AsyncImage(
+                                                model = repo.civitaiImageUrl(u), imageLoader = repo.imageLoader, contentDescription = null,
+                                                contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize(),
+                                            )
+                                            if (u == cover) {
+                                                Icon(
+                                                    Icons.Filled.Check, contentDescription = "Current cover",
+                                                    tint = MaterialTheme.colorScheme.onPrimary,
+                                                    modifier = Modifier.align(Alignment.TopEnd).padding(4.dp).size(20.dp)
+                                                        .clip(RoundedCornerShape(10.dp)).background(MaterialTheme.colorScheme.primary).padding(2.dp),
+                                                )
+                                            }
+                                        }
+                                    }
+                                    repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
+                                }
+                            }
+                        } else if (v != null) {
+                            Text("This version has no showcase pictures.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+                Row(
+                    Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    TextButton(onClick = onDelete) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+                    Spacer(Modifier.weight(1f))
+                    if (working || busy) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                    TextButton(onClick = onDismiss) { Text("Close") }
+                }
+            }
         }
     }
 }

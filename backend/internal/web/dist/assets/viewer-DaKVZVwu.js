@@ -1,4 +1,4 @@
-import{a as S,w as E,e as n,m as h,av as z,B as P,aw as R,ax as O,G as C,A as l,b as a,ay as f,az as m,l as w,aA as G,K as v,aB as g,ak as U,aC as _,aD as D,M as L,q as N,i as M,N as b,u as p,t as F}from"./index-D3VFtMgd.js";const $="oppai.slideshow",x={dwellSec:8,shuffle:!1},A=2,j=120;function I(){try{const e=localStorage.getItem($);if(!e)return{...x};const t=JSON.parse(e);return k(t)}catch{return{...x}}}function K(e){const t=k(e);try{localStorage.setItem($,JSON.stringify(t))}catch{}return t}function k(e){const t=Number(e.dwellSec);return{dwellSec:Number.isFinite(t)?Math.min(j,Math.max(A,Math.round(t))):x.dwellSec,shuffle:!!e.shuffle}}function B(e,t,i,s=Math.random){const o=e.filter(u=>u!==t);if(o.length===0)return null;if(i)return o[Math.floor(s()*o.length)]??null;const c=e.indexOf(t);return c<0?e[0]??null:e[c+1]??null}var V=Object.defineProperty,q=Object.getOwnPropertyDescriptor,d=(e,t,i,s)=>{for(var o=s>1?void 0:s?q(t,i):t,c=e.length-1,u;c>=0;c--)(u=e[c])&&(o=(s?u(t,i,o):u(o))||o);return s&&o&&V(t,i,o),o};let r=class extends S{constructor(){super(...arguments),this.favorite=!1,this.queue=[],this.startAt=0,this.full=null,this.bookmarks=[],this.marking=!1,this.slideshow=I(),this.slideshowOn=!1,this.slideTimer=0,this.activeTag=null,this.tagging=!1,this.editing=!1,this.saving=!1,this.editTitle="",this.editNotes="",this.editDescription="",this.describing=!1,this.editKind="image",this.editTags=[],this.newTag="",this.screenshot="",this.userGallery=[],this.galleryUploading=!1,this.saves=[],this.saveUploading=!1,this.saveError="",this.play=null,this.playing=!1,this.posterFrames=[],this.posterLoading=!1,this.posterSaving=-1,this.posterChosen=-1,this.posterError="",this.posterVersion=0,this.comic=null,this.page=1,this.fit=E(),this.lastReported=0,this.onVideoReady=async e=>{const t=e.target,i=this.media.id;if(this.lastReported=0,this.startAt>0){t.currentTime=this.startAt,this.startAt=0;return}try{const s=await n.getProgress(i);if(this.media.id!==i||s.position<r.PROGRESS_FLOOR)return;const o=t.duration||s.duration;if(o>0&&s.position>o*r.PROGRESS_DONE)return;t.currentTime=s.position,h("Picking up where you left off.")}catch{}},this.onVideoTime=e=>{const t=e.target,i=t.currentTime;Math.abs(i-this.lastReported)<r.PROGRESS_INTERVAL||(this.lastReported=i,this.saveProgress(i,t.duration))},this.flushProgress=e=>{const t=e.target;this.lastReported=t.currentTime,this.saveProgress(t.currentTime,t.duration)},this.onVideoEnded=()=>{this.lastReported=0,n.clearProgress(this.media.id).catch(()=>{}),this.slideshowOn&&this.advanceSlide()},this.onKey=e=>{var s;if(z(e))return;const t=this.full??this.media;if(t.kind==="comic"){this.onComicKey(e);return}if(t.kind!=="video")return;const i=this.videoEl();if(i)switch(e.key){case" ":case"k":e.preventDefault(),i.paused?i.play():i.pause();break;case"j":i.currentTime=Math.max(0,i.currentTime-10);break;case"l":i.currentTime=Math.min(i.duration||1/0,i.currentTime+10);break;case"m":i.muted=!i.muted;break;case"b":this.markMoment();break;case"f":e.preventDefault(),document.fullscreenElement?document.exitFullscreen():(s=i.requestFullscreen)==null||s.call(i);break}},this.cancelEdit=()=>{this.editing=!1}}connectedCallback(){super.connectedCallback(),P(this,"viewer"),this.loadItem(),window.addEventListener("keydown",this.onKey)}disconnectedCallback(){super.disconnectedCallback(),window.removeEventListener("keydown",this.onKey),this.clearMediaSession(),this.stopSlideshow()}playback(){const e=this.videoEl();return e?{position:e.currentTime,duration:Number.isFinite(e.duration)?e.duration:0,paused:e.paused}:null}updated(e){if(e.has("media")){const t=e.get("media");t&&t.id!==this.media.id&&(this.editing=!1,this.activeTag=null,this.loadItem())}(e.has("media")||e.has("queue"))&&this.centerCurrentInQueue(),this.setupMediaSession(),e.has("media")&&this.slideshowOn&&this.armSlide()}centerCurrentInQueue(){const e=this.renderRoot.querySelector(".upnext .strip"),t=e==null?void 0:e.querySelector(".strip-item.on");!e||!t||(e.scrollLeft=Math.max(0,t.offsetLeft-(e.clientWidth-t.offsetWidth)/2))}loadItem(){const e=this.media;this.full=e,n.getMedia(e.id).then(t=>this.full=t).catch(()=>this.full=e),this.comic=null,e.kind==="comic"&&this.loadComic(e.id),this.bookmarks=[],(e.kind==="video"||e.kind==="gif")&&n.bookmarks(e.id).then(t=>{this.media.id===e.id&&(this.bookmarks=t.bookmarks)}).catch(()=>{}),this.userGallery=[],this.saves=[],this.saveError="",this.play=null,this.playing=!1,e.kind==="game"&&(this.loadGameGallery(e.id),this.loadSaves(e.id),this.probePlayable(e.id))}async loadSaves(e){try{const t=await n.gameSaves(e);this.media.id===e&&(this.saves=t.items)}catch{this.media.id===e&&(this.saves=[])}}async probePlayable(e){try{const t=await n.gamePlayInfo(e);this.media.id===e&&(this.play=t.playable?t:null)}catch{this.media.id===e&&(this.play=null)}}async uploadSave(e,t){const i=e.target,s=[...i.files??[]];if(i.value="",!(!s.length||this.saveUploading)){this.saveUploading=!0,this.saveError="";try{for(const o of s){const c=await n.uploadGameSave(t,o);this.saves=[c,...this.saves]}}catch(o){this.saveError=o instanceof Error?o.message:"Couldn't upload that save."}finally{this.saveUploading=!1}}}async deleteSave(e,t){try{await n.deleteGameSave(e,t),this.saves=this.saves.filter(i=>i.id!==t)}catch(i){this.saveError=i instanceof Error?i.message:"Couldn't delete that save."}}async loadGameGallery(e){try{const t=await n.gameGallery(e);this.media.id===e&&(this.userGallery=t.items)}catch{this.userGallery=[]}}async uploadGameGallery(e,t){const i=e.target,s=[...i.files??[]];if(i.value="",!(!s.length||this.galleryUploading)){this.galleryUploading=!0;try{for(const o of s)this.userGallery=[...this.userGallery,await n.uploadGameGallery(t,o)]}finally{this.galleryUploading=!1}}}async removeGameGallery(e,t){await n.removeGameGallery(e,t),this.userGallery=this.userGallery.filter(i=>i.id!==t)}async loadComic(e){try{const t=await n.comicInfo(e);if(this.media.id!==e)return;if(this.comic=t,t.readable&&t.pages>0){this.page=Math.min(Math.max(R(e),1),t.pages),this.preloadPage(e,this.page+1);try{const i=await n.getProgress(e),s=Math.round(i.position);this.media.id===e&&s>=1&&s<=t.pages&&s!==this.page&&(this.page=s,this.preloadPage(e,s+1))}catch{}}}catch(t){if(this.media.id!==e)return;this.comic={readable:!1,pages:0,reason:t.message}}}preloadPage(e,t){var i;!((i=this.comic)!=null&&i.readable)||t<1||t>this.comic.pages||(new Image().src=n.pageURL(e,t))}goPage(e){var s,o;if(!((s=this.comic)!=null&&s.readable))return;const t=this.full??this.media,i=Math.min(Math.max(e,1),this.comic.pages);i!==this.page&&(this.page=i,O(t.id,i),n.setProgress(t.id,i).catch(()=>{}),this.preloadPage(t.id,i+1),this.fit==="width"&&((o=this.renderRoot.querySelector(".reader-stage"))==null||o.scrollIntoView({block:"start"})))}setFit(e){this.fit=e,C(e)}toggleSlideshow(){this.slideshowOn?this.stopSlideshow():(this.slideshowOn=!0,this.armSlide(),h(this.slideshow.shuffle?"Shuffling through.":"Playing through, in order."))}stopSlideshow(){window.clearTimeout(this.slideTimer),this.slideTimer=0,this.slideshowOn=!1}setSlideshow(e){this.slideshow=K({...this.slideshow,...e}),this.slideshowOn&&this.armSlide()}armSlide(){window.clearTimeout(this.slideTimer),this.slideTimer=0,(this.full??this.media).kind!=="video"&&(this.slideTimer=window.setTimeout(()=>this.advanceSlide(),this.slideshow.dwellSec*1e3))}advanceSlide(){if(!this.slideshowOn)return;const e=B(this.queue.map(t=>t.id),this.media.id,this.slideshow.shuffle);if(e==null){this.stopSlideshow(),h("That's the end of the run.");return}this.jumpTo(e)}renderSlideshowBar(){const e=this.full??this.media;return e.kind==="comic"||e.kind==="game"||this.queue.length<2?l:a`
+import{a as z,w as E,e as l,m as h,av as P,B as R,aw as L,ax as _,G as C,A as n,b as a,ay as f,az as m,l as $,aA as U,K as v,aB as g,ak as O,aC as G,aD as D,M as N,q as M,i as F,N as b,u as p,t as A}from"./index-tGtnXIFt.js";const k="oppai.slideshow",w={dwellSec:8,shuffle:!1},j=2,I=120;function V(){try{const e=localStorage.getItem(k);if(!e)return{...w};const t=JSON.parse(e);return T(t)}catch{return{...w}}}function K(e){const t=T(e);try{localStorage.setItem(k,JSON.stringify(t))}catch{}return t}function T(e){const t=Number(e.dwellSec);return{dwellSec:Number.isFinite(t)?Math.min(I,Math.max(j,Math.round(t))):w.dwellSec,shuffle:!!e.shuffle}}function B(e,t,i,s=Math.random){const o=e.filter(u=>u!==t);if(o.length===0)return null;if(i)return o[Math.floor(s()*o.length)]??null;const c=e.indexOf(t);return c<0?e[0]??null:e[c+1]??null}var q=Object.defineProperty,W=Object.getOwnPropertyDescriptor,d=(e,t,i,s)=>{for(var o=s>1?void 0:s?W(t,i):t,c=e.length-1,u;c>=0;c--)(u=e[c])&&(o=(s?u(t,i,o):u(o))||o);return s&&o&&q(t,i,o),o};let r=class extends z{constructor(){super(...arguments),this.favorite=!1,this.queue=[],this.startAt=0,this.full=null,this.bookmarks=[],this.marking=!1,this.slideshow=V(),this.slideshowOn=!1,this.slideTimer=0,this.activeTag=null,this.tagging=!1,this.editing=!1,this.saving=!1,this.editTitle="",this.editNotes="",this.editDescription="",this.describing=!1,this.editKind="image",this.editTags=[],this.newTag="",this.screenshot="",this.userGallery=[],this.galleryUploading=!1,this.saves=[],this.saveUploading=!1,this.saveError="",this.play=null,this.playing=!1,this.launchy=null,this.launching="",this.checking=!1,this.sources=null,this.sourcesLoading=!1,this.posterFrames=[],this.posterLoading=!1,this.posterSaving=-1,this.posterChosen=-1,this.posterError="",this.posterVersion=0,this.comic=null,this.page=1,this.fit=E(),this.lastReported=0,this.onVideoReady=async e=>{const t=e.target,i=this.media.id;if(this.lastReported=0,this.startAt>0){t.currentTime=this.startAt,this.startAt=0;return}try{const s=await l.getProgress(i);if(this.media.id!==i||s.position<r.PROGRESS_FLOOR)return;const o=t.duration||s.duration;if(o>0&&s.position>o*r.PROGRESS_DONE)return;t.currentTime=s.position,h("Picking up where you left off.")}catch{}},this.onVideoTime=e=>{const t=e.target,i=t.currentTime;Math.abs(i-this.lastReported)<r.PROGRESS_INTERVAL||(this.lastReported=i,this.saveProgress(i,t.duration))},this.flushProgress=e=>{const t=e.target;this.lastReported=t.currentTime,this.saveProgress(t.currentTime,t.duration)},this.onVideoEnded=()=>{this.lastReported=0,l.clearProgress(this.media.id).catch(()=>{}),this.slideshowOn&&this.advanceSlide()},this.onKey=e=>{var s;if(P(e))return;const t=this.full??this.media;if(t.kind==="comic"){this.onComicKey(e);return}if(t.kind!=="video")return;const i=this.videoEl();if(i)switch(e.key){case" ":case"k":e.preventDefault(),i.paused?i.play():i.pause();break;case"j":i.currentTime=Math.max(0,i.currentTime-10);break;case"l":i.currentTime=Math.min(i.duration||1/0,i.currentTime+10);break;case"m":i.muted=!i.muted;break;case"b":this.markMoment();break;case"f":e.preventDefault(),document.fullscreenElement?document.exitFullscreen():(s=i.requestFullscreen)==null||s.call(i);break}},this.cancelEdit=()=>{this.editing=!1}}connectedCallback(){super.connectedCallback(),R(this,"viewer"),this.loadItem(),window.addEventListener("keydown",this.onKey)}disconnectedCallback(){super.disconnectedCallback(),window.removeEventListener("keydown",this.onKey),this.clearMediaSession(),this.stopSlideshow()}playback(){const e=this.videoEl();return e?{position:e.currentTime,duration:Number.isFinite(e.duration)?e.duration:0,paused:e.paused}:null}updated(e){if(e.has("media")){const t=e.get("media");t&&t.id!==this.media.id&&(this.editing=!1,this.activeTag=null,this.loadItem())}(e.has("media")||e.has("queue"))&&this.centerCurrentInQueue(),this.setupMediaSession(),e.has("media")&&this.slideshowOn&&this.armSlide()}centerCurrentInQueue(){const e=this.renderRoot.querySelector(".upnext .strip"),t=e==null?void 0:e.querySelector(".strip-item.on");!e||!t||(e.scrollLeft=Math.max(0,t.offsetLeft-(e.clientWidth-t.offsetWidth)/2))}loadItem(){const e=this.media;this.full=e,l.getMedia(e.id).then(t=>this.full=t).catch(()=>this.full=e),this.comic=null,e.kind==="comic"&&this.loadComic(e.id),this.bookmarks=[],(e.kind==="video"||e.kind==="gif")&&l.bookmarks(e.id).then(t=>{this.media.id===e.id&&(this.bookmarks=t.bookmarks)}).catch(()=>{}),this.userGallery=[],this.saves=[],this.saveError="",this.play=null,this.playing=!1,this.sources=null,this.launching="",e.kind==="game"&&(this.loadGameGallery(e.id),this.loadSaves(e.id),this.probePlayable(e.id),l.launchyStatus().then(t=>this.launchy=t).catch(()=>this.launchy=null))}async checkRemote(e){this.checking=!0;try{const t=await l.checkGameRemote(e);t.error?h(t.error,"error"):h(t.changed?`A newer version is out: ${t.remote.latestVersion}.`:"You have the latest version."),this.full&&this.full.id===e&&(this.full={...this.full,remote:t.remote}),this.dispatchEvent(new CustomEvent("changed",{bubbles:!0,composed:!0}))}catch(t){h(t.message,"error")}finally{this.checking=!1}}async acknowledgeRemote(e){try{const t=await l.acknowledgeGameRemote(e);this.full&&this.full.id===e&&(this.full={...this.full,remote:t}),this.dispatchEvent(new CustomEvent("changed",{bubbles:!0,composed:!0}))}catch(t){h(t.message,"error")}}async loadSources(e){this.sourcesLoading=!0;try{this.sources=await l.gameSources(e)}catch(t){h(t.message,"error")}finally{this.sourcesLoading=!1}}async launchOnPC(e){try{const t=await l.launchyLaunch(e);this.launching=t.id;const i=Date.now();for(;this.launching===t.id&&Date.now()-i<3e4;){await new Promise(o=>setTimeout(o,1500));const s=await l.launchyLaunchStatus(t.id);if(s.status==="done"){h("Launchy started it.");break}if(s.status==="failed"){h(s.error||"Launchy could not start it.","error");break}}}catch(t){h(t.message,"error")}finally{this.launching="",l.launchyStatus().then(t=>this.launchy=t).catch(()=>{})}}async loadSaves(e){try{const t=await l.gameSaves(e);this.media.id===e&&(this.saves=t.items)}catch{this.media.id===e&&(this.saves=[])}}async probePlayable(e){try{const t=await l.gamePlayInfo(e);this.media.id===e&&(this.play=t.playable?t:null)}catch{this.media.id===e&&(this.play=null)}}async uploadSave(e,t){const i=e.target,s=[...i.files??[]];if(i.value="",!(!s.length||this.saveUploading)){this.saveUploading=!0,this.saveError="";try{for(const o of s){const c=await l.uploadGameSave(t,o);this.saves=[c,...this.saves]}}catch(o){this.saveError=o instanceof Error?o.message:"Couldn't upload that save."}finally{this.saveUploading=!1}}}async deleteSave(e,t){try{await l.deleteGameSave(e,t),this.saves=this.saves.filter(i=>i.id!==t)}catch(i){this.saveError=i instanceof Error?i.message:"Couldn't delete that save."}}async loadGameGallery(e){try{const t=await l.gameGallery(e);this.media.id===e&&(this.userGallery=t.items)}catch{this.userGallery=[]}}async uploadGameGallery(e,t){const i=e.target,s=[...i.files??[]];if(i.value="",!(!s.length||this.galleryUploading)){this.galleryUploading=!0;try{for(const o of s)this.userGallery=[...this.userGallery,await l.uploadGameGallery(t,o)]}finally{this.galleryUploading=!1}}}async removeGameGallery(e,t){await l.removeGameGallery(e,t),this.userGallery=this.userGallery.filter(i=>i.id!==t)}async loadComic(e){try{const t=await l.comicInfo(e);if(this.media.id!==e)return;if(this.comic=t,t.readable&&t.pages>0){this.page=Math.min(Math.max(L(e),1),t.pages),this.preloadPage(e,this.page+1);try{const i=await l.getProgress(e),s=Math.round(i.position);this.media.id===e&&s>=1&&s<=t.pages&&s!==this.page&&(this.page=s,this.preloadPage(e,s+1))}catch{}}}catch(t){if(this.media.id!==e)return;this.comic={readable:!1,pages:0,reason:t.message}}}preloadPage(e,t){var i;!((i=this.comic)!=null&&i.readable)||t<1||t>this.comic.pages||(new Image().src=l.pageURL(e,t))}goPage(e){var s,o;if(!((s=this.comic)!=null&&s.readable))return;const t=this.full??this.media,i=Math.min(Math.max(e,1),this.comic.pages);i!==this.page&&(this.page=i,_(t.id,i),l.setProgress(t.id,i).catch(()=>{}),this.preloadPage(t.id,i+1),this.fit==="width"&&((o=this.renderRoot.querySelector(".reader-stage"))==null||o.scrollIntoView({block:"start"})))}setFit(e){this.fit=e,C(e)}toggleSlideshow(){this.slideshowOn?this.stopSlideshow():(this.slideshowOn=!0,this.armSlide(),h(this.slideshow.shuffle?"Shuffling through.":"Playing through, in order."))}stopSlideshow(){window.clearTimeout(this.slideTimer),this.slideTimer=0,this.slideshowOn=!1}setSlideshow(e){this.slideshow=K({...this.slideshow,...e}),this.slideshowOn&&this.armSlide()}armSlide(){window.clearTimeout(this.slideTimer),this.slideTimer=0,(this.full??this.media).kind!=="video"&&(this.slideTimer=window.setTimeout(()=>this.advanceSlide(),this.slideshow.dwellSec*1e3))}advanceSlide(){if(!this.slideshowOn)return;const e=B(this.queue.map(t=>t.id),this.media.id,this.slideshow.shuffle);if(e==null){this.stopSlideshow(),h("That's the end of the run.");return}this.jumpTo(e)}renderSlideshowBar(){const e=this.full??this.media;return e.kind==="comic"||e.kind==="game"||this.queue.length<2?n:a`
       <div class="slidebar ${this.slideshowOn?"on":""}">
         <button class="icon-round" title=${this.slideshowOn?"Stop the slideshow":"Play through from here"} @click=${()=>this.toggleSlideshow()}>
           <span class="material-symbols-rounded" style="font-size:22px;">${this.slideshowOn?"pause":"play_arrow"}</span>
@@ -12,24 +12,24 @@ import{a as S,w as E,e as n,m as h,av as z,B as P,aw as R,ax as O,G as C,A as l,
             ${[3,5,8,12,20,30].map(t=>a`<option value=${t} ?selected=${t===this.slideshow.dwellSec}>${t}s</option>`)}
           </select>
         </label>
-        ${this.slideshowOn?a`<span class="slide-note">videos play through, then the next one comes on</span>`:l}
+        ${this.slideshowOn?a`<span class="slide-note">videos play through, then the next one comes on</span>`:n}
       </div>
-    `}async markMoment(){var o;const e=this.videoEl(),t=this.full??this.media,i=e?e.currentTime:0,s=(o=window.prompt(`Bookmark ${f(i)} of “${t.title}” as…`,""))==null?void 0:o.trim();if(s!==void 0){this.marking=!0;try{const c=await n.addBookmark(t.id,i,s);this.media.id===t.id&&(this.bookmarks=[...this.bookmarks,c].sort((u,T)=>u.position-T.position)),h(`Marked ${f(i)}.`)}catch(c){h(c.message,"error")}finally{this.marking=!1}}}async dropBookmark(e){try{await n.deleteBookmark(e.id),this.bookmarks=this.bookmarks.filter(t=>t.id!==e.id)}catch(t){h(t.message,"error")}}renderBookmarks(e){return e.kind!=="video"||this.bookmarks.length===0?l:a`
+    `}async markMoment(){var o;const e=this.videoEl(),t=this.full??this.media,i=e?e.currentTime:0,s=(o=window.prompt(`Bookmark ${f(i)} of “${t.title}” as…`,""))==null?void 0:o.trim();if(s!==void 0){this.marking=!0;try{const c=await l.addBookmark(t.id,i,s);this.media.id===t.id&&(this.bookmarks=[...this.bookmarks,c].sort((u,S)=>u.position-S.position)),h(`Marked ${f(i)}.`)}catch(c){h(c.message,"error")}finally{this.marking=!1}}}async dropBookmark(e){try{await l.deleteBookmark(e.id),this.bookmarks=this.bookmarks.filter(t=>t.id!==e.id)}catch(t){h(t.message,"error")}}renderBookmarks(e){return e.kind!=="video"||this.bookmarks.length===0?n:a`
       <div class="section-label">Moments</div>
       <div class="moments">
         ${this.bookmarks.map(t=>a`
           <div class="moment">
             <button class="moment-open" title="Jump to ${f(t.position)}" @click=${()=>this.seekTo(t.position)}>
-              <img src=${n.bookmarkThumbURL(t.id)} alt="" loading="lazy" @error=${i=>i.target.style.visibility="hidden"} />
+              <img src=${l.bookmarkThumbURL(t.id)} alt="" loading="lazy" @error=${i=>i.target.style.visibility="hidden"} />
               <span class="moment-time">${f(t.position)}</span>
-              ${t.label?a`<span class="moment-label">${t.label}</span>`:l}
+              ${t.label?a`<span class="moment-label">${t.label}</span>`:n}
             </button>
             <button class="moment-drop" title="Remove this bookmark" @click=${()=>void this.dropBookmark(t)}>
               <span class="material-symbols-rounded" style="font-size:16px;">close</span>
             </button>
           </div>`)}
       </div>
-    `}saveProgress(e,t){const i=this.media.id;if(e<r.PROGRESS_FLOOR||t>0&&e>t*r.PROGRESS_DONE){n.clearProgress(i).catch(()=>{});return}n.setProgress(i,e).catch(()=>{})}videoEl(){var e;return((e=this.renderRoot)==null?void 0:e.querySelector("video"))??null}onComicKey(e){var t;if((t=this.comic)!=null&&t.readable)switch(e.key){case"ArrowRight":case"PageDown":case" ":e.preventDefault(),this.goPage(this.page+1);break;case"ArrowLeft":case"PageUp":e.preventDefault(),this.goPage(this.page-1);break;case"Home":e.preventDefault(),this.goPage(1);break;case"End":e.preventDefault(),this.goPage(this.comic.pages);break}}emitNavigate(e){this.dispatchEvent(new CustomEvent("navigate",{detail:{dir:e},bubbles:!0,composed:!0}))}setupMediaSession(){const e=this.full??this.media;if(e.kind!=="video"||!("mediaSession"in navigator))return;const t=this.videoEl();if(!t)return;const i=navigator.mediaSession;try{i.metadata=new MediaMetadata({title:e.title,artist:"OppaiLib"})}catch{}const s=(o,c)=>{try{i.setActionHandler(o,c)}catch{}};s("play",()=>void t.play()),s("pause",()=>t.pause()),s("seekbackward",o=>{t.currentTime=Math.max(0,t.currentTime-(o.seekOffset??10))}),s("seekforward",o=>{t.currentTime=Math.min(t.duration||1/0,t.currentTime+(o.seekOffset??10))}),s("seekto",o=>{o.seekTime!=null&&(t.currentTime=o.seekTime)}),s("previoustrack",()=>this.emitNavigate(-1)),s("nexttrack",()=>this.emitNavigate(1))}clearMediaSession(){if(!("mediaSession"in navigator))return;const e=navigator.mediaSession,t=["play","pause","seekbackward","seekforward","seekto","previoustrack","nexttrack"];for(const i of t)try{e.setActionHandler(i,null)}catch{}e.metadata=null}toggleFav(){this.dispatchEvent(new CustomEvent("toggle-favorite",{bubbles:!0,composed:!0}))}async describe(){this.describing=!0;try{const e=await n.describe(this.media.id);this.full&&(this.full={...this.full,description:e.description}),this.dispatchEvent(new CustomEvent("changed",{bubbles:!0,composed:!0})),h("Described.","success")}catch(e){console.error("describe",e),h(`Describing failed: ${e.message}`,"error")}finally{this.describing=!1}}async retag(){this.tagging=!0;try{const e=await n.autotag(this.media.id);this.full&&(this.full={...this.full,tags:e.tags}),this.activeTag=null,this.dispatchEvent(new CustomEvent("changed",{bubbles:!0,composed:!0})),h(e.tags.length?`Tags refreshed — ${e.tags.length} found.`:"Tagging finished, but nothing cleared your confidence threshold.","success")}catch(e){console.error("autotag",e),h(`Auto-tagging failed: ${e.message}`,"error")}finally{this.tagging=!1}}hasTimeline(e){var i;const t=this.full??this.media;return t.kind==="video"&&!!t.duration&&!!((i=e.moments)!=null&&i.length)}toggleTagTimeline(e){this.hasTimeline(e)&&(this.activeTag=this.activeTag===e.id?null:e.id)}seekTo(e){const t=this.videoEl();t&&(t.currentTime=e,t.play())}renderTimeline(e){var s;if(e.kind!=="video"||!e.duration)return l;const t=(e.tags??[]).find(o=>o.id===this.activeTag);if(!((s=t==null?void 0:t.moments)!=null&&s.length))return l;const i=e.duration;return a`
+    `}saveProgress(e,t){const i=this.media.id;if(e<r.PROGRESS_FLOOR||t>0&&e>t*r.PROGRESS_DONE){l.clearProgress(i).catch(()=>{});return}l.setProgress(i,e).catch(()=>{})}videoEl(){var e;return((e=this.renderRoot)==null?void 0:e.querySelector("video"))??null}onComicKey(e){var t;if((t=this.comic)!=null&&t.readable)switch(e.key){case"ArrowRight":case"PageDown":case" ":e.preventDefault(),this.goPage(this.page+1);break;case"ArrowLeft":case"PageUp":e.preventDefault(),this.goPage(this.page-1);break;case"Home":e.preventDefault(),this.goPage(1);break;case"End":e.preventDefault(),this.goPage(this.comic.pages);break}}emitNavigate(e){this.dispatchEvent(new CustomEvent("navigate",{detail:{dir:e},bubbles:!0,composed:!0}))}setupMediaSession(){const e=this.full??this.media;if(e.kind!=="video"||!("mediaSession"in navigator))return;const t=this.videoEl();if(!t)return;const i=navigator.mediaSession;try{i.metadata=new MediaMetadata({title:e.title,artist:"OppaiLib"})}catch{}const s=(o,c)=>{try{i.setActionHandler(o,c)}catch{}};s("play",()=>void t.play()),s("pause",()=>t.pause()),s("seekbackward",o=>{t.currentTime=Math.max(0,t.currentTime-(o.seekOffset??10))}),s("seekforward",o=>{t.currentTime=Math.min(t.duration||1/0,t.currentTime+(o.seekOffset??10))}),s("seekto",o=>{o.seekTime!=null&&(t.currentTime=o.seekTime)}),s("previoustrack",()=>this.emitNavigate(-1)),s("nexttrack",()=>this.emitNavigate(1))}clearMediaSession(){if(!("mediaSession"in navigator))return;const e=navigator.mediaSession,t=["play","pause","seekbackward","seekforward","seekto","previoustrack","nexttrack"];for(const i of t)try{e.setActionHandler(i,null)}catch{}e.metadata=null}toggleFav(){this.dispatchEvent(new CustomEvent("toggle-favorite",{bubbles:!0,composed:!0}))}async describe(){this.describing=!0;try{const e=await l.describe(this.media.id);this.full&&(this.full={...this.full,description:e.description}),this.dispatchEvent(new CustomEvent("changed",{bubbles:!0,composed:!0})),h("Described.","success")}catch(e){console.error("describe",e),h(`Describing failed: ${e.message}`,"error")}finally{this.describing=!1}}async retag(){this.tagging=!0;try{const e=await l.autotag(this.media.id);this.full&&(this.full={...this.full,tags:e.tags}),this.activeTag=null,this.dispatchEvent(new CustomEvent("changed",{bubbles:!0,composed:!0})),h(e.tags.length?`Tags refreshed — ${e.tags.length} found.`:"Tagging finished, but nothing cleared your confidence threshold.","success")}catch(e){console.error("autotag",e),h(`Auto-tagging failed: ${e.message}`,"error")}finally{this.tagging=!1}}hasTimeline(e){var i;const t=this.full??this.media;return t.kind==="video"&&!!t.duration&&!!((i=e.moments)!=null&&i.length)}toggleTagTimeline(e){this.hasTimeline(e)&&(this.activeTag=this.activeTag===e.id?null:e.id)}seekTo(e){const t=this.videoEl();t&&(t.currentTime=e,t.play())}renderTimeline(e){var s;if(e.kind!=="video"||!e.duration)return n;const t=(e.tags??[]).find(o=>o.id===this.activeTag);if(!((s=t==null?void 0:t.moments)!=null&&s.length))return n;const i=e.duration;return a`
       <div class="timeline">
         <div class="rail">
           ${t.moments.map(o=>a`<button
@@ -48,7 +48,7 @@ import{a as S,w as E,e as n,m as h,av as z,B as P,aw as R,ax as O,G as C,A as l,
           >
         </div>
       </div>
-    `}startEdit(){const e=this.full??this.media;this.editTitle=e.title,this.editNotes=e.notes??"",this.editDescription=e.description??"",this.editKind=e.kind,this.editTags=(e.tags??[]).map(t=>t.name),this.newTag="",this.editing=!0}removeEditTag(e){this.editTags=this.editTags.filter(t=>t!==e)}commitNewTag(){const e=this.newTag.trim();e&&!this.editTags.includes(e)&&(this.editTags=[...this.editTags,e]),this.newTag=""}onTagKeydown(e){(e.key==="Enter"||e.key===",")&&(e.preventDefault(),this.commitNewTag())}async saveEdit(){const e=this.full??this.media;this.commitNewTag();const t=(e.tags??[]).map(o=>o.name),i=this.editTags.filter(o=>!t.includes(o)),s=t.filter(o=>!this.editTags.includes(o));this.saving=!0;try{const o=await n.updateMedia(e.id,{title:this.editTitle,notes:this.editNotes,...this.editDescription!==(e.description??"")?{description:this.editDescription}:{},kind:this.editKind,addTags:i,removeTags:s});this.full=o,this.editing=!1,this.dispatchEvent(new CustomEvent("changed",{bubbles:!0,composed:!0}))}catch(o){console.error("save edit",o)}finally{this.saving=!1}}async doDelete(){const e=this.full??this.media;if(confirm(`Delete "${e.title}"? This cannot be undone.`))try{await n.deleteMedia(e.id);const t=w("libraryDelete");h(t.message,"success",{emotion:t.emotion,intensity:t.intensity}),this.dispatchEvent(new CustomEvent("deleted",{detail:{id:e.id},bubbles:!0,composed:!0}))}catch(t){console.error("delete",t)}}renderEdit(){const e=this.full??this.media;return a`
+    `}startEdit(){const e=this.full??this.media;this.editTitle=e.title,this.editNotes=e.notes??"",this.editDescription=e.description??"",this.editKind=e.kind,this.editTags=(e.tags??[]).map(t=>t.name),this.newTag="",this.editing=!0}removeEditTag(e){this.editTags=this.editTags.filter(t=>t!==e)}commitNewTag(){const e=this.newTag.trim();e&&!this.editTags.includes(e)&&(this.editTags=[...this.editTags,e]),this.newTag=""}onTagKeydown(e){(e.key==="Enter"||e.key===",")&&(e.preventDefault(),this.commitNewTag())}async saveEdit(){const e=this.full??this.media;this.commitNewTag();const t=(e.tags??[]).map(o=>o.name),i=this.editTags.filter(o=>!t.includes(o)),s=t.filter(o=>!this.editTags.includes(o));this.saving=!0;try{const o=await l.updateMedia(e.id,{title:this.editTitle,notes:this.editNotes,...this.editDescription!==(e.description??"")?{description:this.editDescription}:{},kind:this.editKind,addTags:i,removeTags:s});this.full=o,this.editing=!1,this.dispatchEvent(new CustomEvent("changed",{bubbles:!0,composed:!0}))}catch(o){console.error("save edit",o)}finally{this.saving=!1}}async doDelete(){const e=this.full??this.media;if(confirm(`Delete "${e.title}"? This cannot be undone.`))try{await l.deleteMedia(e.id);const t=$("libraryDelete");h(t.message,"success",{emotion:t.emotion,intensity:t.intensity}),this.dispatchEvent(new CustomEvent("deleted",{detail:{id:e.id},bubbles:!0,composed:!0}))}catch(t){console.error("delete",t)}}renderEdit(){const e=this.full??this.media;return a`
       <div class="edit">
         <div>
           <label>Title</label>
@@ -63,7 +63,7 @@ import{a as S,w as E,e as n,m as h,av as z,B as P,aw as R,ax as O,G as C,A as l,
             .value=${this.editKind}
             @change=${t=>this.editKind=t.target.value}
           >
-            ${G.map(t=>a`<option value=${t} ?selected=${t===this.editKind}>${v[t].label}</option>`)}
+            ${U.map(t=>a`<option value=${t} ?selected=${t===this.editKind}>${v[t].label}</option>`)}
           </select>
         </div>
         <div>
@@ -80,7 +80,7 @@ import{a as S,w as E,e as n,m as h,av as z,B as P,aw as R,ax as O,G as C,A as l,
                 .value=${this.editDescription}
                 @input=${t=>this.editDescription=t.target.value}
               ></textarea>
-            </div>`:l}
+            </div>`:n}
         <div>
           <label>Tags</label>
           <div class="tag-edit">
@@ -100,7 +100,7 @@ import{a as S,w as E,e as n,m as h,av as z,B as P,aw as R,ax as O,G as C,A as l,
             />
           </div>
         </div>
-        ${(this.full??this.media).kind==="video"?this.renderPosterPicker():l}
+        ${(this.full??this.media).kind==="video"?this.renderPosterPicker():n}
         <div class="edit-actions">
           <button class="btn-primary" @click=${this.saveEdit} ?disabled=${this.saving}>
             <span class="material-symbols-rounded" style="font-size:20px;">save</span>
@@ -109,23 +109,23 @@ import{a as S,w as E,e as n,m as h,av as z,B as P,aw as R,ax as O,G as C,A as l,
           <button class="btn-outline" @click=${this.cancelEdit} ?disabled=${this.saving}>Cancel</button>
         </div>
       </div>
-    `}async loadPosterFrames(){const e=this.full??this.media;if(!this.posterLoading){this.posterLoading=!0,this.posterError="";try{const t=await n.posterFrames(e.id);if((this.full??this.media).id!==e.id)return;this.posterFrames=t.frames}catch(t){this.posterError=t.message||"Couldn't read frames from this video."}finally{this.posterLoading=!1}}}async choosePoster(e){const t=this.full??this.media,i=this.posterFrames[e];if(!(!i||this.posterSaving>=0)){this.posterSaving=e,this.posterError="";try{await n.setPoster(t.id,i.at),this.posterChosen=e,this.posterVersion=Date.now();const s=w("save");h("New thumbnail set.","success",{emotion:s.emotion,intensity:s.intensity})}catch(s){this.posterError=s.message||"Couldn't set that frame as the thumbnail."}finally{this.posterSaving=-1}}}renderPosterPicker(){const e=this.full??this.media;return a`<div class="poster-picker">
+    `}async loadPosterFrames(){const e=this.full??this.media;if(!this.posterLoading){this.posterLoading=!0,this.posterError="";try{const t=await l.posterFrames(e.id);if((this.full??this.media).id!==e.id)return;this.posterFrames=t.frames}catch(t){this.posterError=t.message||"Couldn't read frames from this video."}finally{this.posterLoading=!1}}}async choosePoster(e){const t=this.full??this.media,i=this.posterFrames[e];if(!(!i||this.posterSaving>=0)){this.posterSaving=e,this.posterError="";try{await l.setPoster(t.id,i.at),this.posterChosen=e,this.posterVersion=Date.now();const s=$("save");h("New thumbnail set.","success",{emotion:s.emotion,intensity:s.intensity})}catch(s){this.posterError=s.message||"Couldn't set that frame as the thumbnail."}finally{this.posterSaving=-1}}}renderPosterPicker(){const e=this.full??this.media;return a`<div class="poster-picker">
       <label>Thumbnail</label>
       <div class="poster-head">
         <img
           class="poster-current"
-          src=${`${n.thumbURL(e.id)}${this.posterVersion?`?v=${this.posterVersion}`:""}`}
+          src=${`${l.thumbURL(e.id)}${this.posterVersion?`?v=${this.posterVersion}`:""}`}
           alt="Current thumbnail"
           @error=${t=>t.target.style.visibility="hidden"}
         />
         <div class="poster-copy">
           <span>Pick the frame this video shows in the library.</span>
-          ${this.posterFrames.length?l:a`<button class="btn-outline" ?disabled=${this.posterLoading} @click=${()=>this.loadPosterFrames()}>
+          ${this.posterFrames.length?n:a`<button class="btn-outline" ?disabled=${this.posterLoading} @click=${()=>this.loadPosterFrames()}>
                 ${this.posterLoading?"Reading frames…":"Choose a frame"}
               </button>`}
         </div>
       </div>
-      ${this.posterError?a`<div class="poster-error" role="alert">${this.posterError}</div>`:l}
+      ${this.posterError?a`<div class="poster-error" role="alert">${this.posterError}</div>`:n}
       ${this.posterFrames.length?a`<div class="poster-strip">
             ${this.posterFrames.map((t,i)=>a`<button
               class="poster-frame ${this.posterChosen===i?"on":""}"
@@ -138,24 +138,24 @@ import{a as S,w as E,e as n,m as h,av as z,B as P,aw as R,ax as O,G as C,A as l,
                 ${this.posterSaving===i?"Saving…":m(t.at)}
               </span>
             </button>`)}
-          </div>`:l}
+          </div>`:n}
     </div>`}favIcon(){return a`<span
       class="material-symbols-rounded fill-icon"
       style="font-size:22px; color:${this.favorite?"var(--oppai-fav)":"var(--oppai-text)"};"
       >${this.favorite?"favorite":"favorite_border"}</span
-    >`}render(){const e=this.full??this.media,t=n.streamURL(e.id);return a`
+    >`}render(){const e=this.full??this.media,t=l.streamURL(e.id);return a`
       <div class="wrap">
         ${this.renderStage(e,t)}
         ${this.renderSlideshowBar()}
-        ${e.kind==="video"||e.kind==="image"?this.renderUpNext(e):l}
+        ${e.kind==="video"||e.kind==="image"?this.renderUpNext(e):n}
         ${this.renderTimeline(e)}
         ${this.renderBookmarks(e)}
-        ${e.kind==="game"?l:this.renderMeta(e)}
+        ${e.kind==="game"?n:this.renderMeta(e)}
       </div>
       ${this.screenshot?a`<button class="shot-lightbox" aria-label="Close screenshot" @click=${()=>this.screenshot=""}>
             <img src=${this.screenshot} alt="Full-size game screenshot" />
-          </button>`:l}
-    `}renderUpNext(e){const t=this.queue.filter(s=>s.kind==="video"||s.kind==="image");if(t.some(s=>s.id===e.id)||t.unshift(e),t.length<2)return l;const i=t.findIndex(s=>s.id===e.id);return a`
+          </button>`:n}
+    `}renderUpNext(e){const t=this.queue.filter(s=>s.kind==="video"||s.kind==="image");if(t.some(s=>s.id===e.id)||t.unshift(e),t.length<2)return n;const i=t.findIndex(s=>s.id===e.id);return a`
       <div class="upnext">
         <div class="upnext-label">Videos & images</div>
         <div class="strip">
@@ -166,9 +166,9 @@ import{a as S,w as E,e as n,m as h,av as z,B as P,aw as R,ax as O,G as C,A as l,
                 aria-current=${s.id===e.id}
                 @click=${()=>this.jumpTo(s.id)}
               >
-                ${s.hasThumb?a`<img src=${n.thumbURL(s.id)} loading="lazy" alt=${s.title} />`:a`<span class="strip-blank" style="background:${g(s)};"></span>`}
-                ${s.kind==="video"?a`<span class="strip-play material-symbols-rounded">play_circle</span>`:l}
-                ${o===i+1?a`<span class="strip-next">Next</span>`:l}
+                ${s.hasThumb?a`<img src=${l.thumbURL(s.id)} loading="lazy" alt=${s.title} />`:a`<span class="strip-blank" style="background:${g(s)};"></span>`}
+                ${s.kind==="video"?a`<span class="strip-play material-symbols-rounded">play_circle</span>`:n}
+                ${o===i+1?a`<span class="strip-next">Next</span>`:n}
               </button>
             `)}
         </div>
@@ -179,7 +179,7 @@ import{a as S,w as E,e as n,m as h,av as z,B as P,aw as R,ax as O,G as C,A as l,
         >
           <video
             src=${t}
-            poster=${e.hasThumb?n.thumbURL(e.id):l}
+            poster=${e.hasThumb?l.thumbURL(e.id):n}
             controls
             autoplay
             playsinline
@@ -191,7 +191,7 @@ import{a as S,w as E,e as n,m as h,av as z,B as P,aw as R,ax as O,G as C,A as l,
           ></video>
         </div>`;case"gif":case"image":return a`<div class="stage-fit">
           <img src=${t} alt=${e.title} />
-        </div>`;case"comic":return this.renderComic(e);case"game":return this.renderGame(e,t);default:return l}}renderComic(e){return a`
+        </div>`;case"comic":return this.renderComic(e);case"game":return this.renderGame(e,t);default:return n}}renderComic(e){return a`
       <div class="reader">
         ${this.comic===null?a`<div class="reader-fallback" style="background:${g(e)};">
               <span class="mono" style="color:#fff;">OPENING…</span>
@@ -201,7 +201,7 @@ import{a as S,w as E,e as n,m as h,av as z,B as P,aw as R,ax as O,G as C,A as l,
       <div class="reader-stage">
         <img
           class="page-img ${this.fit==="width"?"fit-width":"fit-page"}"
-          src=${n.pageURL(e.id,this.page)}
+          src=${l.pageURL(e.id,this.page)}
           alt="Page ${this.page} of ${e.title}"
         />
         <button
@@ -210,7 +210,7 @@ import{a as S,w as E,e as n,m as h,av as z,B as P,aw as R,ax as O,G as C,A as l,
           ?disabled=${i}
           @click=${()=>this.goPage(this.page-1)}
         >
-          ${i?l:a`<span class="material-symbols-rounded" style="font-size:28px;">chevron_left</span>`}
+          ${i?n:a`<span class="material-symbols-rounded" style="font-size:28px;">chevron_left</span>`}
         </button>
         <button
           class="turn next"
@@ -218,7 +218,7 @@ import{a as S,w as E,e as n,m as h,av as z,B as P,aw as R,ax as O,G as C,A as l,
           ?disabled=${s}
           @click=${()=>this.goPage(this.page+1)}
         >
-          ${s?l:a`<span class="material-symbols-rounded" style="font-size:28px;">chevron_right</span>`}
+          ${s?n:a`<span class="material-symbols-rounded" style="font-size:28px;">chevron_right</span>`}
         </button>
       </div>
 
@@ -255,15 +255,15 @@ import{a as S,w as E,e as n,m as h,av as z,B as P,aw as R,ax as O,G as C,A as l,
         <span style="font-size:12px; color:rgba(255,255,255,0.75);">
           ${t.reason??"Unsupported archive."} Only .cbz / .zip comics can be paged through here.
         </span>
-        <a href=${n.streamURL(e.id)} download style="color:#fff; font-size:12px; font-weight:600; margin-top:6px;"
+        <a href=${l.streamURL(e.id)} download style="color:#fff; font-size:12px; font-weight:600; margin-top:6px;"
           >Download the file</a
         >
       </div>
-    `}renderGame(e,t){const i=e.download?this.hostOf(e.download):"";return a`
+    `}renderGame(e,t){var s,o;const i=e.download?this.hostOf(e.download):"";return a`
       <div class="game">
         <div class="game-cover" style="background:${g(e)};">
           ${e.hasThumb?a`<img
-                src=${n.thumbURL(e.id)}
+                src=${l.thumbURL(e.id)}
                 alt=${e.title}
                 style="width:100%; height:100%; object-fit:cover;"
               />`:a`<span class="material-symbols-rounded" style="font-size:48px; color:#fff;">sports_esports</span>`}
@@ -279,7 +279,7 @@ import{a as S,w as E,e as n,m as h,av as z,B as P,aw as R,ax as O,G as C,A as l,
                   ${this.play?a`<button class="btn-primary" @click=${()=>this.playing=!0}>
                         <span class="material-symbols-rounded fill-icon" style="font-size:20px;">play_arrow</span>
                         Play in browser
-                      </button>`:l}
+                      </button>`:n}
                   ${e.download?a`<a class="btn-primary" href=${e.download} target="_blank" rel="noreferrer">
                         <span class="material-symbols-rounded fill-icon" style="font-size:20px;">open_in_new</span>
                         ${i?`Get it on ${i}`:"Get it"}
@@ -287,6 +287,11 @@ import{a as S,w as E,e as n,m as h,av as z,B as P,aw as R,ax as O,G as C,A as l,
                         <span class="material-symbols-rounded fill-icon" style="font-size:20px;">download</span>
                         Download
                       </a>`}
+                  ${(s=e.launchy)!=null&&s.installed&&((o=this.launchy)!=null&&o.connected)?a`<button class="btn-primary" ?disabled=${!!this.launching} title="Start it in Launchy on your PC"
+                        @click=${()=>void this.launchOnPC(e.id)}>
+                        <span class="material-symbols-rounded fill-icon" style="font-size:20px;">${this.launching?"hourglass_top":"play_arrow"}</span>
+                        ${this.launching?"Starting…":this.launchy.running.includes(e.id)?"Running on PC":"Launch on PC"}
+                      </button>`:n}
                   <button class="btn-outline" @click=${this.toggleFav}>
                     <span
                       class="material-symbols-rounded"
@@ -296,43 +301,45 @@ import{a as S,w as E,e as n,m as h,av as z,B as P,aw as R,ax as O,G as C,A as l,
                     Favorite
                   </button>
                 </div>
-                ${this.playing?this.renderPlayer(e):l}
-                ${e.description?a`<p class="desc described">${e.description}</p>`:l}
-                ${e.notes?a`<p class="desc">${e.notes}</p>`:e.description?l:a`<p class="desc">A title from your library.</p>`}
+                ${this.playing?this.renderPlayer(e):n}
+                ${this.renderRemote(e)}
+                ${this.renderLaunchy(e)}
+                ${e.description?a`<p class="desc described">${e.description}</p>`:n}
+                ${e.notes?a`<p class="desc">${e.notes}</p>`:e.description?n:a`<p class="desc">A title from your library.</p>`}
                 ${this.renderTags(e)}
                 ${this.renderSaves(e)}
                 ${e.gallery&&e.gallery.length?a`<div class="shots">
-                      ${e.gallery.map(s=>a`<button
+                      ${e.gallery.map(c=>a`<button
                         class="shot"
                         title="Open full-size screenshot"
-                        @click=${()=>this.screenshot=n.proxyURL(s)}
-                      ><img loading="lazy" src=${n.proxyURL(s)} alt="screenshot" /></button>`)}
-                    </div>`:l}
+                        @click=${()=>this.screenshot=l.proxyURL(c)}
+                      ><img loading="lazy" src=${l.proxyURL(c)} alt="screenshot" /></button>`)}
+                    </div>`:n}
                 <div class="section-label">User gallery</div>
                 <div class="shots">
-                  ${this.userGallery.map(s=>a`<div class="shot user-shot">
-                    ${s.kind==="video"?a`<video controls preload="metadata" src=${n.streamURL(s.id)}></video>`:a`<button class="shot" title="Open full-size upload"
-                          @click=${()=>this.screenshot=n.streamURL(s.id)}>
-                          <img loading="lazy" src=${n.thumbURL(s.id)} alt=${s.title} />
+                  ${this.userGallery.map(c=>a`<div class="shot user-shot">
+                    ${c.kind==="video"?a`<video controls preload="metadata" src=${l.streamURL(c.id)}></video>`:a`<button class="shot" title="Open full-size upload"
+                          @click=${()=>this.screenshot=l.streamURL(c.id)}>
+                          <img loading="lazy" src=${l.thumbURL(c.id)} alt=${c.title} />
                         </button>`}
                     <button class="remove-shot" title="Remove from game gallery"
-                      @click=${()=>void this.removeGameGallery(e.id,s.id)}>×</button>
+                      @click=${()=>void this.removeGameGallery(e.id,c.id)}>×</button>
                   </div>`)}
                 </div>
                 <label class="btn-outline gallery-upload">
                   <span class="material-symbols-rounded">add_photo_alternate</span>
                   ${this.galleryUploading?"Uploading…":"Add photos or videos"}
                   <input type="file" accept="image/*,video/*" multiple hidden ?disabled=${this.galleryUploading}
-                    @change=${s=>void this.uploadGameGallery(s,e.id)} />
+                    @change=${c=>void this.uploadGameGallery(c,e.id)} />
                 </label>
                 ${e.source?a`<div class="meta-note">
                       Source:
                       <a href=${e.source} target="_blank" rel="noreferrer" style="color:var(--oppai-primary-bright);">link</a>
-                    </div>`:l}
+                    </div>`:n}
               `}
         </div>
       </div>
-    `}renderPlayer(e){const t=this.play;if(!t)return l;const i=t.mode==="embed"&&t.embedUrl;return a`
+    `}renderPlayer(e){const t=this.play;if(!t)return n;const i=t.mode==="embed"&&t.embedUrl;return a`
       <div class="play-stage">
         <button class="play-close" title="Stop playing" @click=${()=>this.playing=!1}>×</button>
         ${i?a`<iframe
@@ -342,7 +349,7 @@ import{a as S,w as E,e as n,m as h,av as z,B as P,aw as R,ax as O,G as C,A as l,
               sandbox="allow-scripts allow-same-origin allow-pointer-lock allow-popups"
               referrerpolicy="no-referrer"
             ></iframe>`:a`<iframe
-              src=${n.gamePlayURL(e.id)}
+              src=${l.gamePlayURL(e.id)}
               title=${e.title}
               allow="fullscreen; gamepad; autoplay"
               sandbox="allow-scripts allow-pointer-lock allow-popups"
@@ -358,8 +365,8 @@ import{a as S,w as E,e as n,m as h,av as z,B as P,aw as R,ax as O,G as C,A as l,
       ${this.saves.length?a`<div class="saves">
             ${this.saves.map(t=>a`<div class="save-row">
                 <span class="save-name" title=${t.label}>${t.label}</span>
-                <span class="save-meta">${U(t.size)} · ${H(t.createdAt)}</span>
-                <a class="save-act" title="Download this save" href=${n.gameSaveURL(e.id,t.id)} download>
+                <span class="save-meta">${O(t.size)} · ${x(t.createdAt)}</span>
+                <a class="save-act" title="Download this save" href=${l.gameSaveURL(e.id,t.id)} download>
                   <span class="material-symbols-rounded" style="font-size:20px;">download</span>
                 </a>
                 <button class="save-act" title="Delete this save"
@@ -368,32 +375,71 @@ import{a as S,w as E,e as n,m as h,av as z,B as P,aw as R,ax as O,G as C,A as l,
                 </button>
               </div>`)}
           </div>`:a`<div class="save-empty">No saves backed up yet.</div>`}
-      ${this.saveError?a`<div class="save-error">${this.saveError}</div>`:l}
+      ${this.saveError?a`<div class="save-error">${this.saveError}</div>`:n}
       <label class="btn-outline gallery-upload">
         <span class="material-symbols-rounded">backup</span>
         ${this.saveUploading?"Uploading…":"Back up a save"}
         <input type="file" multiple hidden ?disabled=${this.saveUploading}
           @change=${t=>void this.uploadSave(t,e.id)} />
       </label>
+    `}renderRemote(e){const t=e.remote;return t?a`
+      <div class="remote ${t.hasUpdate?"update":""}">
+        <div class="remote-head">
+          <span class="material-symbols-rounded" style="font-size:18px; color:${t.hasUpdate?"var(--oppai-accent)":"inherit"};"
+            >${t.hasUpdate?"new_releases":"check_circle"}</span>
+          ${t.hasUpdate?a`<b>Update available:</b> ${t.knownVersion||"your version"} → ${t.latestVersion}`:a`<b>${t.knownVersion||t.latestVersion||"Version unknown"}</b> on ${t.label}${t.checkedAt?a` · checked ${x(t.checkedAt)}`:n}`}
+          <div class="remote-acts">
+            <button class="icon-round" title="Check for a new version" ?disabled=${this.checking} @click=${()=>void this.checkRemote(e.id)}>
+              <span class="material-symbols-rounded" style="font-size:20px; color:var(--oppai-text-dim);">${this.checking?"hourglass_empty":"update"}</span>
+            </button>
+            ${t.hasUpdate?a`<button class="icon-round" title="I have this version now" @click=${()=>void this.acknowledgeRemote(e.id)}>
+                  <span class="material-symbols-rounded" style="font-size:20px; color:var(--oppai-text-dim);">done</span>
+                </button>`:n}
+            <button class="icon-round" title="Where to get it" ?disabled=${this.sourcesLoading} @click=${()=>void this.loadSources(e.id)}>
+              <span class="material-symbols-rounded" style="font-size:20px; color:var(--oppai-text-dim);">${this.sourcesLoading?"hourglass_empty":"download"}</span>
+            </button>
+          </div>
+        </div>
+        ${t.hasUpdate&&t.changelog?a`<div class="log">${t.changelog}</div>`:n}
+        ${this.sources?this.sources.degraded?a`<div class="log">The page could not be read just now — <a href=${t.url} target="_blank" rel="noreferrer" style="color:var(--oppai-primary-bright);">open it yourself</a>.</div>`:a`<div class="srcs">
+                ${this.sources.sources.map(i=>a`<a class="src" href=${i.url} target="_blank" rel="noreferrer" title=${i.url}>
+                  <span class="material-symbols-rounded" style="font-size:16px;">open_in_new</span>${i.label}
+                </a>`)}
+                ${this.sources.sources.length?n:this.sources.signedIn?a`<span>No downloads are listed on the page.</span>`:a`<span>${t.label} hides its download links from guests — sign in on the Games tab to see them.</span>`}
+              </div>`:n}
+      </div>
+    `:n}renderLaunchy(e){var s,o;const t=e.launchy;if(!t)return n;const i=t.playSeconds>=3600?`${(t.playSeconds/3600).toFixed(1)} h`:`${Math.round(t.playSeconds/60)} min`;return a`
+      <div class="remote">
+        <div class="remote-head">
+          <span class="material-symbols-rounded" style="font-size:18px;">${(s=this.launchy)!=null&&s.connected?"cloud_done":"cloud_off"}</span>
+          <b>${(o=this.launchy)!=null&&o.connected?"Launchy is connected":"Launchy is offline"}</b>
+          <span>· ${t.installed?"installed on the PC":"in Launchy, not installed"}${t.version?` · v${t.version}`:""}</span>
+        </div>
+        <div style="margin-top:6px;">
+          <span class="pc-stat"><span class="material-symbols-rounded" style="font-size:16px;">history</span>${i} played</span>
+          <span class="pc-stat"><span class="material-symbols-rounded" style="font-size:16px;">play_circle</span>${t.launchCount} launches</span>
+          ${t.lastPlayed?a`<span class="pc-stat">last played ${x(t.lastPlayed)}</span>`:n}
+        </div>
+      </div>
     `}hostOf(e){try{return new URL(e).hostname.replace(/^www\./,"")}catch{return""}}renderActions(e=!0){var t;return a`
       ${e?a`<button class="icon-round" title="Auto-tag" @click=${this.retag} ?disabled=${this.tagging}>
             <span class="material-symbols-rounded" style="font-size:22px; color:var(--oppai-text-dim);"
               >${this.tagging?"hourglass_empty":"auto_awesome"}</span
             >
-          </button>`:l}
+          </button>`:n}
       ${e&&this.media.kind!=="comic"&&this.media.kind!=="game"?a`<button class="icon-round" title=${(t=this.full)!=null&&t.description?"Describe again with the vision model":"Describe with the vision model"}
             @click=${this.describe} ?disabled=${this.describing}>
             <span class="material-symbols-rounded" style="font-size:22px; color:var(--oppai-text-dim);"
               >${this.describing?"hourglass_empty":"description"}</span
             >
-          </button>`:l}
-      ${_(this.media)?a`<button class="icon-round" title="Edit in the studio — regenerate it with its own settings"
+          </button>`:n}
+      ${G(this.media)?a`<button class="icon-round" title="Edit in the studio — regenerate it with its own settings"
             @click=${()=>this.dispatchEvent(new CustomEvent("edit-in-studio",{detail:{id:this.media.id},bubbles:!0,composed:!0}))}>
             <span class="material-symbols-rounded" style="font-size:22px; color:var(--oppai-text-dim);">brush</span>
-          </button>`:l}
+          </button>`:n}
       ${this.media.kind==="video"?a`<button class="icon-round" title="Bookmark this moment" @click=${()=>void this.markMoment()} ?disabled=${this.marking}>
             <span class="material-symbols-rounded" style="font-size:22px; color:var(--oppai-text-dim);">${this.marking?"hourglass_empty":"bookmarks"}</span>
-          </button>`:l}
+          </button>`:n}
       <button class="icon-round" title="Edit" @click=${()=>this.startEdit()}>
         <span class="material-symbols-rounded" style="font-size:22px; color:var(--oppai-text-dim);">edit</span>
       </button>
@@ -413,12 +459,12 @@ import{a as S,w as E,e as n,m as h,av as z,B as P,aw as R,ax as O,G as C,A as l,
                 <span class="chip chip-muted">${t.typeLabel}</span>
               </div>
               ${this.renderTags(e)}
-              ${e.description?a`<p class="desc described" style="margin-top:16px;" title="What the vision model saw">${e.description}</p>`:l}
-              ${e.notes?a`<p class="desc" style="margin-top:16px;">${e.notes}</p>`:l}
+              ${e.description?a`<p class="desc described" style="margin-top:16px;" title="What the vision model saw">${e.description}</p>`:n}
+              ${e.notes?a`<p class="desc" style="margin-top:16px;">${e.notes}</p>`:n}
               ${e.source?a`<div class="meta-note">
                     Source:
                     <a href=${e.source} target="_blank" rel="noreferrer" style="color:var(--oppai-primary-bright);">link</a>
-                  </div>`:l}
+                  </div>`:n}
             `}
       </div>
     `}renderTags(e){const t=[...e.tags??[]].sort((s,o)=>y(o)-y(s));if(t.length===0)return a`<div class="meta-note" style="margin-top:14px;">
@@ -429,16 +475,16 @@ import{a as S,w as E,e as n,m as h,av as z,B as P,aw as R,ax as O,G as C,A as l,
       </div>
       ${i&&this.activeTag==null?a`<div class="meta-note" style="margin-top:10px;">
             Tap a ✨ tag to see where it appears in this video.
-          </div>`:l}
-    `}renderTagChip(e){const t=y(e),i=t<1,s=i?`${Math.max(1,Math.round(t*100))}%`:"",o=`${e.category}${e.source?" · "+e.source:""}${i?` · in about ${s} of the sampled frames`:""}`;if(!this.hasTimeline(e))return a`<span class="chip chip-muted" title=${o}>${e.name}${i?a`<span class="chip-share">${s}</span>`:l}</span>`;const c=this.activeTag===e.id,u=e.moments.length;return a`<button
+          </div>`:n}
+    `}renderTagChip(e){const t=y(e),i=t<1,s=i?`${Math.max(1,Math.round(t*100))}%`:"",o=`${e.category}${e.source?" · "+e.source:""}${i?` · in about ${s} of the sampled frames`:""}`;if(!this.hasTimeline(e))return a`<span class="chip chip-muted" title=${o}>${e.name}${i?a`<span class="chip-share">${s}</span>`:n}</span>`;const c=this.activeTag===e.id,u=e.moments.length;return a`<button
       class="chip ${c?"on":"chip-muted"}"
       title="${o} · seen at ${u} point${u===1?"":"s"}"
       aria-pressed=${c}
       @click=${()=>this.toggleTagTimeline(e)}
     >
       <span class="material-symbols-rounded" style="font-size:14px;">auto_awesome</span>
-      ${e.name}${i?a`<span class="chip-share">${s}</span>`:l}
-    </button>`}};r.styles=[L,N,M`
+      ${e.name}${i?a`<span class="chip-share">${s}</span>`:n}
+    </button>`}};r.styles=[N,M,F`
       :host {
         display: block;
       }
@@ -1169,6 +1215,26 @@ import{a as S,w as E,e as n,m as h,av as z,B as P,aw as R,ax as O,G as C,A as l,
       .save-empty { color:var(--oppai-text-dim); font-size:13px; margin-top:8px; }
       .save-error { color:var(--oppai-danger, #ff6b6b); font-size:13px; margin-top:8px; }
 
+      /* Where the game came from, and the PC it lives on. */
+      .remote {
+        margin: 4px 0 18px; padding: 12px 14px; border-radius: 14px; max-width: 640px;
+        background: var(--oppai-surface-1); border: 1px solid var(--oppai-border, rgba(255,255,255,.08));
+        font-size: 13px; color: var(--oppai-text-dim);
+      }
+      .remote.update { border-color: var(--oppai-accent); }
+      .remote-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+      .remote-head b { color: var(--oppai-text); font-weight: 500; }
+      .remote-acts { margin-left: auto; display: flex; gap: 4px; }
+      .remote .log { white-space: pre-wrap; margin-top: 8px; max-height: 160px; overflow: auto; font-size: 12px; }
+      .remote .srcs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+      .remote .src {
+        display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 10px;
+        background: var(--oppai-surface-2); color: var(--oppai-text); text-decoration: none; font-size: 12px;
+        border: 1px solid var(--oppai-border-strong);
+      }
+      .remote .src:hover { background: var(--oppai-nav-hover); }
+      .pc-stat { display: inline-flex; align-items: center; gap: 4px; margin-right: 12px; }
+
       /* HTML5 game player */
       .play-stage {
         position:relative; margin-top:14px; width:100%; max-width:960px;
@@ -1182,4 +1248,4 @@ import{a as S,w as E,e as n,m as h,av as z,B as P,aw as R,ax as O,G as C,A as l,
         color:#fff; background:rgba(0,0,0,.75);
       }
       .play-note { color:var(--oppai-text-dim); font-size:12px; margin-top:6px; max-width:640px; }
-    `];r.PROGRESS_INTERVAL=10;r.PROGRESS_FLOOR=15;r.PROGRESS_DONE=.97;d([b({attribute:!1})],r.prototype,"media",2);d([b({type:Boolean})],r.prototype,"favorite",2);d([b({attribute:!1})],r.prototype,"queue",2);d([b({type:Number})],r.prototype,"startAt",2);d([p()],r.prototype,"full",2);d([p()],r.prototype,"bookmarks",2);d([p()],r.prototype,"marking",2);d([p()],r.prototype,"slideshow",2);d([p()],r.prototype,"slideshowOn",2);d([p()],r.prototype,"activeTag",2);d([p()],r.prototype,"tagging",2);d([p()],r.prototype,"editing",2);d([p()],r.prototype,"saving",2);d([p()],r.prototype,"editTitle",2);d([p()],r.prototype,"editNotes",2);d([p()],r.prototype,"editDescription",2);d([p()],r.prototype,"describing",2);d([p()],r.prototype,"editKind",2);d([p()],r.prototype,"editTags",2);d([p()],r.prototype,"newTag",2);d([p()],r.prototype,"screenshot",2);d([p()],r.prototype,"userGallery",2);d([p()],r.prototype,"galleryUploading",2);d([p()],r.prototype,"saves",2);d([p()],r.prototype,"saveUploading",2);d([p()],r.prototype,"saveError",2);d([p()],r.prototype,"play",2);d([p()],r.prototype,"playing",2);d([p()],r.prototype,"posterFrames",2);d([p()],r.prototype,"posterLoading",2);d([p()],r.prototype,"posterSaving",2);d([p()],r.prototype,"posterChosen",2);d([p()],r.prototype,"posterError",2);d([p()],r.prototype,"posterVersion",2);d([p()],r.prototype,"comic",2);d([p()],r.prototype,"page",2);d([p()],r.prototype,"fit",2);r=d([F("oppai-viewer")],r);function y(e){return e.weight&&e.weight>0?Math.min(1,e.weight):1}function H(e){return e?new Date(e*1e3).toLocaleString(void 0,{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"}):""}export{r as OppaiViewer,_ as studioEditable};
+    `];r.PROGRESS_INTERVAL=10;r.PROGRESS_FLOOR=15;r.PROGRESS_DONE=.97;d([b({attribute:!1})],r.prototype,"media",2);d([b({type:Boolean})],r.prototype,"favorite",2);d([b({attribute:!1})],r.prototype,"queue",2);d([b({type:Number})],r.prototype,"startAt",2);d([p()],r.prototype,"full",2);d([p()],r.prototype,"bookmarks",2);d([p()],r.prototype,"marking",2);d([p()],r.prototype,"slideshow",2);d([p()],r.prototype,"slideshowOn",2);d([p()],r.prototype,"activeTag",2);d([p()],r.prototype,"tagging",2);d([p()],r.prototype,"editing",2);d([p()],r.prototype,"saving",2);d([p()],r.prototype,"editTitle",2);d([p()],r.prototype,"editNotes",2);d([p()],r.prototype,"editDescription",2);d([p()],r.prototype,"describing",2);d([p()],r.prototype,"editKind",2);d([p()],r.prototype,"editTags",2);d([p()],r.prototype,"newTag",2);d([p()],r.prototype,"screenshot",2);d([p()],r.prototype,"userGallery",2);d([p()],r.prototype,"galleryUploading",2);d([p()],r.prototype,"saves",2);d([p()],r.prototype,"saveUploading",2);d([p()],r.prototype,"saveError",2);d([p()],r.prototype,"play",2);d([p()],r.prototype,"playing",2);d([p()],r.prototype,"launchy",2);d([p()],r.prototype,"launching",2);d([p()],r.prototype,"checking",2);d([p()],r.prototype,"sources",2);d([p()],r.prototype,"sourcesLoading",2);d([p()],r.prototype,"posterFrames",2);d([p()],r.prototype,"posterLoading",2);d([p()],r.prototype,"posterSaving",2);d([p()],r.prototype,"posterChosen",2);d([p()],r.prototype,"posterError",2);d([p()],r.prototype,"posterVersion",2);d([p()],r.prototype,"comic",2);d([p()],r.prototype,"page",2);d([p()],r.prototype,"fit",2);r=d([A("oppai-viewer")],r);function y(e){return e.weight&&e.weight>0?Math.min(1,e.weight):1}function x(e){return e?new Date(e*1e3).toLocaleString(void 0,{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"}):""}export{r as OppaiViewer,G as studioEditable};

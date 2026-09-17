@@ -258,6 +258,114 @@ ours, since the browser still refuses a cross-origin frame any access to the app
 Android likewise skips request interception for an embed: interception exists only to
 attach our bearer token, and itch has no use for one.
 
+### Where a game came from
+
+A game added from itch.io or F95zone remembers its page, which is what later makes
+"is there a newer version?" answerable. The reference is encrypted like a title is —
+an F95zone thread number is as good as a name to anyone who can type it into a
+browser — while the version strings stay plaintext so a sweep can compare them
+without decrypting every row.
+
+| Method | Path | Notes |
+|--------|------|-------|
+| GET | `/api/media/{id}/remote` | → `GameRemote`; `404` when the game was not added from a site |
+| PUT | `/api/media/{id}/remote` | `{url, id?, knownVersion?, latestVersion?}` — points a game at its page. `400` for a URL on neither site |
+| DELETE | `/api/media/{id}/remote` | `204`; the game stays, the reference goes |
+| POST | `/api/media/{id}/remote/check` | reads the page now → `{remote, changed, error?}`. `error` is set when the page would not load; versions are then left alone |
+| POST | `/api/media/{id}/remote/acknowledge` | the newest version is the one installed → `GameRemote`, badge cleared |
+| GET | `/api/media/{id}/sources` | → `SourceReport`: where the build can be had, read off the page |
+
+```jsonc
+// GameRemote — also carried on GET /api/media/{id} for a game
+{ "site": "f95", "label": "F95zone", "id": "270043",
+  "url": "https://f95zone.to/threads/270043/",
+  "knownVersion": "0.3", "latestVersion": "0.4", "changelog": "- a new chapter",
+  "checkedAt": 1789609249, "updateSeenAt": 1789609249, "hasUpdate": true }
+
+// SourceReport
+{ "url": "…", "version": "Ch.4 v1.5", "changelog": "", "degraded": false,
+  "signedIn": false, "sources": [] }
+```
+
+`knownVersion` only moves when the user says so — an install, or an acknowledgement —
+so an update stays flagged until it is acted on. `hasUpdate` compares the two
+leniently: "v0.7" and "0.7" are one build, and "different from what you have" is the
+test rather than "newer than", because developers version however they like.
+
+`degraded` means the page could not be read and nothing else in the report is
+trustworthy. `signedIn` distinguishes the two ways `sources` can be empty: F95zone
+serves a thread to anyone but hides every download link from a guest, so an empty
+list from a signed-out read means "none you may see", not "none listed".
+
+Nothing here downloads a build. The links are opened in the user's own browser,
+where their cookies and the file hosts' captchas already are.
+
+## Browsing the game sites
+
+| Method | Path | Notes |
+|--------|------|-------|
+| GET | `/api/games/sites` | → `{sites: [Account], sorts, itchNsfw}` — both sites' sign-in state |
+| POST | `/api/games/sites/{site}/login` | `{username, password}` or `{cookie}` → `Account`; `401` when the site refuses |
+| POST | `/api/games/sites/{site}/logout` | drops the session; for F95zone also forgets the stored login |
+| GET | `/api/games/browse?site=&q=&sort=&page=` | one page → `{items, page, hasMore}`; `401` when the site is not signed in |
+| POST | `/api/games/browse/detail` | `{item}` → `{item, degraded}` — the result's own page, read on demand |
+| POST | `/api/games/browse/add` | `{url, id?, version?}` → `{id, created, media, remote}` |
+| GET | `/api/games/updates` | → `{items, tracked, sweep}` — every game whose site has moved on |
+| POST | `/api/games/updates/check` | sweeps every game that came from a site, in the background → `202 {started, sweep}` |
+
+**A site is browsed signed in or not at all.** itch.io only serves its adult listings
+to an account that has asked for them and F95zone hides threads and download links
+from guests, so browsing signed out would quietly show a fraction of what is there
+and call it the catalogue. `401` with a message is the honest answer.
+
+The two sign-ins are not alike. F95zone takes a username and password (the same
+login the scraper uses for members-only threads, shared with it). **itch.io cannot**:
+its login page sits behind a Cloudflare check that only a real browser passes, so it
+is signed in by handing over the `itchio` session cookie — pasted from a browser, or
+pushed by Launchy, which signs in through itch's own page in a real window. Either
+site also accepts a cookie, which is the way in for an F95zone account with two-step
+verification. Cookies are stored like the F95 password: write-only over the API.
+
+`add` files the game away through the same import a pasted URL uses — cover art,
+description, screenshots and tags — and records the page as where it came from. A
+URL already in the library answers `200` with the existing entry rather than a
+second copy.
+
+`items` carry `libraryId` when the game is already on the shelf, which is what lets
+a browse page mark what you have without the client holding the library.
+
+## Launchy, the desktop launcher
+
+Launchy is the client in the pairing: it holds an ordinary session, syncs on its own
+schedule, and long-polls for launch requests. The server never reaches out to the PC,
+so nothing has to be configured or opened here and the launcher works from behind any
+router.
+
+| Method | Path | Notes |
+|--------|------|-------|
+| GET | `/api/launchy` | → `{connected, name, lastSeen, running, pending}` |
+| GET | `/api/launchy/commands?wait=&name=&running=` | the launcher's long poll; `wait` is capped at 25 s. Its arrival is the heartbeat |
+| POST | `/api/launchy/commands/{cmd}` | `{ok, error}` — how a request went |
+| POST | `/api/launchy/launch` | `{gameId}` → `202` the queued command, or `409` when the launcher is not connected |
+| GET | `/api/launchy/launch/{cmd}` | how that request went |
+| GET | `/api/launchy/games` | every game with its remote and launcher state, for the sync |
+| POST | `/api/launchy/games` | multipart `meta` + optional `cover` — a launcher entry becomes a library game |
+| PUT | `/api/launchy/games/{id}` | `meta` — the launcher's state, and any metadata it changed |
+| DELETE | `/api/launchy/games/{id}` | unpairs; the game stays |
+
+`meta` names the launcher's own entry (`launchyId`) and always carries what only the
+PC knows — `installed`, `version`, `playSeconds`, `lastPlayed`, `launchCount`. The
+media fields (`title`, `developer`, `description`, `rating`, `favorite`, `tags`) are
+optional: a sync that has no local edits to push sends only the launcher state, and
+what it leaves out is left alone. Tags are merged, never removed — the tagger's and
+the scraper's tags are not the launcher's to take away. A game with no cover art in
+the launcher gets a placeholder drawn from its id, because a game needs a blob and
+two placeholders must not collide on the store's hash.
+
+A launch is refused rather than queued when no launcher is polling: a request that
+sits until a launcher appears hours later and starts a game unbidden is worse than
+an error.
+
 ## Settings
 
 | Method | Path | Notes |
@@ -407,14 +515,19 @@ Civitai browser does is here. Uploading is not: Civitai has no public upload API
 |--------|------|-------|
 | GET | `/api/imagegen/civitai/search?q=&type=&category=&base=&period=&sort=&creator=&nsfw=&cursor=` | one page → `{items, nextCursor}`. `type` ∈ checkpoint, lora, embedding, vae, controlnet, upscaler; `period` ∈ day, week, month, year, all; `sort` ∈ downloaded (default), rated, newest, liked, discussed, collected, images; `nsfw=0` hides adult models. Each version carries `installed` when InvokeAI holds its file (matched by BLAKE3). |
 | GET | `/api/imagegen/civitai/models/{id}` | one model's page: sanitized HTML `description`, every version with `files`, showcase `images`, `publishedAt`, and the same `installed` flags |
-| GET | `/api/imagegen/civitai/images?versionId=\|modelId=\|username=&sort=&period=&nsfw=&cursor=` | posted pictures → `{items, nextCursor, withPrompts, keySet}`. Each item carries the prompt and settings behind it when the poster kept them — which Civitai shares only with an API key, hence `withPrompts` and `keySet` |
+| GET | `/api/imagegen/civitai/images?versionId=\|modelId=\|postId=\|collectionId=\|username=&sort=&period=&nsfw=&cursor=` | posted pictures → `{items, nextCursor, withPrompts, keySet}`. Each item carries the prompt and settings behind it when the poster kept them — which Civitai shares only with an API key, hence `withPrompts` and `keySet` — plus `postId` and `createdAt` |
+| GET | `/api/imagegen/civitai/posts?username=&nsfw=&cursor=` | someone's posts, newest first → `{items:[{id, username, createdAt, images}], nextCursor}`. Civitai has no posts endpoint; a page of their pictures is grouped by `postId`, so a post can continue onto the next page (the clients merge it) |
+| GET | `/api/imagegen/civitai/collections?q=&sort=&cursor=` | public collections by name → `{items:[{id, name, description, type, count, cover, username, userId, nsfw}], nextCursor}`; `sort` ∈ newest (default), followers. The catalogue ignores every owner filter, so nobody's own collections can be listed — only searched. `images?collectionId=` lists an Image or Post collection's pictures; a Model collection cannot be opened (the model search rejects the filter) |
 | GET | `/api/imagegen/civitai/categories` | the catalogue's most-used tags → `{categories:[{name,count}]}` |
 | GET | `/api/imagegen/civitai/image?url=` | streams one preview through the server; Civitai hosts only |
-| GET | `/api/imagegen/civitai/me` | who the API key belongs to → `{id, username, image}`; 400 without a key |
+| GET | `/api/imagegen/civitai/me` | who the API key belongs to → `{id, username, image, cover}`; 400 without a key. `cover` is the profile's cover photo when the user record carries one, which the public API mostly does not — the clients fall back to the newest posted picture |
 | POST | `/api/imagegen/civitai/install` | `{url, modelId, versionId}` → InvokeAI's install job. With the ids, the server writes the catalogue's description, trigger words and first preview onto the InvokeAI record once the download completes |
 | GET | `/api/imagegen/civitai/installs` | InvokeAI's install queue → `{jobs}`; a completed job carries `modelKey` |
-| GET | `/api/imagegen/civitai/installed?refresh=` | the studio's models with their catalogue records → `{models:[{key,name,type,base,hasCover,civitai?}]}`. `civitai` holds the ids, creator, previews, trained words and `updateAvailable`. Looked up by file hash and remembered for a day; `refresh=1` asks again |
-| POST | `/api/imagegen/civitai/sync` | `{key, versionId?}` → applies the catalogue's cover, description and trigger words to one installed model now, by hash or by the version given → the record, or `{}` when the file is not on Civitai |
+| GET | `/api/imagegen/civitai/installed?refresh=` | the studio's models with their catalogue records → `{models:[{key,name,type,base,hasCover,civitai?}]}`. `civitai` holds the ids, creator, previews, trained words, `updateAvailable` and `coverUrl` (the preview chosen as cover, when one was). Looked up by file hash and remembered for a day; `refresh=1` asks again |
+| POST | `/api/imagegen/civitai/sync` | `{key, versionId?}` → applies the catalogue's cover, description and trigger words to one installed model now, by hash or by the version given → the record, or `{}` when the file is not on Civitai. A cover chosen for the same version is kept |
+| POST | `/api/imagegen/civitai/cover` | `{key, url}` → 204. Makes one of the catalogue's pictures (a Civitai host only) the model's InvokeAI cover and remembers the choice |
+| POST | `/api/imagegen/civitai/update` | `{key, versionId?}` → InvokeAI's install job for that version (the newest when unsaid) of the model the record is linked to. Once the download completes and the new record is dressed, the old record is deleted, file included. 400 when the model is not linked or is already at that version |
+| DELETE | `/api/imagegen/model?key=` | removes a model or LoRA from InvokeAI (its file too, when InvokeAI manages it) and forgets its catalogue record → 204. A LoRA's display name is accepted for `key` |
 
 Model descriptions are HTML written by whoever uploaded the model. The server keeps
 paragraphs, headings, lists, emphasis, code and http(s) links and drops everything

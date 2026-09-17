@@ -488,7 +488,7 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit) {
                     val shownModels = if (modelFilter.isBlank()) st.models
                     else st.models.filter { it.modelName.contains(modelFilter, true) || it.title.contains(modelFilter, true) || it.base.contains(modelFilter, true) }
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        items(shownModels, key = { it.title }) { m ->
+                        items(shownModels.distinctBy { it.title }, key = { it.title }) { m ->
                             PickerCard(
                                 label = m.modelName.ifBlank { m.title },
                                 imageUrl = repo.modelThumbUrl(m.title),
@@ -505,8 +505,13 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit) {
                 if (st.loras.isNotEmpty()) {
                     item {
                         SectionLabel("LoRAs")
+                        // The row is keyed by name, and Compose throws (and the app
+                        // dies) if two items share a key. The server now names a
+                        // duplicate by its key instead, but an older server does not,
+                        // and InvokeAI is happy to hold two LoRAs with one name.
+                        val loras = st.loras.distinctBy { it.name }
                         LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            items(st.loras, key = { it.name }) { lora ->
+                            items(loras, key = { it.name }) { lora ->
                                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                     PickerCard(
                                         label = lora.alias.ifBlank { lora.name },
@@ -985,6 +990,15 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit) {
             onDismiss = { editTarget = null },
             onSaved = {
                 // Names and recommended settings may have changed; reload the pickers.
+                scope.launch {
+                    runCatching { repo.api.imageGenStatus() }.onSuccess { status = it }
+                }
+            },
+            onDeleted = { key ->
+                // Whatever pointed at it is cleared before the pickers reload, so a
+                // generate in between does not name a model InvokeAI no longer has.
+                if (checkpoint == key) checkpoint = ""
+                loraWeights = loraWeights - name - key
                 scope.launch {
                     runCatching { repo.api.imageGenStatus() }.onSuccess { status = it }
                 }

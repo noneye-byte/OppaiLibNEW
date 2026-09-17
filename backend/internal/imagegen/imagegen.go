@@ -551,6 +551,16 @@ func (c *Client) ModelRecords(ctx context.Context, base string) ([]ModelRecord, 
 	return out, nil
 }
 
+// DeleteModel removes a model record from InvokeAI, and the file with it when
+// InvokeAI manages the file (an install from a URL is; a model registered in place
+// from elsewhere on disk is only forgotten).
+func (c *Client) DeleteModel(ctx context.Context, base, key string) error {
+	if err := c.requireInvoke(ctx, base, "deleting models"); err != nil {
+		return err
+	}
+	return c.invokeDeleteModel(ctx, base, key)
+}
+
 // InstallJobs lists InvokeAI's model-install queue, newest first.
 func (c *Client) InstallJobs(ctx context.Context, base string) ([]InstallJob, error) {
 	if err := c.requireInvoke(ctx, base, "installing models"); err != nil {

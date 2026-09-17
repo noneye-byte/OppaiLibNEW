@@ -39,6 +39,10 @@ data class Media(
     val download: String? = null,
     /** Screenshot URLs for a game. They live on the origin site, not on us. */
     val gallery: List<String> = emptyList(),
+    /** Where a game came from and what the site last said about it, and the desktop
+     *  launcher's side of it. Only on a single fetched game, never on list pages. */
+    val remote: GameRemote? = null,
+    val launchy: GameLaunchy? = null,
     val tags: List<MediaTag> = emptyList(),
     val createdAt: Long = 0,
     val updatedAt: Long = 0,
@@ -187,6 +191,66 @@ data class GameSave(
 
 @Serializable
 data class GameSaveListResponse(val items: List<GameSave> = emptyList())
+
+/**
+ * Where a game came from — an itch.io page or an F95zone thread — and what the site
+ * said about it the last time anyone looked. [knownVersion] is what you have,
+ * [latestVersion] what the site reports; [hasUpdate] is the server's lenient
+ * comparison of the two, so "v0.7" and "0.7" never read as an update.
+ */
+@Serializable
+data class GameRemote(
+    val site: String = "",
+    val label: String = "",
+    val id: String = "",
+    val url: String = "",
+    val knownVersion: String = "",
+    val latestVersion: String = "",
+    val changelog: String = "",
+    val checkedAt: Long = 0,
+    val updateSeenAt: Long = 0,
+    val hasUpdate: Boolean = false,
+)
+
+/** Launchy's side of a game: installed on the PC, played this long, this entry. */
+@Serializable
+data class GameLaunchy(
+    val launchyId: String = "",
+    val installed: Boolean = false,
+    val version: String = "",
+    val playSeconds: Long = 0,
+    val lastPlayed: Long = 0,
+    val launchCount: Long = 0,
+    val updatedAt: Long = 0,
+)
+
+/** Whether Launchy is connected right now, and which games it is running. */
+@Serializable
+data class LaunchyStatus(
+    val connected: Boolean = false,
+    val name: String = "",
+    val lastSeen: Long = 0,
+    val running: List<Long> = emptyList(),
+    val pending: Int = 0,
+)
+
+/** A launch request queued for Launchy. [status] is pending, sent, done or failed. */
+@Serializable
+data class LaunchCommand(
+    val id: String = "",
+    val action: String = "",
+    val gameId: Long = 0,
+    val status: String = "pending",
+    val error: String = "",
+    val createdAt: Long = 0,
+    val doneAt: Long = 0,
+)
+
+@Serializable
+data class LaunchRequest(val gameId: Long)
+
+@Serializable
+data class GameCheckResponse(val remote: GameRemote, val changed: Boolean = false, val error: String = "")
 
 /**
  * Whether a game can be played in the browser, and how.
@@ -870,6 +934,9 @@ data class CivitaiImage(
     val seed: Long = 0,
     val model: String = "",
     val size: String = "",
+    /** The upload this picture was part of, and when. Absent on showcase stills. */
+    val postId: Long = 0,
+    val createdAt: String = "",
 )
 
 @Serializable
@@ -878,8 +945,49 @@ data class CivitaiImagesResponse(
     val nextCursor: String = "",
 )
 
+/** One upload of several pictures, rebuilt from someone's image feed (Civitai's
+ *  public API has no endpoint for posts, but every picture names its post). */
 @Serializable
-data class CivitaiMe(val id: Long = 0, val username: String = "", val image: String = "")
+data class CivitaiPost(
+    val id: Long,
+    val username: String = "",
+    val createdAt: String = "",
+    val images: List<CivitaiImage> = emptyList(),
+)
+
+@Serializable
+data class CivitaiPostsResponse(
+    val items: List<CivitaiPost> = emptyList(),
+    val nextCursor: String = "",
+)
+
+/** A public collection. Only Image and Post collections open here: the image feed
+ *  lists their pictures, while the model search rejects a collection. */
+@Serializable
+data class CivitaiCollection(
+    val id: Long,
+    val name: String = "",
+    val description: String = "",
+    val type: String = "",
+    val count: Long = 0,
+    val cover: String = "",
+    val username: String = "",
+    val userId: Long = 0,
+    val nsfw: Boolean = false,
+) {
+    val openable: Boolean get() = type == "Image" || type == "Post"
+}
+
+@Serializable
+data class CivitaiCollectionsResponse(
+    val items: List<CivitaiCollection> = emptyList(),
+    val nextCursor: String = "",
+)
+
+/** Whose the API key is. [cover] is the profile's cover photo when the catalogue
+ *  shares it, which its public API mostly does not. */
+@Serializable
+data class CivitaiMe(val id: Long = 0, val username: String = "", val image: String = "", val cover: String = "")
 
 /** What the studio holds on Civitai's side: one installed model's catalogue record. */
 @Serializable
@@ -896,6 +1004,8 @@ data class CivitaiLink(
     val description: String = "",
     val trainedWords: List<String> = emptyList(),
     val previews: List<String> = emptyList(),
+    /** The preview chosen as the cover; blank when the first was taken. */
+    val coverUrl: String = "",
 )
 
 @Serializable
@@ -913,6 +1023,13 @@ data class CivitaiInstalledResponse(val models: List<CivitaiInstalled> = emptyLi
 
 @Serializable
 data class CivitaiSyncRequest(val key: String, val versionId: Long = 0)
+
+@Serializable
+data class CivitaiCoverRequest(val key: String, val url: String)
+
+/** [versionId] 0 means the newest. */
+@Serializable
+data class CivitaiUpdateRequest(val key: String, val versionId: Long = 0)
 
 @Serializable
 data class CivitaiSearchResponse(

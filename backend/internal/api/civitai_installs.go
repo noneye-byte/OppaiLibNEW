@@ -117,6 +117,9 @@ func (s *Server) civitaiApplyFinishedInstalls(ctx context.Context) int {
 			if _, err := s.civitaiApplyToModel(ctx, set.ImageGenURL, job.ModelKey, p.ModelID, p.VersionID); err != nil {
 				s.log.Warn("civitai: apply metadata after install", "model", job.ModelKey, "err", err)
 			}
+			// An update: the version this one supersedes goes now that the new file
+			// is registered and dressed.
+			s.civitaiRetireReplaced(ctx, set.ImageGenURL, p.ReplaceKey, job.ModelKey)
 			_ = s.db.DeleteCivitaiInstall(ctx, p.Source)
 			s.installedHashCache.forget(set.ImageGenURL) // the model list changed
 		case job.Status == "error" || job.Status == "cancelled":
@@ -185,6 +188,11 @@ func (s *Server) civitaiApplyToModel(ctx context.Context, base, key string, mode
 		}
 	}
 	link := civitaiLinkFrom(key, hash, m, versionID)
+	// A cover somebody chose stays chosen while the version is the same; moving
+	// to another version starts again from that version's own pictures.
+	if prev, ok, _ := s.db.CivitaiLink(ctx, key); ok && prev.CoverURL != "" && prev.VersionID == link.VersionID {
+		link.CoverURL = prev.CoverURL
+	}
 
 	// InvokeAI's description is one plain-text field shown in a small panel; the
 	// whole of a long model card would be noise there. The full text stays on our
@@ -200,8 +208,12 @@ func (s *Server) civitaiApplyToModel(ctx context.Context, base, key string, mode
 	}); err != nil {
 		return db.CivitaiLink{}, err
 	}
-	if len(link.Previews) > 0 {
-		if data, ct, err := s.civitaiFetchImage(ctx, link.Previews[0]); err == nil {
+	cover := link.CoverURL
+	if cover == "" && len(link.Previews) > 0 {
+		cover = link.Previews[0]
+	}
+	if cover != "" {
+		if data, ct, err := s.civitaiFetchImage(ctx, cover); err == nil {
 			if err := s.imagegen.UpdateCover(ctx, base, key, data, ct); err != nil {
 				s.log.Warn("civitai: cover art", "model", key, "err", err)
 			}
@@ -284,6 +296,8 @@ type civitaiLinkOut struct {
 	TrainedWords    []string `json:"trainedWords"`
 	Previews        []string `json:"previews"`
 	CheckedAt       int64    `json:"checkedAt"`
+	// CoverURL is the preview chosen as the cover, "" when the first was taken.
+	CoverURL string `json:"coverUrl,omitempty"`
 }
 
 func civitaiLinkOutOf(l db.CivitaiLink) *civitaiLinkOut {
@@ -296,6 +310,7 @@ func civitaiLinkOutOf(l db.CivitaiLink) *civitaiLinkOut {
 		ModelName: l.ModelName, VersionName: l.VersionName, ModelType: l.ModelType,
 		BaseModel: l.BaseModel, Creator: l.Creator, Description: l.Description,
 		TrainedWords: l.TrainedWords, Previews: l.Previews, CheckedAt: l.CheckedAt,
+		CoverURL: l.CoverURL,
 	}
 }
 
@@ -421,5 +436,8 @@ func (s *Server) civitaiLookupByHash(ctx context.Context, r imagegen.ModelRecord
 		return db.CivitaiLink{}, err
 	}
 	link := civitaiLinkFrom(r.Key, hash, m, versionID)
+	if known.CoverURL != "" && known.VersionID == link.VersionID {
+		link.CoverURL = known.CoverURL
+	}
 	return link, s.db.PutCivitaiLink(ctx, link)
 }

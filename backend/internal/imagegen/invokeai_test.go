@@ -38,6 +38,7 @@ func (st *stubInvoke) server(t *testing.T) *httptest.Server {
 				{"key":"key-lora","hash":"h2","name":"detail-tweaker","base":"sd-1","type":"lora",
 					"trigger_phrases":["fine detail","sharp eyes"]},
 				{"key":"key-lora-xl","hash":"h4","name":"xl-only","base":"sdxl","type":"lora"},
+				{"key":"key-lora-again","hash":"h6","name":"detail-tweaker","base":"sd-1","type":"lora"},
 				{"key":"key-vae","hash":"h5","name":"fixed-vae","base":"sd-1","type":"vae"}
 			]}`)
 		case r.URL.Path == "/api/v1/style_presets/":
@@ -149,8 +150,14 @@ func TestInvokeModelsAndLoras(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loras: %v", err)
 	}
-	if len(loras) != 2 || loras[0].Name != "detail-tweaker" || len(loras[0].TriggerPhrases) != 2 {
+	if len(loras) != 3 || loras[0].Name != "detail-tweaker" || len(loras[0].TriggerPhrases) != 2 {
 		t.Fatalf("loras = %+v", loras)
+	}
+	// Two records with one name: the second is picked by its key so nothing keyed
+	// by name (the phone's list, a generate request) sees the same LoRA twice, and
+	// keeps the shared name as its label.
+	if loras[2].Name != "key-lora-again" || loras[2].Alias != "detail-tweaker" {
+		t.Fatalf("duplicate-named lora = %+v", loras[2])
 	}
 	vaes, err := c.Vaes(context.Background(), srv.URL)
 	if err != nil {

@@ -144,6 +144,45 @@ CREATE TABLE IF NOT EXISTS game_saves (
 );
 CREATE INDEX IF NOT EXISTS idx_game_saves_game ON game_saves(game_id, created_at DESC);
 
+-- Where a game came from — an itch.io page or an F95zone thread — and what the
+-- site said about it the last time anyone looked. This is what makes "is there a
+-- newer version than mine?" answerable without the user remembering which thread
+-- a game came out of. ref_enc seals the page URL and the site's own id for the
+-- game: an F95zone thread number is as good as a title to anyone who can type it
+-- into a browser, so it is ciphertext like the title is. The site name and the
+-- version strings stay plain — "0.7.2" says nothing on its own, and the update
+-- sweep wants to compare them without decrypting every row.
+--
+-- known_version is what the user has; latest_version is what the site reports.
+-- known only moves when the user says so (an install, an acknowledgement), so an
+-- update stays flagged until it is actually acted on.
+CREATE TABLE IF NOT EXISTS game_remote (
+    game_id        INTEGER PRIMARY KEY REFERENCES media(id) ON DELETE CASCADE,
+    site           TEXT NOT NULL,                 -- itch|f95
+    ref_enc        BLOB NOT NULL,                 -- encrypted JSON {id, url}
+    known_version  TEXT NOT NULL DEFAULT '',
+    latest_version TEXT NOT NULL DEFAULT '',
+    changelog_enc  BLOB,                          -- what changed, encrypted like notes
+    checked_at     INTEGER NOT NULL DEFAULT 0,
+    update_seen_at INTEGER NOT NULL DEFAULT 0     -- when latest first differed from known
+);
+
+-- The desktop launcher's (Launchy's) side of a game: that it is installed on the
+-- PC, how long it has been played there, and which launcher entry it is. Written
+-- only by the launcher's sync; read by every client that wants to offer "launch on
+-- PC" or show playtime next to the cover. One launcher entry pairs with one game.
+CREATE TABLE IF NOT EXISTS game_launchy (
+    game_id      INTEGER PRIMARY KEY REFERENCES media(id) ON DELETE CASCADE,
+    launchy_id   TEXT NOT NULL,
+    installed    INTEGER NOT NULL DEFAULT 0,
+    version      TEXT NOT NULL DEFAULT '',
+    play_seconds INTEGER NOT NULL DEFAULT 0,
+    last_played  INTEGER NOT NULL DEFAULT 0,       -- unix seconds, 0 = never
+    launch_count INTEGER NOT NULL DEFAULT 0,
+    updated_at   INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_game_launchy_launchy ON game_launchy(launchy_id);
+
 -- Reusable image-generation character references. The original reference and the
 -- derived appearance-only prompt tags are encrypted at rest like media metadata.
 CREATE TABLE IF NOT EXISTS characters (
@@ -308,7 +347,8 @@ CREATE TABLE IF NOT EXISTS civitai_models (
     description       TEXT NOT NULL DEFAULT '',  -- plain text, already stripped of markup
     trained_words     TEXT NOT NULL DEFAULT '[]', -- JSON list
     previews          TEXT NOT NULL DEFAULT '[]', -- JSON list of image URLs
-    checked_at        INTEGER NOT NULL
+    checked_at        INTEGER NOT NULL,
+    cover_url         TEXT NOT NULL DEFAULT ''   -- the preview chosen as cover art, if one was
 );
 
 -- A model InvokeAI is downloading on our behalf, with what it should be told about
@@ -318,10 +358,11 @@ CREATE TABLE IF NOT EXISTS civitai_models (
 -- installed from the browser look the way it does on Civitai instead of arriving as
 -- a bare filename with a black tile.
 CREATE TABLE IF NOT EXISTS civitai_installs (
-    source     TEXT PRIMARY KEY,               -- the download URL handed to InvokeAI
-    model_id   INTEGER NOT NULL,
-    version_id INTEGER NOT NULL,
-    created_at INTEGER NOT NULL
+    source      TEXT PRIMARY KEY,               -- the download URL handed to InvokeAI
+    model_id    INTEGER NOT NULL,
+    version_id  INTEGER NOT NULL,
+    created_at  INTEGER NOT NULL,
+    replace_key TEXT NOT NULL DEFAULT ''        -- an older record to delete once this one is in (an update)
 );
 
 -- media_fts was an FTS5 table for title/tags/notes that nothing ever wrote a row to

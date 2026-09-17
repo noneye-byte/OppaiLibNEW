@@ -16,28 +16,61 @@ const (
 // Media is the API-facing view. Encrypted DB fields (title, notes, source) are
 // decrypted before serialization by the handler layer.
 type Media struct {
-	ID        int64     `json:"id"`
-	Kind      MediaKind `json:"kind"`
-	SHA256    string    `json:"sha256"`
-	Size      int64     `json:"size"`
-	Title     string    `json:"title"`
-	Notes     string    `json:"notes,omitempty"`
+	ID     int64     `json:"id"`
+	Kind   MediaKind `json:"kind"`
+	SHA256 string    `json:"sha256"`
+	Size   int64     `json:"size"`
+	Title  string    `json:"title"`
+	Notes  string    `json:"notes,omitempty"`
 	// Description is the vision model's prose about the picture (or a hand-written
 	// one). Carried on a single item, not on list pages.
-	Description string `json:"description,omitempty"`
-	Source      string `json:"source,omitempty"`
-	Rating    int       `json:"rating"`
-	Favorite  bool      `json:"favorite"`
-	Duration  float64   `json:"duration,omitempty"`
-	Width     int       `json:"width,omitempty"`
-	Height    int       `json:"height,omitempty"`
-	PageCount int       `json:"pageCount,omitempty"`
-	HasThumb  bool      `json:"hasThumb,omitempty"`
-	Download  string    `json:"download,omitempty"` // external download URL (games)
-	Gallery   []string  `json:"gallery,omitempty"`  // screenshot URLs (games)
-	Tags      []Tag     `json:"tags,omitempty"`
-	CreatedAt int64     `json:"createdAt"`
-	UpdatedAt int64     `json:"updatedAt"`
+	Description string   `json:"description,omitempty"`
+	Source      string   `json:"source,omitempty"`
+	Rating      int      `json:"rating"`
+	Favorite    bool     `json:"favorite"`
+	Duration    float64  `json:"duration,omitempty"`
+	Width       int      `json:"width,omitempty"`
+	Height      int      `json:"height,omitempty"`
+	PageCount   int      `json:"pageCount,omitempty"`
+	HasThumb    bool     `json:"hasThumb,omitempty"`
+	Download    string   `json:"download,omitempty"` // external download URL (games)
+	Gallery     []string `json:"gallery,omitempty"`  // screenshot URLs (games)
+	// Remote and Launchy are carried on a single game: where it came from and what
+	// the site last said, and the desktop launcher's side of it. Absent on list pages.
+	Remote    *GameRemote  `json:"remote,omitempty"`
+	Launchy   *GameLaunchy `json:"launchy,omitempty"`
+	Tags      []Tag        `json:"tags,omitempty"`
+	CreatedAt int64        `json:"createdAt"`
+	UpdatedAt int64        `json:"updatedAt"`
+}
+
+// GameRemote is where a game came from — an itch.io page or an F95zone thread —
+// and what the site said about it the last time anyone looked. KnownVersion is
+// what the user has; LatestVersion is what the site reports; HasUpdate is the two
+// compared leniently (see gamesites.HasUpdate).
+type GameRemote struct {
+	Site          string `json:"site"`
+	Label         string `json:"label"`
+	ID            string `json:"id,omitempty"`
+	URL           string `json:"url"`
+	KnownVersion  string `json:"knownVersion"`
+	LatestVersion string `json:"latestVersion"`
+	Changelog     string `json:"changelog,omitempty"`
+	CheckedAt     int64  `json:"checkedAt"`
+	UpdateSeenAt  int64  `json:"updateSeenAt,omitempty"`
+	HasUpdate     bool   `json:"hasUpdate"`
+}
+
+// GameLaunchy is the desktop launcher's side of a game: that it is installed on
+// the PC, how long it has been played there, and which launcher entry it is.
+type GameLaunchy struct {
+	LaunchyID   string `json:"launchyId"`
+	Installed   bool   `json:"installed"`
+	Version     string `json:"version,omitempty"`
+	PlaySeconds int64  `json:"playSeconds"`
+	LastPlayed  int64  `json:"lastPlayed,omitempty"`
+	LaunchCount int64  `json:"launchCount"`
+	UpdatedAt   int64  `json:"updatedAt"`
 }
 
 type Tag struct {

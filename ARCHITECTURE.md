@@ -88,6 +88,13 @@ library bundled in the image; there is no second service to orchestrate.
    about the picture, encrypted like a note (`api/vision_describe.go`)
 - `tags(id, name, category)` and `media_tags(media_id, tag_id, source)`
    (`source ∈ {manual, ai, scrape}`)
+- `game_remote(game_id, site, ref_enc, known_version, latest_version, changelog_enc,
+   checked_at, update_seen_at)` — where a game came from and what the site last said.
+   The page URL and the site's id for the game are encrypted (a thread number names
+   the game as surely as its title does); the version strings are not, so an update
+   sweep compares them without decrypting every row
+- `game_launchy(game_id, launchy_id, installed, version, play_seconds, last_played,
+   launch_count, updated_at)` — the desktop launcher's side of a game
 - `collections(id, name)` and `collection_items(collection_id, media_id, position)`
 - `progress(user_id, media_id, position, updated_at)` — watch/read progress
 - `scrape_jobs`, `ai_jobs` — background job queue
@@ -177,11 +184,13 @@ The repo layout in §5 is the skeleton; the parts of the tree it does not mentio
 | Image generation | `internal/imagegen/`, `api/handlers_imagegen.go` | A1111/InvokeAI/ComfyUI clients, the outfit studio, the gallery |
 | Voice | `internal/tts/piper.go` | local Piper TTS |
 | Vision | `internal/vision/`, `api/vision_describe.go` | a local multimodal LLM describes pictures and clips in prose |
-| Civitai | `api/handlers_civitai.go`, `api/civitai_installs.go` | the catalogue browser, and the studio's models matched to it by hash |
+| Civitai | `api/handlers_civitai.go`, `api/civitai_installs.go`, `api/civitai_manage.go`, `api/civitai_account.go` | the catalogue browser; the studio's models matched to it by hash, updated to newer versions, given a chosen cover, or deleted; the account page's feeds |
 | Sources | `internal/sources/` | browsable catalogues (rule34, 4chan, YAML-defined sites) |
 | Discord | `internal/discord/` | relay |
 | Passkeys | `api/handlers_passkeys.go` | WebAuthn alongside passwords |
 | Games | `api/handlers_webgame.go`, `api/handlers_game_saves.go` | browser-playable builds, save backups |
+| Game sites | `internal/gamesites/`, `api/handlers_games.go` | itch.io and F95zone as game catalogues: signed-in browsing, adding, and "has this been updated?" |
+| Launchy | `api/handlers_launchy.go` | the desktop launcher's pairing: library sync, save bundles, and launch requests it polls for |
 
 ## 7. Decisions that changed
 
@@ -199,6 +208,14 @@ outlives the change:
   the tags worth offering as filter chips.
 - **Collections and progress were schema-only.** Both tables existed from the start
   with no API and no UI. They are wired up now — see `docs/API.md`.
+- **The game sites are not `sources.Source`s.** A `sources.Source` is a feed of media
+  the client streams through the proxy, and a game listing is neither streamable nor a
+  picture — what it needs is a search with a sort, cards that say which games are
+  already on the shelf, and a page read that answers "is there a newer version than
+  mine?". So itch.io and F95zone are their own package (`internal/gamesites`), and the
+  scraper still owns turning one of their URLs into a library entry. The parsing is a
+  port of the desktop launcher's, kept in step so both ends of the pairing read a page
+  the same way.
 - **The image is not ~20 MB.** §1's justification for Go still holds, but the shipped
   image carries ffmpeg, the ONNX runtime, Piper and ~68 MB of Libby's artwork embedded
   in the binary. There is a lean image variant for boxes that do not want all of it.

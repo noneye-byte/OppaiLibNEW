@@ -4144,6 +4144,34 @@ export class OppaiImageGen extends LitElement {
     }
   }
 
+  /** Removes the model from InvokeAI — file included when InvokeAI manages it
+   *  (an install from Civitai is) — and drops it from the form if it was picked. */
+  private async deleteMetaModel() {
+    const d = this.metaDraft;
+    if (!d || this.metaBusy) return;
+    const what = d.type === "lora" ? "LoRA" : "model";
+    if (!confirm(`Delete the ${what} “${d.name}” from InvokeAI? The file goes with it.`)) return;
+    this.metaBusy = true;
+    try {
+      await api.deleteModel(d.key);
+      this.metaDraft = null;
+      if (d.type === "lora") {
+        const next = { ...this.selectedLoras };
+        delete next[d.name];
+        delete next[d.key];
+        this.selectedLoras = next;
+      } else if (this.checkpoint === d.key) {
+        this.checkpoint = "";
+      }
+      this.showToast(`${what} deleted`);
+      await this.loadStatus();
+    } catch (e) {
+      this.showToast((e as Error).message);
+    } finally {
+      this.metaBusy = false;
+    }
+  }
+
   private toggleLora(name: string) {
     const next = { ...this.selectedLoras };
     if (name in next) {
@@ -4485,6 +4513,8 @@ export class OppaiImageGen extends LitElement {
                 </div>
               `}
           <div class="dialog-actions">
+            <button class="btn danger" ?disabled=${this.metaBusy} title="Remove from InvokeAI, file included"
+              @click=${() => this.deleteMetaModel()}>Delete</button>
             <button class="btn" @click=${() => (this.metaDraft = null)}>Cancel</button>
             <button class="btn primary" ?disabled=${this.metaBusy || !d.name.trim()} @click=${() => this.saveMeta()}>
               Save

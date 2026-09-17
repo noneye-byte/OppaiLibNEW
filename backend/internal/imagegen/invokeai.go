@@ -624,6 +624,25 @@ func (c *Client) invokeInstallModel(ctx context.Context, base, source string) (*
 	return &job, nil
 }
 
+func (c *Client) invokeDeleteModel(ctx context.Context, base, key string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, base+"/api/v2/models/i/"+url.PathEscape(key), nil)
+	if err != nil {
+		return err
+	}
+	resp, err := c.hc.Do(req)
+	if err != nil {
+		return fmt.Errorf("image generator unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return fmt.Errorf("InvokeAI has no such model")
+	}
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return fmt.Errorf("InvokeAI returned %d deleting the model", resp.StatusCode)
+	}
+	return nil
+}
+
 func (c *Client) invokeInstallJobs(ctx context.Context, base string) ([]InstallJob, error) {
 	var raw []invokeInstallJobRaw
 	if err := c.getJSON(ctx, base+"/api/v2/models/install", &raw); err != nil {
@@ -642,11 +661,22 @@ func (c *Client) invokeLoras(ctx context.Context, base string) ([]Lora, error) {
 		return nil, err
 	}
 	out := []Lora{}
+	// A LoRA is picked by its Name everywhere — the generate call, the thumbnail,
+	// the record editor — so two records sharing a name are indistinguishable and,
+	// worse, a list keyed by name breaks (the phone crashed on exactly that). InvokeAI
+	// allows the collision: a re-download, or two files it normalised to one name.
+	// The second such record goes by its key instead, which every lookup also
+	// accepts, and keeps the display name as its alias.
+	seen := map[string]bool{}
 	for _, r := range records {
 		if r.Type != "lora" {
 			continue
 		}
 		lora := Lora{Name: r.Name, Alias: r.Name, Path: r.Key, Hash: r.Hash, Base: r.Base, TriggerPhrases: r.TriggerPhrases}
+		if seen[r.Name] || r.Name == "" {
+			lora.Name = r.Key
+		}
+		seen[r.Name] = true
 		if r.DefaultSettings != nil && r.DefaultSettings.Weight != nil {
 			lora.Weight = *r.DefaultSettings.Weight
 		}

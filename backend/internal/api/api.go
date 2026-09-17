@@ -15,13 +15,14 @@ import (
 	"github.com/youruser/oppailib/internal/ai"
 	"github.com/youruser/oppailib/internal/config"
 	"github.com/youruser/oppailib/internal/db"
+	"github.com/youruser/oppailib/internal/gamesites"
 	"github.com/youruser/oppailib/internal/imagegen"
-	"github.com/youruser/oppailib/internal/tts"
 	"github.com/youruser/oppailib/internal/obs"
 	"github.com/youruser/oppailib/internal/scraper"
 	"github.com/youruser/oppailib/internal/settings"
 	"github.com/youruser/oppailib/internal/sources"
 	"github.com/youruser/oppailib/internal/storage"
+	"github.com/youruser/oppailib/internal/tts"
 	oweb "github.com/youruser/oppailib/internal/web"
 )
 
@@ -49,8 +50,8 @@ type Server struct {
 	// per call); genCache holds just-generated images in memory so they can be
 	// previewed and saved without ever touching disk — the "don't save unless asked"
 	// rule. Model and LoRA cover art always lives in InvokeAI itself.
-	imagegen     *imagegen.Client
-	genCache     *genCache
+	imagegen *imagegen.Client
+	genCache *genCache
 	// genJobs are the generations in flight, by the id the studio gave them, so a
 	// poll can read their progress and a click can cancel one. See imagegen_jobs.go.
 	genJobs *genJobs
@@ -139,6 +140,14 @@ type Server struct {
 	// can name something from any depth of the collection rather than only from the
 	// newest rows. Built lazily on her first lookup. See chat_library_index.go.
 	library *libraryIndex
+
+	// The Games tab's itch.io and F95zone browsers, their signed-in sessions, and the
+	// update sweep over every game that came from one. See handlers_games.go.
+	games       *gamesites.Client
+	gameUpdates *gameUpdateSweep
+	// The desktop launcher's connection: when it last checked in, what it is running,
+	// and the launch requests waiting for it. See handlers_launchy.go.
+	launchy *launchyRuntime
 }
 
 const (
@@ -184,9 +193,9 @@ func NewServer(cfg *config.Config, database *db.DB, store *storage.Store, sc *sc
 		login:      newLoginGuard(),
 		ceremonies: newCeremonyStore(),
 
-		imagegen:     imagegen.New(),
-		genCache:     newGenCache(),
-		genJobs:      newGenJobs(),
+		imagegen: imagegen.New(),
+		genCache: newGenCache(),
+		genJobs:  newGenJobs(),
 		speaker: tts.NewSpeaker(
 			tts.FindPiper(cfg.TTSPiper, dirOr(cfg.TTSVoiceDir, filepath.Join(cfg.ConfigDir, "tts")), cfg.TTSBundledVoiceDir),
 			nil,
@@ -211,6 +220,20 @@ func NewServer(cfg *config.Config, database *db.DB, store *storage.Store, sc *sc
 
 		installedHashCache: newResolveCache[map[string]string](time.Minute),
 		describe:           newDescribeQueue(),
+
+		gameUpdates: &gameUpdateSweep{},
+		launchy:     newLaunchyRuntime(),
+	}
+	// The game sites share the scraper's guarded transport (SSRF dial guard, per-phase
+	// deadlines) but keep their own cookie jars: a signed-in F95zone session must not
+	// ride along on an unrelated scrape.
+	var base *http.Client
+	if sc != nil {
+		base = sc.HTTPClient()
+	}
+	s.games = gamesites.New(base, cfg.ScrapeUserAgent)
+	if set != nil {
+		s.applyGameSiteSettings(set.Get())
 	}
 	// A picture that has just been tagged is the moment to ask whether it is one of
 	// Libby. Registered here rather than inside the tagger because who Libby is, and
@@ -449,6 +472,7 @@ func (s *Server) Handler() http.Handler {
 	// are the same edits its model manager would make.
 	mux.HandleFunc("GET /api/imagegen/model", s.requireAuth(s.handleGetModelMeta))
 	mux.HandleFunc("PATCH /api/imagegen/model", s.requireAuth(s.handlePatchModelMeta))
+	mux.HandleFunc("DELETE /api/imagegen/model", s.requireAuth(s.handleDeleteModel))
 	// The InvokeAI gallery: browse the generator's own boards and images, stream
 	// them through the server, delete from them, or copy one into the library.
 	mux.HandleFunc("GET /api/imagegen/gallery/boards", s.requireAuth(s.handleGalleryBoards))
@@ -476,6 +500,10 @@ func (s *Server) Handler() http.Handler {
 	// catalogue's cover, description and trigger words. See civitai_installs.go.
 	mux.HandleFunc("GET /api/imagegen/civitai/installed", s.requireAuth(s.handleCivitaiInstalled))
 	mux.HandleFunc("POST /api/imagegen/civitai/sync", s.requireAuth(s.handleCivitaiSync))
+	mux.HandleFunc("POST /api/imagegen/civitai/cover", s.requireAuth(s.handleCivitaiCover))
+	mux.HandleFunc("POST /api/imagegen/civitai/update", s.requireAuth(s.handleCivitaiUpdate))
+	mux.HandleFunc("GET /api/imagegen/civitai/posts", s.requireAuth(s.handleCivitaiPosts))
+	mux.HandleFunc("GET /api/imagegen/civitai/collections", s.requireAuth(s.handleCivitaiCollections))
 
 	// Libby outfits: user-made wardrobes for the mascot, one image per emotion.
 	// Which outfit is worn is a per-device choice; the server only stores the art.
@@ -586,6 +614,35 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/media/{id}/saves", s.requireAuth(s.handleUploadGameSave))
 	mux.HandleFunc("GET /api/media/{id}/saves/{save}", s.requireAuth(s.handleDownloadGameSave))
 	mux.HandleFunc("DELETE /api/media/{id}/saves/{save}", s.requireAuth(s.handleDeleteGameSave))
+
+	// Where a game came from, and whether the site has moved on. The two catalogues
+	// are browsed signed in — see gamesites for why not otherwise. See handlers_games.go.
+	mux.HandleFunc("GET /api/games/sites", s.requireAuth(s.handleGameSites))
+	mux.HandleFunc("POST /api/games/sites/{site}/login", s.requireAuth(s.handleGameSiteLogin))
+	mux.HandleFunc("POST /api/games/sites/{site}/logout", s.requireAuth(s.handleGameSiteLogout))
+	mux.HandleFunc("GET /api/games/browse", s.requireAuth(s.handleGameBrowse))
+	mux.HandleFunc("POST /api/games/browse/detail", s.requireAuth(s.handleGameBrowseDetail))
+	mux.HandleFunc("POST /api/games/browse/add", s.requireAuth(s.handleGameBrowseAdd))
+	mux.HandleFunc("GET /api/games/updates", s.requireAuth(s.handleGameUpdates))
+	mux.HandleFunc("POST /api/games/updates/check", s.requireAuth(s.handleGameUpdatesCheck))
+	mux.HandleFunc("GET /api/media/{id}/remote", s.requireAuth(s.handleGetGameRemote))
+	mux.HandleFunc("PUT /api/media/{id}/remote", s.requireAuth(s.handlePutGameRemote))
+	mux.HandleFunc("DELETE /api/media/{id}/remote", s.requireAuth(s.handleDeleteGameRemote))
+	mux.HandleFunc("POST /api/media/{id}/remote/check", s.requireAuth(s.handleCheckGameRemote))
+	mux.HandleFunc("POST /api/media/{id}/remote/acknowledge", s.requireAuth(s.handleAcknowledgeGameRemote))
+	mux.HandleFunc("GET /api/media/{id}/sources", s.requireAuth(s.handleGameSources))
+
+	// The desktop launcher's pairing: its sync, its long poll for launch requests,
+	// and the button every other client gets because of it. See handlers_launchy.go.
+	mux.HandleFunc("GET /api/launchy", s.requireAuth(s.handleLaunchyStatus))
+	mux.HandleFunc("GET /api/launchy/commands", s.requireAuth(s.handleLaunchyCommands))
+	mux.HandleFunc("POST /api/launchy/commands/{cmd}", s.requireAuth(s.handleLaunchyCommandDone))
+	mux.HandleFunc("POST /api/launchy/launch", s.requireAuth(s.handleLaunchyLaunch))
+	mux.HandleFunc("GET /api/launchy/launch/{cmd}", s.requireAuth(s.handleLaunchyLaunchStatus))
+	mux.HandleFunc("GET /api/launchy/games", s.requireAuth(s.handleLaunchyGames))
+	mux.HandleFunc("POST /api/launchy/games", s.requireAuth(s.handleLaunchyCreateGame))
+	mux.HandleFunc("PUT /api/launchy/games/{id}", s.requireAuth(s.handleLaunchySyncGame))
+	mux.HandleFunc("DELETE /api/launchy/games/{id}", s.requireAuth(s.handleLaunchyUnpairGame))
 
 	// Playing an imported HTML5 game build in place. See handlers_webgame.go for why
 	// serving a game's own scripts from this origin is safe.
