@@ -546,11 +546,12 @@ func (c *Client) loginF95(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("F95zone could not be reached: %w", err)
 	}
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	landed := resp.Request.URL.String()
 	resp.Body.Close()
 
 	// XenForo sets xf_user on a successful sign-in; its absence means the
-	// credentials were rejected, or a two-step challenge got in the way.
+	// credentials were rejected, or a challenge got in the way.
 	u, _ := url.Parse(f95Origin + "/")
 	for _, ck := range jar.Cookies(u) {
 		if ck.Name == "xf_user" && ck.Value != "" {
@@ -558,8 +559,36 @@ func (c *Client) loginF95(ctx context.Context) error {
 			return nil
 		}
 	}
-	return errors.New("F95zone rejected the login — check the username and password, and that the account has no two-step verification")
+	// Two-step is not something a password can get past, and saying "check your
+	// password" to someone whose password was right is the least useful thing we
+	// could do — so it is named, along with the way in.
+	if strings.Contains(landed, "two-step") || strings.Contains(string(body), "two-step") {
+		return errors.New("that account has two-step verification, which a password alone cannot pass — sign in with the xf_user cookie instead")
+	}
+	// XenForo prints exactly what was wrong ("The requested user X could not be
+	// found", "Incorrect password"). Its sentence beats any guess of ours.
+	if said := f95LoginError(string(body)); said != "" {
+		return errors.New("F95zone says: " + said)
+	}
+	return errors.New("F95zone would not sign in, and did not say why — check the username and password")
 }
+
+// f95LoginError lifts the error XenForo prints above the login form.
+func f95LoginError(page string) string {
+	m := f95BlockError.FindStringSubmatch(page)
+	if m == nil {
+		return ""
+	}
+	said := inlineText(m[1])
+	// The block also carries the form's own furniture when the markup shifts;
+	// a paragraph is an explanation, a page is not.
+	if len(said) > 300 {
+		said = clampText(said, 300)
+	}
+	return said
+}
+
+var f95BlockError = regexp.MustCompile(`(?is)<div[^>]*class="[^"]*blockMessage--error[^"]*"[^>]*>(.*?)</div>`)
 
 // ItemFromURL reads a game page by address and returns it as a result, for adding
 // a game whose page the user pasted rather than found in a listing.

@@ -35,9 +35,11 @@ func TestGameSitesStartSignedOutAndBrowsingRefusesUntilSignedIn(t *testing.T) {
 		t.Fatalf("sorts missing: %+v", sites.Sorts)
 	}
 
+	// 409, not 401: a 401 would sign the user out of OppaiLib itself. See
+	// TestASiteRefusingNeverLooksLikeOurSessionEnding.
 	rec = do(t, h, token, http.MethodGet, "/api/games/browse?site=itch", "")
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("browsing signed out: %d %s, want 401", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("browsing signed out: %d %s, want 409", rec.Code, rec.Body.String())
 	}
 	rec = do(t, h, token, http.MethodGet, "/api/games/browse?site=steam", "")
 	if rec.Code != http.StatusBadRequest {
@@ -47,6 +49,36 @@ func TestGameSitesStartSignedOutAndBrowsingRefusesUntilSignedIn(t *testing.T) {
 	rec = do(t, h, token, http.MethodPost, "/api/games/sites/itch/login", `{"cookie":"itchio_token=abc"}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("guest cookie: %d %s, want 400", rec.Code, rec.Body.String())
+	}
+}
+
+// A 401 from anywhere makes the web client drop the session and sign the user out
+// ("Your session ended. Please sign in again."). So none of these endpoints may
+// answer one for a *site's* refusal: mistyping an F95zone password used to throw
+// you out of your own library.
+func TestASiteRefusingNeverLooksLikeOurSessionEnding(t *testing.T) {
+	s, token := newTestServer(t)
+	h := s.Handler()
+
+	cases := []struct{ method, path, body string }{
+		{http.MethodGet, "/api/games/browse?site=itch", ""},
+		{http.MethodGet, "/api/games/browse?site=f95", ""},
+		{http.MethodPost, "/api/games/sites/itch/login", `{"cookie":"itchio_token=guestonly"}`},
+		{http.MethodPost, "/api/games/sites/f95/login", `{"username":"","password":""}`},
+		{http.MethodPost, "/api/games/browse/detail", `{"item":{"url":"https://f95zone.to/threads/1/"}}`},
+	}
+	for _, c := range cases {
+		rec := do(t, h, token, c.method, c.path, c.body)
+		if rec.Code == http.StatusUnauthorized {
+			t.Fatalf("%s %s answered 401, which signs the user out of OppaiLib", c.method, c.path)
+		}
+		if rec.Code < 400 {
+			continue
+		}
+		// Whatever it answers, it has to say something the user can act on.
+		if !strings.Contains(rec.Body.String(), "error") {
+			t.Fatalf("%s %s answered %d with no message: %s", c.method, c.path, rec.Code, rec.Body.String())
+		}
 	}
 }
 

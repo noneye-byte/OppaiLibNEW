@@ -156,7 +156,7 @@ func (s *Server) handleGameSiteLogin(w http.ResponseWriter, r *http.Request) {
 		}
 		acct := s.games.Account(ctx, site)
 		if !acct.SignedIn {
-			writeErr(w, http.StatusUnauthorized, site.Label()+" did not accept that cookie — it may have expired")
+			writeErr(w, http.StatusBadGateway, site.Label()+" did not accept that cookie — it may have expired")
 			return
 		}
 		if site == gamesites.Itch {
@@ -166,7 +166,12 @@ func (s *Server) handleGameSiteLogin(w http.ResponseWriter, r *http.Request) {
 		}
 	default:
 		if err := s.games.Login(ctx, site, req.Username, req.Password); err != nil {
-			writeErr(w, http.StatusUnauthorized, err.Error())
+			// Deliberately not 401. The client treats a 401 from anywhere as "your
+			// OppaiLib session has ended" and signs the user out on the spot — which
+			// is what a rejected *F95zone* password used to do, throwing you out of
+			// your own library for mistyping someone else's. This is an upstream
+			// refusal, and it is reported as one.
+			writeErr(w, http.StatusBadGateway, err.Error())
 			return
 		}
 		cur.F95Username, cur.F95Password = strings.TrimSpace(req.Username), req.Password
@@ -253,7 +258,9 @@ func (s *Server) handleGameBrowse(w http.ResponseWriter, r *http.Request) {
 		NSFW:  s.settings.Get().ItchNSFW,
 	})
 	if errors.Is(err, gamesites.ErrSignedOut) {
-		writeErr(w, http.StatusUnauthorized, "sign in to "+site.Label()+" to browse it")
+		// 409, not 401 — see handleGameSiteLogin. A site we are not signed in to is
+		// a precondition of this request, not a statement about the caller's session.
+		writeErr(w, http.StatusConflict, "sign in to "+site.Label()+" to browse it")
 		return
 	}
 	if err != nil {
