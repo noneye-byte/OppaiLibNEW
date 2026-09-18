@@ -182,7 +182,16 @@ func (s *Server) handleGameSiteLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	s.settings.Set(cur)
 	s.scraper.SetF95Credentials(cur.F95Username, cur.F95Password)
-	writeJSON(w, http.StatusOK, s.games.Account(ctx, site))
+	// A sign-in that was accepted and then does not read as signed in is still a
+	// failure, and answering 200 with signedIn:false made it an invisible one: the
+	// form simply stayed where it was, with nothing said. Say it instead — the
+	// credentials are kept either way, so the next read can try renewing them.
+	acct := s.games.Account(ctx, site)
+	if !acct.SignedIn {
+		writeErr(w, http.StatusBadGateway, site.Label()+" took the sign-in but still serves us as a guest — the session did not stick")
+		return
+	}
+	writeJSON(w, http.StatusOK, acct)
 }
 
 func (s *Server) handleGameSiteLogout(w http.ResponseWriter, r *http.Request) {

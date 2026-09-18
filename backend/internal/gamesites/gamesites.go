@@ -404,10 +404,7 @@ func (c *Client) Account(ctx context.Context, site Site) Account {
 	return acct
 }
 
-var (
-	itchUserName = regexp.MustCompile(`(?i)<span[^>]*\sclass="[^"]*\buser_name\b[^"]*"[^>]*>([\s\S]{1,80}?)</span>`)
-	f95UserName  = regexp.MustCompile(`(?i)<span[^>]*\sclass="[^"]*\bp-navgroup-user-linkText\b[^"]*"[^>]*>([\s\S]{1,80}?)</span>`)
-)
+var itchUserName = regexp.MustCompile(`(?i)<span[^>]*\sclass="[^"]*\buser_name\b[^"]*"[^>]*>([\s\S]{1,80}?)</span>`)
 
 // probe reads a page only a member can see and reports whether the site let us.
 func (c *Client) probe(ctx context.Context, site Site) (user string, signedIn bool, err error) {
@@ -433,11 +430,8 @@ func (c *Client) probe(ctx context.Context, site Site) (user string, signedIn bo
 		if status != http.StatusOK || strings.Contains(final, "/login") {
 			return "", false, nil
 		}
-		if m := f95UserName.FindStringSubmatch(body); m != nil {
-			return inlineText(m[1]), true, nil
-		}
-		// The page came back, but the member menu is not on it: a guest view.
-		return "", strings.Contains(body, "p-navgroup-user-linkText") || strings.Contains(body, "/logout/"), nil
+		user, signedIn := f95Visitor(body)
+		return user, signedIn, nil
 	}
 	return "", false, fmt.Errorf("unknown site %q", site)
 }

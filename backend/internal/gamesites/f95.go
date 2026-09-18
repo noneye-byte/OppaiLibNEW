@@ -483,6 +483,40 @@ func (c *Client) reportF95(ctx context.Context, threadURL string) (*Report, erro
 
 /* --------------------------------------------------------------- the login */
 
+// f95Visitor reads the account block in the page header and reports who, if
+// anyone, the site thinks is reading. XenForo renders that one block two ways —
+// `p-navgroup--guest` for a visitor, `p-navgroup--member` with a link to
+// /account/ for a member — so it answers the question exactly, on any page.
+//
+// It used to look for a class named "p-navgroup-user-linkText", which XenForo has
+// never emitted and f95zone.to's own stylesheets do not contain. The match
+// therefore never fired, and neither did the "/logout/" fallback behind it: XF2
+// fetches the visitor menu that holds the logout link only when it is opened, so
+// it is not in the page either. Signing in then went like this — the password was
+// accepted, the session cookie arrived, and the probe immediately reported a
+// guest, so Account threw the fresh session away and answered "signed out" with
+// no error anywhere. The Games tab did nothing at all, which is the hardest kind
+// of bug to report.
+func f95Visitor(page string) (user string, signedIn bool) {
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(page))
+	if err != nil {
+		return "", false
+	}
+	if doc.Find(".p-navgroup--member, a.p-navgroup-link--user").Length() == 0 {
+		return "", false
+	}
+	// The name lives in the link's own label. The avatar beside it is a span of
+	// initials when the account has no picture, so it is removed rather than read
+	// along with the name.
+	link := doc.Find("a.p-navgroup-link--user").First().Clone()
+	link.Find(".avatar").Remove()
+	name := inlineText(link.Find(".p-navgroup-linkText").First().Text())
+	if name == "" {
+		name = inlineText(link.Text())
+	}
+	return name, true
+}
+
 // loginF95 performs the XenForo login: read the CSRF token off the login page,
 // post the credentials, keep the session cookies. Its own jar over the shared
 // transport, so cookies set across the login redirect are captured.

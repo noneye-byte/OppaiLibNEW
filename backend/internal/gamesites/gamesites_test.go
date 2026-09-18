@@ -221,3 +221,48 @@ func TestHasUpdateComparesLeniently(t *testing.T) {
 		t.Fatal("a different build is an update")
 	}
 }
+
+// The account block in the F95zone header, as the live site serves it: the same
+// element, rendered --guest or --member. The guest half carries p-navgroup-linkText
+// spans of its own ("Log in", "Register"), which is why the member test cannot be
+// a search for that class alone.
+const (
+	f95GuestNav = `<div class="p-navgroup p-account p-navgroup--guest">
+		<a href="/login/" class="p-navgroup-link p-navgroup-link--textual p-navgroup-link--logIn" data-xf-click="menu"><i></i>
+			<span class="p-navgroup-linkText">Log in</span></a>
+		<a href="/login/register" class="p-navgroup-link p-navgroup-link--textual p-navgroup-link--register"><i></i>
+			<span class="p-navgroup-linkText">Register</span></a>
+	</div>`
+	f95MemberNav = `<div class="p-navgroup p-account p-navgroup--member">
+		<a href="/account/" class="p-navgroup-link p-navgroup-link--user" data-xf-click="menu">
+			<span class="avatar avatar--xxs avatar--default"><span class="avatar-u42-s">O</span></span>
+			<span class="p-navgroup-linkText">Owen</span></a>
+		<div class="menu" data-menu="menu" aria-hidden="true" data-href="/account/visitor-menu"></div>
+	</div>`
+)
+
+func TestF95TellsAMemberFromAGuestByTheAccountBlock(t *testing.T) {
+	if user, in := f95Visitor(`<html><body>` + f95GuestNav + `</body></html>`); in || user != "" {
+		t.Fatalf("a guest read as signed in: user=%q", user)
+	}
+	user, in := f95Visitor(`<html><body>` + f95MemberNav + `</body></html>`)
+	if !in {
+		t.Fatal("a member read as a guest")
+	}
+	// The avatar beside the name is a span of initials when the account has no
+	// picture; reading the link whole used to hand back "OOwen".
+	if user != "Owen" {
+		t.Fatalf("username %q", user)
+	}
+}
+
+// The logout link is not evidence either way: XF2 fetches the visitor menu that
+// holds it only when the menu is opened, so a signed-in page does not contain one.
+func TestF95SignedInWithoutALogoutLinkStillReadsAsSignedIn(t *testing.T) {
+	if _, in := f95Visitor(`<html><body>` + f95MemberNav + `</body></html>`); !in {
+		t.Fatal("wanted signed in")
+	}
+	if strings.Contains(f95MemberNav, "/logout/") {
+		t.Fatal("the fixture should not lean on a logout link")
+	}
+}
