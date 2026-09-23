@@ -11,6 +11,9 @@ from **Settings → Libby chat**, or set a startup default:
 OPPAI_CHAT_URL=http://192.168.1.10:5000/v1
 # Optional fallback for generic OpenAI-compatible servers:
 OPPAI_CHAT_MODEL=your-local-model-name
+# The window she may fill, in tokens. 0 (the default) asks the loader what it
+# allocated — which only text-generation-webui answers. See "How much card" below.
+OPPAI_CHAT_CONTEXT=0
 ```
 
 The URL may be the server root or its `/v1` base; OppaiLib normalizes it before
@@ -23,17 +26,54 @@ Conversation history stays in the current web/Android screen and is sent only to
 that configured endpoint.
 
 **Which model.** Libby is a text-protocol workload — a dozen-odd silent tags
-(`[mood:]`, `[link:]`, `[send:]`, `[remember:]`, `[want:]`, …) that a small model
-has to keep obeying inside an 8K window — so instruction-following matters more
-than prose. On an 8 GB card the recommended pick is an **abliterated Qwen3.5‑9B**
-at `Q4_K_M` (~5.6 GB, text-only build; the chat model never receives images, shared
-photos reach it as the local tagger's words). A Mistral‑Nemo‑12B roleplay merge at
-`IQ4_XS` trades some obedience for a better voice. Reasoning models are told not to
-think: every request carries `enable_thinking: false` (text-generation-webui) and
-`chat_template_kwargs.enable_thinking: false` (llama.cpp server, vLLM), and a
-`<think>` block that leaks anyway is stripped before the reply is parsed, so no
-loader-side switch is required. Libby's Sweet, Playful, Bold, and Roleplay modes change
-the local system prompt; the latter modes permit consensual adult NSFW chat.
+(`[mood:]`, `[link:]`, `[send:]`, `[remember:]`, `[want:]`, …) that the model has to
+keep obeying at the end of every reply — so instruction-following matters at least as
+much as prose. Two further things narrow the field more than raw benchmark scores do:
+
+- **The chat template needs a real system role.** Her card, the tag protocol and the
+  folded-history digest are system messages, and the card is deliberately a
+  byte-identical prefix so the backend can cache it. A template with no system role —
+  Gemma's, notably — has the loader fold it into the first user turn, which loses both
+  the separation and the cache. Prefer ChatML or Mistral-style templates.
+- **Seeing is a bonus, not a requirement.** A text-only build works: shared photos reach
+  her as the local tagger's words. But most of the 24B–32B models a 32 GB card runs can
+  see — Mistral-Small-3.2, Gemma 3, the Qwen-VL family — and with the projector loaded
+  (llama.cpp's `mmproj`) she looks at the picture itself. See "Her own eyes" below.
+
+Reasoning models are told not to think: every request carries `enable_thinking: false`
+(text-generation-webui) and `chat_template_kwargs.enable_thinking: false` (llama.cpp
+server, vLLM), and a `<think>` block that leaks anyway is stripped before the reply is
+parsed, so no loader-side switch is required. Libby's Sweet, Playful, Bold, and Roleplay
+modes change the local system prompt; the latter modes permit consensual adult NSFW chat.
+
+**How much card.** The picks below assume the LLM has the card mostly to itself. Quantise
+the KV cache to `q8_0` (llama.cpp) or `q8` (ExLlama) rather than leaving it at fp16 —
+it halves the cache for no difference anyone has been able to measure, and on a 32 GB
+card that is the difference between an 8K window and a 32K one.
+
+| Card | Model | Quant | Context | Why |
+|------|-------|-------|---------|-----|
+| **8 GB** | abliterated **Qwen3.5‑9B** | `Q4_K_M` (~5.6 GB) | 8K | The obedience-per-gigabyte pick. A Mistral‑Nemo‑12B roleplay merge at `IQ4_XS` trades some of it for a better voice. |
+| **16 GB** | a **12B–14B** roleplay merge | `Q6_K` | 16K | Where prose starts being worth the swap, with room for a long evening. |
+| **32 GB** | **Mistral‑Small‑3.2‑24B‑Instruct**, abliterated or RP‑tuned | `Q6_K` (~19.5 GB) | **32K** (~3 GB at `q8_0`) | **The recommended pick.** Mistral's template has a proper system role, a 24B at Q6 is past the quantisation damage that makes smaller models drop tags, and it can see: load its `mmproj` and she looks at your photos herself (≈0.9 GB more). |
+| 32 GB, alt | **Qwen3‑32B** abliterated | `Q4_K_M` (~20 GB) | 32K (~4 GB at `q8_0`) | More obedient on the tag protocol, drier in a scene. Take this one if she is losing `[send:]` and `[remember:]` rather than sounding flat. |
+
+What *not* to spend 32 GB on: a 70B at `IQ2`, where the quantisation costs more than the
+parameters buy and the tags start going missing; a large MoE, which spends the card on
+weights it is not using per token; and anything under 24B, which simply leaves the card
+idle. Set **Settings → Libby chat → Model size** to *Large* (or leave it on Auto, which
+reads the parameter count out of the model's name) — it eases the repetition penalty the
+7B presets rely on and lets a scene run longer. See `chat_model_tier.go` for what that
+changes and what it deliberately does not.
+
+**The window.** OppaiLib fits every turn into a stated window and reports what it had to
+leave out; the number it fits into is `Settings → Libby chat → Context window`. At `0`
+it asks the loader — `n_ctx`, `max_seq_len`, `max_model_len` — and follows the answer up
+to 32K. Only text-generation-webui answers that question: **llama.cpp server, LM Studio
+and Ollama expose no such endpoint**, so on those the setting is the only way to tell her
+she has room, and leaving it at 0 quietly runs a 32 GB card at the 8 GB assumption. Never
+set it above what the model was actually loaded with — past that the backend truncates
+the *front* of the prompt, which is her character card.
 
 **How the window is spent.** The prompt is built for the turn, not copied from a
 template. Her card and the tag protocol are fixed; everything else is a ranked,
@@ -283,6 +323,71 @@ state something about yourself in so many words — your name, where you live, w
 you do, what you love or hate, a line not to cross — it is kept whether or not she
 wrote the tag, and if you ask what she remembers about you, she tells you.
 
+### Her own eyes
+
+**Settings → Libby chat → Her eyes** (Auto / On / Off). When her model can see, the photo
+you send her, the picture you are asking about, and a library item you attach go to her
+*as pictures* alongside your words, so "what do you think of my outfit" is answered about
+the outfit rather than from `1girl, skirt, standing`. Auto reads it off the model's name
+(`VL`, `Vision`, `Pixtral`, `Gemma-3`, `Mistral-Small-3.1/3.2`, …).
+
+- **The tags still ride along.** A backend that accepts an image and silently drops it
+  (a GGUF loaded without its `mmproj`) would otherwise leave her told she can see and
+  seeing nothing, which is how a model invents a picture. She is told the picture wins
+  where it and the tags disagree.
+- **A refusal is survivable.** If the backend errors on an image, the turn is sent again
+  without it and without the "you can see" line, and that model is remembered as blind for
+  half an hour — so leaving Auto on costs at most one failed request.
+- **Only this turn's pictures are sent**, at 896px on the long side, budgeted at ~1,100
+  tokens each and capped at a quarter of the window: one on an 8K window, six on 32K.
+  Earlier pictures stay described in words, which keeps the front of the prompt
+  byte-identical and so cacheable. A video is shown as its poster, not sampled — sampling
+  decodes the whole clip, which is minutes, and someone is waiting for the reply.
+
+### Sharing one card
+
+**Settings → Libby chat → Sharing the graphics card.** *Both loaded* (the default) leaves
+her model and the image generator side by side, which is right when they fit. *Swap* is
+for when they do not: before a picture is generated her chat model is unloaded, and once
+the generator has been idle for a minute it is asked to let go of its checkpoint (InvokeAI
+empties its model cache; Automatic1111 unloads and is asked to reload before the next
+run) and her model is loaded back **with the loader arguments it was last loaded with from
+OppaiLib** — so set context, cache type and GPU layers once on the models page and they
+survive every swap.
+
+The idle minute is what keeps a sixty-square outfit run from reloading her between every
+square. A chat message during that minute skips the rest of it; while she is parked the
+chat screen says she has lent the card to the generator rather than reporting the backend
+as down. Swap needs text-generation-webui (the backend that can load and unload over its
+API), never interrupts a load someone started by hand, and a server restarted mid-swap
+hands the card back on startup. Loading a different model by hand cancels a pending
+hand-back, so the model you chose is the one that ends up on the card.
+
+### Looking after the server
+
+Ask her how the server is doing — the box, the drives, the backlog, the model, the card —
+and she is told: version and uptime, free space on the media and database drives, uploads
+in flight, the tagger, how many items still have no description and whether they are being
+worked through, the model she is running on (tier, window, whether she can see), the other
+chat models on disk, the generator and whether it currently has the card, and her voice.
+That snapshot is only gathered on turns about the server, on a three-second deadline.
+
+On every other turn only the drives are checked (a local call, nothing on the network), and
+only a drive at 92% or fuller is mentioned — once, lightly, the way someone who lives there
+would bring it up.
+
+To an **admin**, on a server turn, she can also offer:
+
+| tag | card | what Allow does |
+|-----|------|-----------------|
+| `[do: load <model>]` | Load a different chat model | loads a model the backend listed (never one she named from memory), with its remembered loader arguments, in the background |
+| `[do: cleanup]` | Clean up storage | clears abandoned uploads and scratch — the same as the Storage page's cleanup |
+| `[do: describe]` | Describe the library | starts the vision model's backfill over everything without a description |
+| `[do: free card]` | Free the graphics card | asks the generator to let go of its checkpoint |
+
+`/api/libby/act` checks the admin flag again for all four and answers a non-admin with 403
+— the offer is only made to an admin, but the offer is a string a model wrote.
+
 ## Image generation
 
 The Create tab drives a local image generator, configured by URL under
@@ -345,7 +450,7 @@ OPPAI_VISION_MODEL=qwen2.5vl:7b
 Any OpenAI-compatible chat endpoint whose model accepts images works: Ollama or
 LM Studio with a llava, qwen-vl, minicpm-v or gemma3 build, llama.cpp server
 with an mmproj, vLLM. It is a separate endpoint from Libby's chat backend
-because her text model is picked for obedience inside an 8K window and is
+because her text model is picked for obedience to the tag protocol and is
 usually a text-only build. Frames are sent as base64 JPEGs downsized to 1024px;
 nothing leaves the LAN.
 

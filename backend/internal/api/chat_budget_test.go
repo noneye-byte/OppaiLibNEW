@@ -28,18 +28,49 @@ func TestEstimateTokens(t *testing.T) {
 	}
 }
 
-func TestEffectiveContextLimitTargetsEightKAndHonorsHardCaps(t *testing.T) {
-	if got := effectiveContextLimit(); got != 8192 {
+func TestASilentBackendFallsBackToTheEightKAssumption(t *testing.T) {
+	if got := effectiveContextLimit(0); got != 8192 {
 		t.Fatalf("unreported context = %d, want 8192", got)
 	}
-	if got := effectiveContextLimit(32768, 16384); got != 8192 {
-		t.Fatalf("roomy loader context = %d, want target 8192", got)
+	if got := effectiveContextLimit(0, 0, 999999); got != 8192 {
+		t.Fatalf("unbelievable reports changed the target to %d", got)
 	}
-	if got := effectiveContextLimit(4096, 32768); got != 4096 {
+}
+
+func TestARoomyLoaderIsFollowedRatherThanCappedAtEightK(t *testing.T) {
+	// The whole point of the 32 GB pass: a loader holding a 32K context used to be
+	// told to use 8K of it.
+	if got := effectiveContextLimit(0, 32768, 32768); got != 32768 {
+		t.Fatalf("roomy loader context = %d, want the 32768 it reported", got)
+	}
+	// And only so far — past autoContextCeiling the extra window is prefill nobody
+	// asked for. See the constant.
+	if got := effectiveContextLimit(0, 131072); got != autoContextCeiling {
+		t.Fatalf("very long loader context = %d, want %d", got, autoContextCeiling)
+	}
+}
+
+func TestTheSmallestReportedCeilingWins(t *testing.T) {
+	if got := effectiveContextLimit(0, 4096, 32768); got != 4096 {
 		t.Fatalf("hard-capped loader context = %d, want 4096", got)
 	}
-	if got := effectiveContextLimit(0, 999999); got != 8192 {
-		t.Fatalf("invalid reports changed target to %d", got)
+}
+
+func TestAPinnedWindowBeatsTheDefaultButNotTheLoader(t *testing.T) {
+	// Pinning is how a backend with no model/info endpoint — llama.cpp server, LM
+	// Studio, Ollama — is told it has room.
+	if got := effectiveContextLimit(24576); got != 24576 {
+		t.Fatalf("pinned window with a silent backend = %d, want 24576", got)
+	}
+	// Pinning more than the loader allocated does not create context; it makes the
+	// backend drop the character card off the front.
+	if got := effectiveContextLimit(65536, 16384); got != 16384 {
+		t.Fatalf("pin above the loader ceiling = %d, want 16384", got)
+	}
+	// Pinning less is honoured: a smaller window is a legitimate wish, usually to
+	// keep prefill quick.
+	if got := effectiveContextLimit(8192, 32768); got != 8192 {
+		t.Fatalf("pin below the loader ceiling = %d, want 8192", got)
 	}
 }
 

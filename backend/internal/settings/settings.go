@@ -71,6 +71,30 @@ type Settings struct {
 	ChatAPIKey    string `json:"chatApiKey"`
 	ChatAPIKeySet bool   `json:"chatApiKeySet"`
 	ChatEnabled   bool   `json:"chatEnabled"`
+	// ChatContextTokens is the window OppaiLib fits a turn into, in tokens.
+	//
+	// 0 means auto, and auto is what almost everyone should leave it on: the loader is
+	// asked how long a context it actually allocated and that number is used. The
+	// setting exists for the backends that cannot be asked — llama.cpp server, LM
+	// Studio and Ollama expose no such endpoint — where auto has to fall back to a
+	// conservative default, and a card with room to spare would otherwise never be
+	// told about it. See api.chatContextLimit.
+	ChatContextTokens int `json:"chatContextTokens"`
+	// ChatModelTier says how much slack her sampling is allowed: "small" for a 7B-to-
+	// 13B quant, "large" for a 24B and up, "" or "auto" to read it off the loaded
+	// model's name. The presets and their bounds were written for a 7B, where a heavy
+	// repetition penalty is what stops a loop; the same numbers on a 24B flatten the
+	// prose and cost her the protocol tags written at the end of it. See api.modelTier.
+	ChatModelTier string `json:"chatModelTier"`
+	// ChatVision says whether her own model can see: "on", "off", or "" to read it off
+	// the loaded model's name. When she can, a picture in the turn is sent to her as a
+	// picture rather than only as the tagger's words, and a backend that turns out not
+	// to take images is retried without them. See api.chatSeesPictures.
+	ChatVision string `json:"chatVision"`
+	// GPUShare is how the chat model and the image generator share one card: "" keeps
+	// both loaded, "swap" unloads her model while a picture is being made and loads it
+	// back once the generator goes quiet. See api.cardShare.
+	GPUShare string `json:"gpuShare"`
 	// ChatModelDir is text-generation-webui's models folder, as this container sees it.
 	//
 	// Required for deleting a model and for nothing else: text-generation-webui exposes
@@ -84,8 +108,8 @@ type Settings struct {
 	// word list cannot: who is where, doing what, in what style. An OpenAI-compatible
 	// chat endpoint whose model accepts images (Ollama or LM Studio with a
 	// llava/qwen-vl/gemma3 build, llama.cpp server with an mmproj). Separate from the
-	// chat backend because Libby's text model is picked for obedience inside an 8K
-	// window and is usually a text-only build. VisionAuto describes every new
+	// chat backend because Libby's text model is picked for obedience to her tag
+	// protocol and is usually a text-only build. VisionAuto describes every new
 	// picture and clip on import; VisionEnabled is derived from the URL.
 	VisionURL       string `json:"visionUrl"`
 	VisionModel     string `json:"visionModel"`
@@ -156,6 +180,18 @@ type Settings struct {
 	Incognito bool `json:"incognito"`
 }
 
+// What a pinned chat context window may be set to.
+//
+// The floor is the point below which Libby's own character prompt plus a reply worth
+// reading stop fitting together at all (api.fitChatTurn refuses outright below it).
+// The ceiling is not a model limit — it is a "this was meant to be tokens" check, so
+// a mistyped 320000 does not become a budget that reserves more history than any
+// machine can process.
+const (
+	minContextTokens = 2048
+	maxContextTokens = 131072
+)
+
 // Setting keys as stored in the settings table.
 const (
 	keyAIEnabled           = "ai.enabled"
@@ -178,6 +214,10 @@ const (
 	keyChatURL             = "chat.url"
 	keyChatModel           = "chat.model"
 	keyChatModelDir        = "chat.model_dir"
+	keyChatContextTokens   = "chat.context_tokens"
+	keyChatModelTier       = "chat.model_tier"
+	keyChatVision          = "chat.vision"
+	keyGPUShare            = "gpu.share"
 	keyChatAPIKey          = "chat.api_key"
 	keyVisionURL           = "vision.url"
 	keyVisionModel         = "vision.model"
@@ -223,6 +263,7 @@ func Defaults(cfg *config.Config) Settings {
 		Rule34APIKey:        cfg.Rule34APIKey,
 		ChatURL:             cfg.ChatURL,
 		ChatModel:           cfg.ChatModel,
+		ChatContextTokens:   cfg.ChatContextTokens,
 		ChatAPIKey:          cfg.ChatAPIKey,
 		VisionURL:           cfg.VisionURL,
 		VisionModel:         cfg.VisionModel,
@@ -304,6 +345,18 @@ func Merge(base Settings, stored map[string]string) Settings {
 	}
 	if v, ok := stored[keyChatModelDir]; ok {
 		s.ChatModelDir = v
+	}
+	if v, err := strconv.Atoi(stored[keyChatContextTokens]); err == nil {
+		s.ChatContextTokens = v
+	}
+	if v, ok := stored[keyChatModelTier]; ok {
+		s.ChatModelTier = v
+	}
+	if v, ok := stored[keyChatVision]; ok {
+		s.ChatVision = v
+	}
+	if v, ok := stored[keyGPUShare]; ok {
+		s.GPUShare = v
 	}
 	if v, ok := stored[keyChatAPIKey]; ok {
 		s.ChatAPIKey = v
@@ -397,6 +450,10 @@ func (s Settings) Map() map[string]string {
 		keyChatURL:             s.ChatURL,
 		keyChatModel:           s.ChatModel,
 		keyChatModelDir:        s.ChatModelDir,
+		keyChatContextTokens:   strconv.Itoa(s.ChatContextTokens),
+		keyChatModelTier:       s.ChatModelTier,
+		keyChatVision:          s.ChatVision,
+		keyGPUShare:            s.GPUShare,
 		keyChatAPIKey:          s.ChatAPIKey,
 		keyVisionURL:           s.VisionURL,
 		keyVisionModel:         s.VisionModel,
@@ -490,6 +547,29 @@ func (s *Settings) Clamp() {
 	s.ChatModel = strings.TrimSpace(s.ChatModel)
 	s.ChatModelDir = strings.TrimRight(strings.TrimSpace(s.ChatModelDir), "/")
 	s.ChatAPIKey = strings.TrimSpace(s.ChatAPIKey)
+	// A pinned window is bounded rather than rejected: a typo of 80 or 8000000 is
+	// still a statement that the operator wants something other than auto, and
+	// clamping honours it as far as it can be honoured. 0 stays 0, meaning auto.
+	if s.ChatContextTokens != 0 {
+		if s.ChatContextTokens < minContextTokens {
+			s.ChatContextTokens = minContextTokens
+		}
+		if s.ChatContextTokens > maxContextTokens {
+			s.ChatContextTokens = maxContextTokens
+		}
+	}
+	switch strings.ToLower(strings.TrimSpace(s.ChatModelTier)) {
+	case "small", "large":
+		s.ChatModelTier = strings.ToLower(strings.TrimSpace(s.ChatModelTier))
+	default:
+		// Anything else — including the word "auto" and a client that sent nothing —
+		// is the automatic reading of the model's name.
+		s.ChatModelTier = ""
+	}
+	// The same reading for her eyes and for the card: a value this build does not know
+	// is the default, never an error, so a setting written by a newer client degrades.
+	s.ChatVision = oneOf(s.ChatVision, "on", "off")
+	s.GPUShare = oneOf(s.GPUShare, "swap")
 	// A text-generation-webui model is selected in its own WebUI/startup config;
 	// its OpenAI endpoint does not require OppaiLib to own that lifecycle or even
 	// send a model field. The live readiness probe decides whether Chat can run.
@@ -594,4 +674,16 @@ func parseBool(v string) (bool, bool) {
 		return false, false
 	}
 	return b, true
+}
+
+// oneOf lowercases value and keeps it when it is one of allowed, and is "" — the
+// setting's default — for anything else.
+func oneOf(value string, allowed ...string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	for _, a := range allowed {
+		if value == a {
+			return value
+		}
+	}
+	return ""
 }

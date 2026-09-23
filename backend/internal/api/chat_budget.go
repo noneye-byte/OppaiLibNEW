@@ -31,12 +31,32 @@ import (
 // what was said is less elegant and cannot lie.
 
 const (
-	// targetContextLimit is the context OppaiLib asks the backend to use for Libby.
-	// OpenHermes/Mistral can comfortably run this window, and current text-generation-
-	// webui uses 8192 as the default ctx-size for non-llama.cpp loaders. The value is
-	// also sent as truncation_length on every generation; merely budgeting for 8K while
-	// leaving the backend's request default at 4K would recreate silent truncation.
+	// targetContextLimit is what Libby gets when nothing better is known: no pinned
+	// setting, and a backend that will not say what it allocated. A 7B-class quant runs
+	// this comfortably and current text-generation-webui uses 8192 as the default
+	// ctx-size for non-llama.cpp loaders, so it is the safe assumption rather than the
+	// intended one. The value is also sent as truncation_length on every generation;
+	// merely budgeting for 8K while leaving the backend's request default at 4K would
+	// recreate silent truncation.
 	targetContextLimit = 8192
+	// autoContextCeiling is how far the automatic reading follows a loader that reports
+	// a very long window.
+	//
+	// Not a memory limit — the loader has already allocated whatever it reports — but a
+	// limit on what a longer window buys her. Past roughly here every section of her
+	// prompt already fits and the history is no longer being trimmed, so the only thing
+	// another 32K adds is prefill: a local backend re-reading a 60K-token prompt is
+	// seconds of silence before she starts typing, every turn, over context she is not
+	// using. A 128K model loaded at 128K is nearly always somebody wanting the window
+	// available rather than wanting every chat to cost it. An operator who does want the
+	// whole thing says so with the setting, which this does not cap.
+	autoContextCeiling = 32768
+	// minContextLimit is the smallest window worth believing a loader about. Below it
+	// the number is far likelier to be a field that means something else than a real
+	// context of a few hundred tokens.
+	minContextLimit = 2048
+	// maxContextLimit is the other end of the same judgement.
+	maxContextLimit = 131072
 	// contextLimitTTL is how long a probed window is trusted. Loading a different model
 	// changes it, and a load is a user action they will be watching the screen for.
 	contextLimitTTL = 2 * time.Minute
@@ -60,29 +80,49 @@ const (
 // contextLimitCache memoises the probed window. Guarded by its own mutex rather than
 // chatMu: this is read on the chat path and has nothing to do with the workspace files.
 var contextLimitCache struct {
-	mu    sync.Mutex
-	value int
-	at    time.Time
-	url   string // invalidates the cache when the operator repoints the backend
+	mu     sync.Mutex
+	value  int
+	at     time.Time
+	url    string // invalidates the cache when the operator repoints the backend
+	pinned int    // and when they change the window by hand, which wants to take effect now
 }
 
-// chatContextLimit is the model's context window in tokens.
+// chatContextLimit is the window a turn is fitted into, in tokens.
 //
-// OppaiLib chooses the requested input window, then asks the backend only for hard
-// loader ceilings: n_ctx is llama.cpp's, max_seq_len is ExLlama's, and max_model_len
-// is vLLM's. text-generation-webui's truncation_length is a per-request generation
-// option, so its shared default must not lower Libby's 8K target.
+// This used to be 8192 and nothing else: a constant, lowered when a loader admitted to
+// having less and never raised when it had more. That was right while the only machine
+// this ran on held a 7B quant on 8 GB. It is wrong on a card with room for a 24B at a
+// 32K context, because the entire cost of a small window is paid in the parts of Libby
+// that get shed to fit — what she remembers about the person she is talking to, the
+// bond, the other conversations they have had — and on that card none of it needed to
+// go. A window that never grows is half an idle card and a Libby who forgets for no
+// reason.
+//
+// So the number is the best of three answers, in order:
+//
+//  1. What the operator pinned, if they pinned one — still held under a loader ceiling,
+//     because asking for more than the loader allocated does not create context. It
+//     makes the backend drop the front of the prompt, which is her character card.
+//  2. What the loader says it allocated: n_ctx is llama.cpp's, max_seq_len ExLlama's,
+//     max_model_len vLLM's. Followed up to autoContextCeiling.
+//  3. targetContextLimit, for a backend that will not say — llama.cpp server, LM Studio
+//     and Ollama have no such endpoint, which is exactly who the setting is for.
+//
+// text-generation-webui's truncation_length is deliberately not read: it is a
+// per-request generation option OppaiLib overrides on every call, so its shared default
+// must never lower what Libby is given.
 func (s *Server) chatContextLimit(ctx context.Context) int {
 	cur := s.settings.Get()
 	contextLimitCache.mu.Lock()
-	if contextLimitCache.value > 0 && contextLimitCache.url == cur.ChatURL && time.Since(contextLimitCache.at) < contextLimitTTL {
+	if contextLimitCache.value > 0 && contextLimitCache.url == cur.ChatURL &&
+		contextLimitCache.pinned == cur.ChatContextTokens && time.Since(contextLimitCache.at) < contextLimitTTL {
 		limit := contextLimitCache.value
 		contextLimitCache.mu.Unlock()
 		return limit
 	}
 	contextLimitCache.mu.Unlock()
 
-	limit := targetContextLimit
+	var reported []int
 	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	if status, raw, err := s.chatBackendRequest(probeCtx, http.MethodGet, "/v1/internal/model/info", nil); err == nil && status >= 200 && status < 300 {
@@ -92,26 +132,46 @@ func (s *Server) chatContextLimit(ctx context.Context) int {
 			MaxModelLen int `json:"max_model_len"`
 		}
 		if json.Unmarshal(raw, &info) == nil {
-			limit = effectiveContextLimit(info.NCtx, info.MaxSeqLen, info.MaxModelLen)
+			reported = []int{info.NCtx, info.MaxSeqLen, info.MaxModelLen}
 		}
 	}
+	limit := effectiveContextLimit(cur.ChatContextTokens, reported...)
 	contextLimitCache.mu.Lock()
-	contextLimitCache.value, contextLimitCache.at, contextLimitCache.url = limit, time.Now(), cur.ChatURL
+	contextLimitCache.value, contextLimitCache.at = limit, time.Now()
+	contextLimitCache.url, contextLimitCache.pinned = cur.ChatURL, cur.ChatContextTokens
 	contextLimitCache.mu.Unlock()
 	return limit
 }
 
-// effectiveContextLimit keeps the 8K request beneath a loader's reported hard
-// capacity. truncation_length is intentionally absent: text-generation-webui treats
-// it as a per-generation input limit, and OppaiLib overrides it on the request. n_ctx,
-// max_seq_len and max_model_len describe the loaded model/loader and cannot safely be
-// exceeded. When several are present, the smallest is the real ceiling.
-func effectiveContextLimit(hardLimits ...int) int {
-	limit := targetContextLimit
+// effectiveContextLimit resolves the window from what the operator pinned (0 for
+// automatic) and what the loader reported.
+//
+// A reported number outside [minContextLimit, maxContextLimit] is not a window — it is
+// an unset zero, or a field that meant something else — and is ignored rather than
+// believed. Among the believable ones the smallest is the real ceiling, since each is a
+// hard capacity of the loader that is actually running.
+func effectiveContextLimit(pinned int, hardLimits ...int) int {
+	ceiling := 0
 	for _, reported := range hardLimits {
-		if reported >= 1024 && reported <= 131072 && reported < limit {
-			limit = reported
+		if reported < minContextLimit || reported > maxContextLimit {
+			continue
 		}
+		if ceiling == 0 || reported < ceiling {
+			ceiling = reported
+		}
+	}
+	limit := pinned
+	if limit <= 0 {
+		limit = targetContextLimit
+		if ceiling > 0 {
+			limit = clampInt(ceiling, minContextLimit, autoContextCeiling)
+		}
+	}
+	// A pin above what the loader has is honoured as far as the loader allows, and no
+	// further: the alternative is silent front-truncation of the character card, which
+	// is the failure this whole file exists to prevent.
+	if ceiling > 0 && limit > ceiling {
+		limit = ceiling
 	}
 	return limit
 }
@@ -185,6 +245,7 @@ const (
 	rankPhotoCatalogue  = 20 // which selfies she could send
 	rankThoughts        = 25 // that she may think something instead of saying it
 	rankWantsList       = 30 // her own standing desires
+	rankServer          = 33 // how the machine she lives on is doing
 	rankRecaps          = 35 // the other conversations she has had with them
 	rankBond            = 40 // the gap, carried mood, closeness
 	// Above the wants, recaps and bond rather than below them, where it sat at 27:

@@ -224,6 +224,8 @@ func (s *Server) handleLoadChatModel(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, "this chat backend does not support loading models over its API")
 		return
 	}
+	// A model chosen by hand outranks one parked for the generator. See gpu_share.go.
+	s.forgetParkedCard()
 
 	body := map[string]any{"model_name": in.Model, "args": in.Args}
 	if len(in.Settings) > 0 {

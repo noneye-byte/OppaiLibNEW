@@ -440,6 +440,19 @@ export interface Settings {
   chatModel: string;
   chatApiKey: string;
   chatApiKeySet: boolean;
+  /** The context window Libby's turns are fitted into. 0 is auto — ask the loader
+      what it allocated — which is right for text-generation-webui and impossible for
+      llama.cpp server, LM Studio or Ollama, none of which will say. */
+  chatContextTokens: number;
+  /** How much slack her sampling gets: "small" for a 7B–13B quant, "large" for a 24B
+      and up, "" to read it off the loaded model's name. */
+  chatModelTier: string;
+  /** Whether her own model can see: "on", "off", or "" to read it off the model's name.
+      When it can, a shared picture goes to her as a picture, not only as tags. */
+  chatVision: string;
+  /** How her model and the image generator share one GPU: "" keeps both loaded, "swap"
+      unloads her while a picture is made and loads her back once it is done. */
+  gpuShare: string;
   /** A vision-capable OpenAI-compatible endpoint that describes pictures in prose. */
   visionUrl: string;
   visionModel: string;

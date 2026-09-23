@@ -15,6 +15,8 @@ Requires Android 6.0 (API 23) or newer.
 - Download unencrypted device copies through a persistent, resumable foreground queue
 - Import by pasting a URL → preview scraped media → import selected assets
 - Browse configured remote sources, discussions, and paged feeds without importing first
+- Browse the itch.io and F95zone game catalogues signed in, add a game to the library from
+  its page, and work through the games whose site has posted a newer version
 - Chat with Libby and custom character cards, including library/photo sharing and video calls
 - Create images, manage characters/models, browse the Invoke gallery, and install from Civitai
 - One-tap AI auto-tag from the viewer, plus per-item and bulk metadata editing

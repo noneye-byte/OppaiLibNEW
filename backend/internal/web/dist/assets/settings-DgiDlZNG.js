@@ -1,4 +1,4 @@
-import{t as f,s as m,a as w}from"./libby-backgrounds-jM8y53Kw.js";import{a as $,v as x,w as k,x as S,e as p,m as E,y as v,z as A,B as L,C as M,D as P,E as B,F as T,G as R,A as c,b as t,H as N,L as z,I,J as D,K as g,M as C,q as O,i as _,N as U,u as n,t as F}from"./index-tGtnXIFt.js";import{r as G,p as V}from"./passkeys-B0BWbzJB.js";var K=Object.defineProperty,W=Object.getOwnPropertyDescriptor,d=(e,s,i,r)=>{for(var a=r>1?void 0:r?W(s,i):s,h=e.length-1,l;h>=0;h--)(l=e[h])&&(a=(r?l(s,i,a):l(a))||a);return r&&a&&K(s,i,a),a};const H=[{id:"appearance",label:"Appearance",icon:"palette",group:"You"},{id:"libby",label:"Libby",icon:"auto_awesome",group:"You"},{id:"backgrounds",label:"Her backgrounds",icon:"wallpaper",group:"You"},{id:"account",label:"Account",icon:"account_circle",group:"You"},{id:"ai",label:"AI tagging",icon:"smart_toy",group:"Server",server:!0},{id:"scraping",label:"Scraping",icon:"travel_explore",group:"Server",server:!0},{id:"library",label:"Library",icon:"inventory_2",group:"Server"},{id:"android",label:"Android app",icon:"android",group:"Server"},{id:"storage",label:"Storage",icon:"hard_drive",group:"Server"},{id:"diagnostics",label:"Diagnostics",icon:"speed",group:"Server",adminOnly:!0},{id:"privacy",label:"Privacy",icon:"visibility_off",group:"Server",server:!0,adminOnly:!0},{id:"about",label:"About",icon:"info",group:"Server"}];let o=class extends ${constructor(){super(...arguments),this.tab="appearance",this.settings=null,this.info=null,this.stats=null,this.apk=null,this.loadError="",this.passkeyList=null,this.passkeyBusy=!1,this.passkeyError="",this.passkeyMsg="",this.passkeyName="",this.passkeyRenaming=null,this.passkeyRevoking=null,this.passkeyPassword="",this.diag=null,this.uiDiag=null,this.storage=null,this.storageBusy=!1,this.storageErr="",this.diagBusy=!1,this.diagErr="",this.dirty=!1,this.saving=!1,this.saved=!1,this.theme=x(),this.fit=k(),this.hideLibby=S(),this.genModels=[],this.genLoras=[],this.genBoards=[],this.genError="",this.pwCurrent="",this.pwNew="",this.pwConfirm="",this.pwBusy=!1,this.pwMsg="",this.pwErr="",this.tts=void 0,this.describe=null,this.describeBusy=!1,this.describeNote="",this.ttsErrors={},this.addPasskey=async()=>{this.passkeyBusy=!0,this.passkeyError="",this.passkeyMsg="";try{const e=await G(this.passkeyName.trim());this.passkeyName="",this.passkeyMsg=`Added “${e.name}”. You can sign in with it now.`,await this.loadPasskeys()}catch(e){const s=V(e);s&&(this.passkeyError=s)}finally{this.passkeyBusy=!1}},this.cancelRevoke=()=>{this.passkeyRevoking=null,this.passkeyPassword=""},this.loadStorage=async()=>{this.storageBusy=!0,this.storageErr="";try{this.storage=await p.storage()}catch(e){this.storageErr=e.message}finally{this.storageBusy=!1}},this.runCleanup=async()=>{this.storageBusy=!0,this.storageErr="";try{const e=await p.cleanupStorage(["uploads","temp"]);this.storage=e.storage,E(`Reclaimed ${e.freedHuman}.`,"success")}catch(e){this.storageErr=e.message}finally{this.storageBusy=!1}},this.loadDiagnostics=async()=>{this.diagBusy=!0,this.diagErr="";try{this.diag=await p.diagnostics(),this.uiDiag=v()}catch(e){this.diagErr=e.message}finally{this.diagBusy=!1}},this.resetDiagnostics=async()=>{this.diagBusy=!0,this.diagErr="";try{A(),await p.resetDiagnostics(),this.diag=await p.diagnostics(),this.uiDiag=v()}catch(e){this.diagErr=e.message}finally{this.diagBusy=!1}}}connectedCallback(){super.connectedCallback(),L(this,"settings"),this.load(),this.loadGenLists(),this.loadTTS(),this.loadDescribe()}async load(){try{const[e,s]=await Promise.all([p.getSettings(),p.stats()]);this.settings=e.settings,this.info=e.readOnly,this.stats=s}catch(e){this.loadError=e.message}try{this.apk=await p.apkInfo()}catch{this.apk={available:!1}}}get canEdit(){var e;return!!((e=this.user)!=null&&e.isAdmin)}openTab(e){M(()=>{this.tab=e}),e==="diagnostics"&&!this.diag&&!this.diagBusy&&this.loadDiagnostics(),e==="storage"&&!this.storage&&!this.storageBusy&&this.loadStorage(),e==="account"&&!this.passkeyList&&this.loadPasskeys()}edit(e){!this.settings||!this.canEdit||(this.settings={...this.settings,...e},this.dirty=!0,this.saved=!1)}async save(){if(this.settings){this.saving=!0;try{const e=await p.saveSettings(this.settings);this.settings=e.settings,this.info=e.readOnly,this.dirty=!1,this.saved=!0,P(!!e.settings.incognito),this.loadTTS(!0),this.loadDescribe()}catch(e){this.loadError=e.message}finally{this.saving=!1}}}pickTheme(e){this.theme=e,B(e),T(e)}pickFit(e){this.fit=e,R(e)}async changePassword(){if(this.pwMsg="",this.pwErr="",this.pwNew!==this.pwConfirm){this.pwErr="The new passwords don't match.";return}if(this.pwNew.length<8){this.pwErr="Use at least 8 characters.";return}this.pwBusy=!0;try{await p.changePassword(this.pwCurrent,this.pwNew),this.pwMsg="Password changed.",this.pwCurrent=this.pwNew=this.pwConfirm=""}catch(e){this.pwErr=e.message}finally{this.pwBusy=!1}}render(){const e=H.filter(a=>!a.adminOnly||this.canEdit),s=e.find(a=>a.id===this.tab)??e[0],i=this.dirty||this.saved;let r="";return t`
+import{t as f,s as m,a as w}from"./libby-backgrounds-BR5oLgfe.js";import{a as $,v as x,w as k,x as S,e as p,m as E,y as v,z as A,B as L,C as M,D as B,E as P,F as T,G as N,A as c,b as t,H as R,L as z,I,J as D,K as g,M as C,q as O,i as U,N as _,u as n,t as G}from"./index-DufD-B2G.js";import{r as F,p as V}from"./passkeys-DfaAP0nx.js";var W=Object.defineProperty,K=Object.getOwnPropertyDescriptor,d=(e,s,i,r)=>{for(var a=r>1?void 0:r?K(s,i):s,h=e.length-1,l;h>=0;h--)(l=e[h])&&(a=(r?l(s,i,a):l(a))||a);return r&&a&&W(s,i,a),a};const H=[{id:"appearance",label:"Appearance",icon:"palette",group:"You"},{id:"libby",label:"Libby",icon:"auto_awesome",group:"You"},{id:"backgrounds",label:"Her backgrounds",icon:"wallpaper",group:"You"},{id:"account",label:"Account",icon:"account_circle",group:"You"},{id:"ai",label:"AI tagging",icon:"smart_toy",group:"Server",server:!0},{id:"scraping",label:"Scraping",icon:"travel_explore",group:"Server",server:!0},{id:"library",label:"Library",icon:"inventory_2",group:"Server"},{id:"android",label:"Android app",icon:"android",group:"Server"},{id:"storage",label:"Storage",icon:"hard_drive",group:"Server"},{id:"diagnostics",label:"Diagnostics",icon:"speed",group:"Server",adminOnly:!0},{id:"privacy",label:"Privacy",icon:"visibility_off",group:"Server",server:!0,adminOnly:!0},{id:"about",label:"About",icon:"info",group:"Server"}];let o=class extends ${constructor(){super(...arguments),this.tab="appearance",this.settings=null,this.info=null,this.stats=null,this.apk=null,this.loadError="",this.passkeyList=null,this.passkeyBusy=!1,this.passkeyError="",this.passkeyMsg="",this.passkeyName="",this.passkeyRenaming=null,this.passkeyRevoking=null,this.passkeyPassword="",this.diag=null,this.uiDiag=null,this.storage=null,this.storageBusy=!1,this.storageErr="",this.diagBusy=!1,this.diagErr="",this.dirty=!1,this.saving=!1,this.saved=!1,this.theme=x(),this.fit=k(),this.hideLibby=S(),this.genModels=[],this.genLoras=[],this.genBoards=[],this.genError="",this.pwCurrent="",this.pwNew="",this.pwConfirm="",this.pwBusy=!1,this.pwMsg="",this.pwErr="",this.tts=void 0,this.describe=null,this.describeBusy=!1,this.describeNote="",this.ttsErrors={},this.addPasskey=async()=>{this.passkeyBusy=!0,this.passkeyError="",this.passkeyMsg="";try{const e=await F(this.passkeyName.trim());this.passkeyName="",this.passkeyMsg=`Added “${e.name}”. You can sign in with it now.`,await this.loadPasskeys()}catch(e){const s=V(e);s&&(this.passkeyError=s)}finally{this.passkeyBusy=!1}},this.cancelRevoke=()=>{this.passkeyRevoking=null,this.passkeyPassword=""},this.loadStorage=async()=>{this.storageBusy=!0,this.storageErr="";try{this.storage=await p.storage()}catch(e){this.storageErr=e.message}finally{this.storageBusy=!1}},this.runCleanup=async()=>{this.storageBusy=!0,this.storageErr="";try{const e=await p.cleanupStorage(["uploads","temp"]);this.storage=e.storage,E(`Reclaimed ${e.freedHuman}.`,"success")}catch(e){this.storageErr=e.message}finally{this.storageBusy=!1}},this.loadDiagnostics=async()=>{this.diagBusy=!0,this.diagErr="";try{this.diag=await p.diagnostics(),this.uiDiag=v()}catch(e){this.diagErr=e.message}finally{this.diagBusy=!1}},this.resetDiagnostics=async()=>{this.diagBusy=!0,this.diagErr="";try{A(),await p.resetDiagnostics(),this.diag=await p.diagnostics(),this.uiDiag=v()}catch(e){this.diagErr=e.message}finally{this.diagBusy=!1}}}connectedCallback(){super.connectedCallback(),L(this,"settings"),this.load(),this.loadGenLists(),this.loadTTS(),this.loadDescribe()}async load(){try{const[e,s]=await Promise.all([p.getSettings(),p.stats()]);this.settings=e.settings,this.info=e.readOnly,this.stats=s}catch(e){this.loadError=e.message}try{this.apk=await p.apkInfo()}catch{this.apk={available:!1}}}get canEdit(){var e;return!!((e=this.user)!=null&&e.isAdmin)}openTab(e){M(()=>{this.tab=e}),e==="diagnostics"&&!this.diag&&!this.diagBusy&&this.loadDiagnostics(),e==="storage"&&!this.storage&&!this.storageBusy&&this.loadStorage(),e==="account"&&!this.passkeyList&&this.loadPasskeys()}edit(e){!this.settings||!this.canEdit||(this.settings={...this.settings,...e},this.dirty=!0,this.saved=!1)}async save(){if(this.settings){this.saving=!0;try{const e=await p.saveSettings(this.settings);this.settings=e.settings,this.info=e.readOnly,this.dirty=!1,this.saved=!0,B(!!e.settings.incognito),this.loadTTS(!0),this.loadDescribe()}catch(e){this.loadError=e.message}finally{this.saving=!1}}}pickTheme(e){this.theme=e,P(e),T(e)}pickFit(e){this.fit=e,N(e)}async changePassword(){if(this.pwMsg="",this.pwErr="",this.pwNew!==this.pwConfirm){this.pwErr="The new passwords don't match.";return}if(this.pwNew.length<8){this.pwErr="Use at least 8 characters.";return}this.pwBusy=!0;try{await p.changePassword(this.pwCurrent,this.pwNew),this.pwMsg="Password changed.",this.pwCurrent=this.pwNew=this.pwConfirm=""}catch(e){this.pwErr=e.message}finally{this.pwBusy=!1}}render(){const e=H.filter(a=>!a.adminOnly||this.canEdit),s=e.find(a=>a.id===this.tab)??e[0],i=this.dirty||this.saved;let r="";return t`
       <div class="shell">
         <nav class="cat-rail" aria-label="Settings categories">
           ${e.map(a=>{const h=a.group===r?c:t`<div class="cat-head">${a.group}</div>`;return r=a.group,t`${h}
@@ -191,7 +191,7 @@ import{t as f,s as m,a as w}from"./libby-backgrounds-jM8y53Kw.js";import{a as $,
               role="switch"
               aria-checked=${this.hideLibby?"true":"false"}
               aria-label="Hide Libby"
-              @click=${()=>{this.hideLibby=!this.hideLibby,N(this.hideLibby)}}
+              @click=${()=>{this.hideLibby=!this.hideLibby,R(this.hideLibby)}}
             ></button>
           </div>
         </div>
@@ -727,6 +727,91 @@ import{t as f,s as m,a as w}from"./libby-backgrounds-jM8y53Kw.js";import{a as $,
                 </div>
               </div>
 
+              <div class="field">
+                <div class="field-text">
+                  <div class="field-label">Context window</div>
+                  <div class="field-help">
+                    How much of the model's context Libby may fill, in tokens. Leave at
+                    <strong>0</strong> and OppaiLib asks the loader what it allocated —
+                    which text-generation-webui answers and llama.cpp server, LM&nbsp;Studio
+                    and Ollama do not. On those, a number here is the only way to tell her
+                    she has room: a bigger window is memory, bond and library context she
+                    keeps instead of shedding to fit. Never set it above what the model is
+                    actually loaded with — past that the backend drops the front of the
+                    prompt, which is her character card.
+                  </div>
+                </div>
+                <div class="field-control">
+                  <input
+                    type="number"
+                    min="0"
+                    max="131072"
+                    step="1024"
+                    .value=${String(e.chatContextTokens)}
+                    ?disabled=${!this.canEdit}
+                    @change=${s=>this.edit({chatContextTokens:Number(s.target.value)})}
+                  />
+                </div>
+              </div>
+
+              <div class="field">
+                <div class="field-text">
+                  <div class="field-label">Model size</div>
+                  <div class="field-help">
+                    Her sampler presets were written for a 7B, where a heavy repetition
+                    penalty is what stops a looping reply. On a 24B and up the same numbers
+                    flatten the prose and cost her the tags written at the end of it, so
+                    that penalty is eased and a scene is allowed to run longer. Auto reads
+                    the parameter count out of the loaded model's name.
+                  </div>
+                </div>
+                <div class="field-control">
+                  <select ?disabled=${!this.canEdit}
+                    @change=${s=>this.edit({chatModelTier:s.target.value})}>
+                    ${[["","Auto (from the model name)"],["small","Small — 7B to 13B"],["large","Large — 24B and up"]].map(([s,i])=>t`<option value=${s} ?selected=${e.chatModelTier===s}>${i}</option>`)}
+                  </select>
+                </div>
+              </div>
+
+              <div class="field">
+                <div class="field-text">
+                  <div class="field-label">Her eyes</div>
+                  <div class="field-help">
+                    Most of the 24B–32B models a big card runs can see — Mistral&#8209;Small&#8209;3.2,
+                    Gemma&nbsp;3, the Qwen&#8209;VL family. When hers can, a photo you send and the
+                    picture you ask about go to her as pictures, not just as the tagger's words.
+                    Auto reads it off the model's name; a backend that turns out not to take images
+                    (a GGUF loaded without its mmproj) is answered from the tags instead, so leaving
+                    this on is safe.
+                  </div>
+                </div>
+                <div class="field-control">
+                  <select ?disabled=${!this.canEdit}
+                    @change=${s=>this.edit({chatVision:s.target.value})}>
+                    ${[["","Auto (from the model name)"],["on","On — her model can see"],["off","Off — tags only"]].map(([s,i])=>t`<option value=${s} ?selected=${(e.chatVision??"")===s}>${i}</option>`)}
+                  </select>
+                </div>
+              </div>
+
+              <div class="field">
+                <div class="field-text">
+                  <div class="field-label">Sharing the graphics card</div>
+                  <div class="field-help">
+                    For one GPU running both her and the image generator. <strong>Both loaded</strong>
+                    keeps them side by side — fine when they fit. <strong>Swap</strong> unloads her
+                    while a picture is being made and loads her back, with the loader settings she was
+                    last loaded with, a minute after the generator goes quiet (sooner if you message
+                    her). Needs text-generation-webui, which is the backend that can load and unload.
+                  </div>
+                </div>
+                <div class="field-control">
+                  <select ?disabled=${!this.canEdit}
+                    @change=${s=>this.edit({gpuShare:s.target.value})}>
+                    ${[["","Both loaded"],["swap","Swap for pictures"]].map(([s,i])=>t`<option value=${s} ?selected=${(e.gpuShare??"")===s}>${i}</option>`)}
+                  </select>
+                </div>
+              </div>
+
               <div class="field stack">
                 <div class="field-text">
                   <div class="field-label">Model folder (for deleting models)</div>
@@ -1128,7 +1213,7 @@ import{t as f,s as m,a as w}from"./libby-backgrounds-jM8y53Kw.js";import{a as $,
         </div>
         <div class="field-control"><span class="ro">${i}</span></div>
       </div>
-    `}};o.styles=[C,O,_`
+    `}};o.styles=[C,O,U`
       :host {
         display: block;
       }
@@ -1648,4 +1733,4 @@ import{t as f,s as m,a as w}from"./libby-backgrounds-jM8y53Kw.js";import{a as $,
         gap: 12px;
         max-width: 360px;
       }
-    `];d([U({attribute:!1})],o.prototype,"user",2);d([n()],o.prototype,"tab",2);d([n()],o.prototype,"settings",2);d([n()],o.prototype,"info",2);d([n()],o.prototype,"stats",2);d([n()],o.prototype,"apk",2);d([n()],o.prototype,"loadError",2);d([n()],o.prototype,"passkeyList",2);d([n()],o.prototype,"passkeyBusy",2);d([n()],o.prototype,"passkeyError",2);d([n()],o.prototype,"passkeyMsg",2);d([n()],o.prototype,"passkeyName",2);d([n()],o.prototype,"passkeyRenaming",2);d([n()],o.prototype,"passkeyRevoking",2);d([n()],o.prototype,"passkeyPassword",2);d([n()],o.prototype,"diag",2);d([n()],o.prototype,"uiDiag",2);d([n()],o.prototype,"storage",2);d([n()],o.prototype,"storageBusy",2);d([n()],o.prototype,"storageErr",2);d([n()],o.prototype,"diagBusy",2);d([n()],o.prototype,"diagErr",2);d([n()],o.prototype,"dirty",2);d([n()],o.prototype,"saving",2);d([n()],o.prototype,"saved",2);d([n()],o.prototype,"theme",2);d([n()],o.prototype,"fit",2);d([n()],o.prototype,"hideLibby",2);d([n()],o.prototype,"genModels",2);d([n()],o.prototype,"genLoras",2);d([n()],o.prototype,"genBoards",2);d([n()],o.prototype,"genError",2);d([n()],o.prototype,"pwCurrent",2);d([n()],o.prototype,"pwNew",2);d([n()],o.prototype,"pwConfirm",2);d([n()],o.prototype,"pwBusy",2);d([n()],o.prototype,"pwMsg",2);d([n()],o.prototype,"pwErr",2);d([n()],o.prototype,"tts",2);d([n()],o.prototype,"describe",2);d([n()],o.prototype,"describeBusy",2);d([n()],o.prototype,"describeNote",2);d([n()],o.prototype,"ttsErrors",2);o=d([F("oppai-settings")],o);function b(e){if(!e)return"never";const s=Math.max(0,(Date.now()-e)/1e3);if(s<90)return"just now";const i=Math.round(s/60);if(i<60)return`${i} min ago`;const r=Math.round(i/60);if(r<24)return`${r}h ago`;const a=Math.round(r/24);return a<=30?`${a} day${a===1?"":"s"} ago`:new Date(e).toLocaleDateString()}function q(e){const s=Math.max(0,Math.floor(e)),i=Math.floor(s/86400),r=Math.floor(s%86400/3600),a=Math.floor(s%3600/60);return i>0?`${i}d ${r}h`:r>0?`${r}h ${a}m`:a>0?`${a}m ${s%60}s`:`${s}s`}function u(e){if(!e)return"0 B";const s=["B","KB","MB","GB","TB"];let i=e,r=0;for(;i>=1024&&r<s.length-1;)i/=1024,r++;return`${i<10&&r>0?i.toFixed(1):Math.round(i)} ${s[r]}`}export{o as OppaiSettings};
+    `];d([_({attribute:!1})],o.prototype,"user",2);d([n()],o.prototype,"tab",2);d([n()],o.prototype,"settings",2);d([n()],o.prototype,"info",2);d([n()],o.prototype,"stats",2);d([n()],o.prototype,"apk",2);d([n()],o.prototype,"loadError",2);d([n()],o.prototype,"passkeyList",2);d([n()],o.prototype,"passkeyBusy",2);d([n()],o.prototype,"passkeyError",2);d([n()],o.prototype,"passkeyMsg",2);d([n()],o.prototype,"passkeyName",2);d([n()],o.prototype,"passkeyRenaming",2);d([n()],o.prototype,"passkeyRevoking",2);d([n()],o.prototype,"passkeyPassword",2);d([n()],o.prototype,"diag",2);d([n()],o.prototype,"uiDiag",2);d([n()],o.prototype,"storage",2);d([n()],o.prototype,"storageBusy",2);d([n()],o.prototype,"storageErr",2);d([n()],o.prototype,"diagBusy",2);d([n()],o.prototype,"diagErr",2);d([n()],o.prototype,"dirty",2);d([n()],o.prototype,"saving",2);d([n()],o.prototype,"saved",2);d([n()],o.prototype,"theme",2);d([n()],o.prototype,"fit",2);d([n()],o.prototype,"hideLibby",2);d([n()],o.prototype,"genModels",2);d([n()],o.prototype,"genLoras",2);d([n()],o.prototype,"genBoards",2);d([n()],o.prototype,"genError",2);d([n()],o.prototype,"pwCurrent",2);d([n()],o.prototype,"pwNew",2);d([n()],o.prototype,"pwConfirm",2);d([n()],o.prototype,"pwBusy",2);d([n()],o.prototype,"pwMsg",2);d([n()],o.prototype,"pwErr",2);d([n()],o.prototype,"tts",2);d([n()],o.prototype,"describe",2);d([n()],o.prototype,"describeBusy",2);d([n()],o.prototype,"describeNote",2);d([n()],o.prototype,"ttsErrors",2);o=d([G("oppai-settings")],o);function b(e){if(!e)return"never";const s=Math.max(0,(Date.now()-e)/1e3);if(s<90)return"just now";const i=Math.round(s/60);if(i<60)return`${i} min ago`;const r=Math.round(i/60);if(r<24)return`${r}h ago`;const a=Math.round(r/24);return a<=30?`${a} day${a===1?"":"s"} ago`:new Date(e).toLocaleDateString()}function q(e){const s=Math.max(0,Math.floor(e)),i=Math.floor(s/86400),r=Math.floor(s%86400/3600),a=Math.floor(s%3600/60);return i>0?`${i}d ${r}h`:r>0?`${r}h ${a}m`:a>0?`${a}m ${s%60}s`:`${s}s`}function u(e){if(!e)return"0 B";const s=["B","KB","MB","GB","TB"];let i=e,r=0;for(;i>=1024&&r<s.length-1;)i/=1024,r++;return`${i<10&&r>0?i.toFixed(1):Math.round(i)} ${s[r]}`}export{o as OppaiSettings};

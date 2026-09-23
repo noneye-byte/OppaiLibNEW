@@ -341,7 +341,13 @@ func (s *Server) discordReply(ctx context.Context, settings discordSettings, cha
 	// A short public message wants short-message sampling, which is what the reaction
 	// preset is for. Asked for by name rather than classified: the server knows this is
 	// Discord, and the text alone cannot show it.
-	_, preset := tuneSampling(chatRequest{Task: "reaction"}, target.Content)
+	// The tier from the configured model name rather than a probed one: this path
+	// deliberately does no readiness probe — a Discord reply either works or is silence
+	// in a channel — so the name in Settings, or the explicit tier setting, is what
+	// there is. Both are wrong only on a backend that was never told its model name,
+	// where the answer is the cautious one anyway. See chat_model_tier.go.
+	tier := resolveModelTier(cur.ChatModelTier, cur.ChatModel)
+	_, preset := tuneSampling(chatRequest{Task: "reaction"}, target.Content, tier)
 	limit := s.chatContextLimit(ctx)
 	fitted, replyTokens, _, err := fitChatTurn(prompt.String(), sections, "", messages, limit, preset.MaxTokens)
 	if err != nil {

@@ -18,6 +18,7 @@ import net.fourbakers.oppailib.OppaiApp
 import net.fourbakers.oppailib.data.CompleteUploadRequest
 import net.fourbakers.oppailib.data.CreateUploadRequest
 import net.fourbakers.oppailib.data.Repository
+import net.fourbakers.oppailib.data.serverMessage
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody
 import okio.BufferedSink
@@ -228,7 +229,7 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                 return SendResult.OK
             } catch (e: HttpException) {
                 // 4xx is the server declining for a reason it will decline again.
-                if (e.code() < 500) return SendResult.Refused(serverMessage(e))
+                if (e.code() < 500) return SendResult.Refused(e.serverMessage("The server said ${e.code()}."))
                 if (attempt >= MAX_CHUNK_ATTEMPTS) return SendResult.RETRY
             } catch (e: Exception) {
                 if (attempt >= MAX_CHUNK_ATTEMPTS) return SendResult.RETRY
@@ -241,7 +242,9 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
 
     private fun fail(id: String, e: Exception?, fallback: String): Outcome {
         val message = when {
-            e is HttpException -> serverMessage(e)
+            // data/ApiError.kt unwraps the server's own sentence, which the game
+            // catalogues need for the same reason an upload does.
+            e is HttpException -> e.serverMessage("The server said ${e.code()}.")
             e?.message.isNullOrBlank() -> fallback
             else -> "$fallback: ${e?.message}"
         }
@@ -249,20 +252,6 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         return Outcome.FAILED
     }
 
-    private fun serverMessage(e: HttpException): String {
-        val body = runCatching { e.response()?.errorBody()?.string() }.getOrNull().orEmpty()
-        // The server's JSON error, unwrapped without a parser: this is one field in a
-        // small object, and pulling in a decode here would fail on an HTML error page
-        // from a reverse proxy — which is exactly when the message matters most.
-        val marker = "\"error\":\""
-        val at = body.indexOf(marker)
-        if (at >= 0) {
-            val start = at + marker.length
-            val end = body.indexOf('"', start)
-            if (end > start) return body.substring(start, end)
-        }
-        return "The server said ${e.code()}."
-    }
 
     private suspend fun postProgress(id: String) {
         val item = UploadQueue.byId(id) ?: return

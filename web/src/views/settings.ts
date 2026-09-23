@@ -1809,6 +1809,95 @@ export class OppaiSettings extends LitElement {
                 </div>
               </div>
 
+              <div class="field">
+                <div class="field-text">
+                  <div class="field-label">Context window</div>
+                  <div class="field-help">
+                    How much of the model's context Libby may fill, in tokens. Leave at
+                    <strong>0</strong> and OppaiLib asks the loader what it allocated —
+                    which text-generation-webui answers and llama.cpp server, LM&nbsp;Studio
+                    and Ollama do not. On those, a number here is the only way to tell her
+                    she has room: a bigger window is memory, bond and library context she
+                    keeps instead of shedding to fit. Never set it above what the model is
+                    actually loaded with — past that the backend drops the front of the
+                    prompt, which is her character card.
+                  </div>
+                </div>
+                <div class="field-control">
+                  <input
+                    type="number"
+                    min="0"
+                    max="131072"
+                    step="1024"
+                    .value=${String(s.chatContextTokens)}
+                    ?disabled=${!this.canEdit}
+                    @change=${(e: Event) =>
+                      this.edit({ chatContextTokens: Number((e.target as HTMLInputElement).value) })}
+                  />
+                </div>
+              </div>
+
+              <div class="field">
+                <div class="field-text">
+                  <div class="field-label">Model size</div>
+                  <div class="field-help">
+                    Her sampler presets were written for a 7B, where a heavy repetition
+                    penalty is what stops a looping reply. On a 24B and up the same numbers
+                    flatten the prose and cost her the tags written at the end of it, so
+                    that penalty is eased and a scene is allowed to run longer. Auto reads
+                    the parameter count out of the loaded model's name.
+                  </div>
+                </div>
+                <div class="field-control">
+                  <select ?disabled=${!this.canEdit}
+                    @change=${(e: Event) => this.edit({ chatModelTier: (e.target as HTMLSelectElement).value })}>
+                    ${[["", "Auto (from the model name)"], ["small", "Small — 7B to 13B"], ["large", "Large — 24B and up"]].map(
+                      ([id, label]) => html`<option value=${id} ?selected=${s.chatModelTier === id}>${label}</option>`)}
+                  </select>
+                </div>
+              </div>
+
+              <div class="field">
+                <div class="field-text">
+                  <div class="field-label">Her eyes</div>
+                  <div class="field-help">
+                    Most of the 24B–32B models a big card runs can see — Mistral&#8209;Small&#8209;3.2,
+                    Gemma&nbsp;3, the Qwen&#8209;VL family. When hers can, a photo you send and the
+                    picture you ask about go to her as pictures, not just as the tagger's words.
+                    Auto reads it off the model's name; a backend that turns out not to take images
+                    (a GGUF loaded without its mmproj) is answered from the tags instead, so leaving
+                    this on is safe.
+                  </div>
+                </div>
+                <div class="field-control">
+                  <select ?disabled=${!this.canEdit}
+                    @change=${(e: Event) => this.edit({ chatVision: (e.target as HTMLSelectElement).value })}>
+                    ${[["", "Auto (from the model name)"], ["on", "On — her model can see"], ["off", "Off — tags only"]].map(
+                      ([id, label]) => html`<option value=${id} ?selected=${(s.chatVision ?? "") === id}>${label}</option>`)}
+                  </select>
+                </div>
+              </div>
+
+              <div class="field">
+                <div class="field-text">
+                  <div class="field-label">Sharing the graphics card</div>
+                  <div class="field-help">
+                    For one GPU running both her and the image generator. <strong>Both loaded</strong>
+                    keeps them side by side — fine when they fit. <strong>Swap</strong> unloads her
+                    while a picture is being made and loads her back, with the loader settings she was
+                    last loaded with, a minute after the generator goes quiet (sooner if you message
+                    her). Needs text-generation-webui, which is the backend that can load and unload.
+                  </div>
+                </div>
+                <div class="field-control">
+                  <select ?disabled=${!this.canEdit}
+                    @change=${(e: Event) => this.edit({ gpuShare: (e.target as HTMLSelectElement).value })}>
+                    ${[["", "Both loaded"], ["swap", "Swap for pictures"]].map(
+                      ([id, label]) => html`<option value=${id} ?selected=${(s.gpuShare ?? "") === id}>${label}</option>`)}
+                  </select>
+                </div>
+              </div>
+
               <div class="field stack">
                 <div class="field-text">
                   <div class="field-label">Model folder (for deleting models)</div>

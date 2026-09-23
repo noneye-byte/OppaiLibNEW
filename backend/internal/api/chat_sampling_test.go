@@ -40,7 +40,7 @@ func TestTuneSamplingStaysInBounds(t *testing.T) {
 		for i := 0; i < 60; i++ {
 			in.Messages = append(in.Messages, chatMessage{Role: "user", Content: "x"})
 		}
-		got, preset := tuneSampling(in, "more")
+		got, preset := tuneSampling(in, "more", tierSmall)
 		if got != task {
 			t.Fatalf("explicit task %q classified as %q", task, got)
 		}
@@ -64,11 +64,11 @@ func TestTuneSamplingStaysInBounds(t *testing.T) {
 	// one that exists to be accurate must stay cold. These are the two behaviours the
 	// presets are for; the absolute caps were raised together, so this bound tracks the
 	// table rather than pinning a number the table has moved past.
-	_, reaction := tuneSampling(chatRequest{Mode: "sweet", Intensity: 1, PhotoTags: []string{"x"}}, "look")
+	_, reaction := tuneSampling(chatRequest{Mode: "sweet", Intensity: 1, PhotoTags: []string{"x"}}, "look", tierSmall)
 	if reaction.MaxTokens > 260 {
 		t.Errorf("a reaction may not be long: max_tokens = %d", reaction.MaxTokens)
 	}
-	_, factual := tuneSampling(chatRequest{Mode: "sweet", Intensity: 1}, "how many tags are in my library?")
+	_, factual := tuneSampling(chatRequest{Mode: "sweet", Intensity: 1}, "how many tags are in my library?", tierSmall)
 	if factual.Temperature > 0.5 {
 		t.Errorf("a factual answer may not run hot: temperature = %v", factual.Temperature)
 	}
@@ -126,13 +126,113 @@ func TestChatStopsGuardTheTurnBoundary(t *testing.T) {
 }
 
 func TestSamplingSummaryIsCopyable(t *testing.T) {
-	summary := samplingSummary(taskCreative, samplingPresets[taskCreative], []string{"temperature"})
-	for _, want := range []string{"task=creative", "temperature=", "max_tokens=", "overridden=temperature"} {
+	summary := samplingSummary(taskCreative, tierLarge, samplingPresets[taskCreative], []string{"temperature"})
+	// The tier is in the line because the same task now produces two different sets of
+	// numbers, and a copied line that does not say which is not a diagnostic.
+	for _, want := range []string{"task=creative", "tier=large", "temperature=", "max_tokens=", "overridden=temperature"} {
 		if !strings.Contains(summary, want) {
 			t.Errorf("summary missing %q: %q", want, summary)
 		}
 	}
-	if strings.Contains(samplingSummary(taskCasual, samplingPresets[taskCasual], nil), "overridden") {
+	if strings.Contains(samplingSummary(taskCasual, tierSmall, samplingPresets[taskCasual], nil), "overridden") {
 		t.Error("nothing overridden should not mention overrides")
+	}
+}
+
+
+// ── the large-model tier ────────────────────────────────────────────────────
+
+func TestAParameterCountIsReadOffTheModelName(t *testing.T) {
+	for name, want := range map[string]modelTier{
+		"":                                       tierSmall,
+		"OpenHermes-2.5-Mistral-7B-GPTQ":         tierSmall,
+		"Mistral-Nemo-Instruct-2407-12B-IQ4_XS":  tierSmall,
+		"Qwen3.5-9B-abliterated-Q4_K_M.gguf":     tierSmall,
+		"Mistral-Small-3.2-24B-Instruct-Q5_K_M":  tierLarge,
+		"gemma-3-27b-it-Q6_K":                    tierLarge,
+		"Qwen3-32B-Q4_K_M.gguf":                  tierLarge,
+		"Meta-Llama-3.3-70B-Instruct-IQ2_XS":     tierLarge,
+		"some-finetune-with-no-count-in-it":      tierSmall,
+	} {
+		if got := tierFromModelName(name); got != want {
+			t.Errorf("%q read as %s, want %s", name, got, want)
+		}
+	}
+}
+
+func TestAVersionNumberIsNotAParameterCount(t *testing.T) {
+	// The bug this guards: "Mistral-Small-3.2-24B" offering the 2 of "3.2", or a
+	// quantisation suffix offering its own digits. Only a number that starts a word
+	// and ends in B counts.
+	if got := tierFromModelName("Llama-3.2-1B-Instruct-Q8_0"); got != tierSmall {
+		t.Errorf("a 1B read as %s", got)
+	}
+	if got := tierFromModelName("Mistral-Small-3.2-24B-Instruct"); got != tierLarge {
+		t.Errorf("a 24B read as %s", got)
+	}
+}
+
+func TestTheTierSettingBeatsTheName(t *testing.T) {
+	// Somebody running a merge that behaves unlike its size knows something a
+	// filename cannot say.
+	if got := resolveModelTier("large", "some-7B-merge"); got != tierLarge {
+		t.Errorf("explicit large ignored: %s", got)
+	}
+	if got := resolveModelTier("small", "Qwen3-32B"); got != tierSmall {
+		t.Errorf("explicit small ignored: %s", got)
+	}
+	if got := resolveModelTier("auto", "Qwen3-32B"); got != tierLarge {
+		t.Errorf("auto did not read the name: %s", got)
+	}
+}
+
+func TestALargeModelIsNotHandedTheSmallModelsCrutches(t *testing.T) {
+	scene := chatRequest{Mode: "roleplay", Intensity: 3, Task: string(taskCreative)}
+	_, small := tuneSampling(scene, "go on", tierSmall)
+	_, large := tuneSampling(scene, "go on", tierLarge)
+
+	// The repetition penalty is the one that costs a big model its prose and, at the
+	// end of a long reply, its protocol tags.
+	if large.RepetitionPen >= small.RepetitionPen {
+		t.Errorf("repetition_penalty %v on large is not below the 7B's %v", large.RepetitionPen, small.RepetitionPen)
+	}
+	// But never all the way to neutral, which is where even a 24B loops.
+	if large.RepetitionPen <= 1.0 {
+		t.Errorf("repetition_penalty %v invites loops", large.RepetitionPen)
+	}
+	// A scene is worth reading for longer on a model that holds one together.
+	if large.MaxTokens <= small.MaxTokens {
+		t.Errorf("a scene on large is capped at %d, no longer than the 7B's %d", large.MaxTokens, small.MaxTokens)
+	}
+}
+
+func TestLengthThatIsIntentDoesNotGrowWithTheModel(t *testing.T) {
+	// A reaction is a beat because a reaction is a beat. Only the cap that was a
+	// statement about what a 7B is worth reading moves with the tier.
+	beat := chatRequest{Mode: "sweet", Intensity: 1, PhotoTags: []string{"x"}}
+	_, small := tuneSampling(beat, "look", tierSmall)
+	_, large := tuneSampling(beat, "look", tierLarge)
+	if large.MaxTokens != small.MaxTokens {
+		t.Errorf("a reaction on large is %d tokens, want the 7B's %d", large.MaxTokens, small.MaxTokens)
+	}
+}
+
+func TestTheLargeTierIsStillAnEnvelope(t *testing.T) {
+	for task := range samplingPresets {
+		in := chatRequest{Mode: "horny", Intensity: 5, Task: string(task)}
+		for i := 0; i < 60; i++ {
+			in.Messages = append(in.Messages, chatMessage{Role: "user", Content: "x"})
+		}
+		_, preset := tuneSampling(in, "more", tierLarge)
+		b := largeSamplingBounds
+		if preset.Temperature < b.tempMin || preset.Temperature > b.tempMax {
+			t.Errorf("%s: temperature %v out of the large bounds", task, preset.Temperature)
+		}
+		if preset.RepetitionPen < b.repMin || preset.RepetitionPen > b.repMax {
+			t.Errorf("%s: repetition_penalty %v out of the large bounds", task, preset.RepetitionPen)
+		}
+		if preset.MaxTokens < b.maxTokMin || preset.MaxTokens > b.maxTokMax {
+			t.Errorf("%s: max_tokens %d out of the large bounds", task, preset.MaxTokens)
+		}
 	}
 }

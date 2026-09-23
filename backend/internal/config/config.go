@@ -95,6 +95,10 @@ type Config struct {
 	// when possible OppaiLib detects the model loaded by the backend itself.
 	ChatURL    string
 	ChatModel  string
+	// ChatContextTokens is the context window OppaiLib asks the chat backend to use,
+	// in tokens. 0 means auto: take what the loader reports, or a conservative
+	// default when it reports nothing. See api.chatContextLimit.
+	ChatContextTokens int
 	// VisionURL and VisionModel are the optional vision-capable OpenAI-compatible
 	// endpoint that describes pictures in prose; see settings.Settings.VisionURL.
 	VisionURL   string
@@ -153,6 +157,7 @@ func Load() *Config {
 		Rule34APIKey:        env("OPPAI_RULE34_API_KEY", ""),
 		ChatURL:             env("OPPAI_CHAT_URL", ""),
 		ChatModel:           env("OPPAI_CHAT_MODEL", ""),
+		ChatContextTokens:   envInt("OPPAI_CHAT_CONTEXT", 0),
 		VisionURL:           env("OPPAI_VISION_URL", ""),
 		VisionModel:         env("OPPAI_VISION_MODEL", ""),
 		ChatAPIKey:          env("OPPAI_CHAT_API_KEY", ""),

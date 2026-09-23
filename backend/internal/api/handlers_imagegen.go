@@ -336,6 +336,10 @@ func (s *Server) handleImageGenGenerate(w http.ResponseWriter, r *http.Request) 
 		gen.Progress = job.report
 		defer s.genJobs.finish(req.JobID, job)
 	}
+	// On a card shared by swapping, her model steps off it for the length of the run.
+	// See gpu_share.go.
+	release := s.lendCardToImages(r.Context())
+	defer release()
 	res, err := s.imagegen.Generate(ctx, set.ImageGenURL, gen)
 	if err != nil {
 		if ctx.Err() != nil && r.Context().Err() == nil {

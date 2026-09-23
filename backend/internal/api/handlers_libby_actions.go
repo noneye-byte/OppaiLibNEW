@@ -87,6 +87,13 @@ type actionCapabilities struct {
 	// SelfieReady says a picture of her fitting this turn's request already exists, so
 	// offering to generate one instead is the wrong answer. See chat_photo_pick.go.
 	SelfieReady bool
+	// Server says the admin actions are on the table: the user is an admin and the turn
+	// is about the machine. Describe says a vision model is configured. Models are the
+	// chat models she may offer to load, filled in once the backend has been asked —
+	// after the directive is written, before the reply is parsed. See libby_server.go.
+	Server   bool
+	Describe bool
+	Models   []string
 }
 
 func libbyCapabilities(cur settings.Settings) actionCapabilities {
@@ -124,6 +131,17 @@ func actionDirective(caps actionCapabilities) string {
 			"- [do: rename <title> | <new title>] — offer to rename something in the library. Only when they asked for a better name or the current one is plainly a filename or a number.",
 			"- [do: shelf <what tonight is for, in a few words>] — offer to put together tonight's shelf: a short collection called \""+libbyShelfName+"\", picked by you from what they like and what you want to show them. "+
 				"For when they ask what to watch tonight, want a few things lined up, or tell you to choose for them.")
+	}
+	if caps.Server {
+		lines = append(lines,
+			"- [do: load <model name>] — offer to load a different chat model: one of the other chat models on disk named in the server's state, written exactly. That swaps out your own mind for a minute or two; only when they ask for a different model or the one you are on is plainly wrong for what they want.",
+			"- [do: cleanup] — offer to clear abandoned uploads and leftover scratch files. It never touches media or your memories.")
+		if caps.Describe {
+			lines = append(lines, "- [do: describe] — offer to have the vision model write descriptions for everything in the library that has none yet. It runs in the background.")
+		}
+		if caps.Generate {
+			lines = append(lines, "- [do: free card] — offer to make the image generator let go of the graphics card memory it is holding.")
+		}
 	}
 	if len(lines) == 0 {
 		return ""
@@ -304,6 +322,36 @@ func (s *Server) buildLibbyAction(verb, argument string, caps actionCapabilities
 			Prompt: theme,
 		}, true
 
+	case "load", "switch", "swap":
+		if !caps.Server {
+			return libbyAction{}, false
+		}
+		// Only a name the backend listed. A model she invented, or one she half-
+		// remembered from her training, is a load that can only fail.
+		name, ok := matchModelName(strings.TrimPrefix(strings.TrimSpace(argument), "model "), caps.Models)
+		if !ok {
+			return libbyAction{}, false
+		}
+		return libbyAction{Kind: "load", Label: "Load a different chat model", Detail: name, Prompt: name}, true
+
+	case "cleanup", "clean", "tidy":
+		if !caps.Server {
+			return libbyAction{}, false
+		}
+		return libbyAction{Kind: "cleanup", Label: "Clean up storage", Detail: "Abandoned uploads and leftover scratch files — never media or memories"}, true
+
+	case "describe":
+		if !caps.Server || !caps.Describe {
+			return libbyAction{}, false
+		}
+		return libbyAction{Kind: "describe", Label: "Describe the library", Detail: "The vision model writes a description for everything that has none, in the background"}, true
+
+	case "free", "release", "unload":
+		if !caps.Server || !caps.Generate {
+			return libbyAction{}, false
+		}
+		return libbyAction{Kind: "free", Label: "Free the graphics card", Detail: "The image generator lets go of the checkpoint it is holding"}, true
+
 	case "rename", "retitle", "call":
 		if !caps.Library {
 			return libbyAction{}, false
@@ -403,6 +451,8 @@ func (s *Server) handleLibbyAct(w http.ResponseWriter, r *http.Request) {
 		s.actRename(w, r, req)
 	case "shelf":
 		s.actShelf(w, r, req)
+	case "load", "cleanup", "describe", "free":
+		s.actServer(w, r, cur, req)
 	default:
 		writeErr(w, http.StatusBadRequest, "unknown action")
 	}

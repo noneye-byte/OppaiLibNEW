@@ -137,6 +137,7 @@ export type ActionState = "pending" | "running" | "done" | "declined" | "failed"
     never heard of still renders as a card the user can read and refuse. */
 const ACTION_ICONS: Record<string, string> = {
   generate: "auto_awesome", import: "download", tag: "sell", favorite: "favorite", rename: "edit",
+  load: "swap_horiz", cleanup: "delete_sweep", describe: "description", free: "memory",
 };
 
 export const actionCardStyles = css`
@@ -233,7 +234,9 @@ export class ActionApprovals {
     this.set(action.id, "running");
     try {
       const result = await api.libbyAct(action, this.context());
-      let status = SUCCESS_STATUS[action.kind];
+      // The server's own words where it has some: "Loading Qwen3-32B — she'll be back in a
+      // minute or two" says what the table below cannot.
+      let status = typeof result.message === "string" ? result.message : SUCCESS_STATUS[action.kind];
       if (action.kind === "shelf" && typeof result.count === "number") {
         status = `${result.count} things on “${result.name ?? "Libby's pick"}” — it's in your collections.`;
       }

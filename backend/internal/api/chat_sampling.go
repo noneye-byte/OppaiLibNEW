@@ -17,10 +17,15 @@ import (
 //
 // So the task decides. Each class below is a bounded preset, and "bounded" is the whole
 // design: every value stays inside what OpenHermes-2.5-Mistral-7B actually behaves well at
-// (see samplingBounds), because the model this runs against is a 7B quant on 8 GB and the
-// failure modes at the edges — loops, word salad, three-minute replies — are worse than any
-// preset being slightly off. An advanced user's explicit numbers still win; see handleChat,
-// where in.Options is layered over these.
+// (see samplingBounds), because the model this was first written against is a 7B quant on
+// 8 GB and the failure modes at the edges — loops, word salad, three-minute replies — are
+// worse than any preset being slightly off. An advanced user's explicit numbers still win;
+// see handleChat, where in.Options is layered over these.
+//
+// The table is still the 7B's, and stays that way. What a larger model changes is applied
+// on top of it rather than by forking it into a second table nobody would keep in step —
+// see relaxForLargeModel, and chat_model_tier.go for which numbers a bigger model actually
+// wants different and which it does not.
 
 // chatTask is what this turn is for. The vocabulary is the brief's, and each one exists
 // because it wants genuinely different numbers, not because more classes is better.
@@ -120,7 +125,7 @@ var samplingPresets = map[chatTask]samplingPreset{
 // behaviour: the prompt is fitted to leave exactly the reply allowance the budget
 // reserved, so an override above it is spending room the history already occupies. See
 // handleChat, which caps that one field at the fitted figure and honours any smaller.
-var samplingBounds = struct {
+type samplingBoundsEnvelope struct {
 	tempMin, tempMax   float64
 	topPMin, topPMax   float64
 	topKMin, topKMax   int
@@ -129,7 +134,9 @@ var samplingBounds = struct {
 	rangeMin, rangeMax int
 	maxTokMin          int
 	maxTokMax          int
-}{
+}
+
+var samplingBounds = samplingBoundsEnvelope{
 	tempMin: 0.20, tempMax: 1.05,
 	topPMin: 0.70, topPMax: 0.98,
 	topKMin: 10, topKMax: 100,
@@ -139,14 +146,67 @@ var samplingBounds = struct {
 	maxTokMin: 48, maxTokMax: 1536,
 }
 
-func (p *samplingPreset) clamp() {
-	p.Temperature = clampFloat(p.Temperature, samplingBounds.tempMin, samplingBounds.tempMax)
-	p.TopP = clampFloat(p.TopP, samplingBounds.topPMin, samplingBounds.topPMax)
-	p.MinP = clampFloat(p.MinP, samplingBounds.minPMin, samplingBounds.minPMax)
-	p.RepetitionPen = clampFloat(p.RepetitionPen, samplingBounds.repMin, samplingBounds.repMax)
-	p.TopK = clampInt(p.TopK, samplingBounds.topKMin, samplingBounds.topKMax)
-	p.RepetitionRange = clampInt(p.RepetitionRange, samplingBounds.rangeMin, samplingBounds.rangeMax)
-	p.MaxTokens = clampInt(p.MaxTokens, samplingBounds.maxTokMin, samplingBounds.maxTokMax)
+// largeSamplingBounds is the same envelope, widened for a 24B and up.
+//
+// Only in the three directions a large model earns and a small one does not: it stays
+// coherent hotter, it is worth reading for longer, and its repetition penalty wants to
+// be able to sit near neutral without the clamp pushing it back up. topP, topK and minP
+// are unchanged, because the failure they guard against — the long tail of the
+// distribution — is not a thing a bigger model has less of.
+//
+// It is a wider envelope, not the absence of one. Nothing the automatic path chooses
+// may still reach a temperature that degenerates or a max_tokens that means minutes of
+// silence, and an explicit user override is still theirs to get wrong.
+var largeSamplingBounds = samplingBoundsEnvelope{
+	tempMin: 0.20, tempMax: 1.15,
+	topPMin: 0.70, topPMax: 0.98,
+	topKMin: 10, topKMax: 200,
+	minPMin: 0.00, minPMax: 0.20,
+	repMin: 1.00, repMax: 1.20,
+	rangeMin: 256, rangeMax: 8192,
+	maxTokMin: 48, maxTokMax: 2560,
+}
+
+// boundsFor is the envelope a tier is clamped into.
+func boundsFor(tier modelTier) samplingBoundsEnvelope {
+	if tier == tierLarge {
+		return largeSamplingBounds
+	}
+	return samplingBounds
+}
+
+// relaxForLargeModel undoes the two small-model crutches. See chat_model_tier.go for
+// why these two and nothing else.
+func (p *samplingPreset) relaxForLargeModel(task chatTask) {
+	// Most of the way back to neutral rather than all of it: a long scene on any model
+	// benefits from *some* discouragement of the exact phrase it just used, and 1.0 is
+	// the value that lets a bad night loop even on a big model. 1.15 becomes 1.05,
+	// 1.10 becomes 1.035, and the two near-deterministic presets barely move.
+	p.RepetitionPen = 1 + (p.RepetitionPen-1)*largeRepetitionShare
+	// With the penalty that much lighter it can afford to look back further, which is
+	// what catches a repeat across paragraphs rather than within one.
+	p.RepetitionRange *= 2
+	// Length is intent, not capacity — a reaction is a beat at any size and casual is
+	// texting — so only the class whose cap was a statement about what a 7B is worth
+	// reading moves. See the preset table.
+	if task == taskCreative {
+		p.MaxTokens = p.MaxTokens * 3 / 2
+	}
+}
+
+// largeRepetitionShare is how much of a preset's repetition penalty survives on a large
+// model, as a fraction of its distance above 1.0.
+const largeRepetitionShare = 0.35
+
+func (p *samplingPreset) clamp(tier modelTier) {
+	bounds := boundsFor(tier)
+	p.Temperature = clampFloat(p.Temperature, bounds.tempMin, bounds.tempMax)
+	p.TopP = clampFloat(p.TopP, bounds.topPMin, bounds.topPMax)
+	p.MinP = clampFloat(p.MinP, bounds.minPMin, bounds.minPMax)
+	p.RepetitionPen = clampFloat(p.RepetitionPen, bounds.repMin, bounds.repMax)
+	p.TopK = clampInt(p.TopK, bounds.topKMin, bounds.topKMax)
+	p.RepetitionRange = clampInt(p.RepetitionRange, bounds.rangeMin, bounds.rangeMax)
+	p.MaxTokens = clampInt(p.MaxTokens, bounds.maxTokMin, bounds.maxTokMax)
 }
 
 // intFromAny reads a whole number out of a decoded JSON value. Every numeric field in
@@ -290,11 +350,17 @@ func containsAny(s string, needles []string) bool {
 // The adjustments are small and few by design. A preset table plus per-request nudges is
 // already two systems deciding one number; a third would make the chosen values impossible
 // to reason about from the outside, which is exactly what the copyable log below is for.
-func tuneSampling(in chatRequest, latestUser string) (chatTask, samplingPreset) {
+func tuneSampling(in chatRequest, latestUser string, tier modelTier) (chatTask, samplingPreset) {
 	task := classifyChatTask(in, latestUser)
 	preset, known := samplingPresets[task]
 	if !known {
 		task, preset = taskCasual, samplingPresets[taskCasual]
+	}
+	// The table is written for a 7B. On a large model two of its numbers are a handicap
+	// rather than a guard, and they are undone first so the adjustments below still land
+	// on top of them. See relaxForLargeModel.
+	if tier == tierLarge {
+		preset.relaxForLargeModel(task)
 	}
 	// Heat loosens her. A peaked scene should not read like the same sentences at a higher
 	// word count, and the clamp keeps this from ever reaching the incoherent range.
@@ -304,11 +370,17 @@ func tuneSampling(in chatRequest, latestUser string) (chatTask, samplingPreset) 
 	}
 	// A long history is where a small model starts repeating itself, so the penalty rises
 	// with the conversation rather than being set once for a chat that has barely started.
+	// Half as much on a large model: the same climb that rescues a 7B at message forty is
+	// what makes a 24B start avoiding ordinary words at message forty.
 	if len(in.Messages) > 24 {
-		preset.RepetitionPen += 0.02
+		if tier == tierLarge {
+			preset.RepetitionPen += 0.01
+		} else {
+			preset.RepetitionPen += 0.02
+		}
 		preset.RepetitionRange += 512
 	}
-	preset.clamp()
+	preset.clamp(tier)
 	return task, preset
 }
 
@@ -372,9 +444,9 @@ func stripThinking(reply string) string {
 // The brief asks for the selected values to be logged and copyable, and this is both: it
 // goes to the server log and comes back in the response for the UI's copy button. Written
 // as key=value in a fixed order so two generations can be diffed by eye.
-func samplingSummary(task chatTask, p samplingPreset, overridden []string) string {
-	out := fmt.Sprintf("task=%s temperature=%.2f top_p=%.2f top_k=%d min_p=%.2f repetition_penalty=%.2f repetition_penalty_range=%d max_tokens=%d",
-		task, p.Temperature, p.TopP, p.TopK, p.MinP, p.RepetitionPen, p.RepetitionRange, p.MaxTokens)
+func samplingSummary(task chatTask, tier modelTier, p samplingPreset, overridden []string) string {
+	out := fmt.Sprintf("task=%s tier=%s temperature=%.2f top_p=%.2f top_k=%d min_p=%.2f repetition_penalty=%.2f repetition_penalty_range=%d max_tokens=%d",
+		task, tier, p.Temperature, p.TopP, p.TopK, p.MinP, p.RepetitionPen, p.RepetitionRange, p.MaxTokens)
 	if len(overridden) > 0 {
 		out += " overridden=" + strings.Join(overridden, ",")
 	}

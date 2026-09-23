@@ -139,6 +139,7 @@ import net.fourbakers.oppailib.work.UploadWorker
  */
 private const val SCREEN_LIBRARY = ""
 private const val SCREEN_BROWSE = "browse"
+private const val SCREEN_GAMES = "games"
 private const val SCREEN_CHAT = "chat"
 private const val SCREEN_DOWNLOADS = "downloads"
 private const val SCREEN_STUDIO = "studio"
@@ -214,6 +215,7 @@ fun LibraryScreen(repo: Repository, onLogout: () -> Unit) {
     var showSettings by remember { mutableStateOf(false) }
     val resumeTo = remember { repo.prefs.lastScreen }
     var showBrowse by remember { mutableStateOf(resumeTo == SCREEN_BROWSE) }
+    var showGames by remember { mutableStateOf(resumeTo == SCREEN_GAMES) }
     var showChat by remember { mutableStateOf(resumeTo == SCREEN_CHAT) }
     // A hold-menu handoff is deliberately in-memory: it is an attachment for this
     // visit to Chat, not a preference that should reappear after relaunching the app.
@@ -349,9 +351,10 @@ fun LibraryScreen(repo: Repository, onLogout: () -> Unit) {
     // a handful of short values into the same encrypted preferences the session already
     // lives in — and they are cleared on sign-out, because where you were is part of
     // the session and not of the phone.
-    LaunchedEffect(showBrowse, showChat, showDownloads, showImageGen) {
+    LaunchedEffect(showBrowse, showGames, showChat, showDownloads, showImageGen) {
         repo.prefs.lastScreen = when {
             showBrowse -> SCREEN_BROWSE
+            showGames -> SCREEN_GAMES
             showChat -> SCREEN_CHAT
             showDownloads -> SCREEN_DOWNLOADS
             showImageGen -> SCREEN_STUDIO
@@ -464,6 +467,18 @@ fun LibraryScreen(repo: Repository, onLogout: () -> Unit) {
                 pins = repo.prefs.pinnedFeeds
                 refresh()
             },
+        )
+        return
+    }
+
+    if (showGames) {
+        // Adding a game from a catalogue lands it in the library, so the grid is
+        // refreshed on the way back for the same reason Browse refreshes: a shelf that
+        // is silently missing what was just added reads as the add having failed.
+        GameBrowseScreen(
+            repo = repo,
+            onBack = { showGames = false; refresh() },
+            onOpenMedia = { id -> showGames = false; openLinked(id) },
         )
         return
     }
@@ -725,6 +740,13 @@ fun LibraryScreen(repo: Repository, onLogout: () -> Unit) {
                         browsePin = null
                         showBrowse = true
                     },
+                    modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding),
+                )
+                NavigationDrawerItem(
+                    icon = { Icon(Icons.Filled.SportsEsports, contentDescription = null) },
+                    label = { Text("Browse games") },
+                    selected = false,
+                    onClick = { scope.launch { drawer.close() }; showGames = true },
                     modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding),
                 )
                 NavigationDrawerItem(

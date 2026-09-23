@@ -576,6 +576,36 @@ func (c *Client) Ping(ctx context.Context, base string) error {
 	return err
 }
 
+// FreeMemory asks the generator to let go of the models it is holding on the card, so
+// something else can have the room. Used when the chat model and the generator take
+// turns on one GPU: a generator that keeps its checkpoint resident after the picture is
+// done leaves the chat model nowhere to load back into.
+//
+// InvokeAI empties its model cache and loads again on demand. Automatic1111 unloads the
+// checkpoint and does not reliably bring it back by itself, which is why ReclaimMemory
+// exists. Both are best-effort from the caller's side: an older build without the
+// endpoint answers 404, which is reported and survivable.
+func (c *Client) FreeMemory(ctx context.Context, base string) error {
+	kind, err := c.Backend(ctx, base)
+	if err != nil {
+		return err
+	}
+	if kind == KindInvokeAI {
+		return c.postJSON(ctx, base+"/api/v2/models/empty_model_cache", map[string]any{}, nil)
+	}
+	return c.postJSON(ctx, base+"/sdapi/v1/unload-checkpoint", map[string]any{}, nil)
+}
+
+// ReclaimMemory undoes FreeMemory before a generation, where the backend needs telling.
+// A no-op for InvokeAI, which loads what a graph asks for.
+func (c *Client) ReclaimMemory(ctx context.Context, base string) error {
+	kind, err := c.Backend(ctx, base)
+	if err != nil || kind == KindInvokeAI {
+		return err
+	}
+	return c.postJSON(ctx, base+"/sdapi/v1/reload-checkpoint", map[string]any{}, nil)
+}
+
 // Generate runs one txt2img job and returns the decoded images. It does not persist
 // anything in the library — that is the caller's decision.
 func (c *Client) Generate(ctx context.Context, base string, req GenerateRequest) (*GenerateResult, error) {

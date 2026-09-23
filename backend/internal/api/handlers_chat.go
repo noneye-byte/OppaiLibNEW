@@ -715,7 +715,8 @@ func (s *Server) postChatCompletion(ctx context.Context, payloadMap map[string]a
 		return "", errors.New("couldn't read the local LLM response")
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("local LLM returned %s: %s", resp.Status, truncateChatError(body))
+		return "", &chatBackendStatusError{Status: resp.StatusCode,
+			msg: fmt.Sprintf("local LLM returned %s: %s", resp.Status, truncateChatError(body))}
 	}
 	var out struct {
 		Choices []struct {
@@ -732,6 +733,16 @@ func (s *Server) postChatCompletion(ctx context.Context, payloadMap map[string]a
 	return reply, nil
 }
 
+// chatBackendStatusError is the backend answering with an error status, as opposed to
+// not answering at all. The distinction is what lets a turn that sent pictures tell "this
+// model will not take images" from "the backend is down", and retry only the first.
+type chatBackendStatusError struct {
+	Status int
+	msg    string
+}
+
+func (e *chatBackendStatusError) Error() string { return e.msg }
+
 func (s *Server) handleChatStatus(w http.ResponseWriter, r *http.Request) {
 	cur := s.settings.Get()
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
@@ -746,11 +757,17 @@ func (s *Server) handleChatStatus(w http.ResponseWriter, r *http.Request) {
 	if model == "" {
 		model = cur.ChatModel
 	}
+	detail := probe.Detail
+	lent := s.card.parkedModel()
+	if lent != "" && !probe.Ready {
+		detail = cardLentNote
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
+		"cardLent":        lent,
 		"enabled":         probe.Ready,
 		"configured":      cur.ChatURL != "",
 		"model":           model,
-		"message":         probe.Detail,
+		"message":         detail,
 		"modes":           []string{"sweet", "playful", "bold", "roleplay", "horny"},
 		"advancedOptions": probe.Ready,
 		"modelBackend":    cur.ChatURL != "",
@@ -1136,6 +1153,16 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	caps := libbyCapabilities(cur)
 	caps.KnownURLs = knownURLs(in)
 	caps.SelfieReady = readyOK && ready.fit > 0
+	// Looking after the machine: a turn about the server, from an admin, puts the admin
+	// actions on the table. The model list they choose from is read after the probe,
+	// below. See libby_server.go.
+	serverTurn := serverCue.MatchString(latestUser)
+	isAdmin := false
+	if u, userOK := s.chatUser(r); userOK {
+		isAdmin = u.IsAdmin
+	}
+	caps.Server = isAdmin && serverTurn && character.ID == "libby"
+	caps.Describe = cur.VisionEnabled
 	actionable := character.ID == "libby"
 	if actionable {
 		// The action directive is the one shed-able piece of protocol: without it she simply
@@ -1147,7 +1174,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			actionText += "\n" + actionFollowUpDirective
 		}
 		addDeferred("what she can do for you", rankActions, "\n\n"+actionText,
-			signals.act || viewing != "" || len(in.SharedMediaIDs) > 0)
+			signals.act || viewing != "" || len(in.SharedMediaIDs) > 0 || caps.Server)
 		// Thinking, and talking to herself. Libby-only for the same reason as the rest of
 		// this block: an imported card's inner life belongs to whoever wrote it.
 		//
@@ -1257,6 +1284,14 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	probe := s.probeChatBackend(probeCtx)
 	probeCancel()
 	if !probe.Ready {
+		// Not down: lent to the image generator. Said as that, and — when nothing is
+		// generating any more — the rest of the grace is skipped, since somebody is now
+		// waiting to talk to her. See gpu_share.go.
+		if s.card.parkedModel() != "" {
+			s.handBackCardNow()
+			writeErr(w, http.StatusServiceUnavailable, cardLentNote)
+			return
+		}
 		writeErr(w, http.StatusServiceUnavailable, probe.Detail)
 		return
 	}
@@ -1268,12 +1303,38 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// a long scene want different temperatures and very different length caps, and pinning
 	// one set of numbers to all of it is what made short answers ramble and factual answers
 	// invent. See chat_sampling.go.
-	task, preset := tuneSampling(in, latestUser)
+	// How much slack the sampling gets depends on what is actually loaded: the preset
+	// table's repetition penalties are a 7B's crutch and a 24B's handicap. probe.Loaded
+	// is the model's own name, which is where the parameter count is written.
+	tier := resolveModelTier(cur.ChatModelTier, model)
+	task, preset := tuneSampling(in, latestUser, tier)
 	// Then make it fit. Past the model's window a local backend drops the *front* of the
 	// prompt, which is the character card — so the trimming happens here, in a stated order,
 	// and what was cut is reported to the client. See chat_budget.go.
 	limit := s.chatContextLimit(r.Context())
-	messages, replyTokens, budget, err := fitChatTurn(modePrompt, sections, tail.String(), history, limit, preset.MaxTokens)
+	// How the box is doing. On a turn about the server, everything she can be told; on
+	// any other turn, only a drive close to full — the one thing she should bring up
+	// unasked — and nothing at all when the drives are fine. See libby_server.go.
+	if character.ID == "libby" {
+		state := s.gatherServerState(r.Context(), cur, model, limit, tier, caps.Server, serverTurn)
+		caps.Models = state.Models
+		if serverTurn || len(state.alarms()) > 0 {
+			sections = append(sections, promptSection{Name: "how the server is doing", Text: state.render(serverTurn), Rank: rankServer})
+		}
+	}
+	// Her eyes, when her model has them: this turn's pictures go to her as pictures, and
+	// the room they take is set aside before the text is fitted, since the backend counts
+	// them against the same window. See chat_eyes.go.
+	var pictures []map[string]any
+	if chatSeesPictures(cur.ChatVision, model) && !knownBlind(cur.ChatURL, model) {
+		if u, userOK := s.chatUser(r); userOK {
+			pictures = s.turnPictures(r.Context(), u.ID, turnPictureSources(in, inQuestion, inQuestionOK), picturesFor(limit))
+		}
+	}
+	if len(pictures) > 0 {
+		tail.WriteString("\n\n" + eyesDirective)
+	}
+	messages, replyTokens, budget, err := fitChatTurn(modePrompt, sections, tail.String(), history, limit-len(pictures)*pictureTokens, preset.MaxTokens)
 	if err != nil {
 		s.log.Warn("libby context budget", "err", err, "limit", limit, "system", budget.SystemTokens)
 		// A note means the failure is explainable to the user; anything else is ours.
@@ -1295,6 +1356,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	payloadMap := map[string]any{"messages": messages, "stream": false}
+	if len(pictures) > 0 {
+		payloadMap["messages"] = withPictures(messages, pictures)
+	}
 	if model != "" {
 		payloadMap["model"] = model
 	}
@@ -1337,12 +1401,23 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	sort.Strings(overridden) // stable for the log line and the copy button
 	// Logged for every generation, as the brief asks, and returned below so the UI can
 	// offer it as one copyable line.
-	summary := samplingSummary(task, preset, overridden)
+	summary := samplingSummary(task, tier, preset, overridden)
 	s.log.Info("libby generation", "sampling", summary, "contextLimit", budget.Limit,
 		"promptTokens", budget.PromptTokens, "dropped", budget.Dropped)
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
 	defer cancel()
 	reply, err := s.postChatCompletion(ctx, payloadMap)
+	// A backend that will not take a picture answers with an error rather than a reply —
+	// "image input is not supported", or a template that cannot place one. Asked again
+	// without the pictures and without being told she can see, and remembered, so the
+	// next turn does not pay for the same refusal. See chat_eyes.go.
+	var refused *chatBackendStatusError
+	if err != nil && len(pictures) > 0 && errors.As(err, &refused) {
+		s.log.Info("libby eyes: backend refused pictures; answering from the tags", "model", model, "status", refused.Status)
+		rememberBlind(cur.ChatURL, model)
+		payloadMap["messages"] = withoutEyes(messages)
+		reply, err = s.postChatCompletion(ctx, payloadMap)
+	}
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return

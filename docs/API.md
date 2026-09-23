@@ -448,7 +448,7 @@ part a client has to send or read to keep up with her.
 | Method | Path | Notes |
 |--------|------|-------|
 | POST | `/api/chat` | `viewing` may carry `position`, `duration` (seconds) and `paused` for the open video, so she reacts to this moment of it. `task: "afterglow"` marks the morning-after turn — see below |
-| POST | `/api/libby/act` | an approved offer. Besides the action's own fields, send `outfit`, `activity`, `intensity` and `recentMediaIds` as they stand when Allow is pressed: a picture she makes of herself is drawn in that state and filed as a picture of her, tagged with the subject; a `shelf` action rebuilds the collection "Libby's pick" → `{collectionId, name, count}` |
+| POST | `/api/libby/act` | an approved offer. Besides the action's own fields, send `outfit`, `activity`, `intensity` and `recentMediaIds` as they stand when Allow is pressed: a picture she makes of herself is drawn in that state and filed as a picture of her, tagged with the subject; a `shelf` action rebuilds the collection "Libby's pick" → `{collectionId, name, count}`. The server actions `load` (the model name in `prompt`), `cleanup`, `describe` and `free` are **admin only** (403 otherwise) and answer `{message}`; `load` answers 202 and loads in the background |
 | GET | `/api/libby/auto/pending` | → `{pending:[{trigger, detail, decision}]}`: reasons to speak first the server noticed itself. Only `afterglow` so far — owed once, the calendar day after a conversation whose heat peaked at 4 or more. Send the turn with the trigger as `task`, then record it with `/api/libby/auto/sent` |
 | POST | `/api/tts/speak` | `{text, voice?, speed?, heat?}`; `heat` 1–5 makes piper read slower and breathier from 3 up |
 

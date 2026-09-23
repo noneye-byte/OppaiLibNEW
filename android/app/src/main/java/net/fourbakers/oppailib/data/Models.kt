@@ -252,6 +252,143 @@ data class LaunchRequest(val gameId: Long)
 @Serializable
 data class GameCheckResponse(val remote: GameRemote, val changed: Boolean = false, val error: String = "")
 
+// ── The game catalogues: itch.io and F95zone ──────────────────────────────────
+//
+// The phone browses both through the server, which is the only thing that holds a
+// session on either site. Nothing here reaches itch.io or F95zone from the handset:
+// a card's thumbnail comes back through the scrape proxy like every other remote
+// picture, and adding a game is a URL handed to the same importer a pasted link goes
+// through. See the backend's gamesites package for why a catalogue is browsed signed
+// in or not at all — F95zone hides threads and every download link from guests, so a
+// listing read signed out is a listing that quietly shows half of what is there.
+
+/**
+ * Whether a game site is signed in, and as whom when it will say.
+ *
+ * [password] is true for a site that takes a username and password here, which is
+ * F95zone. itch.io does not — its login page is behind a browser check no server can
+ * pass — and is signed in by pasting its session cookie instead.
+ */
+@Serializable
+data class GameSiteAccount(
+    val site: String = "",
+    val label: String = "",
+    val signedIn: Boolean = false,
+    val user: String = "",
+    val password: Boolean = false,
+)
+
+/** One ordering a site's listing offers. [key] is passed straight back to it. */
+@Serializable
+data class GameSort(val key: String = "", val label: String = "")
+
+/**
+ * The catalogues and what each will sort by.
+ *
+ * [sorts] is keyed by site name rather than being a field per site: the two sites
+ * offer different orderings and the server is the one that knows them, so a phone
+ * that hard-coded either list would show a sort F95zone had dropped.
+ */
+@Serializable
+data class GameSitesResponse(
+    val sites: List<GameSiteAccount> = emptyList(),
+    val sorts: Map<String, List<GameSort>> = emptyMap(),
+    val itchNsfw: Boolean = false,
+)
+
+/** The body of a sign-in: a password for F95zone, or a session cookie for either. */
+@Serializable
+data class GameSiteLoginRequest(
+    val username: String = "",
+    val password: String = "",
+    val cookie: String = "",
+)
+
+/**
+ * One search result on a game site. Nothing here is in the library unless
+ * [libraryId] says which entry it already is — which is what lets a card say
+ * "On your shelf" instead of offering to add it twice.
+ */
+@Serializable
+data class GameSiteItem(
+    val site: String = "",
+    val id: String = "",
+    val title: String = "",
+    val developer: String = "",
+    val version: String = "",
+    val description: String = "",
+    val url: String = "",
+    val thumbnail: String = "",
+    val images: List<String> = emptyList(),
+    val tags: List<String> = emptyList(),
+    val rating: Double = 0.0,
+    val webPlayable: Boolean = false,
+    val nsfw: Boolean = false,
+    val libraryId: Long = 0,
+)
+
+@Serializable
+data class GameSiteListing(
+    val items: List<GameSiteItem> = emptyList(),
+    val page: Int = 1,
+    val hasMore: Boolean = false,
+)
+
+@Serializable
+data class GameBrowseDetailRequest(val item: GameSiteItem)
+
+/**
+ * A result's own page, read.
+ *
+ * [degraded] means the read did not fully succeed and what came back is the listing's
+ * own thinner data — worth saying out loud rather than showing a half-empty sheet as
+ * though the page were simply sparse.
+ */
+@Serializable
+data class GameBrowseDetailResponse(val item: GameSiteItem, val degraded: Boolean = false)
+
+@Serializable
+data class GameBrowseAddRequest(val url: String, val id: String = "", val version: String = "")
+
+/** [created] is false when the game was already on the shelf, which is not an error. */
+@Serializable
+data class GameBrowseAddResponse(
+    val id: Long = 0,
+    val created: Boolean = false,
+    val media: Media? = null,
+    val remote: GameRemote? = null,
+)
+
+/** How far a check-everything sweep has got. [current] is the title being read now. */
+@Serializable
+data class GameUpdateSweep(
+    val running: Boolean = false,
+    val done: Int = 0,
+    val total: Int = 0,
+    val current: String = "",
+    val lastRun: Long = 0,
+    val found: Int = 0,
+    val errors: Int = 0,
+)
+
+@Serializable
+data class GameUpdateItem(
+    val id: Long = 0,
+    val title: String = "",
+    val hasThumb: Boolean = false,
+    val remote: GameRemote = GameRemote(),
+)
+
+@Serializable
+data class GameUpdatesResponse(
+    val items: List<GameUpdateItem> = emptyList(),
+    val tracked: Int = 0,
+    val sweep: GameUpdateSweep = GameUpdateSweep(),
+)
+
+@Serializable
+data class GameUpdatesCheckResponse(val started: Boolean = false, val sweep: GameUpdateSweep = GameUpdateSweep())
+
 /**
  * Whether a game can be played in the browser, and how.
  *

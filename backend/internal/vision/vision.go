@@ -67,14 +67,11 @@ func (c *Client) Describe(ctx context.Context, req Request) (string, error) {
 	}
 	content := []map[string]any{{"type": "text", "text": Prompt(req.Kind, len(req.Frames), req.Tags)}}
 	for _, img := range req.Frames {
-		data, err := encodeFrame(img)
+		part, err := Part(img, maxEdge)
 		if err != nil {
 			return "", err
 		}
-		content = append(content, map[string]any{
-			"type":      "image_url",
-			"image_url": map[string]any{"url": "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(data)},
-		})
+		content = append(content, part)
 	}
 	body := map[string]any{
 		"messages":    []map[string]any{{"role": "user", "content": content}},
@@ -225,17 +222,37 @@ func firstLine(raw []byte) string {
 	return s
 }
 
-// encodeFrame downsizes a frame to maxEdge and encodes it as JPEG. Everything the
+// Part is one picture as an OpenAI-compatible message content part, downsized so its
+// longer side is at most edge.
+//
+// Exported for the chat path, which shows Libby a picture beside the user's words when
+// her own model can see. It goes through the same encoder as a description so the two
+// cannot drift into different ideas of what a picture costs to send.
+func Part(img image.Image, edge int) (map[string]any, error) {
+	data, err := encodeFrame(img, edge)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"type":      "image_url",
+		"image_url": map[string]any{"url": "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(data)},
+	}, nil
+}
+
+// encodeFrame downsizes a frame to edge and encodes it as JPEG. Everything the
 // model receives goes through here, so a 40 MB PNG scan and a 4K video frame cost
 // the same to send.
-func encodeFrame(img image.Image) ([]byte, error) {
+func encodeFrame(img image.Image, edge int) ([]byte, error) {
 	b := img.Bounds()
 	w, h := b.Dx(), b.Dy()
 	if w == 0 || h == 0 {
 		return nil, errors.New("empty frame")
 	}
-	if w > maxEdge || h > maxEdge {
-		scale := float64(maxEdge) / float64(max(w, h))
+	if edge <= 0 {
+		edge = maxEdge
+	}
+	if w > edge || h > edge {
+		scale := float64(edge) / float64(max(w, h))
 		nw, nh := max(1, int(float64(w)*scale)), max(1, int(float64(h)*scale))
 		dst := image.NewRGBA(image.Rect(0, 0, nw, nh))
 		draw.CatmullRom.Scale(dst, dst.Bounds(), img, b, draw.Over, nil)

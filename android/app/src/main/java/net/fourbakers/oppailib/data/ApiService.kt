@@ -210,6 +210,48 @@ interface ApiService {
     @POST("api/media/{id}/remote/acknowledge")
     suspend fun acknowledgeGameRemote(@Path("id") gameId: Long): GameRemote
 
+    // ── Browsing the catalogues ───────────────────────────────────────────
+    // itch.io and F95zone, read through the server because the server is what holds
+    // a session on either. Every one of these is slow by phone standards — each is
+    // an HTTP fetch of somebody else's site, parsed — so they sit inside the same
+    // ten-minute read timeout the rest of the client uses rather than having their
+    // own. See the backend's gamesites package.
+
+    @GET("api/games/sites")
+    suspend fun gameSites(): GameSitesResponse
+
+    /** Refused with 502, never 401: a rejected F95zone password is an upstream
+     *  refusal, and a 401 from anywhere signs this app out of the library. */
+    @POST("api/games/sites/{site}/login")
+    suspend fun gameSiteLogin(@Path("site") site: String, @Body body: GameSiteLoginRequest): GameSiteAccount
+
+    @POST("api/games/sites/{site}/logout")
+    suspend fun gameSiteLogout(@Path("site") site: String): GameSiteAccount
+
+    /** 409 when the site is not signed in — a precondition of the request, not a
+     *  statement about this session. */
+    @GET("api/games/browse")
+    suspend fun gameBrowse(
+        @Query("site") site: String,
+        @Query("q") query: String,
+        @Query("sort") sort: String,
+        @Query("page") page: Int,
+    ): GameSiteListing
+
+    @POST("api/games/browse/detail")
+    suspend fun gameBrowseDetail(@Body body: GameBrowseDetailRequest): GameBrowseDetailResponse
+
+    /** Minutes of downloading, which the server finishes even if the phone gives up
+     *  waiting for the answer. A timeout here is not a failed import. */
+    @POST("api/games/browse/add")
+    suspend fun gameBrowseAdd(@Body body: GameBrowseAddRequest): GameBrowseAddResponse
+
+    @GET("api/games/updates")
+    suspend fun gameUpdates(): GameUpdatesResponse
+
+    @POST("api/games/updates/check")
+    suspend fun gameUpdatesCheck(): GameUpdatesCheckResponse
+
     @GET("api/launchy")
     suspend fun launchyStatus(): LaunchyStatus
 

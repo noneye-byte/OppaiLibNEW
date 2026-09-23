@@ -136,6 +136,10 @@ type Server struct {
 	// vision_describe.go.
 	describe *describeQueue
 
+	// Whether her chat model is lent to the image generator right now, when the card is
+	// shared by swapping. See gpu_share.go.
+	card *cardShare
+
 	// Every title and tag in the library, decrypted once and kept in memory so Libby
 	// can name something from any depth of the collection rather than only from the
 	// newest rows. Built lazily on her first lookup. See chat_library_index.go.
@@ -220,6 +224,7 @@ func NewServer(cfg *config.Config, database *db.DB, store *storage.Store, sc *sc
 
 		installedHashCache: newResolveCache[map[string]string](time.Minute),
 		describe:           newDescribeQueue(),
+		card:               &cardShare{},
 
 		gameUpdates: &gameUpdateSweep{},
 		launchy:     newLaunchyRuntime(),
@@ -262,6 +267,8 @@ func dirOr(configured, fallback string) string {
 // the server is constructed.
 func (s *Server) StartBackgroundJobs() {
 	go s.backfillAutoTags()
+	// A card lent to the generator when the server last stopped goes back first thing.
+	go s.resumeParkedCard()
 	go s.backfillThumbnails()
 	go s.backfillImageThumbs()
 	go s.backfillComics()
