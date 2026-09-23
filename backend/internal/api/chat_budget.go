@@ -247,6 +247,7 @@ const (
 	rankWantsList       = 30 // her own standing desires
 	rankServer          = 33 // how the machine she lives on is doing
 	rankRecaps          = 35 // the other conversations she has had with them
+	rankJournal         = 37 // what she wrote to herself after the last few
 	rankBond            = 40 // the gap, carried mood, closeness
 	// Above the wants, recaps and bond rather than below them, where it sat at 27:
 	// ranked there it was shed on every install with a real library, and a state she
@@ -255,7 +256,8 @@ const (
 	rankActivity        = 42 // the MISC states she can put herself into
 	rankReadyPicture    = 45 // what the picture she is about to send actually shows
 	rankActions         = 50 // what she may offer to do to the collection
-	rankMemoryList      = 60 // what she knows about them — shed last
+	rankMemoryList      = 60 // what she knows about them
+	rankSelfFacts       = 65 // who she has said she is — shed last of all
 )
 
 // assembleSystemPrompt fits the optional sections into what is left between head and tail.

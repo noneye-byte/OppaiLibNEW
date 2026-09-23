@@ -17,7 +17,7 @@ import {
   api, PROFILE_IMAGE_OWNER, type ChatCharacter, type ChatConversation, type ChatImage, type ChatMessage,
   type ChatBackendInfo, type ChatDebug, type ChatModelInspection, type ChatModels, type ChatOptions, type ChatPhotoReport, type ChatProfile, type ChatSampling, type ChatStatus, type ChatWorkspace,
   type LibbyAutoDecision, type LibbyAutoSettings, type LibbyAutoState, type LibbyBond, type LibbyContext,
-  type DiscordPlace, type DiscordState, type LibbyIdentity, type LibbyMemory, type LibbyThought, type LibbyWant, type SharedLink,
+  type DiscordPlace, type DiscordState, type LibbyIdentity, type LibbyJournalEntry, type LibbyMemory, type LibbyThought, type LibbyWant, type SharedLink,
   type StoredChatMessage, type User, type ChatReplyRef, type LibbyAttachment, type LibbyBackground, type LibbyLink, type Media,
   type LibbyActivityDef, type LibbyOutfit, type LibbyActContext,
   SEND_WEIGHTS,
@@ -276,7 +276,7 @@ const MEMORY_KIND_LABELS: Record<string, string> = {
   relationship: "us",
   preference: "likes",
   user: "about you",
-  libby: "about her",
+  libby: "who she is",
   emotional: "feelings",
   shared: "together",
 };
@@ -423,6 +423,10 @@ export class OppaiChat extends LitElement {
   @state() private autoState: LibbyAutoState | null | undefined = null;
   /** Libby's own standing wants, loaded alongside her memory; null until then. */
   @state() private wants: LibbyWant[] | null = null;
+  /** Her journal, newest first; null until the mind panel first needs it. */
+  @state() private journal: LibbyJournalEntry[] | null = null;
+  /** True while she is writing an entry the user asked for. */
+  @state() private reflecting = false;
   /** Which pictures in the library are of her. undefined = not fetched, or this server
       has no such endpoint — the panel degrades to a spinner rather than erroring. */
   @state() private identity: LibbyIdentity | undefined = undefined;
@@ -1660,6 +1664,45 @@ export class OppaiChat extends LitElement {
       await api.clearLibbyWants();
       this.wants = [];
     } catch (error) { this.say(error instanceof Error ? error.message : "Couldn't clear her wants.", true); }
+  }
+
+  /** Guards the lazy load of the journal from firing on every re-render. */
+  private journalLoading = false;
+
+  private async loadJournal() {
+    if (this.journalLoading) return;
+    this.journalLoading = true;
+    try {
+      this.journal = (await api.libbyJournal()).entries;
+    } catch { this.journal = []; }
+    finally { this.journalLoading = false; }
+  }
+
+  /** Asks her to write about the latest conversation now, rather than once it goes quiet. */
+  private async reflectNow() {
+    this.reflecting = true;
+    try {
+      const result = await api.reflectLibbyNow();
+      if (result.entry) this.journal = [result.entry, ...(this.journal ?? [])];
+      else this.say(result.message ?? "Nothing new to write about.");
+    } catch (error) {
+      this.say(error instanceof Error ? error.message : "She couldn't write just now.", true);
+    } finally { this.reflecting = false; }
+  }
+
+  private async forgetJournalEntry(id: string) {
+    try {
+      await api.forgetJournalEntry(id);
+      this.journal = (this.journal ?? []).filter((entry) => entry.id !== id);
+    } catch (error) { this.say(error instanceof Error ? error.message : "Couldn't remove that.", true); }
+  }
+
+  private async clearJournal() {
+    if (!confirm("Clear Libby's journal? She'll forget what she wrote about your past conversations. This can't be undone.")) return;
+    try {
+      await api.clearLibbyJournal();
+      this.journal = [];
+    } catch (error) { this.say(error instanceof Error ? error.message : "Couldn't clear her journal.", true); }
   }
 
   /** Guards the lazy load of the bond from firing on every re-render. */
@@ -4113,6 +4156,7 @@ export class OppaiChat extends LitElement {
       ${this.renderBondPanel()}
       ${this.renderMemoryPanel()}
       ${this.renderWantsPanel()}
+      ${this.renderJournalPanel()}
       ${this.renderIdentityPanel()}
       ${this.renderAutoPanel()}
       ${this.renderDiscordPanel()}</div>`;
@@ -4432,6 +4476,32 @@ export class OppaiChat extends LitElement {
                 <button class="mem-forget" title="Drop this" aria-label="Drop: ${want.text}" @click=${() => void this.forgetWant(want.id)}><span class="material-symbols-rounded" style="font-size:16px">close</span></button>
               </li>`)}</ul>`}
       ${wants.length > 0 ? html`<div class="panel-actions"><button class="danger" @click=${() => void this.clearWants()}>Clear all wants</button></div>` : nothing}
+    </div>`;
+  }
+
+  /**
+   * Her journal. Read-only apart from deleting: it is what she wrote, in her words, and
+   * an edited diary entry is not hers any more. Deleting one also takes it out of what she
+   * carries into the next conversation.
+   */
+  private renderJournalPanel() {
+    if (this.journal === null) { void this.loadJournal(); }
+    const entries = this.journal ?? [];
+    return html`<div class="mem-panel">
+      <strong>Her journal</strong>
+      <p class="empty">When a conversation goes quiet, Libby looks back on it and writes a few lines to herself — and settles anything she said about her own life, so she's the same person next time. She remembers the last few entries when you talk again.</p>
+      ${this.journal === null
+        ? html`<p class="empty">Loading…</p>`
+        : entries.length === 0
+          ? html`<p class="empty">Nothing yet. She writes once a conversation has been quiet for twenty minutes.</p>`
+          : html`<ul class="mem-list">${entries.map((entry) => html`
+              <li><span><em class="mem-kind">${new Date(entry.at).toLocaleDateString()}${entry.mood ? ` · ${entry.mood}` : ""}</em> ${entry.text}</span>
+                <button class="mem-forget" title="Remove this entry" aria-label="Remove journal entry" @click=${() => void this.forgetJournalEntry(entry.id)}><span class="material-symbols-rounded" style="font-size:16px">close</span></button>
+              </li>`)}</ul>`}
+      <div class="panel-actions">
+        <button class="secondary" ?disabled=${this.reflecting} @click=${() => void this.reflectNow()}>${this.reflecting ? "She's writing…" : "Have her write one now"}</button>
+        ${entries.length > 0 ? html`<button class="danger" @click=${() => void this.clearJournal()}>Clear the journal</button>` : nothing}
+      </div>
     </div>`;
   }
 

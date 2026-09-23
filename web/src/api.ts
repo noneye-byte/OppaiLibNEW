@@ -1909,6 +1909,18 @@ export interface LibbyAutoDecision {
 
 /** One standing want of Libby's own — an outfit, some media, how a night goes — kept
     and carried between conversations the same way her memory is. */
+/** One entry in her journal: what she wrote to herself after a conversation had gone
+    quiet. Carried back into the next conversation as her own recollection. */
+export interface LibbyJournalEntry {
+  id: string;
+  conversationId: string;
+  text: string;
+  /** How she felt when she wrote it, from the emotion vocabulary; may be empty. */
+  mood?: string;
+  /** When she wrote it, epoch millis. */
+  at: number;
+}
+
 export interface LibbyWant {
   id: string;
   text: string;
@@ -3042,6 +3054,18 @@ export const api = {
     request<{ status: string }>("/api/libby/wants", { method: "DELETE" }),
   forgetLibbyWant: (id: string) =>
     request<{ status: string }>(`/api/libby/wants/${encodeURIComponent(id)}`, { method: "DELETE" }),
+
+  // ── Libby's journal ──────────────────────────────────────────────────────
+  // What she writes after a conversation goes quiet. Written by the server in the
+  // background; these read it, ask for one now, and delete from it.
+  libbyJournal: () => request<{ entries: LibbyJournalEntry[] }>("/api/libby/journal", {}, 15_000),
+  /** Has her write about the latest conversation now. Minutes on a slow model. */
+  reflectLibbyNow: () =>
+    request<{ entry: LibbyJournalEntry | null; message?: string }>("/api/libby/journal/reflect", { method: "POST" }, 300_000),
+  forgetJournalEntry: (id: string) =>
+    request<{ status: string }>(`/api/libby/journal/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  clearLibbyJournal: () =>
+    request<{ status: string }>("/api/libby/journal", { method: "DELETE" }),
 
   // ── Libby on Discord ─────────────────────────────────────────────────────
   // The token is write-only from here: it goes in through connect and is never

@@ -281,6 +281,51 @@ settings → your profile** shows where you stand — last talked, her mood, how
 the name she calls you — with **Start fresh** to reset just the bond (your memories
 and her wants are kept). Web only for now, like Memory, Wants, and Outfits.
 
+### Who she has said she is
+
+The card says who Libby is in a paragraph; everything past it — where she grew up, a
+sister, her favourite film — she decides as she goes. Those decisions are kept, so the town
+she grew up in on Tuesday is the same town on Friday:
+
+- **Captured from what she says**, not only from a `[remember:]` tag. A sentence of hers
+  that settles her life ("I grew up in a fishing town", "my mum used to…", "my favourite
+  film is…", "I've always hated…") is filed; one about the two of you, a question, a
+  hypothetical, or the moment ("I'm so wet") is not. Two per reply at most.
+- **Kept apart** from what she knows about you: its own cap of 40, so neither can crowd
+  out the other, and it never fades with age.
+- **Carried whole** as its own "who you are" section, the last thing a tight window sheds.
+- **The first telling stands.** A later sentence on the same topic — a second hometown,
+  another favourite colour — is not filed over it, and she is told the first is true.
+  Topics recognised: birthday, where she grew up, each family member, each favourite,
+  work, studies, pets. **Chat → settings → Her mind** lists these as "who she is"; edit or
+  pin one there to make it yours, and her say-so can no longer change it.
+
+### Thinking it over afterwards
+
+When a conversation with her has been quiet for 20 minutes, nobody has sent a chat turn
+for five, and the card is not lent to the generator, a background sweep (every 10
+minutes, two conversations at a time, only ones that ended within the last three days)
+has **her own model** look back over it and answer in JSON:
+
+- a **journal entry** — a few sentences in her voice. The last three ride into the next
+  conversation's opening turn, and any turn that reaches back, as her own recollection;
+- what she **said or settled about herself**, filed by the rules above (a contradiction of
+  what is already true is dropped);
+- what she **learned about you** worth keeping;
+- which of her notes the conversation showed to be **wrong or repeated** — dropped, unless
+  you wrote or pinned it.
+
+With **memory switched off** (Your profile) she keeps nothing about you: no journal entry,
+no facts, and she is not shown her notes about you — she still settles things about
+herself. An answer that is not JSON costs that one reflection and the conversation is
+marked done, so a model that cannot do this never loops. This is the one place Libby makes
+a second model call; it was avoided on the reply path because it doubles the wait and a 7B
+invents, and neither holds for a background pass on a 24B.
+
+**Chat → settings → Her mind → Her journal** lists the entries, deletes one or all, and has
+**Have her write one now** for the latest conversation without waiting. Stored encrypted
+per user in `libby-journal.json.enc` beside memory, wants and bond.
+
 ### Texting, not request-and-response
 
 A longer reply arrives the way a person texts — as two or three short messages

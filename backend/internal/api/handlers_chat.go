@@ -790,6 +790,9 @@ func feedUserID(s *Server, r *http.Request, characterID string) int64 {
 }
 
 func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
+	// Stamped first, so a reflection never starts while a reply is being written.
+	// See libby_reflect.go.
+	s.lastChatAt.Store(time.Now().UnixMilli())
 	cur := s.settings.Get()
 	if cur.ChatURL == "" {
 		writeErr(w, http.StatusServiceUnavailable, "Libby chat is not configured")
@@ -1037,10 +1040,18 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			// Where the two of them stand — time since last, carried mood, closeness.
 			// See handlers_libby_bond.go.
 			bond, _ := s.readLibbyBond(u.ID)
+			// What she wrote to herself after the last few conversations. See libby_reflect.go.
+			journal, _ := s.readLibbyJournal(u.ID)
 			s.chatMu.Unlock()
 			add("what she remembers about you", rankMemoryList, memoryPromptBlock(store))
+			// Who she has said she is: whole, and the last thing a tight window costs her.
+			// See libby_self.go.
+			add("who she is", rankSelfFacts, selfPromptBlock(store))
 			add("her own wants", rankWantsList, wantsPromptBlock(wants))
 			add("your history together", rankBond, bondPromptBlock(bond, time.Now()))
+			// Wanted as a conversation opens and when they reach back; otherwise it waits.
+			addDeferred("her journal", rankJournal, journalPromptBlock(journal, time.Now()),
+				signals.past || len(in.Messages) <= 2)
 			// The morning-after turn, when the client says that is what this is. Core,
 			// not a section: it is the whole point of the message.
 			if chatTask(strings.ToLower(strings.TrimSpace(in.Task))) == taskAfterglow {
@@ -1836,6 +1847,20 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// — {{user}} and [Name] are how cards write the person — and the user reads it as
 	// her forgetting them.
 	reply = fillNamePlaceholders(reply, ws.Profile.DisplayName)
+	// What she just said about herself — where she grew up, her sister, her favourite
+	// film — kept, so she is the same person next week. Hers, not the user's, so it is not
+	// gated on their memory consent; best-effort like every other capture. See libby_self.go.
+	if actionable {
+		if facts := captureSelfFacts(reply); len(facts) > 0 {
+			if u, userOK := s.chatUser(r); userOK {
+				s.chatMu.Lock()
+				if _, err := s.appendLibbyMemories(u.ID, asSelfFacts(facts)); err != nil {
+					s.log.Debug("libby self", "err", err)
+				}
+				s.chatMu.Unlock()
+			}
+		}
+	}
 	// A snap is a picture sent to be seen once. It is only a snap if a picture came.
 	snap = snap && (imageID != "" || len(attachments) > 0)
 	// The reaction, landing on their latest message.

@@ -142,6 +142,8 @@ func memoryScore(m libbyMemory, now time.Time) float64 {
 	for remaining := age; remaining >= memoryHalfLife && recency > 0.01; remaining -= memoryHalfLife {
 		recency /= 2
 	}
+	// Except who she is, which does not get less true for not coming up. See libby_self.go.
+	recency = selfFactRecency(m, recency)
 	// A fact re-learned several times holds its ground: this is how a preference forms from
 	// repetition rather than from one offhand line.
 	reinforcement := 1.0 + 0.25*float64(m.Recalls)
@@ -282,10 +284,18 @@ func (s *Server) appendLibbyMemories(userID int64, facts []string) (bool, error)
 			}
 			// The newer wording wins when it is more specific, on the assumption that a fact
 			// restated at greater length is the fuller version of it.
-			if len(text) > len(store.Memories[merged].Text) {
+			// Not over the user's own wording, though: they typed or corrected it, and a longer
+			// paraphrase of hers is not a better version of something they vouched for.
+			if len(text) > len(store.Memories[merged].Text) && store.Memories[merged].Source != memorySourceUser {
 				store.Memories[merged].Text = text
 			}
 			changed = true
+			continue
+		}
+		// Something about herself she has already settled differently — a second hometown,
+		// another favourite colour — is not filed over the first. The first is what she is
+		// told is true; the settings screen is where it can be changed. See libby_self.go.
+		if kind == memoryAboutLibby && selfTopicTaken(store.Memories, text) {
 			continue
 		}
 		m := libbyMemory{ID: randomID(), Text: text, Kind: kind, At: now.UnixMilli(), Source: memorySourceLibby}
@@ -338,28 +348,44 @@ func strongerMemory(a, b libbyMemory, now time.Time) bool {
 // identical scores and identical timestamps, so ranking by either left them in file order and
 // an overflowing batch dropped its own newest entries. The list is oldest-first, so later
 // wins a tie.
+//
+// What she knows about the user and who she is herself are capped separately (maxLibbyMemories
+// and maxSelfFacts), so neither can crowd the other out. See libby_self.go.
 func forgetWeakest(memories []libbyMemory, now time.Time) []libbyMemory {
-	if len(memories) <= maxLibbyMemories {
+	var about, self []int
+	for i, m := range memories {
+		if m.Kind == memoryAboutLibby {
+			self = append(self, i)
+		} else {
+			about = append(about, i)
+		}
+	}
+	if len(about) <= maxLibbyMemories && len(self) <= maxSelfFacts {
 		return memories
 	}
-	order := make([]int, len(memories))
-	for i := range order {
-		order[i] = i
-	}
-	sort.SliceStable(order, func(a, b int) bool {
-		scoreA, scoreB := memoryScore(memories[order[a]], now), memoryScore(memories[order[b]], now)
-		if scoreA != scoreB {
-			return scoreA > scoreB
+	surviving := make(map[int]bool, len(memories))
+	for _, group := range []struct {
+		order []int
+		limit int
+	}{{about, maxLibbyMemories}, {self, maxSelfFacts}} {
+		order := group.order
+		sort.SliceStable(order, func(a, b int) bool {
+			scoreA, scoreB := memoryScore(memories[order[a]], now), memoryScore(memories[order[b]], now)
+			if scoreA != scoreB {
+				return scoreA > scoreB
+			}
+			return order[a] > order[b]
+		})
+		if len(order) > group.limit {
+			order = order[:group.limit]
 		}
-		return order[a] > order[b]
-	})
-	surviving := make(map[int]bool, maxLibbyMemories)
-	for _, i := range order[:maxLibbyMemories] {
-		surviving[i] = true
+		for _, i := range order {
+			surviving[i] = true
+		}
 	}
 	// Survivors go back in their original order: the prompt reads better as a history than as
 	// a leaderboard.
-	kept := make([]libbyMemory, 0, maxLibbyMemories)
+	kept := make([]libbyMemory, 0, len(surviving))
 	for i, m := range memories {
 		if surviving[i] {
 			kept = append(kept, m)
@@ -395,13 +421,19 @@ const memoryDirective = "File what a friend would keep — their name, home, wor
 // preference has to be steered by, and a shared evening is just something to be fond of.
 // Under each heading the wording is hers, not a schema's — see memoryKindHeading.
 func memoryPromptBlock(store libbyMemoryStore) string {
-	if len(store.Memories) == 0 {
+	// Who she is goes in its own section, whole and ranked apart. See selfPromptBlock.
+	var carried []libbyMemory
+	for _, m := range store.Memories {
+		if m.Kind != memoryAboutLibby {
+			carried = append(carried, m)
+		}
+	}
+	if len(carried) == 0 {
 		return ""
 	}
 	// Only the strongest are carried when the store has grown past what one prompt should
 	// spend on it. Ranked by the same score that decides what is eventually forgotten, so the
 	// memories she stops carrying are the ones on their way out anyway.
-	carried := store.Memories
 	if len(carried) > promptMemories {
 		now := time.Now()
 		ordered := make([]libbyMemory, len(carried))

@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/youruser/oppailib/internal/ai"
@@ -140,6 +141,12 @@ type Server struct {
 	// shared by swapping. See gpu_share.go.
 	card *cardShare
 
+	// When the last chat turn arrived, UnixMilli, so her reflections never queue in front
+	// of a reply; and the lock that keeps her writing one entry at a time. See
+	// libby_reflect.go.
+	lastChatAt atomic.Int64
+	reflectMu  sync.Mutex
+
 	// Every title and tag in the library, decrypted once and kept in memory so Libby
 	// can name something from any depth of the collection rather than only from the
 	// newest rows. Built lazily on her first lookup. See chat_library_index.go.
@@ -269,6 +276,8 @@ func (s *Server) StartBackgroundJobs() {
 	go s.backfillAutoTags()
 	// A card lent to the generator when the server last stopped goes back first thing.
 	go s.resumeParkedCard()
+	// Looking back over conversations that have gone quiet. See libby_reflect.go.
+	go s.startReflecting()
 	go s.backfillThumbnails()
 	go s.backfillImageThumbs()
 	go s.backfillComics()
@@ -535,6 +544,11 @@ func (s *Server) Handler() http.Handler {
 	// written from her own replies on the chat path. These endpoints only read and clear
 	// them, for the settings screen. See handlers_libby_wants.go.
 	mux.HandleFunc("GET /api/libby/wants", s.requireAuth(s.handleGetLibbyWants))
+	// Her journal: what she wrote after conversations. See libby_reflect.go.
+	mux.HandleFunc("GET /api/libby/journal", s.requireAuth(s.handleGetLibbyJournal))
+	mux.HandleFunc("POST /api/libby/journal/reflect", s.requireAuth(s.handleReflectNow))
+	mux.HandleFunc("DELETE /api/libby/journal", s.requireAuth(s.handleClearLibbyJournal))
+	mux.HandleFunc("DELETE /api/libby/journal/{id}", s.requireAuth(s.handleForgetJournalEntry))
 	mux.HandleFunc("DELETE /api/libby/wants", s.requireAuth(s.handleClearLibbyWants))
 	mux.HandleFunc("DELETE /api/libby/wants/{id}", s.requireAuth(s.handleForgetLibbyWant))
 	// Libby's bond: where the two of you left off — time since last, carried mood and
