@@ -149,9 +149,28 @@ func (s *Server) handleScrapeProxy(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad url")
 		return
 	}
+	// Kept pictures are answered from memory, and fetched ones skip the scraper's
+	// politeness queue for a per-host limit. See image_proxy.go.
+	key := u.String()
+	// A day, not five minutes: these are pictures on CDNs that tell browsers to keep
+	// them for a year, and a phone that re-fetches a cover every five minutes is paying
+	// for nothing.
+	const cacheControl = "private, max-age=86400"
+	if img, ok := s.imageCache.get(key); ok {
+		w.Header().Set("Content-Type", img.contentType)
+		w.Header().Set("Cache-Control", cacheControl)
+		_, _ = w.Write(img.body)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), scrapeTimeout)
 	defer cancel()
-	dl, err := s.scraper.Download(ctx, u.String())
+	release, err := s.imageCache.acquire(ctx, u.Host)
+	if err != nil {
+		writeErr(w, http.StatusGatewayTimeout, "timed out waiting to fetch that picture")
+		return
+	}
+	defer release()
+	dl, err := s.scraper.FetchImage(ctx, key)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
@@ -161,9 +180,23 @@ func (s *Server) handleScrapeProxy(w http.ResponseWriter, r *http.Request) {
 	// named), so it must never be served as an active document on our origin — a
 	// text/html response here would run script with the user's session. Constrain it
 	// to safe media types; the global nosniff header stops content sniffing.
-	w.Header().Set("Content-Type", safeInlineContentType(dl.ContentType))
-	w.Header().Set("Cache-Control", "private, max-age=300")
-	_, _ = io.Copy(w, io.LimitReader(dl.Body, proxyMaxBytes))
+	contentType := safeInlineContentType(dl.ContentType)
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Cache-Control", cacheControl)
+	if !isPictureType(contentType) {
+		_, _ = io.Copy(w, io.LimitReader(dl.Body, proxyMaxBytes))
+		return
+	}
+	// Read up to the cache's item limit; a picture that fits is kept, one that does
+	// not is streamed on from where the read stopped.
+	head, _ := io.ReadAll(io.LimitReader(dl.Body, imageCacheMaxItem+1))
+	if len(head) <= imageCacheMaxItem {
+		s.imageCache.put(cachedImage{key: key, contentType: contentType, body: head})
+		_, _ = w.Write(head)
+		return
+	}
+	_, _ = w.Write(head)
+	_, _ = io.Copy(w, io.LimitReader(dl.Body, proxyMaxBytes-int64(len(head))))
 }
 
 func dedupeNonEmpty(in []string) []string {

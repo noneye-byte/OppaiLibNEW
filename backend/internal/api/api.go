@@ -141,6 +141,13 @@ type Server struct {
 	// shared by swapping. See gpu_share.go.
 	card *cardShare
 
+	// Pictures fetched through the proxy, kept, and the per-host limit on fetching them.
+	// See image_proxy.go.
+	imageCache *imageProxyCache
+	// Game pages read for a detail view, briefly kept so reopening one is instant.
+	// See handleGameBrowseDetail.
+	gameDetails *resolveCache[gameDetail]
+
 	// When the last chat turn arrived, UnixMilli, so her reflections never queue in front
 	// of a reply; and the lock that keeps her writing one entry at a time. See
 	// libby_reflect.go.
@@ -232,6 +239,8 @@ func NewServer(cfg *config.Config, database *db.DB, store *storage.Store, sc *sc
 		installedHashCache: newResolveCache[map[string]string](time.Minute),
 		describe:           newDescribeQueue(),
 		card:               &cardShare{},
+		imageCache:         newImageProxyCache(),
+		gameDetails:        newResolveCache[gameDetail](gameDetailTTL),
 
 		gameUpdates: &gameUpdateSweep{},
 		launchy:     newLaunchyRuntime(),

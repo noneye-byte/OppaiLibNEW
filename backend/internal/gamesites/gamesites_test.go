@@ -266,3 +266,36 @@ func TestF95SignedInWithoutALogoutLinkStillReadsAsSignedIn(t *testing.T) {
 		t.Fatal("the fixture should not lean on a logout link")
 	}
 }
+
+// The first post as F95zone draws it (trimmed from a live thread, 2026-09-23): each
+// attachment a link to the full picture around its thumbnail, and og:image the favicon.
+const f95PicturePost = `<html><head><meta property="og:image" content="https://f95zone.to/assets/favicon-32x32.png"></head><body>
+<h1 class="p-title-value">Dinner Date [v0.2] [Studio]</h1>
+<article class="message-body js-selectToQuote"><div class="bbWrapper">
+<a href="https://attachments.f95zone.to/2026/09/6524703_Logo.png" target="_blank"><img src="https://attachments.f95zone.to/2026/09/thumb/6524703_Logo.png" class="bbImage " alt="Logo.png"></a>
+<b>Overview</b>: dinner.
+<a href="https://attachments.f95zone.to/2026/09/6524718_Screenshot_10.png" target="_blank"><img src="https://attachments.f95zone.to/2026/09/thumb/6524718_Screenshot_10.png" class="bbImage "></a>
+<img src="https://f95zone.to/styles/brand/smiley.png" class="bbImage ">
+<img src="https://i.imgur.com/banner.jpg" class="bbImage ">
+</div></article>
+<article class="message-body"><div class="bbWrapper"><a href="https://attachments.f95zone.to/2026/09/999_reply.png"><img class="bbImage" src="https://attachments.f95zone.to/2026/09/thumb/999_reply.png"></a></div></article>
+</body></html>`
+
+func TestAGameIsGivenTheFirstPostsPicturesNotTheSiteLogo(t *testing.T) {
+	got := ParseF95Detail(f95PicturePost, Item{Site: F95, Images: []string{}, Tags: []string{}})
+	want := []string{
+		"https://attachments.f95zone.to/2026/09/6524703_Logo.png", // full size, and a cover called Logo.png is still a cover
+		"https://attachments.f95zone.to/2026/09/6524718_Screenshot_10.png",
+		"https://i.imgur.com/banner.jpg", // posted by URL, no link around it
+	}
+	if !reflect.DeepEqual(got.Images, want) || got.Thumbnail != want[0] {
+		t.Fatalf("images %v thumbnail %q", got.Images, got.Thumbnail)
+	}
+	// A listing that already brought its screenshots keeps them: they are the smaller
+	// renditions of the same files.
+	listed := []string{"https://preview.f95zone.to/a.png", "https://preview.f95zone.to/b.png"}
+	kept := ParseF95Detail(f95PicturePost, Item{Site: F95, Images: listed, Tags: []string{}})
+	if !reflect.DeepEqual(kept.Images, listed) {
+		t.Fatalf("listing images replaced: %v", kept.Images)
+	}
+}

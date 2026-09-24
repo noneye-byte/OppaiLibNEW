@@ -154,9 +154,22 @@ func ParseF95Detail(page string, item Item) Item {
 	if tags := normalizeTags(raw, 24); len(tags) > 0 {
 		out.Tags = tags
 	}
+	// The pictures are the ones in the first post: the cover first, then the
+	// screenshots. Taken when the listing brought one picture or none — a game opened
+	// from a pasted link, from the updates list, or being added — and not otherwise,
+	// because the listing's are the smaller preview renditions of these same files.
+	if len(out.Images) <= 1 {
+		if shots := f95PostImages(doc); len(shots) > 0 {
+			out.Images = shots
+			if out.Thumbnail == "" {
+				out.Thumbnail = shots[0]
+			}
+		}
+	}
 	if len(out.Images) == 0 {
-		// A guest view's og:image is the site favicon, which is not a cover.
-		if cover := metaContent(doc, "og:image"); cover != "" && !strings.Contains(cover, "favicon") {
+		// og:image is the last resort, and the site favicon — which is what it is on
+		// every thread, signed in or not — is never a cover.
+		if cover := metaContent(doc, "og:image"); cover != "" && !isF95SiteArt(cover) {
 			out.Images = []string{cover}
 			if out.Thumbnail == "" {
 				out.Thumbnail = cover
@@ -170,6 +183,58 @@ func ParseF95Detail(page string, item Item) Item {
 		out.Version = ParseF95Version(page)
 	}
 	return out
+}
+
+// maxF95PostImages bounds the pictures taken from a first post; some threads carry
+// dozens of screenshots and a preview does not need them all.
+const maxF95PostImages = 12
+
+// f95PostImages lists the pictures in a thread's first post, full size, in order.
+//
+// XenForo draws each as a link to the attachment around a thumbnail of it
+// (<a href=".../6524703_x.png"><img src=".../thumb/6524703_x.png" class="bbImage">),
+// so the link is the full picture. An image posted by URL rather than attached has no
+// link, and its own src is taken instead.
+func f95PostImages(doc *goquery.Document) []string {
+	post := doc.Find("article.message-body").First()
+	var out []string
+	post.Find("img.bbImage").Each(func(_ int, img *goquery.Selection) {
+		src := ""
+		if href, ok := img.Closest("a").Attr("href"); ok && isF95Picture(href) {
+			src = href
+		} else if s, ok := img.Attr("data-src"); ok && isF95Picture(s) {
+			src = s
+		} else if s, ok := img.Attr("src"); ok && isF95Picture(s) {
+			src = s
+		}
+		if src != "" {
+			out = append(out, src)
+		}
+	})
+	out = dedupe(out)
+	if len(out) > maxF95PostImages {
+		out = out[:maxF95PostImages]
+	}
+	return out
+}
+
+// isF95Picture accepts an absolute https picture that is not the site's own artwork.
+func isF95Picture(u string) bool {
+	return strings.HasPrefix(u, "https://") && !isF95SiteArt(u)
+}
+
+// isF95SiteArt recognises F95zone's own logo and icons, which a page offers in place
+// of a cover and which every game added as a guest used to get. Decided by host, not
+// by name: a game's cover is as likely as not to be called Logo.png, and it lives on
+// the attachment hosts, never on the forum's own.
+func isF95SiteArt(u string) bool {
+	parsed, err := url.Parse(u)
+	if err != nil {
+		return true
+	}
+	host := strings.ToLower(parsed.Host)
+	return host == "f95zone.to" || host == "www.f95zone.to" || host == "static.f95zone.to" ||
+		strings.Contains(strings.ToLower(parsed.Path), "favicon")
 }
 
 func titleWithoutLabels(doc *goquery.Document) string {

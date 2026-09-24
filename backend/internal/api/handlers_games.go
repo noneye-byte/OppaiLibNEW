@@ -299,10 +299,37 @@ func (s *Server) handleGameBrowseDetail(w http.ResponseWriter, r *http.Request) 
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
 	defer cancel()
-	item, degraded := s.games.Detail(ctx, req.Item)
+	// Kept briefly, so opening a game, going back and opening it again does not read the
+	// thread twice — a 100 KB page from F95zone is most of the wait for a detail view.
+	// A degraded read is not kept: that is a failure, and the next open should retry it.
+	detail, _ := s.gameDetails.get(ctx, req.Item.URL, func(ctx context.Context) (gameDetail, error) {
+		item, degraded := s.games.Detail(ctx, req.Item)
+		if degraded {
+			return gameDetail{item: item, degraded: true}, errGameDetailDegraded
+		}
+		return gameDetail{item: item}, nil
+	})
+	if detail.item.URL == "" {
+		detail = gameDetail{item: req.Item, degraded: true}
+	}
+	item := detail.item
 	s.markInLibrary(s.remoteIndex(r.Context()), &item)
-	writeJSON(w, http.StatusOK, map[string]any{"item": item, "degraded": degraded})
+	writeJSON(w, http.StatusOK, map[string]any{"item": item, "degraded": detail.degraded})
 }
+
+// gameDetailTTL is how long a read game page is kept. Long enough to cover going back
+// and forth through a listing; short enough that a version posted this afternoon shows.
+const gameDetailTTL = 10 * time.Minute
+
+// gameDetail is one read game page, as the detail view shows it.
+type gameDetail struct {
+	item     gamesites.Item
+	degraded bool
+}
+
+// errGameDetailDegraded marks a read that fell back to the listing's data, so the cache
+// does not keep it.
+var errGameDetailDegraded = errors.New("game page could not be read")
 
 // handleGameBrowseAdd files a browsed game away: the scraper reads the page into a
 // library entry the way a pasted URL would, and the page is remembered as where
@@ -338,6 +365,14 @@ func (s *Server) handleGameBrowseAdd(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
 	}
+	// The generic scraper reads the page as a stranger, and on F95zone a stranger's
+	// page offers the site favicon as its picture. Every game added from there got the
+	// F95 logo for a cover — and because the library de-duplicates by file, the second
+	// game added *became* the first one. Its pictures come from the thread's first post
+	// instead, read by the signed-in client. See gamesites.f95PostImages.
+	if site == gamesites.F95 {
+		s.fillF95Game(r.Context(), scraped, req.URL, req.ID)
+	}
 	id, err := s.importGame(r, scraped)
 	if err != nil {
 		s.log.Warn("game browse add failed", "url", req.URL, "err", err)
@@ -360,6 +395,31 @@ func (s *Server) handleGameBrowseAdd(w http.ResponseWriter, r *http.Request) {
 		s.log.Warn("game browse add: recording remote", "media", id, "err", err)
 	}
 	s.writeGame(w, r, id, true)
+}
+
+// fillF95Game replaces what a stranger's scrape of an F95zone thread got wrong with
+// what the thread actually shows: the cover and screenshots from its first post, and
+// the description, tags and title where the scrape had none or had the site's own.
+func (s *Server) fillF95Game(ctx context.Context, scraped *models.ScrapeResult, pageURL, threadID string) {
+	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	defer cancel()
+	item, _ := s.games.Detail(ctx, gamesites.Item{Site: gamesites.F95, ID: threadID, URL: pageURL, Images: []string{}, Tags: []string{}})
+	if len(item.Images) > 0 {
+		scraped.Cover = item.Images[0]
+		scraped.Screenshots = append([]string{}, item.Images[1:]...)
+		scraped.MediaURLs = nil
+	} else if strings.Contains(strings.ToLower(scraped.Cover), "favicon") {
+		// No pictures to be had, and the site's icon is worse than none: it would make
+		// this game the same library entry as every other one that got it.
+		scraped.Cover = ""
+	}
+	if item.Title != "" && (scraped.Title == "" || strings.Contains(strings.ToLower(scraped.Title), "f95zone")) {
+		scraped.Title = item.Title
+	}
+	if item.Description != "" && len(item.Description) > len(scraped.Description) {
+		scraped.Description = item.Description
+	}
+	scraped.Tags = append(scraped.Tags, item.Tags...)
 }
 
 // setRemote records where a game came from, with both versions equal so a fresh
