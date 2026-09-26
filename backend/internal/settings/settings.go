@@ -95,6 +95,11 @@ type Settings struct {
 	// both loaded, "swap" unloads her model while a picture is being made and loads it
 	// back once the generator goes quiet. See api.cardShare.
 	GPUShare string `json:"gpuShare"`
+	// GPUMemoryGB is how much memory the graphics card has, as the operator says. 0 is
+	// unknown. Nothing the server can ask reports it — neither the chat backend nor the
+	// generator does — and without a figure Libby, asked about the box, guessed one from
+	// her window and her model's size, and the guess was 8 GB on a 32 GB card.
+	GPUMemoryGB int `json:"gpuMemoryGb"`
 	// ChatModelDir is text-generation-webui's models folder, as this container sees it.
 	//
 	// Required for deleting a model and for nothing else: text-generation-webui exposes
@@ -164,6 +169,10 @@ type Settings struct {
 	LibbyGenPrompt string `json:"libbyGenPrompt"`
 	// LibbyGenNegativePrompt is what to keep out of every picture she makes.
 	LibbyGenNegativePrompt string `json:"libbyGenNegativePrompt"`
+	// LibbyGenToLibrary also files every picture she makes in the library. Off by
+	// default: a picture she makes lands in the conversation, as one she sent, and her
+	// chat gallery keeps it. The library is the user's collection, not her camera roll.
+	LibbyGenToLibrary bool `json:"libbyGenToLibrary"`
 
 	// Incognito dresses this install as a Nextcloud instance.
 	//
@@ -218,6 +227,7 @@ const (
 	keyChatModelTier       = "chat.model_tier"
 	keyChatVision          = "chat.vision"
 	keyGPUShare            = "gpu.share"
+	keyGPUMemoryGB         = "gpu.memory_gb"
 	keyChatAPIKey          = "chat.api_key"
 	keyVisionURL           = "vision.url"
 	keyVisionModel         = "vision.model"
@@ -240,6 +250,7 @@ const (
 	keyLibbyGenBoard      = "libby.gen.board"
 	keyLibbyGenPrompt     = "libby.gen.prompt"
 	keyLibbyGenNegative   = "libby.gen.negative_prompt"
+	keyLibbyGenToLibrary  = "libby.gen.to_library"
 
 	keyIncognito = "ui.incognito"
 )
@@ -358,6 +369,9 @@ func Merge(base Settings, stored map[string]string) Settings {
 	if v, ok := stored[keyGPUShare]; ok {
 		s.GPUShare = v
 	}
+	if v, err := strconv.Atoi(stored[keyGPUMemoryGB]); err == nil {
+		s.GPUMemoryGB = v
+	}
 	if v, ok := stored[keyChatAPIKey]; ok {
 		s.ChatAPIKey = v
 	}
@@ -420,6 +434,9 @@ func Merge(base Settings, stored map[string]string) Settings {
 	if v, ok := stored[keyLibbyGenNegative]; ok {
 		s.LibbyGenNegativePrompt = v
 	}
+	if v, ok := parseBool(stored[keyLibbyGenToLibrary]); ok {
+		s.LibbyGenToLibrary = v
+	}
 	if v, ok := parseBool(stored[keyIncognito]); ok {
 		s.Incognito = v
 	}
@@ -454,6 +471,7 @@ func (s Settings) Map() map[string]string {
 		keyChatModelTier:       s.ChatModelTier,
 		keyChatVision:          s.ChatVision,
 		keyGPUShare:            s.GPUShare,
+		keyGPUMemoryGB:         strconv.Itoa(s.GPUMemoryGB),
 		keyChatAPIKey:          s.ChatAPIKey,
 		keyVisionURL:           s.VisionURL,
 		keyVisionModel:         s.VisionModel,
@@ -476,6 +494,7 @@ func (s Settings) Map() map[string]string {
 		keyLibbyGenBoard:      s.LibbyGenBoard,
 		keyLibbyGenPrompt:     s.LibbyGenPrompt,
 		keyLibbyGenNegative:   s.LibbyGenNegativePrompt,
+		keyLibbyGenToLibrary:  strconv.FormatBool(s.LibbyGenToLibrary),
 
 		keyIncognito: strconv.FormatBool(s.Incognito),
 	}
@@ -570,6 +589,10 @@ func (s *Settings) Clamp() {
 	// is the default, never an error, so a setting written by a newer client degrades.
 	s.ChatVision = oneOf(s.ChatVision, "on", "off")
 	s.GPUShare = oneOf(s.GPUShare, "swap")
+	// No card for sale has more than this; a bigger number is a typo in MB.
+	if s.GPUMemoryGB < 0 || s.GPUMemoryGB > 256 {
+		s.GPUMemoryGB = 0
+	}
 	// A text-generation-webui model is selected in its own WebUI/startup config;
 	// its OpenAI endpoint does not require OppaiLib to own that lifecycle or even
 	// send a model field. The live readiness probe decides whether Chat can run.

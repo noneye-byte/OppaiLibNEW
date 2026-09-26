@@ -297,6 +297,8 @@ func withoutEyes(messages []chatMessage) []chatMessage {
 	for i, m := range messages {
 		if m.Role == "system" {
 			m.Content = strings.Replace(m.Content, "\n\n"+eyesDirective, "", 1)
+			// The reference directive goes with it: the picture it describes is gone too.
+			m.Content = strings.Replace(m.Content, "\n\n"+referenceDirective, "", 1)
 		}
 		out[i] = m
 	}

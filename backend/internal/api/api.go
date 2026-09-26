@@ -593,6 +593,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/libby/identity", s.requireAuth(s.handlePutLibbyIdentity))
 	mux.HandleFunc("POST /api/libby/identity/mark", s.requireAuth(s.handleMarkLibbyIdentity))
 	mux.HandleFunc("POST /api/libby/identity/scan", s.requireAuth(s.handleScanLibbyIdentity))
+	// The two pictures her own eyes are shown of her: clothed and bare. See libby_references.go.
+	mux.HandleFunc("GET /api/libby/references", s.requireAuth(s.handleListLibbyReferences))
+	mux.HandleFunc("GET /api/libby/references/{slot}", s.requireAuth(s.handleGetLibbyReference))
+	mux.HandleFunc("PUT /api/libby/references/{slot}", s.requireAuth(s.handleSetLibbyReference))
+	mux.HandleFunc("DELETE /api/libby/references/{slot}", s.requireAuth(s.handleDeleteLibbyReference))
 	// A library picture sent into the chat as something she sent. See handlers_libby_send.go.
 	mux.HandleFunc("POST /api/libby/send", s.requireAuth(s.handleLibbySend))
 

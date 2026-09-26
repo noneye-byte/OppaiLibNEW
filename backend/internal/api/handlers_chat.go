@@ -1319,6 +1319,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// is the model's own name, which is where the parameter count is written.
 	tier := resolveModelTier(cur.ChatModelTier, model)
 	task, preset := tuneSampling(in, latestUser, tier)
+	// How many texts this reply is, drawn from what the turn is for. Everyone gets it:
+	// an imported card sends a wall of five bubbles for the same reasons she did, and
+	// the number asserts nothing about who the character is. See chat_texts.go.
+	texts := textsForTurn(task, latestUser, rollTexts())
+	tail.WriteString("\n\n" + textCountDirective(texts))
 	// Then make it fit. Past the model's window a local backend drops the *front* of the
 	// prompt, which is the character card — so the trimming happens here, in a stated order,
 	// and what was cut is reported to the client. See chat_budget.go.
@@ -1337,15 +1342,36 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// the room they take is set aside before the text is fitted, since the backend counts
 	// them against the same window. See chat_eyes.go.
 	var pictures []map[string]any
+	seen, referenceShown := 0, false
 	if chatSeesPictures(cur.ChatVision, model) && !knownBlind(cur.ChatURL, model) {
 		if u, userOK := s.chatUser(r); userOK {
-			pictures = s.turnPictures(r.Context(), u.ID, turnPictureSources(in, inQuestion, inQuestionOK), picturesFor(limit))
+			room := picturesFor(limit)
+			pictures = s.turnPictures(r.Context(), u.ID, turnPictureSources(in, inQuestion, inQuestionOK), room)
+			seen = len(pictures)
+			// And what she looks like, on a turn about it, in whatever room theirs left.
+			// Hers alone: the references are pictures of her. See libby_references.go.
+			if character.ID == "libby" && seen < room {
+				if slot, ok := referenceFor(latestUser, in.Intensity, seen > 0 || in.PhotoImageID != "", s.hasReference); ok {
+					if parts := s.referenceParts(slot); parts != nil {
+						pictures, referenceShown = append(pictures, parts...), true
+					}
+				}
+			}
 		}
 	}
-	if len(pictures) > 0 {
+	if seen > 0 {
 		tail.WriteString("\n\n" + eyesDirective)
 	}
-	messages, replyTokens, budget, err := fitChatTurn(modePrompt, sections, tail.String(), history, limit-len(pictures)*pictureTokens, preset.MaxTokens)
+	if referenceShown {
+		tail.WriteString("\n\n" + referenceDirective)
+	}
+	// The reference's label is a text part, not a picture, so the room is counted in
+	// pictures rather than parts.
+	shown := seen
+	if referenceShown {
+		shown++
+	}
+	messages, replyTokens, budget, err := fitChatTurn(modePrompt, sections, tail.String(), history, limit-shown*pictureTokens, preset.MaxTokens)
 	if err != nil {
 		s.log.Warn("libby context budget", "err", err, "limit", limit, "system", budget.SystemTokens)
 		// A note means the failure is explainable to the user; anything else is ours.
@@ -1378,7 +1404,13 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	for key, value := range samplingFields(preset) {
 		payloadMap[key] = value
 	}
-	payloadMap["stop"] = chatStops(ws.Profile.DisplayName)
+	stops := chatStops(ws.Profile.DisplayName)
+	// Her own name at the start of a line is her writing a transcript rather than a
+	// message: the line before it was somebody else's, invented.
+	if name := strings.TrimSpace(character.Name); name != "" && len(name) <= 40 {
+		stops = append(stops, "\n"+name+":")
+	}
+	payloadMap["stop"] = stops
 	// These four fields belong to OppaiLib: allowing them through would bypass the
 	// validated history/model, desynchronise the fitted budget from the backend's
 	// truncation window, or turn this bounded JSON call into an SSE stream.
@@ -1840,6 +1872,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	if handedOver && strings.TrimSpace(reply) == "" && imageID == "" && len(attachments) == 0 && !silent {
 		reply = "I went looking for one to send you, but nothing on the shelves fit."
 	}
+	// No more texts than she was asked for, give or take one. The ones past that are the
+	// likeliest to be a conversation she wrote both sides of. See chat_texts.go.
+	reply = capTexts(reply, texts)
 	// Whatever she wrote, an address she wrote is one she made up: she cannot browse, and
 	// nothing in the prompt hands her URLs to repeat. See chat_hallucinations.go.
 	reply = scrubInventedURLs(reply, knownURLs(in))

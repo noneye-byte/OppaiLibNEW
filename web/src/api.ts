@@ -440,10 +440,13 @@ export interface Settings {
   chatModel: string;
   chatApiKey: string;
   chatApiKeySet: boolean;
-  /** The context window Libby's turns are fitted into. 0 is auto — ask the loader
-      what it allocated — which is right for text-generation-webui and impossible for
-      llama.cpp server, LM Studio or Ollama, none of which will say. */
+  /** The context window Libby's turns are fitted into. 0 is auto: the window a model
+      was loaded with from OppaiLib, or what llama.cpp server reports, and 8192 when
+      neither is known. */
   chatContextTokens: number;
+  /** How much memory the graphics card has, in GB, so she can say so. 0 is unknown —
+      nothing on the network reports it. */
+  gpuMemoryGb: number;
   /** How much slack her sampling gets: "small" for a 7B–13B quant, "large" for a 24B
       and up, "" to read it off the loaded model's name. */
   chatModelTier: string;
@@ -490,6 +493,9 @@ export interface Settings {
   /** Who she is in generator words, prefixed to whatever she describes. */
   libbyGenPrompt: string;
   libbyGenNegativePrompt: string;
+  /** Also file every picture she makes in the library. Off: it is sent in the chat and
+      kept with her chat photos. */
+  libbyGenToLibrary: boolean;
   /** Dresses the whole install as a Nextcloud instance: the sign-in page, the tab's
       identity, the response headers and the endpoints a scanner probes. Server-side
       rather than per-device, because half of the disguise is the server. */
@@ -1109,6 +1115,9 @@ export interface ChatConversation {
   createdAt: number;
   updatedAt: number;
 }
+
+/** Which reference picture of her: in her usual clothes, or in nothing. */
+export type LibbyReferenceSlot = "clothed" | "nude";
 
 export interface ChatImage {
   id: string;
@@ -3157,6 +3166,14 @@ export const api = {
     }),
   libbyBackgroundURL: (id: string, v?: number) =>
     `/api/libby/backgrounds/${encodeURIComponent(id)}/image${v ? `?v=${v}` : ""}`,
+  // The two pictures her own eyes are shown of her — "clothed" and "nude" — on a turn
+  // about how she looks. See libby_references.go.
+  libbyReferences: () => request<Record<LibbyReferenceSlot, boolean>>("/api/libby/references"),
+  setLibbyReference: (slot: LibbyReferenceSlot, imageData: string) =>
+    request<Record<string, boolean>>(`/api/libby/references/${slot}`, { method: "PUT", body: JSON.stringify({ imageData }) }),
+  deleteLibbyReference: (slot: LibbyReferenceSlot) =>
+    request<Record<string, boolean>>(`/api/libby/references/${slot}`, { method: "DELETE" }),
+  libbyReferenceURL: (slot: LibbyReferenceSlot, v?: number) => `/api/libby/references/${slot}${v ? `?v=${v}` : ""}`,
   saveLibbyOutfit: (body: { id?: string; name: string; prompt?: string }) =>
     request<LibbyOutfit>("/api/libby/outfits", { method: "POST", body: JSON.stringify(body) }),
   deleteLibbyOutfit: (id: string) =>

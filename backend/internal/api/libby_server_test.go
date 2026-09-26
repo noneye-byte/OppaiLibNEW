@@ -40,12 +40,43 @@ func TestAServerTurnIsToldWhatSheRunsOnAndWhatElseCouldRun(t *testing.T) {
 	}
 	full := st.render(true)
 	for _, want := range []string{
-		"Mistral-Small-3.2-24B", "large-model settings", "32768-token window", "can see pictures directly",
+		"Mistral-Small-3.2-24B", "tuned for a large model", "32768-token context window", "can see pictures directly",
 		"Qwen3-32B-Q4_K_M", "412 items still have no description", "takes turns with you", "has it right now", "2 days",
 	} {
 		if !strings.Contains(full, want) {
 			t.Errorf("full render is missing %q:\n%s", want, full)
 		}
+	}
+}
+
+// Told "small-model settings, an 8192-token window" and nothing about the card, she
+// said the box had 8 GB. The card's size is only ever what the operator said, and with
+// nothing said she is told not to work one out.
+func TestSheIsToldTheCardSizeOrToNotGuessIt(t *testing.T) {
+	st := serverState{ChatModel: "some-finetune", Window: 8192, Tier: tierSmall}
+	if full := st.render(true); !strings.Contains(full, "say you don't know") || strings.Contains(full, "GB of memory") {
+		t.Fatalf("an unknown card was described:\n%s", full)
+	}
+	st.GPUMemoryGB = 32
+	if full := st.render(true); !strings.Contains(full, "The graphics card has 32 GB of memory.") {
+		t.Fatalf("the card size was not passed on:\n%s", full)
+	}
+}
+
+func TestTheWindowALoadWasRememberedWithIsTheWindow(t *testing.T) {
+	loads := textgenLoads{Models: map[string]textgenLoad{
+		"Cydonia-Q6_K.gguf": {Args: map[string]any{"ctx_size": float64(32768), "n_ctx": float64(32768)}},
+		"old-exl2":          {Args: map[string]any{"max_seq_len": float64(16384)}},
+		"no-context":        {Args: map[string]any{"gpu_layers": float64(99)}},
+	}}
+	for model, want := range map[string]int{"Cydonia-Q6_K.gguf": 32768, "old-exl2": 16384, "no-context": 0, "never-loaded": 0, "": 0} {
+		if got := rememberedContext(loads, model); got != want {
+			t.Errorf("%q: %d, want %d", model, got, want)
+		}
+	}
+	// And it counts as what the loader reported: auto follows it, a pin cannot pass it.
+	if got := effectiveContextLimit(0, 0, 0, 0, rememberedContext(loads, "Cydonia-Q6_K.gguf")); got != 32768 {
+		t.Fatalf("auto with a remembered 32K load = %d", got)
 	}
 }
 

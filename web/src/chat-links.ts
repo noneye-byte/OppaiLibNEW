@@ -6,7 +6,7 @@
 // items a reply named.
 
 import { css, html, nothing, type TemplateResult } from "lit";
-import { api, type LibbyActContext, type LibbyAction, type LibbyAttachment, type LibbyLink, type StoredChatMessage } from "./api.js";
+import { api, type ChatImage, type LibbyActContext, type LibbyAction, type LibbyAttachment, type LibbyLink, type StoredChatMessage } from "./api.js";
 
 /**
  * The pictures already seen in this conversation, oldest first.
@@ -216,8 +216,14 @@ export class ActionApprovals {
   private states = new Map<string, { state: ActionState; message?: string }>();
 
   /** `onChange` is the host's requestUpdate: this is plain state, not reactive.
-      `context` is read when Allow is pressed — see LibbyActContext. */
-  constructor(private onChange: () => void, private context: () => LibbyActContext = () => ({})) {}
+      `context` is read when Allow is pressed — see LibbyActContext. `onPicture` is
+      where a picture she made goes: the Chat screen posts it into the conversation as
+      hers; a host without one (the drawer) only says where it went. */
+  constructor(
+    private onChange: () => void,
+    private context: () => LibbyActContext = () => ({}),
+    private onPicture?: (image: ChatImage) => void,
+  ) {}
 
   stateOf = (action: LibbyAction) => this.states.get(action.id) ?? { state: "pending" as ActionState };
 
@@ -240,6 +246,13 @@ export class ActionApprovals {
       if (action.kind === "shelf" && typeof result.count === "number") {
         status = `${result.count} things on “${result.name ?? "Libby's pick"}” — it's in your collections.`;
       }
+      // A picture she made comes back as one of her chat photos, to be sent rather than
+      // filed. Where there is a conversation to send it into, it goes there.
+      const picture = result.image as ChatImage | undefined;
+      if (picture?.id) {
+        if (this.onPicture) this.onPicture(picture);
+        else status = "Made it — it's with her photos in Chat.";
+      }
       this.set(action.id, "done", status);
     } catch (error) {
       this.set(action.id, "failed", (error as Error).message);
@@ -255,7 +268,7 @@ export class ActionApprovals {
 /** What a completed action says. Specific where it can be: "Done" is true but tells
     the user nothing about where the thing went. */
 const SUCCESS_STATUS: Record<string, string> = {
-  generate: "Made it — it's in your library.",
+  generate: "She sent it to you.",
   import: "Added to your library.",
   tag: "Tags added.",
   favorite: "Favorited.",

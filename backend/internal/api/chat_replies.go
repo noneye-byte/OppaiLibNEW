@@ -43,7 +43,18 @@ var replyTag = regexp.MustCompile(`(?i)\[\s*(?:replying|reply|quoting|quote|answ
 // replyDirective teaches the tag. Kept to one sentence with the reason inside it,
 // because the failure mode of a bare syntax rule is a model that quotes every message
 // it answers.
-const replyDirective = "To answer or pick up a specific earlier message instead of the latest — a question you skipped, something from before the subject moved — write [reply: <a few exact words from it>]; it shows as a quoted reply. Rare, and only when it is genuinely about that message."
+const replyDirective = "To answer one of their recent messages instead of the latest — a question of theirs you skipped a moment ago — write [reply: <a few exact words from it>]; it shows as a quoted reply. Rare, only ever their words, never your own, and only when it is genuinely about that message."
+
+// replyWindow is how far back a quoted reply may reach, in messages. A person quotes
+// the question from a minute ago, not the one from an hour ago; left unbounded, word
+// overlap found *something* far up the log that shared three words with her quote,
+// and she was drawn answering a message the conversation had long since left.
+const replyWindow = 12
+
+// minVerbatimQuote is the shortest quote trusted as a verbatim match. "lol" and "ok"
+// are in half the messages of an evening, and the newest one of them is not the one
+// she meant.
+const minVerbatimQuote = 8
 
 // findReplyTag reads the earlier message she is replying to, as she quoted it. The
 // first one wins: a second is the model repeating itself, and a message replies to
@@ -79,9 +90,16 @@ func excerptOf(content string) string {
 
 // resolveReplyTarget finds which earlier message her quote came from.
 //
-// The latest message is excluded: replying to it is what every reply already does, so
-// a tag that resolves there is a tag that meant nothing. Only messages that carry an id
-// can be pointed at — an older client sends none and gets none back.
+// The latest message is never the target: replying to it is what every reply already
+// does, so a tag that quotes it meant nothing — and it resolves to nothing, rather than
+// on to an older message that happens to share the words. That fall-through was the
+// commonest way she was drawn answering something from far up the log.
+//
+// Only their messages can be quoted, and only recent ones (replyWindow). Quoting her
+// own earlier text is a thing people do, rarely; a model does it constantly, because
+// its own words are the ones it remembers best, and on a phone it reads as her
+// answering herself. Only messages that carry an id can be pointed at — an older client
+// sends none and gets none back.
 //
 // Substring first, because a model shown the history usually quotes it verbatim. Then
 // word overlap, most-recent-wins on a tie, with a floor so "the thing" does not land on
@@ -91,19 +109,32 @@ func resolveReplyTarget(quote string, messages []chatMessage) *chatReplyRef {
 	if quote == "" || len(messages) < 2 {
 		return nil
 	}
-	candidates := messages[:len(messages)-1]
 	lowerQuote := strings.ToLower(quote)
+	words := requestWords(quote)
+	latest := messages[len(messages)-1]
+	if strings.Contains(strings.ToLower(latest.Content), lowerQuote) || overlap(words, latest.Content) >= 0.6 {
+		return nil
+	}
+	start := len(messages) - 1 - replyWindow
+	if start < 0 {
+		start = 0
+	}
+	candidates := messages[start : len(messages)-1]
+	quotable := func(m chatMessage) bool {
+		return m.ID != "" && m.Content != "" && strings.EqualFold(strings.TrimSpace(m.Role), "user")
+	}
 	// Verbatim, newest first.
-	for i := len(candidates) - 1; i >= 0; i-- {
-		m := candidates[i]
-		if m.ID == "" || m.Content == "" {
-			continue
-		}
-		if strings.Contains(strings.ToLower(m.Content), lowerQuote) {
-			return &chatReplyRef{ID: m.ID, Role: m.Role, Excerpt: excerptOf(m.Content)}
+	if len(quote) >= minVerbatimQuote {
+		for i := len(candidates) - 1; i >= 0; i-- {
+			m := candidates[i]
+			if !quotable(m) {
+				continue
+			}
+			if strings.Contains(strings.ToLower(m.Content), lowerQuote) {
+				return &chatReplyRef{ID: m.ID, Role: m.Role, Excerpt: excerptOf(m.Content)}
+			}
 		}
 	}
-	words := requestWords(quote)
 	if len(words) < 2 {
 		return nil
 	}
@@ -111,17 +142,10 @@ func resolveReplyTarget(quote string, messages []chatMessage) *chatReplyRef {
 	bestScore := 0.0
 	for i := len(candidates) - 1; i >= 0; i-- {
 		m := candidates[i]
-		if m.ID == "" || m.Content == "" {
+		if !quotable(m) {
 			continue
 		}
-		have := requestWords(m.Content)
-		hits := 0
-		for word := range words {
-			if have[word] {
-				hits++
-			}
-		}
-		score := float64(hits) / float64(len(words))
+		score := overlap(words, m.Content)
 		// Strictly greater, so an older message needs to fit better than a newer one
 		// to take it — recency is the tiebreak.
 		if score >= 0.6 && score > bestScore {
@@ -130,6 +154,22 @@ func resolveReplyTarget(quote string, messages []chatMessage) *chatReplyRef {
 		}
 	}
 	return best
+}
+
+// overlap is the share of the quote's words that the message contains. Zero for a
+// quote of fewer than two words, which is too little to recognise a message by.
+func overlap(words map[string]bool, content string) float64 {
+	if len(words) < 2 {
+		return 0
+	}
+	have := requestWords(content)
+	hits := 0
+	for word := range words {
+		if have[word] {
+			hits++
+		}
+	}
+	return float64(hits) / float64(len(words))
 }
 
 // quotedHistoryContent is how a replied-to message reads in the history the model is

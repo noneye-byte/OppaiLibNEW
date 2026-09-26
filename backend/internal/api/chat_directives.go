@@ -296,7 +296,11 @@ var blankLineRun = regexp.MustCompile(`\n{3,}`)
 var spaceRun = regexp.MustCompile(`[ \t]{2,}`)
 
 // danglingSpace tidies punctuation that ends up separated from its word.
-var danglingSpace = regexp.MustCompile(`[ \t]+([,.!?;:])`)
+//
+// Only punctuation that ends a clause — followed by whitespace or the end — because a
+// colon or semicolon with something right after it is an emoticon, not a stray comma:
+// the unanchored version turned "hehe :3" into "hehe:3" and "ok ;)" into "ok;)".
+var danglingSpace = regexp.MustCompile(`[ \t]+([,.!?;:]+)(\s|$)`)
 
 // scrubDirectives removes every control tag and machinery stage direction left in a
 // reply, and tidies the seams.
@@ -338,7 +342,7 @@ func scrubDirectivesReporting(reply string) (cleaned string, emptied bool) {
 		return span
 	})
 	cleaned = spaceRun.ReplaceAllString(cleaned, " ")
-	cleaned = danglingSpace.ReplaceAllString(cleaned, "$1")
+	cleaned = danglingSpace.ReplaceAllString(cleaned, "$1$2")
 	// Trim the trailing spaces deletion leaves at line ends before collapsing runs,
 	// or a line that is now only whitespace does not read as blank.
 	lines := strings.Split(cleaned, "\n")

@@ -307,9 +307,10 @@ private suspend fun typeLikeAPerson(text: String, spentMs: Long, phase: (TypingP
  * Splits a finished reply into the short texts a person would send back to back. A
  * blank line is an intended break — she is told to text that way — and is honoured
  * whatever the length; nothing else is split, since a sentence guess on a phone is
- * worse than one bubble. Capped so a long reply is a few texts, not a wall.
+ * worse than one bubble. Capped at three, the server's own cap (chat_texts.go): past the
+ * third, a burst was usually her writing both sides of a conversation.
  */
-private const val MAX_BUBBLES = 5
+private const val MAX_BUBBLES = 3
 private fun splitIntoBubbles(text: String): List<String> {
     val trimmed = text.trim()
     if (trimmed.isEmpty()) return listOf(trimmed)
@@ -1174,6 +1175,22 @@ fun ChatScreen(
                                         intensity = live.intensity,
                                         recentMediaIds = live.messages.flatMap { entry -> entry.attachments.map { it.id } }.distinct().takeLast(40),
                                     )
+                                },
+                                // A picture she made after Allow: it lands as her message, and
+                                // its record joins the gallery list first — the workspace save
+                                // keeps only the images this client knows of.
+                                onPicture = { image ->
+                                    val latest = workspace ?: ws
+                                    val c = latest.conversations.firstOrNull { it.id == convo.id } ?: convo
+                                    val now = System.currentTimeMillis()
+                                    val sent = StoredChatMessage(
+                                        chatID(), "assistant", "*sends a picture*", now,
+                                        imageId = image.id, mood = c.emotion, heat = c.intensity,
+                                    )
+                                    save(latest.copy(
+                                        images = (latest.images + image).distinctBy { it.id },
+                                        conversations = latest.conversations.map { if (it.id == c.id) c.copy(messages = c.messages + sent, updatedAt = now) else it },
+                                    ))
                                 },
                             )
                         }
@@ -2309,6 +2326,7 @@ private fun ChatMessageRow(
     onOpenSnap: (StoredChatMessage) -> Unit = {},
     receipt: String = "",
     actContext: () -> LibbyActRequest = { LibbyActRequest(kind = "") },
+    onPicture: (ChatImage) -> Unit = {},
 ) {
     if (entry.thought.isNotBlank()) { ChatThoughtRow(char, entry); return }
     val friend = entry.role == "assistant"
@@ -2426,7 +2444,7 @@ private fun ChatMessageRow(
             ChatAttachments(repo, char, entry.attachments, onOpenMedia)
             }
             ChatLinkChips(repo, entry.links, onOpenMedia)
-            ChatActionCards(repo, entry.actions, actContext)
+            ChatActionCards(repo, entry.actions, actContext, onPicture)
             // One stamp per run, at its foot, so a burst of four texts is marked once
             // instead of four times. The ticks are the same idea as everywhere else: the
             // message is in the log on the server, which is as delivered as it gets here.
@@ -2477,7 +2495,12 @@ private fun ChatMessageRow(
  * look pressable after a reload, which is either a lie or a second import.
  */
 @Composable
-private fun ChatActionCards(repo: Repository, actions: List<LibbyAction>, actContext: () -> LibbyActRequest = { LibbyActRequest(kind = "") }) {
+private fun ChatActionCards(
+    repo: Repository,
+    actions: List<LibbyAction>,
+    actContext: () -> LibbyActRequest = { LibbyActRequest(kind = "") },
+    onPicture: (ChatImage) -> Unit = {},
+) {
     if (actions.isEmpty()) return
     val scope = rememberCoroutineScope()
     Column(Modifier.fillMaxWidth().padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -2503,7 +2526,13 @@ private fun ChatActionCards(repo: Repository, actions: List<LibbyAction>, actCon
                                 state = "running"
                                 scope.launch {
                                     runCatching { repo.api.libbyAct(action.toRequest(actContext())) }
-                                        .onSuccess { state = "done"; status = actionDone(action.kind) }
+                                        .onSuccess { result ->
+                                            state = "done"
+                                            status = result.message.ifBlank { actionDone(action.kind) }
+                                            // A picture she made is sent, not filed: it lands
+                                            // in the conversation as hers.
+                                            result.image?.let(onPicture)
+                                        }
                                         .onFailure { state = "failed"; status = it.message ?: "That didn't work." }
                                 }
                             }) { Text("Allow") }
@@ -2542,7 +2571,7 @@ private fun actionIcon(kind: String) = when (kind) {
 /** What a completed action says. Specific where it can be: "Done" is true but tells
     the user nothing about where the thing went. */
 private fun actionDone(kind: String) = when (kind) {
-    "generate" -> "Made it — it's in your library."
+    "generate" -> "She sent it to you."
     "import" -> "Added to your library."
     "tag" -> "Tags added."
     "favorite" -> "Favorited."

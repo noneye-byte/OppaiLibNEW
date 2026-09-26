@@ -665,6 +665,17 @@ data class LibbyIdentityMark(
     val reference: Boolean = false,
 )
 
+/**
+ * What an approved action answered. Every action's reply is an object, and only these
+ * fields are read: the server's own words for the card, and — for a picture she made —
+ * the chat photo it became, which the conversation then shows as hers.
+ */
+@Serializable
+data class LibbyActResult(
+    val message: String = "",
+    val image: ChatImage? = null,
+)
+
 /** The approved half of a [LibbyAction], as the act endpoint takes it. */
 @Serializable
 data class LibbyActRequest(

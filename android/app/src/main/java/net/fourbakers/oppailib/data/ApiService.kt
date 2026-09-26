@@ -509,7 +509,7 @@ interface ApiService {
     /** Performs one action the user has approved. The only call in the app that acts
         on something Libby said, and it exists solely to be made by an Allow button. */
     @POST("api/libby/act")
-    suspend fun libbyAct(@Body body: LibbyActRequest)
+    suspend fun libbyAct(@Body body: LibbyActRequest): LibbyActResult
 
     /**
      * Says whether a library item is a picture of Libby, or is not.

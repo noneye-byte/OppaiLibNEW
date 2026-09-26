@@ -6,11 +6,14 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"image"
 	"io"
 	"net/http"
 	"net/url"
 	"regexp"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/youruser/oppailib/internal/settings"
 )
@@ -556,33 +559,98 @@ func (s *Server) actGenerate(w http.ResponseWriter, r *http.Request, cur setting
 		writeErr(w, http.StatusBadGateway, "the generator returned no image")
 		return
 	}
-	// Titled and tagged so it is findable later as something she made, rather than
-	// landing in the library as another anonymous "Generated image". The subject and
-	// her state go on as tags too: they are what the selfie picker matches a request
-	// against (chat_photo_pick.go), so a picture made for "you in the bath" is the one
-	// that answers "the bath one" next time rather than a fresh generation.
+	// Tagged so it is findable later as something she made. The subject and her state go
+	// on as tags too: they are what the selfie picker matches a request against
+	// (chat_photo_pick.go), so a picture made for "you in the bath" is the one that
+	// answers "the bath one" next time rather than a fresh generation.
 	tags := append([]string{"libby"}, stateTags...)
 	tags = append(tags, selfieSubjectTags(subject)...)
-	saved := s.delegate(r, s.handleImageGenSave, http.MethodPost, "/api/imagegen/save", genSaveReq{
-		ID:    result.Images[0].ID,
-		Title: libbyImageTitle(subject),
-		Tags:  tags,
-	})
-	if saved.status >= 200 && saved.status < 300 {
-		// It is a picture of her by construction, so say so the way a manual verdict
-		// does — recognition would likely agree, but "likely" is a poor basis for
-		// whether she can send it. Best-effort: the save already succeeded.
-		var filed struct {
-			ID int64 `json:"id"`
-		}
-		if err := json.Unmarshal([]byte(saved.body.String()), &filed); err == nil && filed.ID > 0 {
-			if err := s.db.AddTag(r.Context(), filed.ID, libbyIdentityTag, libbyIdentityCategory, "manual", 0); err != nil {
-				s.log.Debug("tag generated selfie as her", "err", err)
-			}
-			s.touchLibraryIndex()
+	title := libbyImageTitle(subject)
+
+	// It goes where a picture she sends goes: her chat gallery, and from there into the
+	// conversation as a message of hers. It used to be filed in the library and the card
+	// said so — which is a picture she made *for* them, sent nowhere, with a note saying
+	// where to go and look. The library copy is now the operator's choice.
+	preview, ok := s.genCache.get(result.Images[0].ID)
+	if !ok {
+		writeErr(w, http.StatusBadGateway, "the generator's picture expired before it could be kept")
+		return
+	}
+	u, ok := s.chatUser(r)
+	if !ok {
+		writeErr(w, http.StatusUnauthorized, "invalid user")
+		return
+	}
+	sent, status, err := s.fileChatImage(u.ID, generatedChatImage(r, s, preview.data, title, tags), preview.data)
+	if err != nil {
+		writeErr(w, status, err.Error())
+		return
+	}
+	out := map[string]any{"image": sent, "message": "She sent it to you."}
+	if cur.LibbyGenToLibrary {
+		if id := s.saveGeneratedToLibrary(r, result.Images[0].ID, title, tags); id > 0 {
+			out["id"] = id
+			out["message"] = "She sent it to you — and it's in your library."
 		}
 	}
-	relay(w, saved)
+	writeJSON(w, http.StatusOK, out)
+}
+
+// generatedChatImage is the gallery record for a picture she made of herself: hers by
+// construction, so its subject is set rather than left to the scanner, and the scanner's
+// tags join hers so the picker can match it by what is actually in it.
+func generatedChatImage(r *http.Request, s *Server, raw []byte, title string, tags []string) chatImage {
+	seen := map[string]bool{}
+	var all []string
+	add := func(tag string) {
+		if tag = normalizeChatTag(tag); tag != "" && !seen[tag] {
+			seen[tag] = true
+			all = append(all, tag)
+		}
+	}
+	for _, tag := range tags {
+		add(tag)
+	}
+	if decoded, _, err := image.Decode(bytes.NewReader(raw)); err == nil {
+		if suggestions, err := s.ai.TagImage(r.Context(), decoded); err == nil {
+			for _, suggestion := range suggestions {
+				add(suggestion.Name)
+			}
+		}
+	}
+	sort.Strings(all)
+	return chatImage{
+		ID: randomID(), CharacterID: "libby", Name: title, Tags: all,
+		MIME: safeInlineContentType(http.DetectContentType(raw)), CreatedAt: time.Now().UnixMilli(),
+		Subject: chatSubjectSelf,
+	}
+}
+
+// saveGeneratedToLibrary files the picture in the library as well, the way it always
+// used to be, and returns the new item's id — 0 when the save failed, which costs the
+// library copy and not the picture she already sent.
+func (s *Server) saveGeneratedToLibrary(r *http.Request, previewID, title string, tags []string) int64 {
+	saved := s.delegate(r, s.handleImageGenSave, http.MethodPost, "/api/imagegen/save", genSaveReq{
+		ID: previewID, Title: title, Tags: tags,
+	})
+	if saved.status < 200 || saved.status >= 300 {
+		s.log.Debug("library copy of a generated selfie", "status", saved.status)
+		return 0
+	}
+	var filed struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(saved.body.String()), &filed); err != nil || filed.ID <= 0 {
+		return 0
+	}
+	// It is a picture of her by construction, so say so the way a manual verdict does —
+	// recognition would likely agree, but "likely" is a poor basis for whether she can
+	// send it.
+	if err := s.db.AddTag(r.Context(), filed.ID, libbyIdentityTag, libbyIdentityCategory, "manual", 0); err != nil {
+		s.log.Debug("tag generated selfie as her", "err", err)
+	}
+	s.touchLibraryIndex()
+	return filed.ID
 }
 
 // libbySelfiePrompt composes the prompt for a picture she makes of herself, and the

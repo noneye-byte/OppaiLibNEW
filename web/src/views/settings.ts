@@ -1,7 +1,7 @@
 import { speak, stopSpeaking, ttsStatus, type TTSStatus } from "../speech.js";
 import { LitElement, html, css, nothing } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
-import { api, mascotSay, type APKInfo, type Diagnostics, type Passkey, type PasskeyList, type Settings, type ReadOnlyInfo, type Stats, type StorageReport, type Timing, type User } from "../api.js";
+import { api, mascotSay, type APKInfo, type Diagnostics, type LibbyReferenceSlot, type Passkey, type PasskeyList, type Settings, type ReadOnlyInfo, type Stats, type StorageReport, type Timing, type User } from "../api.js";
 import { passkeyErrorMessage, registerPasskey } from "../passkeys.js";
 import { withViewTransition } from "../motion.js";
 import { profileUpdates, resetUIMetrics, uiMetricsSnapshot, type UIMetricsSnapshot } from "../ui-metrics.js";
@@ -650,6 +650,63 @@ export class OppaiSettings extends LitElement {
     void this.loadGenLists();
     void this.loadTTS();
     void this.loadDescribe();
+    void this.loadReferences();
+  }
+
+  /** Which of her two reference pictures are set; null until asked. `refStamp` busts the
+   *  preview's cache after a replacement, since the URL does not change. */
+  @state() private refs: Record<LibbyReferenceSlot, boolean> | null = null;
+  @state() private refStamp = Date.now();
+  @state() private refNote = "";
+
+  private async loadReferences() {
+    try { this.refs = await api.libbyReferences(); } catch { this.refs = null; }
+  }
+
+  private async setReference(slot: LibbyReferenceSlot, input: HTMLInputElement) {
+    const file = input.files?.[0];
+    input.value = "";
+    if (!file) return;
+    const imageData = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+    });
+    try {
+      await api.setLibbyReference(slot, imageData);
+      this.refNote = "";
+      this.refStamp = Date.now();
+      await this.loadReferences();
+    } catch (e) { this.refNote = (e as Error).message; }
+  }
+
+  private async clearReference(slot: LibbyReferenceSlot) {
+    try { await api.deleteLibbyReference(slot); this.refNote = ""; await this.loadReferences(); }
+    catch (e) { this.refNote = (e as Error).message; }
+  }
+
+  /** One slot: the picture when there is one, and the buttons to set or clear it. */
+  private referenceTile(slot: LibbyReferenceSlot, label: string) {
+    const set = !!this.refs?.[slot];
+    return html`<div style="display:flex;flex-direction:column;gap:6px;align-items:center;width:132px;">
+      <div style="width:132px;height:176px;border-radius:12px;overflow:hidden;display:grid;place-items:center;
+        background:var(--md-sys-color-surface-container-highest);color:var(--md-sys-color-on-surface-variant);font-size:12px;text-align:center;">
+        ${set
+          ? html`<img src=${api.libbyReferenceURL(slot, this.refStamp)} alt=${`Libby, ${label.toLowerCase()}`} style="width:100%;height:100%;object-fit:cover;"/>`
+          : html`<span>No picture</span>`}
+      </div>
+      <strong style="font-size:12px;">${label}</strong>
+      <div style="display:flex;gap:6px;">
+        <label class="btn-inline">
+          ${set ? "Replace" : "Upload"}
+          <input type="file" accept="image/*" hidden ?disabled=${!this.canEdit}
+            @change=${(e: Event) => void this.setReference(slot, e.target as HTMLInputElement)}/>
+        </label>
+        ${set ? html`<button class="btn-inline" ?disabled=${!this.canEdit}
+          @click=${() => void this.clearReference(slot)}>Remove</button>` : nothing}
+      </div>
+    </div>`;
   }
 
   private async load() {
@@ -1393,6 +1450,26 @@ export class OppaiSettings extends LitElement {
             @change=${(e: Event) => this.edit({ libbyGenNegativePrompt: (e.target as HTMLTextAreaElement).value })}></textarea>
         </div>
       </div>
+
+      <div class="field">
+        <div class="field-text">
+          <div class="field-label">Also save her pictures to the library</div>
+          <div class="field-help">
+            A picture she makes is sent to you in the conversation and kept with her chat
+            photos. Turn this on to file a copy in the library as well.
+          </div>
+        </div>
+        <div class="field-control">
+          <button
+            class="switch ${s.libbyGenToLibrary ? "on" : ""}"
+            role="switch"
+            aria-checked=${s.libbyGenToLibrary ? "true" : "false"}
+            aria-label="Also save her pictures to the library"
+            ?disabled=${!this.canEdit}
+            @click=${() => this.edit({ libbyGenToLibrary: !s.libbyGenToLibrary })}
+          ></button>
+        </div>
+      </div>
     </section>`;
   }
 
@@ -1814,10 +1891,11 @@ export class OppaiSettings extends LitElement {
                   <div class="field-label">Context window</div>
                   <div class="field-help">
                     How much of the model's context Libby may fill, in tokens. Leave at
-                    <strong>0</strong> and OppaiLib asks the loader what it allocated —
-                    which text-generation-webui answers and llama.cpp server, LM&nbsp;Studio
-                    and Ollama do not. On those, a number here is the only way to tell her
-                    she has room: a bigger window is memory, bond and library context she
+                    <strong>0</strong> and OppaiLib uses the context length the model was
+                    loaded with from here (with "remember" ticked), or what llama.cpp server
+                    reports — and 8192 when it knows neither: text-generation-webui loaded from
+                    its own UI, LM&nbsp;Studio and Ollama do not say. There, a number here is
+                    the only way to tell her she has room: a bigger window is memory, bond and library context she
                     keeps instead of shedding to fit. Never set it above what the model is
                     actually loaded with — past that the backend drops the front of the
                     prompt, which is her character card.
@@ -1859,6 +1937,29 @@ export class OppaiSettings extends LitElement {
 
               <div class="field">
                 <div class="field-text">
+                  <div class="field-label">Graphics card memory</div>
+                  <div class="field-help">
+                    In GB, so Libby can say what she runs on when you ask about the box. Nothing
+                    on the network reports it; at <strong>0</strong> she says she doesn't know
+                    rather than guessing one from her model.
+                  </div>
+                </div>
+                <div class="field-control">
+                  <input
+                    type="number"
+                    min="0"
+                    max="256"
+                    step="1"
+                    .value=${String(s.gpuMemoryGb ?? 0)}
+                    ?disabled=${!this.canEdit}
+                    @change=${(e: Event) =>
+                      this.edit({ gpuMemoryGb: Number((e.target as HTMLInputElement).value) })}
+                  />
+                </div>
+              </div>
+
+              <div class="field">
+                <div class="field-text">
                   <div class="field-label">Her eyes</div>
                   <div class="field-help">
                     Most of the 24B–32B models a big card runs can see — Mistral&#8209;Small&#8209;3.2,
@@ -1875,6 +1976,25 @@ export class OppaiSettings extends LitElement {
                     ${[["", "Auto (from the model name)"], ["on", "On — her model can see"], ["off", "Off — tags only"]].map(
                       ([id, label]) => html`<option value=${id} ?selected=${(s.chatVision ?? "") === id}>${label}</option>`)}
                   </select>
+                </div>
+              </div>
+
+              <div class="field stack">
+                <div class="field-text">
+                  <div class="field-label">What she looks like</div>
+                  <div class="field-help">
+                    Two pictures of her for her own eyes: one in her usual outfit, one in nothing.
+                    When a message is about how she looks — what she's wearing, her body, whether a
+                    photo is of her — the one that fits is shown to her beside yours, so she describes
+                    herself from the picture rather than from her card. She never sends these; they
+                    only reach a model that can see (above). If the bare one is missing she uses the
+                    clothed one.
+                  </div>
+                  ${this.refNote ? html`<div class="field-help" style="color:var(--md-sys-color-error);">${this.refNote}</div>` : nothing}
+                </div>
+                <div class="field-control" style="display:flex;gap:16px;flex-wrap:wrap;">
+                  ${this.referenceTile("clothed", "Usual outfit")}
+                  ${this.referenceTile("nude", "Nothing on")}
                 </div>
               </div>
 

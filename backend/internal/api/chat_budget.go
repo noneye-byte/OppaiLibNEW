@@ -127,12 +127,31 @@ func (s *Server) chatContextLimit(ctx context.Context) int {
 	defer cancel()
 	if status, raw, err := s.chatBackendRequest(probeCtx, http.MethodGet, "/v1/internal/model/info", nil); err == nil && status >= 200 && status < 300 {
 		var info struct {
-			NCtx        int `json:"n_ctx"`
-			MaxSeqLen   int `json:"max_seq_len"`
-			MaxModelLen int `json:"max_model_len"`
+			ModelName   string `json:"model_name"`
+			NCtx        int    `json:"n_ctx"`
+			MaxSeqLen   int    `json:"max_seq_len"`
+			MaxModelLen int    `json:"max_model_len"`
 		}
 		if json.Unmarshal(raw, &info) == nil {
 			reported = []int{info.NCtx, info.MaxSeqLen, info.MaxModelLen}
+			// text-generation-webui answers this endpoint with the model's name and not
+			// its window, so on the backend this setting was written for, auto always fell
+			// through to 8192 — and she was told she had an 8K window on a card running
+			// 32K, which she reasonably took to mean a small card. The window is known when
+			// the model was loaded from here: it is in the arguments remembered for it.
+			reported = append(reported, rememberedContext(s.readTextgenLoads(), info.ModelName))
+		}
+	} else if status, raw, err := s.chatBackendRequest(probeCtx, http.MethodGet, "/props", nil); err == nil && status >= 200 && status < 300 {
+		// llama.cpp's own server says what it allocated here, at the top level in newer
+		// builds and under the generation defaults in older ones.
+		var props struct {
+			NCtx     int `json:"n_ctx"`
+			Defaults struct {
+				NCtx int `json:"n_ctx"`
+			} `json:"default_generation_settings"`
+		}
+		if json.Unmarshal(raw, &props) == nil {
+			reported = []int{props.NCtx, props.Defaults.NCtx}
 		}
 	}
 	limit := effectiveContextLimit(cur.ChatContextTokens, reported...)
@@ -141,6 +160,26 @@ func (s *Server) chatContextLimit(ctx context.Context) int {
 	contextLimitCache.url, contextLimitCache.pinned = cur.ChatURL, cur.ChatContextTokens
 	contextLimitCache.mu.Unlock()
 	return limit
+}
+
+// rememberedContext is the context length a model was last loaded with from OppaiLib,
+// or 0 when it was never loaded from here with its settings remembered. Every spelling
+// the loaders have used is read, since the client sends both old and new names.
+//
+// A load made since in the WebUI itself, at another length, is not seen. That is the
+// same trust the load dialog already places in these arguments — they are what it
+// offers for the next load — and the pinned setting still overrides it.
+func rememberedContext(loads textgenLoads, model string) int {
+	load, ok := loads.Models[strings.TrimSpace(model)]
+	if !ok || model == "" {
+		return 0
+	}
+	for _, key := range []string{"ctx_size", "n_ctx", "max_seq_len"} {
+		if n := intFromAny(load.Args[key]); n > 0 {
+			return n
+		}
+	}
+	return 0
 }
 
 // effectiveContextLimit resolves the window from what the operator pinned (0 for

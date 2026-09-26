@@ -68,12 +68,14 @@ type serverState struct {
 	Tier      modelTier
 	Eyes      bool
 	// Models are the other models the chat backend could load, when it can be asked.
-	Models        []string
-	ModelControl  bool
-	ImageGen      string // the generator's kind, "" when none is configured
-	ImageGenDown  bool
-	CardShare     string // "swap" or ""
-	CardLent      bool
+	Models       []string
+	ModelControl bool
+	ImageGen     string // the generator's kind, "" when none is configured
+	ImageGenDown bool
+	CardShare    string // "swap" or ""
+	CardLent     bool
+	GPUMemoryGB  int // what the operator said the card has; 0 is unknown
+
 	Voice         string
 	PendingUpload int64
 }
@@ -150,7 +152,15 @@ func (st serverState) render(full bool) string {
 		if st.Eyes {
 			eyes = "can see pictures directly"
 		}
-		fmt.Fprintf(&b, "\n- You are running on %s (%s-model settings, a %d-token window, %s).", st.ChatModel, st.Tier, st.Window, eyes)
+		// The window in tokens, and the sampling tier as what it is. "small-model settings,
+		// a 8192-token window" is what she was told before, and she read it as the card's
+		// size — "we only have 8 GB" — which neither number is.
+		fmt.Fprintf(&b, "\n- You are running on %s: a %d-token context window, sampling tuned for a %s model, and it %s.", st.ChatModel, st.Window, st.Tier, eyes)
+	}
+	if st.GPUMemoryGB > 0 {
+		fmt.Fprintf(&b, "\n- The graphics card has %d GB of memory.", st.GPUMemoryGB)
+	} else {
+		b.WriteString("\n- Nobody has said how much memory the graphics card has. If it comes up, say you don't know; never work a figure out from the model or the window.")
 	}
 	if len(st.Models) > 0 {
 		b.WriteString("\n- Other chat models on disk: " + strings.Join(st.Models, ", ") + ".")
@@ -198,6 +208,8 @@ func (s *Server) gatherServerState(ctx context.Context, cur settings.Settings, m
 		Eyes:      chatSeesPictures(cur.ChatVision, model) && !knownBlind(cur.ChatURL, model),
 		CardShare: cur.GPUShare,
 		CardLent:  s.card.parkedModel() != "",
+		// Straight from the setting: nothing on the network reports it. See settings.GPUMemoryGB.
+		GPUMemoryGB: cur.GPUMemoryGB,
 	}
 	// The drives that matter to her: where the library lives, and where the database
 	// does when that is a different volume. The rest of the storage page's mappings are

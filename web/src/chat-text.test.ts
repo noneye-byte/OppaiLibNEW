@@ -33,11 +33,19 @@ test("a short reply stays one bubble", () => {
 // guess to be worth making.
 test("a long reply with no paragraph seam is grouped into message-sized runs", () => {
   const sentence = "She walked the length of the pier and watched the boats come in. ";
-  const parts = splitIntoBubbles(sentence.repeat(6));
-  assert.ok(parts.length > 1, "a 400-character reply should not arrive as one bubble");
+  const parts = splitIntoBubbles(sentence.repeat(10));
+  assert.ok(parts.length > 1, "a 650-character reply should not arrive as one bubble");
   assert.ok(parts.length <= MAX_BUBBLES, `got ${parts.length} bubbles, cap is ${MAX_BUBBLES}`);
   // Nothing may be dropped on the way: every word still has to be there.
-  assert.equal(parts.join(" ").replace(/\s+/g, " ").trim(), sentence.repeat(6).replace(/\s+/g, " ").trim());
+  assert.equal(parts.join(" ").replace(/\s+/g, " ").trim(), sentence.repeat(10).replace(/\s+/g, " ").trim());
+});
+
+// She is asked for one text on most turns now, and a one-text answer of a few
+// sentences is one text — chopping it into three is the wall of bubbles again.
+test("a few sentences sent as one text stay one bubble", () => {
+  const text = "ok so I finally finished it. the ending was so good, I did not see it coming at all. " +
+    "you have to read it tonight, no excuses. I want to talk about it tomorrow";
+  assert.deepEqual(splitIntoBubbles(text), [text]);
 });
 
 test("just under the floor is left alone, and no text is ever lost", () => {
@@ -50,7 +58,8 @@ test("just under the floor is left alone, and no text is ever lost", () => {
 test("more paragraphs than the cap fold into the last bubble", () => {
   const parts = splitIntoBubbles(["one", "two", "three", "four", "five", "six", "seven"].join("\n\n"));
   assert.equal(parts.length, MAX_BUBBLES);
-  assert.equal(parts[MAX_BUBBLES - 1], "five\n\nsix\n\nseven");
+  assert.equal(MAX_BUBBLES, 3);
+  assert.equal(parts[MAX_BUBBLES - 1], "three\n\nfour\n\nfive\n\nsix\n\nseven");
 });
 
 // Link detection is deliberately narrow: a dotted word is not a host.

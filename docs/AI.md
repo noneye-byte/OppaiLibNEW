@@ -68,10 +68,14 @@ changes and what it deliberately does not.
 
 **The window.** OppaiLib fits every turn into a stated window and reports what it had to
 leave out; the number it fits into is `Settings → Libby chat → Context window`. At `0`
-it asks the loader — `n_ctx`, `max_seq_len`, `max_model_len` — and follows the answer up
-to 32K. Only text-generation-webui answers that question: **llama.cpp server, LM Studio
-and Ollama expose no such endpoint**, so on those the setting is the only way to tell her
-she has room, and leaving it at 0 quietly runs a 32 GB card at the 8 GB assumption. Never
+it uses the context length the model was loaded with from OppaiLib's own load dialog
+(with its settings remembered), or what llama.cpp server reports at `/props`, and follows
+it up to 32K. **text-generation-webui does not report the window it loaded with**, so a
+model loaded from its own UI — and anything behind LM Studio or Ollama — falls back to
+8192; there the setting is the only way to tell her she has room, and leaving it at 0
+quietly runs a 32 GB card at the 8 GB assumption. **Settings → Libby chat → Graphics card
+memory** is what she says the card has when asked about the box; left at 0 she says she
+doesn't know, rather than working a figure out from her window. Never
 set it above what the model was actually loaded with — past that the backend truncates
 the *front* of the prompt, which is her character card.
 

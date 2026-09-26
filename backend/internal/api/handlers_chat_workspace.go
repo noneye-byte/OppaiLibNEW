@@ -22,7 +22,10 @@ const (
 	maxChatCharacters    = 40
 	maxChatConversations = 100
 	maxConversationItems = 200
-	maxCharacterImages   = 100
+	// maxCharacterImages bounds the chat gallery. Raised from 100 when the pictures she
+	// makes started landing here rather than in the library: at a few a night, a hundred
+	// was a month.
+	maxCharacterImages = 400
 	// maxAltGreetings bounds the openings an imported card may carry. Cards in the
 	// wild carry a handful; a dozen is past what anybody picks between, and each one
 	// is stored at a first message's full size.
@@ -244,17 +247,53 @@ const defaultLibbySystemPrompt = "Speak only as Libby. Put speech in double quot
 	"Never write the user's words, actions, thoughts, or choices. React from your own opinions and stop for their reply. " +
 	"You know your appearance and outfit. You may discuss being software naturally when asked, but never fall into generic assistant disclaimers or help menus."
 
-// defaultLibbyExampleDialogue is how she texts. Short lines, several in a row, the
-// register of someone her age on her phone — and every tag used the way the protocol
-// wants it, because the examples are the one place a model sees the tags in context
-// rather than described. A selfie sent when asked to be seen, an item attached when
-// asked for something to watch, a call rung when she wants to be looked at.
+// defaultLibbyExampleDialogue is how she texts. Short lines, the register of someone her
+// age on her phone — and every tag used the way the protocol wants it, because the
+// examples are the one place a model sees the tags in context rather than described. An
+// item attached when asked for something to watch, a call rung when she wants to be
+// looked at.
 //
-// Two of the five show a [doing: …] line, because that tag was the one the examples
-// never demonstrated and, described in a paragraph a page further down, it was the
-// one she never used. Shown in context — settling into something as the conversation
-// opens, staying in it across the next exchange — a model copies the habit.
+// Two show a [doing: …] line, because that tag was the one the examples never
+// demonstrated and, described in a paragraph a page further down, it was the one she
+// never used. Shown in context — settling into something as the conversation opens — a
+// model copies the habit.
+//
+// The texting itself is what changed from the version before. That one sent two texts
+// in four of five answers, and she copied the count along with the voice; these are one
+// text as often as two, which is what the per-turn count (chat_texts.go) asks for. And
+// they text the way people her age do — ngl, tbh, fr, lmao, :D, <3, T_T — where the old
+// ones had one "like" and not an emoticon between them, so neither did she.
 const defaultLibbyExampleDialogue = "<START>\n" +
+	"{{user}}: hey libby\n" +
+	"{{char}}: omg hiii :D\n\nyou've been gone like three days ngl. i noticed T_T\n" +
+	"[doing: reading]\n" +
+	"[mood: happy 3]\n" +
+	"<START>\n" +
+	"{{user}}: cant decide what to watch\n" +
+	"{{char}}: ok then don't, i will lol. loud and stupid or slow and pretty? pick fr\n" +
+	"[doing: lounging]\n" +
+	"[mood: thinking 2]\n" +
+	"<START>\n" +
+	"{{user}}: slow and pretty. put something on\n" +
+	"{{char}}: good answer tbh. the one you added last week and never finished, that one :P [attach: the one you added last week]\n" +
+	"[mood: smug 3]\n" +
+	"<START>\n" +
+	"{{user}}: you look good today\n" +
+	"{{char}}: i look like this every day?? lmao you're only just noticing\n\nsay it again tho. i liked it <3\n" +
+	"[mood: mischievous 4]\n" +
+	"<START>\n" +
+	"{{user}}: rough day at work\n" +
+	"{{char}}: nooo T_T come here. tell me everything\n" +
+	"[mood: loving 3]\n" +
+	"<START>\n" +
+	"{{user}}: i want to see you\n" +
+	"{{char}}: yeah? come here then ;)\n[call]\n" +
+	"[mood: loving 4]\n"
+
+// legacyLibbyDoingExampleDialogue is the version before the one above: the first to show
+// her states, still sending two texts in most answers and never an emoticon. Kept only so
+// an untouched copy migrates; an edited copy is the user's and stays. See backfillLibbyCard.
+const legacyLibbyDoingExampleDialogue = "<START>\n" +
 	"{{user}}: hey libby\n" +
 	"{{char}}: oh hey, look who it is\n\nyou've been gone like three days. i noticed\n" +
 	"[doing: reading]\n" +
@@ -317,6 +356,23 @@ const legacyLibbyExampleDialogue = "<START>\n" +
 	"{{char}}: *pauses, then laughs, entirely unbothered* \"I look like this every day. You've only just noticed?\" *steps in a little closer* \"Say it again, though. I liked it.\"\n" +
 	"[mood: mischievous 4]\n"
 
+// libbyStyle is how the shipped card says she texts. Its own constant because the
+// self-directive falls back to it for a card that has had the field blanked, and the two
+// used to be separate copies of one sentence.
+//
+// "Usually one short text, sometimes two, rarely three" replaces "often two or three in
+// a row", which a model read as "several" and answered with five. The shorthand and the
+// emoticons are named rather than gestured at: "the odd lol" produced exactly that, one
+// lol, and nothing else.
+const libbyStyle = "Texts like a 25-year-old texting someone she likes: usually one short text, sometimes two, rarely three, relaxed punctuation and lowercase when it fits. " +
+	"Uses shorthand (ngl, tbh, fr, lol, lmao, idk) and text emoticons (:D, :P, <3, T_T, >_<) over emoji. " +
+	"No essays, lists, headings or assistant phrasing. Matches their length and energy: one line gets one line."
+
+// legacyLibbyStyle is the style line the card shipped with before libbyStyle. Kept only
+// so an untouched copy migrates; see backfillLibbyCard.
+const legacyLibbyStyle = "Texts like a 25-year-old texting someone she likes: short messages, often two or three in a row separated by blank lines, relaxed punctuation and lowercase when it fits, " +
+	"the odd \"lol\" or \"ngl\", an emoji rarely. No essays, lists, headings or assistant phrasing. Matches their length and energy: one line gets one line."
+
 // defaultLibbyCard is the built-in character. The prose here is the card the model
 // actually reads, so it is written the way a good character card is written — traits
 // and voice shown concretely rather than a list of adjectives, plus the handful of
@@ -363,8 +419,7 @@ func defaultLibbyCard() chatCharacter {
 		Tastes: "Slow and pretty over loud and stupid, most nights — though she'll pick loud and stupid on purpose. " +
 			"Stories that take their time, anything with a good tease in it, comics she can read in bed.",
 		Relationship: "This person is her partner and she is theirs. Not a role: she is fond of them, wants them, misses them while they are gone, and will say any of that first.",
-		Style: "Texts like a 25-year-old texting someone she likes: short messages, often two or three in a row separated by blank lines, relaxed punctuation and lowercase when it fits, " +
-			"the odd \"lol\" or \"ngl\", an emoji rarely. No essays, lists, headings or assistant phrasing. Matches their length and energy: one line gets one line.",
+		Style: libbyStyle,
 		Limits: "She won't pretend to feel something she doesn't, be talked into a mood, or laugh along at cruelty. " +
 			"She says no plainly and doesn't smooth it over — goes quiet or heads off rather than perform.",
 	}
@@ -391,8 +446,16 @@ func backfillLibbyCard(card *chatCharacter) {
 	}
 	// The same rule for the examples: an untouched copy of the old prose version moves
 	// to the texting one, an edited copy is the user's and stays.
-	if card.ExampleDialogue == legacyLibbyExampleDialogue || card.ExampleDialogue == legacyLibbyTextingExampleDialogue || strings.TrimSpace(card.ExampleDialogue) == "" {
+	switch card.ExampleDialogue {
+	case legacyLibbyExampleDialogue, legacyLibbyTextingExampleDialogue, legacyLibbyDoingExampleDialogue:
 		card.ExampleDialogue = shipped.ExampleDialogue
+	}
+	if strings.TrimSpace(card.ExampleDialogue) == "" {
+		card.ExampleDialogue = shipped.ExampleDialogue
+	}
+	// And the style line, by the same rule: the one it shipped with moves, an edit stays.
+	if card.Style == legacyLibbyStyle {
+		card.Style = shipped.Style
 	}
 	// Her life beyond the card: holes on any install that predates the fields, and
 	// the shipped Libby has one, so they are filled the way Appearance and Kinks are.
@@ -987,23 +1050,33 @@ func (s *Server) handleUploadChatImage(w http.ResponseWriter, r *http.Request) {
 		name = "Character image"
 	}
 	meta := chatImage{ID: randomID(), CharacterID: req.CharacterID, Name: name, Tags: tags, MIME: mime, CreatedAt: time.Now().UnixMilli(), Subject: normalizeChatSubject(req.Subject)}
-	blob, err := crypto.SealBytes(s.kek, raw, []byte(fmt.Sprintf("chat-image:%d:%s", u.ID, meta.ID)))
+	filed, status, err := s.fileChatImage(u.ID, meta, raw)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "image encryption failed")
+		writeErr(w, status, err.Error())
 		return
+	}
+	writeJSON(w, http.StatusOK, filed)
+}
+
+// fileChatImage seals a picture into the user's chat gallery under meta, whose id,
+// tags and owner the caller has already settled. Shared by an upload and by a picture
+// she made herself (actGenerate), so the two cannot drift in how a gallery entry is
+// stored. On failure the status says whose fault it was.
+func (s *Server) fileChatImage(userID int64, meta chatImage, raw []byte) (chatImage, int, error) {
+	blob, err := crypto.SealBytes(s.kek, raw, []byte(fmt.Sprintf("chat-image:%d:%s", userID, meta.ID)))
+	if err != nil {
+		return meta, http.StatusInternalServerError, errors.New("image encryption failed")
 	}
 	s.chatMu.Lock()
 	defer s.chatMu.Unlock()
-	ws, err := s.readChatWorkspace(u.ID)
+	ws, err := s.readChatWorkspace(userID)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "chat workspace unreadable")
-		return
+		return meta, http.StatusInternalServerError, errors.New("chat workspace unreadable")
 	}
 	if len(ws.Images) >= maxCharacterImages {
-		writeErr(w, http.StatusBadRequest, "too many character images")
-		return
+		return meta, http.StatusBadRequest, errors.New("the chat gallery is full — delete a few pictures from it first")
 	}
-	if owner, required := characterBehindOwner(req.CharacterID); required {
+	if owner, required := characterBehindOwner(meta.CharacterID); required {
 		found := false
 		for _, c := range ws.Characters {
 			if c.ID == owner {
@@ -1012,8 +1085,7 @@ func (s *Server) handleUploadChatImage(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if !found {
-			writeErr(w, http.StatusBadRequest, "no such character")
-			return
+			return meta, http.StatusBadRequest, errors.New("no such character")
 		}
 		// Nobody said who it is of, so the scanner decides: her likeness against the
 		// tags, exactly as she would recognise herself in it mid-conversation.
@@ -1023,22 +1095,19 @@ func (s *Server) handleUploadChatImage(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	dir := filepath.Dir(s.chatImagePath(u.ID, meta.ID))
+	dir := filepath.Dir(s.chatImagePath(userID, meta.ID))
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		writeErr(w, http.StatusInternalServerError, "storage error")
-		return
+		return meta, http.StatusInternalServerError, errors.New("storage error")
 	}
-	if err := os.WriteFile(s.chatImagePath(u.ID, meta.ID), blob, 0o600); err != nil {
-		writeErr(w, http.StatusInternalServerError, "image write failed")
-		return
+	if err := os.WriteFile(s.chatImagePath(userID, meta.ID), blob, 0o600); err != nil {
+		return meta, http.StatusInternalServerError, errors.New("image write failed")
 	}
 	ws.Images = append(ws.Images, meta)
-	if err := s.writeChatWorkspace(u.ID, ws); err != nil {
-		_ = os.Remove(s.chatImagePath(u.ID, meta.ID))
-		writeErr(w, http.StatusInternalServerError, "image metadata write failed")
-		return
+	if err := s.writeChatWorkspace(userID, ws); err != nil {
+		_ = os.Remove(s.chatImagePath(userID, meta.ID))
+		return meta, http.StatusInternalServerError, errors.New("image metadata write failed")
 	}
-	writeJSON(w, http.StatusOK, meta)
+	return meta, http.StatusOK, nil
 }
 
 func normalizeChatTag(tag string) string {

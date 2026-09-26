@@ -252,7 +252,9 @@ func clampFloat(v, lo, hi float64) float64 {
 // The mood and send tags are safe from these because they are the last thing in a reply and
 // none of these strings can appear inside one.
 func chatStops(userName string) []string {
-	stops := []string{"\nUser:", "\nuser:", "\nYou:", "\nHuman:", "<|im_end|>", "<|im_start|>"}
+	// "the user:" is what her example dialogue calls them when they have set no name
+	// (expandCardMacros), and so the label she copies when she writes their line.
+	stops := []string{"\nUser:", "\nuser:", "\nYou:", "\nHuman:", "\nthe user:", "<|im_end|>", "<|im_start|>"}
 	if userName = strings.TrimSpace(userName); userName != "" && len(userName) <= 40 {
 		stops = append(stops, "\n"+userName+":")
 	}

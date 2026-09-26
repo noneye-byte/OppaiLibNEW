@@ -591,7 +591,30 @@ export class OppaiChat extends LitElement {
   @state() private imageSubject = "self";
 
   /** Which of her offers have been decided this session; see ActionApprovals. */
-  private approvals = new ActionApprovals(() => this.requestUpdate(), () => this.actContext());
+  private approvals = new ActionApprovals(() => this.requestUpdate(), () => this.actContext(), (image) => this.receiveMadePicture(image));
+
+  /**
+   * A picture she made after you said yes to her offer. It arrives as a message of
+   * hers, the way a selfie does, rather than being filed in the library with a note
+   * saying where to look — which is what it used to do.
+   *
+   * The record goes into the local gallery list first: the server filed it, but the
+   * workspace save keeps only the images this client knows of, so an autosave from a
+   * copy without it would throw the record away.
+   */
+  private receiveMadePicture(image: ChatImage) {
+    if (!this.workspace.images.some((known) => known.id === image.id)) this.workspace.images.push({ ...image, tags: image.tags ?? [] });
+    const live = this.activeConversation;
+    if (live) {
+      live.messages.push({
+        id:newID(), role:"assistant", content:"*sends a picture*", at:Date.now(), imageId:image.id,
+        mood:live.emotion, heat:live.intensity,
+      });
+      live.updatedAt = Date.now();
+      void this.scrollToEnd();
+    }
+    this.touchWorkspace();
+  }
 
   /**
    * Her state on this device when an offer is approved: what she is wearing, doing,

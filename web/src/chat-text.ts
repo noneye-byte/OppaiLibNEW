@@ -24,15 +24,19 @@ export function findLinkInText(text: string): string {
   return found.replace(/[.,;:!?)\]}'"]+$/, "");
 }
 
-/** The most bubbles one reply is ever broken into. */
-export const MAX_BUBBLES = 5;
+/** The most bubbles one reply is ever broken into. Three, the same as the server's
+ *  cap (chat_texts.go): people send one text, sometimes two, now and then three, and
+ *  five in a row read as a wall — and, past the third, were usually her writing both
+ *  sides of a conversation. */
+export const MAX_BUBBLES = 3;
 
-/** Below this many characters a reply is a single thought, and splitting only
- *  fragments it. */
-const SPLIT_FLOOR = 160;
+/** Below this many characters a reply is one text, and splitting only fragments it.
+ *  High on purpose: the server now tells her how many texts to send, so a long reply
+ *  with no blank line in it is one long text she meant as one. */
+const SPLIT_FLOOR = 360;
 
 /** Roughly a text message's worth; the sentence grouper breaks after this. */
-const BUBBLE_TARGET = 200;
+const BUBBLE_TARGET = 240;
 
 /**
  * Breaks one reply into the messages it should arrive as.

@@ -92,7 +92,7 @@ func fillNamePlaceholders(reply, name string) string {
 	out := namePlaceholder.ReplaceAllLiteralString(reply, name)
 	if name == "" {
 		out = spaceRun.ReplaceAllString(out, " ")
-		out = danglingSpace.ReplaceAllString(out, "$1")
+		out = danglingSpace.ReplaceAllString(out, "$1$2")
 	}
 	return out
 }

@@ -69,6 +69,53 @@ func TestResolveReplyTargetQuotesAndOverlaps(t *testing.T) {
 	}
 }
 
+func TestSheNeverQuotesHerOwnMessages(t *testing.T) {
+	messages := []chatMessage{
+		{ID: "a1", Role: "user", Content: "what are you reading"},
+		{ID: "b2", Role: "assistant", Content: "a comic about a lighthouse keeper, it's so good"},
+		{ID: "c3", Role: "user", Content: "nice"},
+	}
+	if got := resolveReplyTarget("a comic about a lighthouse keeper", messages); got != nil {
+		t.Fatalf("her own message was a target: %+v", got)
+	}
+}
+
+func TestAQuoteOfTheLatestDoesNotFallThroughToAnOlderMessage(t *testing.T) {
+	messages := []chatMessage{
+		{ID: "a1", Role: "user", Content: "what should i watch tonight"},
+		{ID: "b2", Role: "assistant", Content: "the slow one"},
+		{ID: "c3", Role: "user", Content: "ok but seriously what should i watch"},
+	}
+	if got := resolveReplyTarget("what should i watch", messages); got != nil {
+		t.Fatalf("a quote of the latest message landed on %+v", got)
+	}
+}
+
+func TestAQuoteCannotReachFarBack(t *testing.T) {
+	messages := []chatMessage{{ID: "old", Role: "user", Content: "did you ever finish that comic i sent you"}}
+	for i := 0; i < replyWindow+2; i++ {
+		role := "assistant"
+		if i%2 == 1 {
+			role = "user"
+		}
+		messages = append(messages, chatMessage{ID: "m" + string(rune('a'+i)), Role: role, Content: "filler message number " + string(rune('a'+i))})
+	}
+	if got := resolveReplyTarget("finish that comic", messages); got != nil {
+		t.Fatalf("a message %d back was a target: %+v", len(messages), got)
+	}
+}
+
+func TestAWordOrTwoIsNotAVerbatimMatch(t *testing.T) {
+	messages := []chatMessage{
+		{ID: "a1", Role: "user", Content: "lol ok"},
+		{ID: "b2", Role: "assistant", Content: "what"},
+		{ID: "c3", Role: "user", Content: "nothing"},
+	}
+	if got := resolveReplyTarget("lol", messages); got != nil {
+		t.Fatalf("\"lol\" resolved to %+v", got)
+	}
+}
+
 func TestFindReplyTagAcceptsTheSpellingsModelsUse(t *testing.T) {
 	for _, tc := range []struct{ in, want string }{
 		{"oh wait [reply: finish that comic] yes i did", "finish that comic"},

@@ -40,9 +40,7 @@ func (s *Server) libbySelfDirective(cur settings.Settings, character chatCharact
 	if style := strings.TrimSpace(character.Style); style != "" {
 		b.WriteString("- How you write: " + style + " Be at ease with this adult collection; follow their pace without going coy or clinical.\n")
 	} else {
-		b.WriteString("- You text like a 25-year-old texting someone she likes: short messages, often two or three in a row separated by blank lines, relaxed punctuation and lowercase when it fits, " +
-			"the odd \"lol\" or \"ngl\", an emoji rarely. No essays, lists, headings or assistant phrasing. Match their length and energy: one line gets one line. " +
-			"Be at ease with this adult collection; follow their pace without going coy or clinical.\n")
+		b.WriteString("- How you write: " + libbyStyle + " Be at ease with this adult collection; follow their pace without going coy or clinical.\n")
 	}
 	b.WriteString("- The pixel-art woman beside the chat is you; matching images depict you. Your selfies are different from media on the shelves.\n")
 	// What she *is* to the person she is talking to, rather than only how she behaves.
