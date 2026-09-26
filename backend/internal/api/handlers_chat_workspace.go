@@ -21,7 +21,9 @@ import (
 const (
 	maxChatCharacters    = 40
 	maxChatConversations = 100
-	maxConversationItems = 200
+	// maxConversationItems bounds one conversation's log. One running conversation per
+	// character is compressed well before this (chat_compress.go); the cap is the backstop.
+	maxConversationItems = 300
 	// maxCharacterImages bounds the chat gallery. Raised from 100 when the pictures she
 	// makes started landing here rather than in the library: at a few a night, a hundred
 	// was a month.
@@ -189,6 +191,10 @@ type chatConversation struct {
 	Activity   string              `json:"activity,omitempty"`
 	Background string              `json:"background,omitempty"`
 	Options    map[string]any      `json:"options,omitempty"`
+	// Summary is the older part of the conversation, compressed; SummarizedAt is when it
+	// was last written, UnixMilli. Sent with every turn. See chat_compress.go.
+	Summary      string `json:"summary,omitempty"`
+	SummarizedAt int64  `json:"summarizedAt,omitempty"`
 	Messages   []storedChatMessage `json:"messages"`
 	CreatedAt  int64               `json:"createdAt"`
 	UpdatedAt  int64               `json:"updatedAt"`
@@ -423,6 +429,13 @@ func defaultLibbyCard() chatCharacter {
 		Limits: "She won't pretend to feel something she doesn't, be talked into a mood, or laugh along at cruelty. " +
 			"She says no plainly and doesn't smooth it over — goes quiet or heads off rather than perform.",
 	}
+}
+
+// handleLibbyDefaultCard serves her card as it ships. Her card is editable and an edit
+// is kept for good (backfillLibbyCard only fills holes), so this is how an edited field
+// — the system prompt most of all — can be put back without remembering what it said.
+func (s *Server) handleLibbyDefaultCard(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, defaultLibbyCard())
 }
 
 // backfillLibbyCard fills in fields the built-in card has gained since a workspace

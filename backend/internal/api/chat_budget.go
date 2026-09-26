@@ -5,10 +5,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 // Fitting a turn into the model's context, and saying so when something had to go.
@@ -85,6 +90,98 @@ var contextLimitCache struct {
 	at     time.Time
 	url    string // invalidates the cache when the operator repoints the backend
 	pinned int    // and when they change the window by hand, which wants to take effect now
+	// guessed says the value is targetContextLimit because nothing said otherwise: no pin,
+	// and nothing the backend or its files reported. The budget note says so, since
+	// "the model's 8192-token context" read as a fact on a card loaded at 32K.
+	guessed bool
+}
+
+// chatContextGuessed reports whether the last window worked out was the fallback.
+func (s *Server) chatContextGuessed() bool {
+	contextLimitCache.mu.Lock()
+	defer contextLimitCache.mu.Unlock()
+	return contextLimitCache.guessed
+}
+
+// guessedWindowHint is added to the budget note when the window was the fallback.
+const guessedWindowHint = " (A guess: the backend does not report its context length. Set her context window under Chat → settings → Model & generation.)"
+
+// lastLoad is the last model loaded from OppaiLib, with its arguments, whether or not
+// "remember" was ticked. The remembered file only holds the loads someone chose to
+// keep, so a model loaded once at 32K from here was still budgeted at 8K.
+var lastLoad struct {
+	mu    sync.Mutex
+	model string
+	args  map[string]any
+}
+
+// noteLoad records a load that succeeded.
+func noteLoad(model string, args map[string]any) {
+	lastLoad.mu.Lock()
+	lastLoad.model, lastLoad.args = strings.TrimSpace(model), args
+	lastLoad.mu.Unlock()
+}
+
+// lastLoadContext is the context length of the last load from here, when it was of model.
+func lastLoadContext(model string) int {
+	lastLoad.mu.Lock()
+	defer lastLoad.mu.Unlock()
+	if model == "" || lastLoad.model != strings.TrimSpace(model) {
+		return 0
+	}
+	return contextArg(lastLoad.args)
+}
+
+// contextArg reads a context length out of loader arguments, in every spelling the
+// loaders have used.
+func contextArg(args map[string]any) int {
+	for _, key := range []string{"ctx_size", "n_ctx", "max_seq_len"} {
+		if n := intFromAny(args[key]); n > 0 {
+			return n
+		}
+	}
+	return 0
+}
+
+// userConfigContext reads the context length text-generation-webui saved for a model
+// in its own config-user.yaml — written by "Save settings" on its Model tab — which
+// sits in its models folder. That folder is readable here when the operator mapped it
+// for model deletion (settings.ChatModelDir). Patterns are matched the way the WebUI
+// matches them: a regular expression against the start of the file name, lower-cased,
+// later entries overriding earlier ones.
+func userConfigContext(modelDir, model string) int {
+	modelDir, model = strings.TrimSpace(modelDir), strings.TrimSpace(model)
+	if modelDir == "" || model == "" {
+		return 0
+	}
+	raw, err := os.ReadFile(filepath.Join(modelDir, "config-user.yaml"))
+	if err != nil {
+		return 0
+	}
+	var config yaml.Node
+	if yaml.Unmarshal(raw, &config) != nil || len(config.Content) == 0 || config.Content[0].Kind != yaml.MappingNode {
+		return 0
+	}
+	name := strings.ToLower(filepath.Base(model))
+	found := 0
+	entries := config.Content[0].Content
+	for i := 0; i+1 < len(entries); i += 2 {
+		pattern, err := regexp.Compile("^(?:" + strings.ToLower(entries[i].Value) + ")")
+		if err != nil || !pattern.MatchString(name) {
+			continue
+		}
+		var fields map[string]any
+		if entries[i+1].Decode(&fields) != nil {
+			continue
+		}
+		for _, key := range []string{"ctx_size", "n_ctx", "max_seq_len"} {
+			if n, ok := fields[key].(int); ok && n > 0 {
+				found = n
+				break
+			}
+		}
+	}
+	return found
 }
 
 // chatContextLimit is the window a turn is fitted into, in tokens.
@@ -139,7 +236,10 @@ func (s *Server) chatContextLimit(ctx context.Context) int {
 			// through to 8192 — and she was told she had an 8K window on a card running
 			// 32K, which she reasonably took to mean a small card. The window is known when
 			// the model was loaded from here: it is in the arguments remembered for it.
-			reported = append(reported, rememberedContext(s.readTextgenLoads(), info.ModelName))
+			// Or in the last load made from here, remembered or not; or in what the WebUI
+			// itself saved for the model, when its models folder is mapped in.
+			reported = append(reported, rememberedContext(s.readTextgenLoads(), info.ModelName),
+				lastLoadContext(info.ModelName), userConfigContext(cur.ChatModelDir, info.ModelName))
 		}
 	} else if status, raw, err := s.chatBackendRequest(probeCtx, http.MethodGet, "/props", nil); err == nil && status >= 200 && status < 300 {
 		// llama.cpp's own server says what it allocated here, at the top level in newer
@@ -155,8 +255,9 @@ func (s *Server) chatContextLimit(ctx context.Context) int {
 		}
 	}
 	limit := effectiveContextLimit(cur.ChatContextTokens, reported...)
+	guessed := cur.ChatContextTokens <= 0 && !reportedAny(reported)
 	contextLimitCache.mu.Lock()
-	contextLimitCache.value, contextLimitCache.at = limit, time.Now()
+	contextLimitCache.value, contextLimitCache.at, contextLimitCache.guessed = limit, time.Now(), guessed
 	contextLimitCache.url, contextLimitCache.pinned = cur.ChatURL, cur.ChatContextTokens
 	contextLimitCache.mu.Unlock()
 	return limit
@@ -174,12 +275,18 @@ func rememberedContext(loads textgenLoads, model string) int {
 	if !ok || model == "" {
 		return 0
 	}
-	for _, key := range []string{"ctx_size", "n_ctx", "max_seq_len"} {
-		if n := intFromAny(load.Args[key]); n > 0 {
-			return n
+	return contextArg(load.Args)
+}
+
+// reportedAny says whether any of the reported windows is believable — the same test
+// effectiveContextLimit applies.
+func reportedAny(reported []int) bool {
+	for _, n := range reported {
+		if n >= minContextLimit && n <= maxContextLimit {
+			return true
 		}
 	}
-	return 0
+	return false
 }
 
 // effectiveContextLimit resolves the window from what the operator pinned (0 for
@@ -295,6 +402,7 @@ const (
 	rankActivity        = 42 // the MISC states she can put herself into
 	rankReadyPicture    = 45 // what the picture she is about to send actually shows
 	rankActions         = 50 // what she may offer to do to the collection
+	rankSummary         = 55 // this conversation before the messages she can see
 	rankMemoryList      = 60 // what she knows about them
 	rankSelfFacts       = 65 // who she has said she is — shed last of all
 )

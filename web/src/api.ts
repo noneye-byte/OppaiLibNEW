@@ -723,6 +723,11 @@ export interface ChatTurn {
       built from, and the reply before any tag was parsed out of it. Opt-in because the
       payload dwarfs the reply; the conversation export is what reads it back. */
   debug?: boolean;
+  /** This client makes the picture itself when a reply asks it to (`generate`), and
+      falls back to a saved one if that fails. */
+  canGenerate?: boolean;
+  /** The conversation's compressed older part. */
+  summary?: string;
   /** Whether the user has her on the call screen rather than in the message log.
       A call changes what they are doing — watching her rather than reading her — and
       the server has no other way to know it was opened. */
@@ -780,6 +785,9 @@ export interface ChatResponse {
   emotion?: string;
   intensity?: number;
   imageId?: string;
+  /** A picture she is taking now: generate it and post it as hers, or send the
+      fallback if the generator fails. Only on a turn that sent `canGenerate`. */
+  generate?: { prompt: string; fallbackImageId?: string; fallbackAttachment?: LibbyAttachment } | null;
   /** Library items this reply points at. Absent from older servers. */
   links?: LibbyLink[];
   /** Library items this reply hands over: something she chose to show, or a picture
@@ -1111,6 +1119,10 @@ export interface ChatConversation {
   background?: string;
   progress?: number;
   options?: ChatOptions;
+  /** The older part of the conversation, compressed into her notes, and when. Sent
+      with every turn in place of the messages it stands for. */
+  summary?: string;
+  summarizedAt?: number;
   messages: StoredChatMessage[];
   createdAt: number;
   updatedAt: number;
@@ -2773,6 +2785,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ model, confirm, permanent }),
     }, 120_000),
+  /** Summarises the older part of a conversation, folding in the summary so far. The
+      caller keeps the answer and drops the messages it stands for. */
+  compressChat: (body: { characterId: string; summary?: string; messages: ChatMessage[] }) =>
+    request<{ summary: string }>("/api/chat/compress", { method: "POST", body: JSON.stringify(body) }, 200_000),
   saveChatWorkspace: (workspace: ChatWorkspace) =>
     request<ChatWorkspace>("/api/chat/workspace", {
       method: "PUT",
@@ -3107,6 +3123,8 @@ export const api = {
   // Which pictures in the library are of her. The label itself lives on the media row
   // as a `character:libby` tag, so it is visible and searchable like any other; these
   // endpoints own the settings, the manual verdicts, and the reference set.
+  /** Libby's card as it ships, so an edited field can be put back. */
+  libbyDefaultCard: () => request<ChatCharacter>("/api/chat/libby-default"),
   libbyIdentity: () => request<LibbyIdentity>("/api/libby/identity", {}, 15_000),
   saveLibbyIdentity: (settings: { auto?: boolean; floor?: number }) =>
     request<LibbyIdentity>("/api/libby/identity", { method: "PUT", body: JSON.stringify(settings) }),

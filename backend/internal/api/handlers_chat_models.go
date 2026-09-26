@@ -257,6 +257,9 @@ func (s *Server) handleLoadChatModel(w http.ResponseWriter, r *http.Request) {
 	if in.Remember {
 		s.rememberTextgenLoad(in.Model, in.Args, in.Settings)
 	}
+	// And kept for this process whatever was ticked, so her window follows the load
+	// either way. See chatContextLimit.
+	noteLoad(probe.Loaded, in.Args)
 	writeJSON(w, http.StatusOK, map[string]any{"loaded": probe.Loaded})
 }
 

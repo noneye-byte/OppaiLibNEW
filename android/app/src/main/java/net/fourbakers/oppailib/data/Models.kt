@@ -524,6 +524,8 @@ data class ChatReplyRef(
 data class ChatRequest(
     val mode: String,
     val messages: List<ChatMessage>,
+    /** The conversation's compressed older part; see [ChatConversation.summary]. */
+    val summary: String = "",
     val emotion: String = "neutral",
     val intensity: Int = 1,
     val options: JsonObject = JsonObject(emptyMap()),
@@ -886,6 +888,11 @@ data class ChatConversation(
     val background: String = "",
     val progress: Double = intensity.toDouble(),
     val options: JsonObject = JsonObject(emptyMap()),
+    /** The older part of the conversation, compressed into her notes by the web client,
+        and when. Carried so a save from the phone does not erase them, and sent with
+        every turn in place of the messages they stand for. */
+    val summary: String = "",
+    val summarizedAt: Long = 0,
     val messages: List<StoredChatMessage> = emptyList(),
     val createdAt: Long,
     val updatedAt: Long,

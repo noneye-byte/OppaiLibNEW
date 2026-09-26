@@ -709,9 +709,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/chat/models/delete", s.requireAuth(s.requireAdmin(s.handleDeleteChatModel)))
 	mux.HandleFunc("PUT /api/chat/workspace", s.requireAuth(s.handlePutChatWorkspace))
 	mux.HandleFunc("POST /api/chat/images", s.requireAuth(s.handleUploadChatImage))
+	// Libby's card as it ships, so each of her fields can be put back. Read-only.
+	mux.HandleFunc("GET /api/chat/libby-default", s.requireAuth(s.handleLibbyDefaultCard))
 	mux.HandleFunc("GET /api/chat/images/{id}", s.requireAuth(s.handleGetChatImage))
 	mux.HandleFunc("DELETE /api/chat/images/{id}", s.requireAuth(s.handleDeleteChatImage))
 	mux.HandleFunc("POST /api/chat", s.requireAuth(s.handleChat))
+	// Summarises the older part of a conversation for the client to keep. See chat_compress.go.
+	mux.HandleFunc("POST /api/chat/compress", s.requireAuth(s.handleCompressConversation))
 
 	mux.HandleFunc("POST /api/scrape", s.requireAuth(s.handleScrape))
 	mux.HandleFunc("POST /api/scrape/bulk", s.requireAuth(s.handleScrapeBulk))

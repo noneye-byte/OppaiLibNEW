@@ -21,6 +21,9 @@ import { LIBBY_PROGRESSION_MULTIPLIERS, getProgressionMultiplier, setProgression
 import "./libby-backgrounds.js";
 
 
+/** Libby's sections, drawn by the chat's settings panel through `only`. */
+export type LibbySection = "libby-general" | "libby-model" | "libby-voice" | "libby-pictures";
+
 type SettingsTab =
   | "appearance" | "libby" | "backgrounds" | "ai" | "scraping" | "library" | "android" | "account" | "storage"
   | "diagnostics" | "privacy" | "about";
@@ -32,10 +35,8 @@ type SettingsTab =
  */
 const SETTINGS_TABS: { id: SettingsTab; label: string; icon: string; group: string; server?: boolean; adminOnly?: boolean }[] = [
   { id: "appearance", label: "Appearance", icon: "palette", group: "You" },
-  { id: "libby", label: "Libby", icon: "auto_awesome", group: "You" },
   // Its own panel rather than a card inside Libby: it is a gallery of pictures with
   // four operations each, and the Android app gives it a screen for the same reason.
-  { id: "backgrounds", label: "Her backgrounds", icon: "wallpaper", group: "You" },
   { id: "account", label: "Account", icon: "account_circle", group: "You" },
   { id: "ai", label: "AI tagging", icon: "smart_toy", group: "Server", server: true },
   { id: "scraping", label: "Scraping", icon: "travel_explore", group: "Server", server: true },
@@ -61,6 +62,9 @@ const SETTINGS_TABS: { id: SettingsTab; label: string; icon: string; group: stri
 @customElement("oppai-settings")
 export class OppaiSettings extends LitElement {
   @property({ attribute: false }) user!: User;
+  /** Draws one of Libby's sections alone, with its own save bar, for the chat's settings
+   *  panel — where all of hers live now, instead of being split across three screens. */
+  @property({ attribute: false }) only: LibbySection | "" = "";
 
   @state() private tab: SettingsTab = "appearance";
   @state() private settings: Settings | null = null;
@@ -820,6 +824,7 @@ export class OppaiSettings extends LitElement {
   }
 
   render() {
+    if (this.only) return this.renderOnly(this.only);
     // Admin-only panels are hidden rather than shown-and-refused: a rail entry that
     // always 403s is just a dead end. Incognito only disguises the public login, so
     // authenticated users keep the complete Libby settings panel.
@@ -871,6 +876,24 @@ export class OppaiSettings extends LitElement {
         </div>
       </div>
     `;
+  }
+
+  /** One of Libby's sections on its own, inside the chat's settings. */
+  private renderOnly(section: LibbySection) {
+    const body = {
+      "libby-general": () => this.renderLibby(),
+      "libby-model": () => this.renderLibbyModel(),
+      "libby-voice": () => this.renderLibbyVoice(),
+      "libby-pictures": () => html`${this.renderLibbyImageGen()}${this.renderLibbyReferences()}`,
+    }[section];
+    return html`<div class="embedded">
+      ${this.loadError ? html`<div class="banner error"><span class="material-symbols-rounded" style="font-size:18px;">error</span>${this.loadError}</div>` : nothing}
+      ${!this.canEdit && this.settings && section !== "libby-general"
+        ? html`<div class="banner info"><span class="material-symbols-rounded" style="font-size:18px;">lock</span>Server settings are read-only — only an admin can change them.</div>`
+        : nothing}
+      ${body()}
+      ${this.dirty || this.saved ? this.renderSaveBar() : nothing}
+    </div>`;
   }
 
   private renderTab() {
@@ -1153,8 +1176,6 @@ export class OppaiSettings extends LitElement {
           </div>
         </div>
       </section>
-      ${this.renderLibbyVoice()}
-      ${this.renderLibbyImageGen()}
     `;
   }
 
@@ -1323,6 +1344,230 @@ export class OppaiSettings extends LitElement {
       await api.deleteTTSVoice(id);
       await this.loadTTS(true);
     } catch (e) { this.loadError = (e as Error).message; }
+  }
+
+  /**
+   * Her model: which local LLM she talks through, and how much of it she may use.
+   * Lives in the chat's own settings (Model & generation) rather than here — see `only`.
+   */
+  private renderLibbyModel() {
+    const s = this.settings;
+    return html`
+      <section class="card">
+        <h3><span class="material-symbols-rounded">memory</span>Her model</h3>
+        <p class="card-sub">The chat backend every character talks through. Saved for the whole server.</p>
+        ${!s
+          ? html`<div class="field-help">Loading…</div>`
+          : html`
+              <div class="field stack">
+                <div class="field-text">
+                  <div class="field-label">Libby chat</div>
+                  <div class="field-help">
+                    OpenAI-compatible API base URL for your local LLM, such as
+                    <code>http://host:5000/v1</code>. The model name is an optional fallback;
+                    OppaiLib detects the model actually loaded by text-generation-webui.
+                    Load and unload models in that backend's own WebUI—OppaiLib never changes its model lifecycle.
+                  </div>
+                </div>
+                <div class="field-control">
+                  <input
+                    type="text"
+                    autocomplete="off"
+                    placeholder="http://host:5000/v1"
+                    .value=${s.chatUrl}
+                    ?disabled=${!this.canEdit}
+                    @change=${(e: Event) => this.edit({ chatUrl: (e.target as HTMLInputElement).value })}
+                  />
+                </div>
+                <div class="field-control">
+                  <input
+                    type="text"
+                    autocomplete="off"
+                    placeholder="Optional fallback model name"
+                    .value=${s.chatModel}
+                    ?disabled=${!this.canEdit}
+                    @change=${(e: Event) => this.edit({ chatModel: (e.target as HTMLInputElement).value })}
+                  />
+                </div>
+                <div class="field-control">
+                  <input
+                    type="password"
+                    autocomplete="new-password"
+                    placeholder=${s.chatApiKeySet ? "API key saved — enter to replace" : "API key (optional)"}
+                    .value=${s.chatApiKey}
+                    ?disabled=${!this.canEdit}
+                    @change=${(e: Event) => this.edit({ chatApiKey: (e.target as HTMLInputElement).value })}
+                  />
+                </div>
+              </div>
+
+              <div class="field">
+                <div class="field-text">
+                  <div class="field-label">Context window</div>
+                  <div class="field-help">
+                    How much of the model's context Libby may fill, in tokens. Leave at
+                    <strong>0</strong> and OppaiLib uses the context length the model was
+                    last loaded with from here, what text-generation-webui saved for it (<em>Save
+                    settings</em> on its Model tab — read from the model folder below, when set), or what
+                    llama.cpp server reports — and 8192 when it knows none of those, because
+                    text-generation-webui's API never says. Otherwise a number here is
+                    the only way to tell her she has room: a bigger window is memory, bond and library context she
+                    keeps instead of shedding to fit. Never set it above what the model is
+                    actually loaded with — past that the backend drops the front of the
+                    prompt, which is her character card.
+                  </div>
+                </div>
+                <div class="field-control">
+                  <input
+                    type="number"
+                    min="0"
+                    max="131072"
+                    step="1024"
+                    .value=${String(s.chatContextTokens)}
+                    ?disabled=${!this.canEdit}
+                    @change=${(e: Event) =>
+                      this.edit({ chatContextTokens: Number((e.target as HTMLInputElement).value) })}
+                  />
+                </div>
+              </div>
+
+              <div class="field">
+                <div class="field-text">
+                  <div class="field-label">Model size</div>
+                  <div class="field-help">
+                    Her sampler presets were written for a 7B, where a heavy repetition
+                    penalty is what stops a looping reply. On a 24B and up the same numbers
+                    flatten the prose and cost her the tags written at the end of it, so
+                    that penalty is eased and a scene is allowed to run longer. Auto reads
+                    the parameter count out of the loaded model's name.
+                  </div>
+                </div>
+                <div class="field-control">
+                  <select ?disabled=${!this.canEdit}
+                    @change=${(e: Event) => this.edit({ chatModelTier: (e.target as HTMLSelectElement).value })}>
+                    ${[["", "Auto (from the model name)"], ["small", "Small — 7B to 13B"], ["large", "Large — 24B and up"]].map(
+                      ([id, label]) => html`<option value=${id} ?selected=${s.chatModelTier === id}>${label}</option>`)}
+                  </select>
+                </div>
+              </div>
+
+              <div class="field">
+                <div class="field-text">
+                  <div class="field-label">Graphics card memory</div>
+                  <div class="field-help">
+                    In GB, so Libby can say what she runs on when you ask about the box. Nothing
+                    on the network reports it; at <strong>0</strong> she says she doesn't know
+                    rather than guessing one from her model.
+                  </div>
+                </div>
+                <div class="field-control">
+                  <input
+                    type="number"
+                    min="0"
+                    max="256"
+                    step="1"
+                    .value=${String(s.gpuMemoryGb ?? 0)}
+                    ?disabled=${!this.canEdit}
+                    @change=${(e: Event) =>
+                      this.edit({ gpuMemoryGb: Number((e.target as HTMLInputElement).value) })}
+                  />
+                </div>
+              </div>
+
+              <div class="field">
+                <div class="field-text">
+                  <div class="field-label">Her eyes</div>
+                  <div class="field-help">
+                    Most of the 24B–32B models a big card runs can see — Mistral&#8209;Small&#8209;3.2,
+                    Gemma&nbsp;3, the Qwen&#8209;VL family. When hers can, a photo you send and the
+                    picture you ask about go to her as pictures, not just as the tagger's words.
+                    Auto reads it off the model's name; a backend that turns out not to take images
+                    (a GGUF loaded without its mmproj) is answered from the tags instead, so leaving
+                    this on is safe.
+                  </div>
+                </div>
+                <div class="field-control">
+                  <select ?disabled=${!this.canEdit}
+                    @change=${(e: Event) => this.edit({ chatVision: (e.target as HTMLSelectElement).value })}>
+                    ${[["", "Auto (from the model name)"], ["on", "On — her model can see"], ["off", "Off — tags only"]].map(
+                      ([id, label]) => html`<option value=${id} ?selected=${(s.chatVision ?? "") === id}>${label}</option>`)}
+                  </select>
+                </div>
+              </div>
+
+              <div class="field">
+                <div class="field-text">
+                  <div class="field-label">Sharing the graphics card</div>
+                  <div class="field-help">
+                    For one GPU running both her and the image generator. <strong>Both loaded</strong>
+                    keeps them side by side — fine when they fit. <strong>Swap</strong> unloads her
+                    while a picture is being made and loads her back, with the loader settings she was
+                    last loaded with, a minute after the generator goes quiet (sooner if you message
+                    her). Needs text-generation-webui, which is the backend that can load and unload.
+                  </div>
+                </div>
+                <div class="field-control">
+                  <select ?disabled=${!this.canEdit}
+                    @change=${(e: Event) => this.edit({ gpuShare: (e.target as HTMLSelectElement).value })}>
+                    ${[["", "Both loaded"], ["swap", "Swap for pictures"]].map(
+                      ([id, label]) => html`<option value=${id} ?selected=${(s.gpuShare ?? "") === id}>${label}</option>`)}
+                  </select>
+                </div>
+              </div>
+
+              <div class="field stack">
+                <div class="field-text">
+                  <div class="field-label">Model folder (for deleting models)</div>
+                  <div class="field-help">
+                    Where text-generation-webui keeps its models, <em>as this container sees
+                    it</em> — map the same host folder into both. Needed only so a model can
+                    be deleted from here; that backend exposes no delete API, so it is a
+                    file operation. Leave blank and the delete control is simply absent.
+                    Deleting moves a model to a recoverable folder inside this directory
+                    unless you ask for a permanent delete, and never touches the model that
+                    is currently loaded.
+                  </div>
+                </div>
+                <div class="field-control">
+                  <input
+                    type="text"
+                    autocomplete="off"
+                    placeholder="/models"
+                    .value=${s.chatModelDir}
+                    ?disabled=${!this.canEdit}
+                    @change=${(e: Event) => this.edit({ chatModelDir: (e.target as HTMLInputElement).value })}
+                  />
+                </div>
+              </div>
+            `}
+      </section>
+    `;
+  }
+
+  /** The two pictures her own eyes are shown of her. With her pictures in the chat. */
+  private renderLibbyReferences() {
+    return html`
+      <section class="card">
+              <div class="field stack">
+                <div class="field-text">
+                  <div class="field-label">What she looks like</div>
+                  <div class="field-help">
+                    Two pictures of her for her own eyes: one in her usual outfit, one in nothing.
+                    When a message is about how she looks — what she's wearing, her body, whether a
+                    photo is of her — the one that fits is shown to her beside yours, so she describes
+                    herself from the picture rather than from her card. She never sends these; they
+                    only reach a model that can see (Her eyes, under Model &amp; generation). If the bare one is missing she uses the
+                    clothed one.
+                  </div>
+                  ${this.refNote ? html`<div class="field-help" style="color:var(--md-sys-color-error);">${this.refNote}</div>` : nothing}
+                </div>
+                <div class="field-control" style="display:flex;gap:16px;flex-wrap:wrap;">
+                  ${this.referenceTile("clothed", "Usual outfit")}
+                  ${this.referenceTile("nude", "Nothing on")}
+                </div>
+              </div>
+      </section>
+    `;
   }
 
   /**
@@ -1840,205 +2085,6 @@ export class OppaiSettings extends LitElement {
                     ?disabled=${!this.canEdit}
                     @change=${(e: Event) =>
                       this.edit({ imageGenUrl: (e.target as HTMLInputElement).value })}
-                  />
-                </div>
-              </div>
-
-              <div class="field stack">
-                <div class="field-text">
-                  <div class="field-label">Libby chat</div>
-                  <div class="field-help">
-                    OpenAI-compatible API base URL for your local LLM, such as
-                    <code>http://host:5000/v1</code>. The model name is an optional fallback;
-                    OppaiLib detects the model actually loaded by text-generation-webui.
-                    Load and unload models in that backend's own WebUI—OppaiLib never changes its model lifecycle.
-                  </div>
-                </div>
-                <div class="field-control">
-                  <input
-                    type="text"
-                    autocomplete="off"
-                    placeholder="http://host:5000/v1"
-                    .value=${s.chatUrl}
-                    ?disabled=${!this.canEdit}
-                    @change=${(e: Event) => this.edit({ chatUrl: (e.target as HTMLInputElement).value })}
-                  />
-                </div>
-                <div class="field-control">
-                  <input
-                    type="text"
-                    autocomplete="off"
-                    placeholder="Optional fallback model name"
-                    .value=${s.chatModel}
-                    ?disabled=${!this.canEdit}
-                    @change=${(e: Event) => this.edit({ chatModel: (e.target as HTMLInputElement).value })}
-                  />
-                </div>
-                <div class="field-control">
-                  <input
-                    type="password"
-                    autocomplete="new-password"
-                    placeholder=${s.chatApiKeySet ? "API key saved — enter to replace" : "API key (optional)"}
-                    .value=${s.chatApiKey}
-                    ?disabled=${!this.canEdit}
-                    @change=${(e: Event) => this.edit({ chatApiKey: (e.target as HTMLInputElement).value })}
-                  />
-                </div>
-              </div>
-
-              <div class="field">
-                <div class="field-text">
-                  <div class="field-label">Context window</div>
-                  <div class="field-help">
-                    How much of the model's context Libby may fill, in tokens. Leave at
-                    <strong>0</strong> and OppaiLib uses the context length the model was
-                    loaded with from here (with "remember" ticked), or what llama.cpp server
-                    reports — and 8192 when it knows neither: text-generation-webui loaded from
-                    its own UI, LM&nbsp;Studio and Ollama do not say. There, a number here is
-                    the only way to tell her she has room: a bigger window is memory, bond and library context she
-                    keeps instead of shedding to fit. Never set it above what the model is
-                    actually loaded with — past that the backend drops the front of the
-                    prompt, which is her character card.
-                  </div>
-                </div>
-                <div class="field-control">
-                  <input
-                    type="number"
-                    min="0"
-                    max="131072"
-                    step="1024"
-                    .value=${String(s.chatContextTokens)}
-                    ?disabled=${!this.canEdit}
-                    @change=${(e: Event) =>
-                      this.edit({ chatContextTokens: Number((e.target as HTMLInputElement).value) })}
-                  />
-                </div>
-              </div>
-
-              <div class="field">
-                <div class="field-text">
-                  <div class="field-label">Model size</div>
-                  <div class="field-help">
-                    Her sampler presets were written for a 7B, where a heavy repetition
-                    penalty is what stops a looping reply. On a 24B and up the same numbers
-                    flatten the prose and cost her the tags written at the end of it, so
-                    that penalty is eased and a scene is allowed to run longer. Auto reads
-                    the parameter count out of the loaded model's name.
-                  </div>
-                </div>
-                <div class="field-control">
-                  <select ?disabled=${!this.canEdit}
-                    @change=${(e: Event) => this.edit({ chatModelTier: (e.target as HTMLSelectElement).value })}>
-                    ${[["", "Auto (from the model name)"], ["small", "Small — 7B to 13B"], ["large", "Large — 24B and up"]].map(
-                      ([id, label]) => html`<option value=${id} ?selected=${s.chatModelTier === id}>${label}</option>`)}
-                  </select>
-                </div>
-              </div>
-
-              <div class="field">
-                <div class="field-text">
-                  <div class="field-label">Graphics card memory</div>
-                  <div class="field-help">
-                    In GB, so Libby can say what she runs on when you ask about the box. Nothing
-                    on the network reports it; at <strong>0</strong> she says she doesn't know
-                    rather than guessing one from her model.
-                  </div>
-                </div>
-                <div class="field-control">
-                  <input
-                    type="number"
-                    min="0"
-                    max="256"
-                    step="1"
-                    .value=${String(s.gpuMemoryGb ?? 0)}
-                    ?disabled=${!this.canEdit}
-                    @change=${(e: Event) =>
-                      this.edit({ gpuMemoryGb: Number((e.target as HTMLInputElement).value) })}
-                  />
-                </div>
-              </div>
-
-              <div class="field">
-                <div class="field-text">
-                  <div class="field-label">Her eyes</div>
-                  <div class="field-help">
-                    Most of the 24B–32B models a big card runs can see — Mistral&#8209;Small&#8209;3.2,
-                    Gemma&nbsp;3, the Qwen&#8209;VL family. When hers can, a photo you send and the
-                    picture you ask about go to her as pictures, not just as the tagger's words.
-                    Auto reads it off the model's name; a backend that turns out not to take images
-                    (a GGUF loaded without its mmproj) is answered from the tags instead, so leaving
-                    this on is safe.
-                  </div>
-                </div>
-                <div class="field-control">
-                  <select ?disabled=${!this.canEdit}
-                    @change=${(e: Event) => this.edit({ chatVision: (e.target as HTMLSelectElement).value })}>
-                    ${[["", "Auto (from the model name)"], ["on", "On — her model can see"], ["off", "Off — tags only"]].map(
-                      ([id, label]) => html`<option value=${id} ?selected=${(s.chatVision ?? "") === id}>${label}</option>`)}
-                  </select>
-                </div>
-              </div>
-
-              <div class="field stack">
-                <div class="field-text">
-                  <div class="field-label">What she looks like</div>
-                  <div class="field-help">
-                    Two pictures of her for her own eyes: one in her usual outfit, one in nothing.
-                    When a message is about how she looks — what she's wearing, her body, whether a
-                    photo is of her — the one that fits is shown to her beside yours, so she describes
-                    herself from the picture rather than from her card. She never sends these; they
-                    only reach a model that can see (above). If the bare one is missing she uses the
-                    clothed one.
-                  </div>
-                  ${this.refNote ? html`<div class="field-help" style="color:var(--md-sys-color-error);">${this.refNote}</div>` : nothing}
-                </div>
-                <div class="field-control" style="display:flex;gap:16px;flex-wrap:wrap;">
-                  ${this.referenceTile("clothed", "Usual outfit")}
-                  ${this.referenceTile("nude", "Nothing on")}
-                </div>
-              </div>
-
-              <div class="field">
-                <div class="field-text">
-                  <div class="field-label">Sharing the graphics card</div>
-                  <div class="field-help">
-                    For one GPU running both her and the image generator. <strong>Both loaded</strong>
-                    keeps them side by side — fine when they fit. <strong>Swap</strong> unloads her
-                    while a picture is being made and loads her back, with the loader settings she was
-                    last loaded with, a minute after the generator goes quiet (sooner if you message
-                    her). Needs text-generation-webui, which is the backend that can load and unload.
-                  </div>
-                </div>
-                <div class="field-control">
-                  <select ?disabled=${!this.canEdit}
-                    @change=${(e: Event) => this.edit({ gpuShare: (e.target as HTMLSelectElement).value })}>
-                    ${[["", "Both loaded"], ["swap", "Swap for pictures"]].map(
-                      ([id, label]) => html`<option value=${id} ?selected=${(s.gpuShare ?? "") === id}>${label}</option>`)}
-                  </select>
-                </div>
-              </div>
-
-              <div class="field stack">
-                <div class="field-text">
-                  <div class="field-label">Model folder (for deleting models)</div>
-                  <div class="field-help">
-                    Where text-generation-webui keeps its models, <em>as this container sees
-                    it</em> — map the same host folder into both. Needed only so a model can
-                    be deleted from here; that backend exposes no delete API, so it is a
-                    file operation. Leave blank and the delete control is simply absent.
-                    Deleting moves a model to a recoverable folder inside this directory
-                    unless you ask for a permanent delete, and never touches the model that
-                    is currently loaded.
-                  </div>
-                </div>
-                <div class="field-control">
-                  <input
-                    type="text"
-                    autocomplete="off"
-                    placeholder="/models"
-                    .value=${s.chatModelDir}
-                    ?disabled=${!this.canEdit}
-                    @change=${(e: Event) => this.edit({ chatModelDir: (e.target as HTMLInputElement).value })}
                   />
                 </div>
               </div>

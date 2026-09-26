@@ -667,6 +667,7 @@ fun ChatScreen(
                     ChatRequest(
                         mode = pending.mode,
                         messages = history,
+                        summary = pending.summary,
                         emotion = pending.emotion,
                         intensity = pending.intensity,
                         options = pending.options,

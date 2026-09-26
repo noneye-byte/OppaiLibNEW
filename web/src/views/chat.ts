@@ -32,6 +32,11 @@ import {
 } from "../libby.js";
 // Registers <oppai-libby-backgrounds>, which her world panel embeds.
 import "./libby-backgrounds.js";
+// Registers <oppai-settings>: her server-side settings are drawn here, in her own
+// settings, one section per tab. Imported statically rather than lazily because a lazy
+// element upgrades after its property bindings are set, and `only` would be lost.
+import "./settings.js";
+import type { LibbySection } from "./settings.js";
 import { applyProgression, getIntensity, setIntensity } from "../libby-meter.js";
 import { libbyHeatDelta, libbyLibraryAnswer, libbyOpener, libbyReact, libbyReply, type LibbyLine } from "../libby-voice.js";
 import { menuDivider, nativeMenuWanted, openMenu, type MenuItem } from "../context-menu.js";
@@ -99,6 +104,18 @@ const LIBBY_TABS: EditorTabDef[] = [
     may take before it stops and waits for the user. Both are deliberately modest:
     a self-driving conversation is a party trick until it fills the log unattended. */
 const AUTO_DELAY_MS = 14_000;
+
+/** Compressing a conversation (see compressConversation). One running conversation per
+    character grows without end, the server refuses one past 300 messages, and the prompt
+    holds a few dozen: past COMPRESS_AT the older part is summarised on its own, keeping
+    the newest COMPRESS_KEEP. A conversation picked back up after COMPRESS_IDLE_MS with
+    more than COMPRESS_IDLE_AT messages is tidied as it opens. Fewer than COMPRESS_MIN
+    older messages are not worth a summary. */
+const COMPRESS_AT = 140;
+const COMPRESS_KEEP = 40;
+const COMPRESS_MIN = 20;
+const COMPRESS_IDLE_MS = 6 * 60 * 60_000;
+const COMPRESS_IDLE_AT = 80;
 const AUTO_MAX_TURNS = 8;
 
 /**
@@ -486,6 +503,8 @@ export class OppaiChat extends LitElement {
   @state() private chatSearch = "";
   /** The "new chat" screen is open in place of the list: who to start one with. */
   @state() private pickerOpen = false;
+  /** The character whose earlier conversations are shown under their row; "" for none. */
+  @state() private earlierOpen = "";
   /**
    * Whether turns are asked to return their working.
    *
@@ -602,9 +621,9 @@ export class OppaiChat extends LitElement {
    * workspace save keeps only the images this client knows of, so an autosave from a
    * copy without it would throw the record away.
    */
-  private receiveMadePicture(image: ChatImage) {
+  private receiveMadePicture(image: ChatImage, conversationID = "") {
     if (!this.workspace.images.some((known) => known.id === image.id)) this.workspace.images.push({ ...image, tags: image.tags ?? [] });
-    const live = this.activeConversation;
+    const live = (conversationID && this.liveConversation(conversationID)) || this.activeConversation;
     if (live) {
       live.messages.push({
         id:newID(), role:"assistant", content:"*sends a picture*", at:Date.now(), imageId:image.id,
@@ -687,7 +706,16 @@ export class OppaiChat extends LitElement {
       place-items:center; background:var(--main); color:var(--muted); cursor:pointer; box-shadow:0 1px 4px rgba(0,0,0,.25); }
     .chat-wrap:hover .chat-delete,.chat-wrap:focus-within .chat-delete { opacity:1; }
     .chat-delete:hover { color:var(--md-sys-color-error); }
+    .field-restore { margin-left:8px; padding:1px 8px; border:1px solid var(--line); border-radius:999px; background:transparent;
+      color:var(--muted); font-size:11px; cursor:pointer; vertical-align:1px; }
+    .field-restore:hover { color:var(--accent); border-color:var(--accent); }
     .chats-empty { padding:32px 18px; color:var(--muted); font-size:13px; text-align:center; }
+    .chat-earlier { display:flex; align-items:center; gap:4px; margin:-2px 0 4px 72px; padding:3px 8px; border:0; border-radius:999px;
+      background:transparent; color:var(--muted); font-size:12px; cursor:pointer; }
+    .chat-earlier:hover { background:var(--hover); color:var(--md-sys-color-on-surface); }
+    .summary-note { margin:6px auto 10px; max-width:560px; padding:8px 12px; border-radius:12px; background:var(--input); color:var(--muted); font-size:12px; }
+    .summary-note summary { cursor:pointer; font-weight:600; }
+    .summary-note p { margin:6px 0 0; white-space:pre-wrap; color:var(--md-sys-color-on-surface); font-size:13px; line-height:1.45; }
     /* Starting a chat: who with. Replaces the list rather than floating over it, so
        it works identically as a phone screen and as a desktop pane.
        NOT called .picker — that is the library picker's full-screen scrim further
@@ -2000,6 +2028,8 @@ export class OppaiChat extends LitElement {
     this.autoTurns = AUTO_MAX_TURNS;
     setIntensity(conversation.intensity); this.armIdle(); this.scheduleAuto(); void this.scrollToEnd(false);
     void this.sayWhatIsPending();
+    // A conversation that went quiet a while ago is tidied as it is picked back up.
+    if (Date.now() - conversation.updatedAt > COMPRESS_IDLE_MS && conversation.messages.length > COMPRESS_IDLE_AT) void this.compressConversation(id, true);
   }
 
   /**
@@ -2627,6 +2657,11 @@ export class OppaiChat extends LitElement {
         task: task || (continuation ? "autonomous" : undefined),
         // Only while the user has capture switched on. See exportConversation.
         debug: this.captureTurns || undefined,
+        // Asked to see her, she takes a new picture rather than sending a saved one; this
+        // client runs the generation and falls back to the saved one. See takePicture.
+        canGenerate: character.id === "libby" || undefined,
+        // What the older part of this conversation was compressed into.
+        summary: conversation.summary || undefined,
       });
       // The turn's working, kept against the conversation rather than the message: it
       // describes how a reply was *built*, which is a fact about the request, and a
@@ -2680,6 +2715,8 @@ export class OppaiChat extends LitElement {
       // An empty message with a thought attached is her deciding to say nothing at all.
       // That is a turn, not a failure — the thought above is what she did with it. A
       // reaction alone is the same. A picture alone still lands, as a bubble of its own.
+      // A picture she is taking with nothing said first is still a turn: it arrives.
+      if (!result.message.trim() && !picture && result.generate) { void this.takePicture(conversationID, result.generate); return true; }
       if (!result.message.trim() && !picture) return (result.thoughts?.length ?? 0) > 0 || !!result.reaction;
       // A long reply lands as the few short texts a person would send back to back,
       // each taking its own turn through the typing indicator. The picture, link chips,
@@ -2688,7 +2725,7 @@ export class OppaiChat extends LitElement {
       // A picture with no words still needs a line in the log — the store refuses an
       // empty message — so it gets the same stage direction your own photo share does.
       const said = result.message.trim() || (result.snap ? "*sends a snap*" : "*sends a picture*");
-      return await this.typeAndPushBubbles(conversationID, splitIntoBubbles(said), Date.now() - startedAt, {
+      const landed = await this.typeAndPushBubbles(conversationID, splitIntoBubbles(said), Date.now() - startedAt, {
         // On the last bubble, so one reply contributes one mood to the run the next
         // turn reports. See recentMoods.
         mood: live.emotion,
@@ -2702,6 +2739,10 @@ export class OppaiChat extends LitElement {
         // The quote rides the first bubble: it is what the reply *starts* by answering.
         replyTo: result.replyTo ?? undefined,
       });
+      // The picture she is taking lands after her words, the way it would from a phone.
+      if (landed && result.generate) void this.takePicture(conversationID, result.generate);
+      if (landed && (this.liveConversation(conversationID)?.messages.length ?? 0) > COMPRESS_AT) void this.compressConversation(conversationID, true);
+      return landed;
     } catch (error) {
       if (this.status?.configured || this.status?.modelBackend) {
         try { this.status = await api.chatStatus(); } catch { /* Keep the generation error when the readiness check also fails. */ }
@@ -3377,9 +3418,18 @@ export class OppaiChat extends LitElement {
     const query = this.chatSearch.trim().toLowerCase();
     const count = new Map<string, number>();
     for (const conversation of this.workspace.conversations) count.set(conversation.characterId, (count.get(conversation.characterId) ?? 0) + 1);
+    // One row per character — their latest conversation — and the rest behind a toggle
+    // on it, the way a phone shows one thread per person. Shown when searching, so an
+    // old conversation that matches is still found.
+    const latest = new Map<string, string>();
+    for (const conversation of [...this.workspace.conversations].sort((a, b) => b.updatedAt - a.updatedAt)) {
+      if (!latest.has(conversation.characterId)) latest.set(conversation.characterId, conversation.id);
+    }
     const rows = [...this.workspace.conversations]
       .map((conversation) => ({ conversation, character: this.visibleCharacters.find((c) => c.id === conversation.characterId) }))
       .filter((row): row is { conversation: ChatConversation; character: ChatCharacter } => !!row.character)
+      .filter(({ conversation }) => query || latest.get(conversation.characterId) === conversation.id
+        || (this.earlierOpen === conversation.characterId) || conversation.id === this.conversationID)
       .sort((a, b) => b.conversation.updatedAt - a.conversation.updatedAt)
       .filter(({ conversation, character }) => !query
         || character.name.toLowerCase().includes(query)
@@ -3399,7 +3449,11 @@ export class OppaiChat extends LitElement {
             : html`<em>${character.firstMessage?.trim() ? "Say hello" : "No messages yet"}</em>`}</span>
         </button>
         <button class="chat-delete" title="Delete chat" aria-label="Delete chat with ${character.name}" @click=${() => this.deleteConversation(conversation.id)}><span class="material-symbols-rounded" style="font-size:16px">delete</span></button>
-      </div>`;
+      </div>${several && !query && latest.get(character.id) === conversation.id ? html`
+        <button class="chat-earlier" @click=${() => (this.earlierOpen = this.earlierOpen === character.id ? "" : character.id)}>
+          <span class="material-symbols-rounded" style="font-size:16px">${this.earlierOpen === character.id ? "expand_less" : "expand_more"}</span>
+          ${this.earlierOpen === character.id ? "Hide" : "Show"} ${(count.get(character.id) ?? 1) - 1} earlier ${(count.get(character.id) ?? 1) - 1 === 1 ? "chat" : "chats"}
+        </button>` : nothing}`;
     });
   }
 
@@ -3582,8 +3636,47 @@ export class OppaiChat extends LitElement {
 
   private startChatWith(id: string) {
     this.pickerOpen = false;
-    this.characterID = id;
-    this.newConversation();
+    // One conversation per character, the way a phone keeps one thread per person:
+    // starting a chat with someone opens theirs, and only a first chat makes a new one.
+    this.activateCharacter(id);
+  }
+
+  /**
+   * Compresses the older part of a conversation into her notes: the model summarises
+   * everything but the newest messages (folding in the summary so far), the summary is
+   * kept on the conversation and sent with every turn, and the messages it stands for
+   * are dropped from the log. `auto` is the unasked version, which stays quiet.
+   *
+   * The ids to drop are fixed before the request, so a reply that lands while it runs
+   * is kept whatever happens.
+   */
+  private compressing = new Set<string>();
+  private async compressConversation(conversationID: string, auto = false) {
+    const conversation = this.liveConversation(conversationID);
+    if (!conversation || this.compressing.has(conversationID) || !this.status?.enabled) {
+      if (!auto && !this.status?.enabled) this.say("Compressing needs a loaded model.", true);
+      return;
+    }
+    const older = conversation.messages.slice(0, Math.max(0, conversation.messages.length - COMPRESS_KEEP));
+    const said = older.filter((message) => !message.thought);
+    if (said.length < COMPRESS_MIN) { if (!auto) this.say("There isn't enough of this conversation to compress yet."); return; }
+    this.compressing.add(conversationID);
+    if (!auto) this.say("Compressing the older part of this conversation…");
+    try {
+      const { summary } = await api.compressChat({
+        characterId: conversation.characterId, summary: conversation.summary || undefined,
+        messages: said.map(({ role, content }) => ({ role, content })),
+      });
+      const live = this.liveConversation(conversationID);
+      if (!live) return;
+      const drop = new Set(older.map((message) => message.id));
+      live.messages = live.messages.filter((message) => !drop.has(message.id));
+      live.summary = summary; live.summarizedAt = Date.now();
+      this.touchWorkspace();
+      if (!auto) this.say(`Compressed ${older.length} older messages into her notes.`);
+    } catch (error) {
+      if (!auto) this.say((error as Error).message, true);
+    } finally { this.compressing.delete(conversationID); }
   }
 
   private renderSettings() {
@@ -3613,17 +3706,85 @@ export class OppaiChat extends LitElement {
           <button class="icon-btn" title="Close settings" aria-label="Close settings" @click=${() => (this.settingsOpen=false)}><span class="material-symbols-rounded">close</span></button>
         </div>
         ${active.id === "character" ? this.renderCharacterPanel(character) : nothing}
+        ${active.id === "character" && character.id === "libby" ? this.libbySection("libby-general") : nothing}
         ${active.id === "world" ? this.renderWorldPanel() : nothing}
+        ${active.id === "world" ? this.libbySection("libby-voice") : nothing}
         ${active.id === "mind" ? this.renderMindPanel() : nothing}
+        ${active.id === "model" ? this.libbySection("libby-model") : nothing}
         ${active.id === "model" ? this.renderModelPanel(conversation, character) : nothing}
         ${active.id === "images" ? this.renderImagesPanel(character) : nothing}
+        ${active.id === "images" && character.id === "libby" ? this.libbySection("libby-pictures") : nothing}
         ${active.id === "profile" ? this.renderProfilePanel() : nothing}
       </div>
     </section>`;
   }
 
+  /**
+   * One of her server-side settings sections, drawn by the Settings screen's own
+   * component. They used to live there, split between a Libby tab and the Scraping tab,
+   * with the rest of her here; now all of her is in her settings. Keyed so switching tab
+   * gets a fresh element rather than one still holding the last section's edits.
+   */
+  private libbySection(section: LibbySection) {
+    if (!this.user) return nothing;
+    return keyed(section, html`<div class="panel libby-section"><oppai-settings .user=${this.user} .only=${section}></oppai-settings></div>`);
+  }
+
+  /**
+   * The picture she said she was taking. Made through the same approved path an
+   * offer's Allow runs, and posted as hers when it lands; if the generator fails, the
+   * saved picture the server chose instead is sent in its place, so a switched-off
+   * generator costs a fresh picture and never the picture itself.
+   */
+  private async takePicture(conversationID: string, request: { prompt: string; fallbackImageId?: string; fallbackAttachment?: LibbyAttachment }) {
+    this.typingPhase = "typing";
+    try {
+      const made = await api.libbyAct({ id: newID(), kind: "generate", label: "", detail: "", prompt: request.prompt }, this.actContext());
+      const image = made.image as ChatImage | undefined;
+      if (!image?.id) throw new Error("the generator sent nothing back");
+      this.receiveMadePicture(image, conversationID);
+    } catch {
+      const live = this.liveConversation(conversationID);
+      if (!live || (!request.fallbackImageId && !request.fallbackAttachment)) return;
+      live.messages.push({
+        id:newID(), role:"assistant", content:"*sends a picture*", at:Date.now(),
+        imageId: request.fallbackImageId || undefined,
+        attachments: request.fallbackAttachment ? [request.fallbackAttachment] : undefined,
+        mood:live.emotion, heat:live.intensity,
+      });
+      live.updatedAt = Date.now(); this.touchWorkspace(); void this.scrollToEnd();
+    } finally {
+      if (!this.busy) this.typingPhase = "idle";
+    }
+  }
+
+  /** Her card as it ships, for putting a field back; null until fetched. */
+  @state() private libbyShipped: ChatCharacter | null = null;
+  private libbyShippedAsked = false;
+
+  /** What a field of hers shipped as, when the open card is hers; undefined otherwise. */
+  private shippedValue(key: keyof ChatCharacter): string | undefined {
+    if (this.activeCharacter?.id !== "libby") return undefined;
+    if (!this.libbyShipped && !this.libbyShippedAsked) {
+      this.libbyShippedAsked = true;
+      void api.libbyDefaultCard().then((card) => (this.libbyShipped = card)).catch(() => { this.libbyShippedAsked = false; });
+    }
+    const value = this.libbyShipped?.[key];
+    return typeof value === "string" ? value : undefined;
+  }
+
+  /**
+   * One card field. On her card, a field that differs from what she shipped with gets a
+   * way back to it: the card is hers to rewrite, and an edit is kept for good — the
+   * system prompt most of all is easy to change and hard to remember.
+   */
   private field(label: string, key: keyof ChatCharacter, value: string, rows = 1) {
-    return html`<label>${label}${rows > 1
+    const shipped = this.shippedValue(key);
+    const restore = shipped !== undefined && shipped !== value
+      ? html`<button type="button" class="field-restore" title="Put back what she shipped with"
+          @click=${(event: Event) => { event.preventDefault(); if (confirm("Replace this field with her default?")) this.updateCharacter(key, shipped); }}>Restore default</button>`
+      : nothing;
+    return html`<label>${label}${restore}${rows > 1
       ? html`<textarea class="field" rows=${rows} .value=${value} @change=${(event:Event) => this.updateCharacter(key, (event.target as HTMLTextAreaElement).value)}></textarea>`
       : html`<input class="field" .value=${value} @change=${(event:Event) => this.updateCharacter(key, (event.target as HTMLInputElement).value)} />`}</label>`;
   }
@@ -4789,6 +4950,7 @@ export class OppaiChat extends LitElement {
       ? [
           { label:"Open", icon:"forum", run:() => this.activateConversation(rowID) },
           { label:"New conversation", icon:"add_comment", run:() => this.newConversation() },
+          { label:"Compress older messages", icon:"history", run:() => void this.compressConversation(rowID) },
           { label:"Export conversation…", icon:"download", run:() => this.exportConversation(rowID) },
           menuDivider,
           { label:"Delete conversation", icon:"delete", danger:true, run:() => this.deleteConversation(rowID) },
@@ -4804,6 +4966,7 @@ export class OppaiChat extends LitElement {
           { label:this.speakOn ? "Stop reading aloud" : "Read replies aloud", icon:this.speakOn ? "volume_off" : "volume_up", run:() => this.toggleSpeak() },
           menuDivider,
           { label:"New conversation", icon:"add_comment", run:() => this.newConversation() },
+          { label:"Compress older messages", icon:"history", disabled:!conversation, run:() => conversation && void this.compressConversation(conversation.id) },
           { label:"Chat settings", icon:"tune", run:() => { this.settingsOpen = true; this.editorTab = "character"; } },
           { label:"Refresh model status", icon:"sync", run:() => void this.refreshModels() },
           menuDivider,
@@ -4988,6 +5151,7 @@ export class OppaiChat extends LitElement {
         ${hero}
         ${this.renderAutopilotBar(character)}
         <section class="log">${messages.length ? nothing : html`<div class="intro">${this.avatar(character,"intro-avatar")}<h2>${character.name}</h2><p>${character.description || `This is the beginning of your conversation with ${character.name}.`}</p><p>${online?`Running on ${this.status!.model}.`:character.id === "libby" ? "Libby is using built-in local replies." : "Connect a local model to start chatting."}</p></div>`}
+          ${conversation.summary ? html`<details class="summary-note"><summary>Earlier messages were compressed into ${character.name}'s notes${conversation.summarizedAt ? ` · ${listTimeOf(conversation.summarizedAt)}` : ""}</summary><p>${conversation.summary}</p></details>` : nothing}
           ${messages.map((message,index)=>this.renderEntry(message,messages[index-1],messages[index+1]))}${this.busy&&this.typingPhase==="typing"?html`<div class="msg theirs last typing-row">${this.avatar(character,"avatar")}<div class="bubble-wrap"><div class="bubble" aria-label="${character.name} is typing"><span class="dots"><i></i><i></i><i></i></span></div></div></div>`:nothing}
         </section>${this.notice?html`<div class="notice ${this.noticeError?"error":""}" role=${this.noticeError?"alert":"status"}>${this.notice}</div>`:nothing}
         <form class="composer-form" @submit=${(event:Event)=>{event.preventDefault();void this.send();}}>

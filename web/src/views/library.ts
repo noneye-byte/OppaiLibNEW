@@ -2306,7 +2306,7 @@ export class OppaiLibrary extends LitElement {
           ${chatMounted
             ? this.ready("chat")
               ? html`<oppai-chat .user=${this.user} style=${isViewer ? "display:none" : ""}
-                  @open-section=${(e: CustomEvent<{ section: "studio" | "settings" }>) => this.selectSection(e.detail.section)}></oppai-chat>`
+                  @open-section=${(e: CustomEvent<{ section: "studio" | "settings" }>) => this.selectSection(e.detail.section)} @open-studio=${() => this.selectSection("studio")}></oppai-chat>`
               : this.renderViewLoading()
             : nothing}
           ${isCollections ? this.renderCollections() : nothing}

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -180,5 +182,32 @@ func TestAskedAboutTheServerSheCanOfferToLoadAnotherModel(t *testing.T) {
 	_ = json.Unmarshal(rec.Body.Bytes(), &out)
 	if len(out.Actions) != 1 || out.Actions[0].Kind != "load" || out.Actions[0].Detail != "Qwen3-32B-Q4_K_M" {
 		t.Fatalf("actions = %+v (message %q)", out.Actions, out.Message)
+	}
+}
+
+// text-generation-webui's API never says what context it loaded with, but "Save
+// settings" on its Model tab writes it to config-user.yaml in the models folder, keyed
+// by a pattern on the file name.
+func TestTheWebUIsSavedContextIsRead(t *testing.T) {
+	dir := t.TempDir()
+	config := "Cydonia-24B-v4.Q6_K.gguf$:\n  loader: llama.cpp\n  ctx_size: 32768\n  gpu_layers: 99\n" +
+		".*qwen:\n  ctx_size: 16384\n"
+	if err := os.WriteFile(filepath.Join(dir, "config-user.yaml"), []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for model, want := range map[string]int{
+		"Cydonia-24B-v4.Q6_K.gguf": 32768, "cydonia-24b-v4.q6_k.gguf": 32768,
+		"Qwen3-32B.gguf": 16384, "Mistral-7B.gguf": 0, "": 0,
+	} {
+		if got := userConfigContext(dir, model); got != want {
+			t.Errorf("%q: %d, want %d", model, got, want)
+		}
+	}
+	if got := userConfigContext("", "Cydonia-24B-v4.Q6_K.gguf"); got != 0 {
+		t.Errorf("no models folder read %d", got)
+	}
+	noteLoad("Loaded-From-Here", map[string]any{"ctx_size": float64(24576)})
+	if lastLoadContext("Loaded-From-Here") != 24576 || lastLoadContext("Something-Else") != 0 {
+		t.Error("the last load from here was not followed")
 	}
 }

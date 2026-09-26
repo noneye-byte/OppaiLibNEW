@@ -128,6 +128,13 @@ type chatRequest struct {
 	// by reference, unlike a shared photo, so a video or a game can be shown to her
 	// without a copy. See chat_shared.go.
 	SharedMediaIDs []int64 `json:"sharedMediaIds,omitempty"`
+	// CanGenerate says this client will make a picture itself when the reply asks for one
+	// (the `generate` field of the response), and fall back to a saved one if that fails.
+	// A client that does not say so gets a saved picture as before. See freshPicture.
+	CanGenerate bool `json:"canGenerate,omitempty"`
+	// Summary is what the older part of this conversation was compressed into, which the
+	// client keeps on the conversation and sends with every turn. See chat_compress.go.
+	Summary string `json:"summary,omitempty"`
 	// Options is a future-proof pass-through for text-generation-webui's full
 	// ChatCompletionRequest surface (samplers, presets, character fields,
 	// templates, grammar, thinking controls, stop strings, and new additions).
@@ -956,6 +963,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			sections = append(sections, promptSection{Name: name, Rank: rank, Text: text, Deferred: !wanted})
 		}
 	}
+	// The part of this conversation that was compressed away, as her notes. Everyone's:
+	// an imported card's conversation grows long for the same reasons. See chat_compress.go.
+	add("earlier in this conversation", rankSummary, summaryDirective(in.Summary))
 	sentPhotos, lastPhoto := recentlySentPhotos(in.RecentImageIDs)
 	sentMedia := recentlyAttached(in.RecentMediaIDs)
 	// The library pictures of her. Hers alone: character:libby says who a picture is
@@ -986,13 +996,21 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// server that can make pictures: the ready picture is withheld, she is told there is
 	// none, and the turn's picture — if she reaches for one — becomes an offer to make it.
 	readyMissing, readySubject := false, ""
+	// fresh is a picture she takes now rather than one she already has: asked to see her,
+	// with a generator connected and a client that will run it. The saved picture the
+	// picker chooses is still chosen — it is what arrives if the generator fails.
+	fresh := freshPicture{}
 	if askedToSeeHer(latestUser) && !talking {
 		ready, readyOK = pickReadyPicture(ws, character.ID, selfPics, latestUser, in.PhotoImageID, lastPhoto, sentPhotos, sentMedia)
-		if readyOK && ready.fit == 0 && cur.ImageGenEnabled {
+		if in.CanGenerate && cur.ImageGenEnabled && character.ID == "libby" {
+			fresh = freshPicture{wanted: true, subject: pictureRequestSubject(latestUser)}
+		} else if readyOK && ready.fit == 0 && cur.ImageGenEnabled {
 			readySubject = pictureRequestSubject(latestUser)
 			readyMissing = readySubject != ""
 		}
 		switch {
+		case fresh.wanted:
+			add("the picture she is taking", rankReadyPicture, "\n\n"+freshPictureDirective(fresh.subject))
 		case readyMissing:
 			add("the picture they asked for", rankReadyPicture, "\n\n"+missingPictureDirective(readySubject))
 		case readyOK:
@@ -1009,8 +1027,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	if readyOK {
 		example = readyPictureHandle(ready)
 	}
-	addDeferred("her photos", rankPhotoCatalogue, "\n\n"+photoCatalogue(ws, character.ID, sentPhotos, selfPics, sentMedia, latestUser, example),
-		signals.photo || in.Intensity >= 3 || len(sentPhotos) > 0)
+	// Not on a turn she is taking a new one: shown her saved pictures, she reaches for one.
+	if !fresh.wanted {
+		addDeferred("her photos", rankPhotoCatalogue, "\n\n"+photoCatalogue(ws, character.ID, sentPhotos, selfPics, sentMedia, latestUser, example),
+			signals.photo || in.Intensity >= 3 || len(sentPhotos) > 0)
+	}
 	// Libby alone gets her self-grounding and the library snapshot. She is this
 	// server's librarian, so knowing who she is, what she can do, and what is on the
 	// shelves is in character; an imported card is somebody else's character and has
@@ -1383,6 +1404,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	preset.MaxTokens = replyTokens
+	// A note about a window nobody reported is a note about a guess, and says where to
+	// correct it.
+	if budget.Note != "" && s.chatContextGuessed() {
+		budget.Note += guessedWindowHint
+	}
 
 	// The turn's receipts, when asked for. Built here, where the sections and the
 	// budget's two loss lists are both still in scope; the raw reply is filled in
@@ -1614,7 +1640,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	if silent {
 		reply = ""
 	} else if strings.TrimSpace(reply) == "" {
-		if !reacted && !photoAsked && !handedOver {
+		if !reacted && !photoAsked && !handedOver && !fresh.wanted {
 			writeErr(w, http.StatusBadGateway, "local LLM returned no message")
 			return
 		}
@@ -1790,7 +1816,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// the user's preferences, and drawn from at random in proportion — so which of the
 	// two a picture happens to live in is invisible, and the same request reaches a
 	// different picture each time. See chat_send_weights.go and chat_photo_pick.go.
-	if !silent && len(attachments) == 0 {
+	if !silent && len(attachments) == 0 && !fresh.wanted {
 		var chosen pictureRef
 		chosenOK := false
 		switch {
@@ -1923,6 +1949,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		// it answers the latest one, which is the ordinary case. See chat_replies.go.
 		"replyTo": replyTo,
 		"imageId": imageID,
+		// A picture she is taking now: the client generates it and posts it as hers, or
+		// the fallback if the generator fails. Null otherwise. See chat_fresh_picture.go.
+		"generate": fresh.response(silent, ready, readyOK),
 		// Why that picture, or why none: which path chose it, what it was matched
 		// against, how well it fitted. For the conversation log. See chat_photo_pick.go.
 		"photo": report,
