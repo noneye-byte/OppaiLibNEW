@@ -423,6 +423,12 @@ type actRequest struct {
 	Outfit    string `json:"outfit,omitempty"`
 	Activity  string `json:"activity,omitempty"`
 	Intensity int    `json:"intensity,omitempty"`
+	// Wearing is what she has on in this conversation when it is not her own clothes —
+	// "nothing", or the clothes she changed into. See libby_wearing.go.
+	Wearing string `json:"wearing,omitempty"`
+	// JobID names the generation so the chat can watch its progress, the way the studio
+	// does. See imagegen_jobs.go.
+	JobID string `json:"jobId,omitempty"`
 	// RecentMediaIDs are what she has already handed over in this conversation, so a
 	// shelf she builds is not the things they have just seen. See libby_shelf.go.
 	RecentMediaIDs []int64 `json:"recentMediaIds,omitempty"`
@@ -532,13 +538,14 @@ func (s *Server) actGenerate(w http.ResponseWriter, r *http.Request, cur setting
 	// doing the thing, rather than of the thing with her somewhere in it. Between the
 	// two goes her state — the clothes she has on and what she is doing — so the
 	// picture is of her as she is in this conversation. See libbySelfiePrompt.
-	prompt, stateTags := s.libbySelfiePrompt(cur.LibbyGenPrompt, subject, req.Outfit, req.Activity, req.Intensity)
+	prompt, stateTags := s.libbySelfiePrompt(cur.LibbyGenPrompt, subject, req.Outfit, normalizeWearing(req.Wearing), req.Activity, req.Intensity)
 	gen := generateReq{
 		Prompt:         prompt,
 		NegativePrompt: cur.LibbyGenNegativePrompt,
 		Checkpoint:     cur.LibbyGenModel,
 		Board:          cur.LibbyGenBoard,
 		Count:          1,
+		JobID:          req.JobID,
 	}
 	gen.Loras = libbyLoras(cur)
 	generated := s.delegate(r, s.handleImageGenGenerate, http.MethodPost, "/api/imagegen/generate", gen)
@@ -583,6 +590,11 @@ func (s *Server) actGenerate(w http.ResponseWriter, r *http.Request, cur setting
 		return
 	}
 	out := map[string]any{"image": sent, "message": "She sent it to you."}
+	// A picture of her in something leaves her in it; the client keeps that as the
+	// conversation's state, the way a chat turn's `wearing` is kept.
+	if wearing, ok := clothesFromSubject(subject); ok {
+		out["wearing"] = wearing
+	}
 	if cur.LibbyGenToLibrary {
 		if id := s.saveGeneratedToLibrary(r, result.Images[0].ID, title, tags); id > 0 {
 			out["id"] = id
@@ -662,13 +674,14 @@ func (s *Server) saveGeneratedToLibrary(r *http.Request, previewID, title string
 // tags that record the state it was made in.
 //
 // Order: her likeness, then the outfit she has on, then what she is doing, then the
-// subject asked for — with the outfit left out when the subject names her clothes. The outfit comes from the worn wardrobe's own prompt when the
+// subject asked for — with the outfit left out when the subject names her clothes, and
+// replaced by what she is wearing when she changed earlier. The outfit comes from the worn wardrobe's own prompt when the
 // studio recorded one, and from the bundled wardrobe's tier description otherwise —
 // the same tiers wardrobeDirective tells her she is wearing, so the picture and her
 // account of herself agree. The activity is the MISC state's generator words, gated
 // at the same floor the state itself is (allowedActivity): a calm conversation cannot
 // be talked into an explicit picture by a client that sends the wrong state.
-func (s *Server) libbySelfiePrompt(likeness, subject, outfitID, activity string, intensity int) (string, []string) {
+func (s *Server) libbySelfiePrompt(likeness, subject, outfitID, wearing, activity string, intensity int) (string, []string) {
 	parts := make([]string, 0, 4)
 	var tags []string
 	if likeness = strings.TrimSpace(likeness); likeness != "" {
@@ -683,6 +696,15 @@ func (s *Server) libbySelfiePrompt(likeness, subject, outfitID, activity string,
 	// libby_selfie_clothes.go for the blend the worn outfit used to make of it.
 	dressed := subjectDressesHer(subject)
 	clothes := ""
+	// What she changed into earlier in the conversation stands in for her own clothes
+	// until she changes back. See libby_wearing.go.
+	if wearing != "" && !dressed {
+		clothes = wearingGen(wearing)
+		if wearing == wearingNothing {
+			tags = append(tags, "nude")
+		}
+		outfitID = ""
+	}
 	if outfitID = strings.TrimSpace(outfitID); outfitID != "" && validChatID(outfitID, false) && !dressed {
 		if outfit, err := s.readLibbyOutfit(outfitID); err == nil {
 			clothes = outfit.Prompt
@@ -691,7 +713,7 @@ func (s *Server) libbySelfiePrompt(likeness, subject, outfitID, activity string,
 			}
 		}
 	}
-	if clothes == "" && !dressed {
+	if clothes == "" && !dressed && wearing == "" {
 		clothes = libbyWardrobeGen[intensity]
 	}
 	if clothes != "" {

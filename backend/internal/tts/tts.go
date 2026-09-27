@@ -256,8 +256,9 @@ func cacheKey(engine string, req Request) string {
 // "quoted speech", markdown links, the odd code span, and — before the server strips
 // them — protocol tags in square brackets. Read literally, a screen reader says
 // "asterisk asterisk" and a synthesiser says nothing useful about a bracket. The
-// actions are kept, since she narrates them in the first person and they are hers;
-// the markup around them goes.
+// actions used to be kept and read out, which is how "*giggles*" came to be a word she
+// said; now they are the sound they describe or nothing, and the texting shorthand
+// around them is expanded. See spoken.go.
 func CleanForSpeech(text string) string {
 	text = strings.TrimSpace(text)
 	if text == "" {
@@ -271,6 +272,9 @@ func CleanForSpeech(text string) string {
 	// Fenced and inline code: the contents are rarely words.
 	text = fencedCode.ReplaceAllString(text, " ")
 	text = inlineCode.ReplaceAllString(text, "$1")
+	// What would be said rather than what was typed — before the asterisks go, since
+	// an action is recognised by them.
+	text = Spoken(text)
 	// Emphasis and strike markers, headings, blockquotes.
 	text = strings.NewReplacer("**", "", "__", "", "~~", "", "*", "", "_ ", " ", " _", " ").Replace(text)
 	text = headingMark.ReplaceAllString(text, "")

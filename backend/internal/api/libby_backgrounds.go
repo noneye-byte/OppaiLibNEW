@@ -591,6 +591,7 @@ func (s *Server) actBackground(w http.ResponseWriter, r *http.Request, cur setti
 		Width:          768,
 		Height:         512,
 		Count:          1,
+		JobID:          req.JobID,
 	})
 	if generated.status < 200 || generated.status >= 300 {
 		relay(w, generated)

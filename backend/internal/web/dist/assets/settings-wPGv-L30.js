@@ -1,4 +1,4 @@
-import{z as P,i as B,v as k,u as l,a as M,e as h,b as a,A as c,t as R,ag as z,ah as I,ai as O,m as C,aj as S,ak as _,x as U,al as G,am as F,an as V,ao as K,ap as W,aq as j,ar as H,as as q,at as Y,au as E,q as Q}from"./index-BlMifOrT.js";import{r as J,p as X}from"./passkeys-D__WvwRN.js";const T="oppai_libby_speak";function ve(){try{return localStorage.getItem(T)==="1"}catch{return!1}}function ge(e){try{localStorage.setItem(T,e?"1":"0")}catch{}e||D(),window.dispatchEvent(new CustomEvent("oppai-libby-speak",{detail:{on:e}}))}let m=null,A=0;async function N(e=!1){if(!e&&m&&Date.now()-A<6e4)return m;try{const t=await fetch("/api/tts/status",{credentials:"same-origin"});if(!t.ok)throw new Error(String(t.status));m=await t.json(),A=Date.now()}catch{m=null}return m}const $=[];let y=null,x=!1,w=0;function Z(e,t=0){const s=e.trim();return s?new Promise(i=>{$.push({text:s,heat:t,done:i}),ee()}):Promise.resolve()}function D(){var e;w++;for(const t of $.splice(0))t.done();y&&(y.pause(),y.src="",y=null);try{(e=window.speechSynthesis)==null||e.cancel()}catch{}}async function ee(){if(!x){x=!0;try{for(;$.length;){const e=$.shift(),t=w;try{await te(e.text,e.heat,t)}catch{}finally{e.done()}}}finally{x=!1}}}async function te(e,t,s){const i=await se(e,t);if(s===w){if(i){await ae(i,s);return}await ie(e,s)}}async function se(e,t){const s=await N();if(s&&!s.engine)return null;try{const i=await fetch("/api/tts/speak",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify({text:e,heat:t||void 0})});return i.status===503?(m=null,null):i.ok?await i.blob():null}catch{return null}}function ae(e,t){return new Promise(s=>{const i=URL.createObjectURL(e),r=new Audio(i);y=r;const n=()=>{y===r&&(y=null),URL.revokeObjectURL(i),s()};r.addEventListener("ended",n,{once:!0}),r.addEventListener("error",n,{once:!0}),r.play().catch(()=>{n()}),t!==w&&n()})}function ie(e,t){const s=window.speechSynthesis;return!s||typeof SpeechSynthesisUtterance>"u"?Promise.resolve():new Promise(i=>{const r=new SpeechSynthesisUtterance(e),n=re(s.getVoices());if(n&&(r.voice=n),r.rate=1.02,r.pitch=1.05,r.onend=()=>i(),r.onerror=()=>i(),t!==w){i();return}s.speak(r)})}function re(e){const t=e.filter(r=>/^en/i.test(r.lang)),s=t.length?t:e,i=r=>{let n=0;const o=r.name.toLowerCase();return/natural|neural|premium|enhanced/.test(o)&&(n+=4),/female|woman|aria|jenny|samantha|zira|karen|moira|tessa|fiona|libby|sonia|ava|allison|susan|emma/.test(o)&&(n+=3),/google/.test(o)&&(n+=1),r.default&&(n+=1),n};return[...s].sort((r,n)=>i(n)-i(r))[0]}var oe=Object.defineProperty,ne=Object.getOwnPropertyDescriptor,g=(e,t,s,i)=>{for(var r=i>1?void 0:i?ne(t,s):t,n=e.length-1,o;n>=0;n--)(o=e[n])&&(r=(i?o(t,s,r):o(r))||r);return i&&r&&oe(t,s,r),r};let v=class extends M{constructor(){super(...arguments),this.embedded=!1,this.backgrounds=[],this.defaultID="",this.loading=!0,this.busy=!1,this.note="",this.bad=!1,this.editing=null,this.draftName="",this.draftTags="",this.version=Date.now()}connectedCallback(){super.connectedCallback(),this.reload()}async reload(){this.loading=!0;try{const e=await h.libbyBackgrounds();this.backgrounds=e.backgrounds??[],this.defaultID=e.default??""}catch(e){this.say(e.message,!0)}finally{this.loading=!1}}say(e,t=!1){this.note=e,this.bad=t}changed(){this.dispatchEvent(new CustomEvent("changed",{bubbles:!0,composed:!0}))}startNew(){this.editing="new",this.draftName="",this.draftTags=""}startEdit(e){this.editing=e.id,this.draftName=e.name,this.draftTags=e.tags.join(", ")}async save(e){const t=this.draftName.trim();if(!t){this.say("A background needs a name.",!0);return}this.busy=!0;try{await h.saveLibbyBackground({id:e,name:t,tags:this.draftTags.split(",").map(s=>s.trim()).filter(Boolean)}),this.editing=null,await this.reload(),this.changed(),this.say(e?`Saved ${t}.`:`Added ${t}. Give it a picture so she can go there.`)}catch(s){this.say(s.message,!0)}finally{this.busy=!1}}async uploadPicture(e,t){var r;const s=t.target,i=(r=s.files)==null?void 0:r[0];if(s.value="",!!i){this.busy=!0;try{const n=await new Promise((o,u)=>{const f=new FileReader;f.onload=()=>o(String(f.result)),f.onerror=()=>u(f.error),f.readAsDataURL(i)});await h.setLibbyBackgroundImage(e,n),this.version=Date.now(),await this.reload(),this.changed(),this.say("Picture saved.")}catch(n){this.say(n.message,!0)}finally{this.busy=!1}}}async makeDefault(e){this.busy=!0;try{const t=this.defaultID===e?"":e;await h.setLibbyDefaultBackground(t),this.defaultID=t,this.changed(),this.say(t?"She starts here now.":"No default room — she starts nowhere in particular.")}catch(t){this.say(t.message,!0)}finally{this.busy=!1}}async deleteBackground(e){if(confirm(`Delete ${e.name}?`)){this.busy=!0;try{await h.deleteLibbyBackground(e.id),await this.reload(),this.changed(),this.say(`Deleted ${e.name}.`)}catch(t){this.say(t.message,!0)}finally{this.busy=!1}}}renderEditor(e){return a`<div class="edit">
+import{z as B,i as M,v as S,u as l,a as R,e as h,b as a,A as c,t as T,aj as I,ak as O,al as C,m as _,am as E,an as U,x as G,ao as F,ap as V,aq as K,ar as W,as as j,at as H,au as q,av as Y,aw as Q,ax as A,q as J}from"./index-B3EgbRfW.js";import{r as X,p as Z}from"./passkeys-DP-sS3vf.js";const ee=160,te=220;function se(e){var u;const t=e.trim();if(t.length<=ee)return t?[t]:[];const s=((u=t.match(/[^.!?…\n]+(?:[.!?…]+["”')]*|\n|$)/g))==null?void 0:u.map(g=>g.trim()).filter(Boolean))??[t],[i,...o]=s,n=[i];let r="";for(const g of o)r&&r.length+g.length+1>te&&(n.push(r),r=""),r=r?`${r} ${g}`:g;return r&&n.push(r),n}const N="oppai_libby_speak";function ye(){try{return localStorage.getItem(N)==="1"}catch{return!1}}function me(e){try{localStorage.setItem(N,e?"1":"0")}catch{}e||z(),window.dispatchEvent(new CustomEvent("oppai-libby-speak",{detail:{on:e}}))}let w=null,L=0;async function D(e=!1){if(!e&&w&&Date.now()-L<6e4)return w;try{const t=await fetch("/api/tts/status",{credentials:"same-origin"});if(!t.ok)throw new Error(String(t.status));w=await t.json(),L=Date.now()}catch{w=null}return w}const $=[];let y=null,x=!1,m=0,k=Promise.resolve();function ae(e,t=0){const s=se(e);if(!s.length)return Promise.resolve();const i=m,o=s.map(n=>new Promise(r=>{const u=k.then(()=>i===m?oe(n,t):null);k=u.catch(()=>null),$.push({text:n,heat:t,audio:u,done:r})}));return ie(),Promise.all(o).then(()=>{})}function z(){var e;m++,k=Promise.resolve();for(const t of $.splice(0))t.done();y&&(y.pause(),y.src="",y=null);try{(e=window.speechSynthesis)==null||e.cancel()}catch{}}async function ie(){if(!x){x=!0;try{for(;$.length;){const e=$.shift(),t=m;try{await re(e,t)}catch{}finally{e.done()}}}finally{x=!1}}}async function re(e,t){const s=await e.audio.catch(()=>null);if(t===m){if(s){await ne(s,t);return}await le(e.text,t)}}async function oe(e,t){const s=await D();if(s&&!s.engine)return null;try{const i=await fetch("/api/tts/speak",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify({text:e,heat:t||void 0})});return i.status===503?(w=null,null):i.ok?await i.blob():null}catch{return null}}function ne(e,t){return new Promise(s=>{const i=URL.createObjectURL(e),o=new Audio(i);y=o;const n=()=>{y===o&&(y=null),URL.revokeObjectURL(i),s()};o.addEventListener("ended",n,{once:!0}),o.addEventListener("error",n,{once:!0}),o.play().catch(()=>{n()}),t!==m&&n()})}function le(e,t){const s=window.speechSynthesis;return!s||typeof SpeechSynthesisUtterance>"u"?Promise.resolve():new Promise(i=>{const o=new SpeechSynthesisUtterance(e),n=de(s.getVoices());if(n&&(o.voice=n),o.rate=1.02,o.pitch=1.05,o.onend=()=>i(),o.onerror=()=>i(),t!==m){i();return}s.speak(o)})}function de(e){const t=e.filter(o=>/^en/i.test(o.lang)),s=t.length?t:e,i=o=>{let n=0;const r=o.name.toLowerCase();return/natural|neural|premium|enhanced/.test(r)&&(n+=4),/female|woman|aria|jenny|samantha|zira|karen|moira|tessa|fiona|libby|sonia|ava|allison|susan|emma/.test(r)&&(n+=3),/google/.test(r)&&(n+=1),o.default&&(n+=1),n};return[...s].sort((o,n)=>i(n)-i(o))[0]}var ce=Object.defineProperty,pe=Object.getOwnPropertyDescriptor,b=(e,t,s,i)=>{for(var o=i>1?void 0:i?pe(t,s):t,n=e.length-1,r;n>=0;n--)(r=e[n])&&(o=(i?r(t,s,o):r(o))||o);return i&&o&&ce(t,s,o),o};let v=class extends R{constructor(){super(...arguments),this.embedded=!1,this.backgrounds=[],this.defaultID="",this.loading=!0,this.busy=!1,this.note="",this.bad=!1,this.editing=null,this.draftName="",this.draftTags="",this.version=Date.now()}connectedCallback(){super.connectedCallback(),this.reload()}async reload(){this.loading=!0;try{const e=await h.libbyBackgrounds();this.backgrounds=e.backgrounds??[],this.defaultID=e.default??""}catch(e){this.say(e.message,!0)}finally{this.loading=!1}}say(e,t=!1){this.note=e,this.bad=t}changed(){this.dispatchEvent(new CustomEvent("changed",{bubbles:!0,composed:!0}))}startNew(){this.editing="new",this.draftName="",this.draftTags=""}startEdit(e){this.editing=e.id,this.draftName=e.name,this.draftTags=e.tags.join(", ")}async save(e){const t=this.draftName.trim();if(!t){this.say("A background needs a name.",!0);return}this.busy=!0;try{await h.saveLibbyBackground({id:e,name:t,tags:this.draftTags.split(",").map(s=>s.trim()).filter(Boolean)}),this.editing=null,await this.reload(),this.changed(),this.say(e?`Saved ${t}.`:`Added ${t}. Give it a picture so she can go there.`)}catch(s){this.say(s.message,!0)}finally{this.busy=!1}}async uploadPicture(e,t){var o;const s=t.target,i=(o=s.files)==null?void 0:o[0];if(s.value="",!!i){this.busy=!0;try{const n=await new Promise((r,u)=>{const g=new FileReader;g.onload=()=>r(String(g.result)),g.onerror=()=>u(g.error),g.readAsDataURL(i)});await h.setLibbyBackgroundImage(e,n),this.version=Date.now(),await this.reload(),this.changed(),this.say("Picture saved.")}catch(n){this.say(n.message,!0)}finally{this.busy=!1}}}async makeDefault(e){this.busy=!0;try{const t=this.defaultID===e?"":e;await h.setLibbyDefaultBackground(t),this.defaultID=t,this.changed(),this.say(t?"She starts here now.":"No default room — she starts nowhere in particular.")}catch(t){this.say(t.message,!0)}finally{this.busy=!1}}async deleteBackground(e){if(confirm(`Delete ${e.name}?`)){this.busy=!0;try{await h.deleteLibbyBackground(e.id),await this.reload(),this.changed(),this.say(`Deleted ${e.name}.`)}catch(t){this.say(t.message,!0)}finally{this.busy=!1}}}renderEditor(e){return a`<div class="edit">
       <label>Name
         <input type="text" .value=${this.draftName} placeholder="Bedroom" ?disabled=${this.busy}
           @input=${t=>this.draftName=t.target.value} /></label>
@@ -58,7 +58,7 @@ import{z as P,i as B,v as k,u as l,a as M,e as h,b as a,A as c,t as R,ag as z,ah
 
       ${!this.loading&&!this.backgrounds.length&&this.editing!=="new"?a`<div class="empty">No rooms yet. Add one, give it a picture, and she can start moving around.</div>`:c}
       ${this.note?a`<p class="note ${this.bad?"bad":""}">${this.note}</p>`:c}
-    `}};v.styles=[P,B`
+    `}};v.styles=[B,M`
     :host { display: block; }
     .head { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 14px; }
     .head h3 { display: flex; align-items: center; gap: 8px; margin: 0 0 4px; font-size: 15px; }
@@ -113,7 +113,7 @@ import{z as P,i as B,v as k,u as l,a as M,e as h,b as a,A as c,t as R,ag as z,ah
     .note { margin: 12px 0 0; padding: 9px 12px; border-radius: 10px; background: var(--oppai-surface-2); font-size: 12.5px; }
     .note.bad { background: color-mix(in srgb, #f2b8b5 16%, transparent); color: #f2b8b5; }
     .empty { padding: 26px; text-align: center; color: var(--oppai-text-muted); font-size: 13px; }
-  `];g([k({type:Boolean})],v.prototype,"embedded",2);g([l()],v.prototype,"backgrounds",2);g([l()],v.prototype,"defaultID",2);g([l()],v.prototype,"loading",2);g([l()],v.prototype,"busy",2);g([l()],v.prototype,"note",2);g([l()],v.prototype,"bad",2);g([l()],v.prototype,"editing",2);g([l()],v.prototype,"draftName",2);g([l()],v.prototype,"draftTags",2);g([l()],v.prototype,"version",2);v=g([R("oppai-libby-backgrounds")],v);var le=Object.defineProperty,de=Object.getOwnPropertyDescriptor,p=(e,t,s,i)=>{for(var r=i>1?void 0:i?de(t,s):t,n=e.length-1,o;n>=0;n--)(o=e[n])&&(r=(i?o(t,s,r):o(r))||r);return i&&r&&le(t,s,r),r};const ce=[{id:"appearance",label:"Appearance",icon:"palette",group:"You"},{id:"account",label:"Account",icon:"account_circle",group:"You"},{id:"ai",label:"AI tagging",icon:"smart_toy",group:"Server",server:!0},{id:"scraping",label:"Scraping",icon:"travel_explore",group:"Server",server:!0},{id:"library",label:"Library",icon:"inventory_2",group:"Server"},{id:"android",label:"Android app",icon:"android",group:"Server"},{id:"storage",label:"Storage",icon:"hard_drive",group:"Server"},{id:"diagnostics",label:"Diagnostics",icon:"speed",group:"Server",adminOnly:!0},{id:"privacy",label:"Privacy",icon:"visibility_off",group:"Server",server:!0,adminOnly:!0},{id:"about",label:"About",icon:"info",group:"Server"}];let d=class extends M{constructor(){super(...arguments),this.only="",this.tab="appearance",this.settings=null,this.info=null,this.stats=null,this.apk=null,this.loadError="",this.passkeyList=null,this.passkeyBusy=!1,this.passkeyError="",this.passkeyMsg="",this.passkeyName="",this.passkeyRenaming=null,this.passkeyRevoking=null,this.passkeyPassword="",this.diag=null,this.uiDiag=null,this.storage=null,this.storageBusy=!1,this.storageErr="",this.diagBusy=!1,this.diagErr="",this.dirty=!1,this.saving=!1,this.saved=!1,this.theme=z(),this.fit=I(),this.hideLibby=O(),this.genModels=[],this.genLoras=[],this.genBoards=[],this.genError="",this.pwCurrent="",this.pwNew="",this.pwConfirm="",this.pwBusy=!1,this.pwMsg="",this.pwErr="",this.refs=null,this.refStamp=Date.now(),this.refNote="",this.tts=void 0,this.describe=null,this.describeBusy=!1,this.describeNote="",this.ttsErrors={},this.addPasskey=async()=>{this.passkeyBusy=!0,this.passkeyError="",this.passkeyMsg="";try{const e=await J(this.passkeyName.trim());this.passkeyName="",this.passkeyMsg=`Added “${e.name}”. You can sign in with it now.`,await this.loadPasskeys()}catch(e){const t=X(e);t&&(this.passkeyError=t)}finally{this.passkeyBusy=!1}},this.cancelRevoke=()=>{this.passkeyRevoking=null,this.passkeyPassword=""},this.loadStorage=async()=>{this.storageBusy=!0,this.storageErr="";try{this.storage=await h.storage()}catch(e){this.storageErr=e.message}finally{this.storageBusy=!1}},this.runCleanup=async()=>{this.storageBusy=!0,this.storageErr="";try{const e=await h.cleanupStorage(["uploads","temp"]);this.storage=e.storage,C(`Reclaimed ${e.freedHuman}.`,"success")}catch(e){this.storageErr=e.message}finally{this.storageBusy=!1}},this.loadDiagnostics=async()=>{this.diagBusy=!0,this.diagErr="";try{this.diag=await h.diagnostics(),this.uiDiag=S()}catch(e){this.diagErr=e.message}finally{this.diagBusy=!1}},this.resetDiagnostics=async()=>{this.diagBusy=!0,this.diagErr="";try{_(),await h.resetDiagnostics(),this.diag=await h.diagnostics(),this.uiDiag=S()}catch(e){this.diagErr=e.message}finally{this.diagBusy=!1}}}connectedCallback(){super.connectedCallback(),U(this,"settings"),this.load(),this.loadGenLists(),this.loadTTS(),this.loadDescribe(),this.loadReferences()}async loadReferences(){try{this.refs=await h.libbyReferences()}catch{this.refs=null}}async setReference(e,t){var r;const s=(r=t.files)==null?void 0:r[0];if(t.value="",!s)return;const i=await new Promise((n,o)=>{const u=new FileReader;u.onload=()=>n(String(u.result)),u.onerror=()=>o(u.error),u.readAsDataURL(s)});try{await h.setLibbyReference(e,i),this.refNote="",this.refStamp=Date.now(),await this.loadReferences()}catch(n){this.refNote=n.message}}async clearReference(e){try{await h.deleteLibbyReference(e),this.refNote="",await this.loadReferences()}catch(t){this.refNote=t.message}}referenceTile(e,t){var i;const s=!!((i=this.refs)!=null&&i[e]);return a`<div style="display:flex;flex-direction:column;gap:6px;align-items:center;width:132px;">
+  `];b([S({type:Boolean})],v.prototype,"embedded",2);b([l()],v.prototype,"backgrounds",2);b([l()],v.prototype,"defaultID",2);b([l()],v.prototype,"loading",2);b([l()],v.prototype,"busy",2);b([l()],v.prototype,"note",2);b([l()],v.prototype,"bad",2);b([l()],v.prototype,"editing",2);b([l()],v.prototype,"draftName",2);b([l()],v.prototype,"draftTags",2);b([l()],v.prototype,"version",2);v=b([T("oppai-libby-backgrounds")],v);var he=Object.defineProperty,ue=Object.getOwnPropertyDescriptor,p=(e,t,s,i)=>{for(var o=i>1?void 0:i?ue(t,s):t,n=e.length-1,r;n>=0;n--)(r=e[n])&&(o=(i?r(t,s,o):r(o))||o);return i&&o&&he(t,s,o),o};const ve=[{id:"appearance",label:"Appearance",icon:"palette",group:"You"},{id:"account",label:"Account",icon:"account_circle",group:"You"},{id:"ai",label:"AI tagging",icon:"smart_toy",group:"Server",server:!0},{id:"scraping",label:"Scraping",icon:"travel_explore",group:"Server",server:!0},{id:"library",label:"Library",icon:"inventory_2",group:"Server"},{id:"android",label:"Android app",icon:"android",group:"Server"},{id:"storage",label:"Storage",icon:"hard_drive",group:"Server"},{id:"diagnostics",label:"Diagnostics",icon:"speed",group:"Server",adminOnly:!0},{id:"privacy",label:"Privacy",icon:"visibility_off",group:"Server",server:!0,adminOnly:!0},{id:"about",label:"About",icon:"info",group:"Server"}];let d=class extends R{constructor(){super(...arguments),this.only="",this.tab="appearance",this.settings=null,this.info=null,this.stats=null,this.apk=null,this.loadError="",this.passkeyList=null,this.passkeyBusy=!1,this.passkeyError="",this.passkeyMsg="",this.passkeyName="",this.passkeyRenaming=null,this.passkeyRevoking=null,this.passkeyPassword="",this.diag=null,this.uiDiag=null,this.storage=null,this.storageBusy=!1,this.storageErr="",this.diagBusy=!1,this.diagErr="",this.dirty=!1,this.saving=!1,this.saved=!1,this.theme=I(),this.fit=O(),this.hideLibby=C(),this.genModels=[],this.genLoras=[],this.genBoards=[],this.genError="",this.pwCurrent="",this.pwNew="",this.pwConfirm="",this.pwBusy=!1,this.pwMsg="",this.pwErr="",this.refs=null,this.refStamp=Date.now(),this.refNote="",this.tts=void 0,this.describe=null,this.describeBusy=!1,this.describeNote="",this.ttsErrors={},this.addPasskey=async()=>{this.passkeyBusy=!0,this.passkeyError="",this.passkeyMsg="";try{const e=await X(this.passkeyName.trim());this.passkeyName="",this.passkeyMsg=`Added “${e.name}”. You can sign in with it now.`,await this.loadPasskeys()}catch(e){const t=Z(e);t&&(this.passkeyError=t)}finally{this.passkeyBusy=!1}},this.cancelRevoke=()=>{this.passkeyRevoking=null,this.passkeyPassword=""},this.loadStorage=async()=>{this.storageBusy=!0,this.storageErr="";try{this.storage=await h.storage()}catch(e){this.storageErr=e.message}finally{this.storageBusy=!1}},this.runCleanup=async()=>{this.storageBusy=!0,this.storageErr="";try{const e=await h.cleanupStorage(["uploads","temp"]);this.storage=e.storage,_(`Reclaimed ${e.freedHuman}.`,"success")}catch(e){this.storageErr=e.message}finally{this.storageBusy=!1}},this.loadDiagnostics=async()=>{this.diagBusy=!0,this.diagErr="";try{this.diag=await h.diagnostics(),this.uiDiag=E()}catch(e){this.diagErr=e.message}finally{this.diagBusy=!1}},this.resetDiagnostics=async()=>{this.diagBusy=!0,this.diagErr="";try{U(),await h.resetDiagnostics(),this.diag=await h.diagnostics(),this.uiDiag=E()}catch(e){this.diagErr=e.message}finally{this.diagBusy=!1}}}connectedCallback(){super.connectedCallback(),G(this,"settings"),this.load(),this.loadGenLists(),this.loadTTS(),this.loadDescribe(),this.loadReferences()}async loadReferences(){try{this.refs=await h.libbyReferences()}catch{this.refs=null}}async setReference(e,t){var o;const s=(o=t.files)==null?void 0:o[0];if(t.value="",!s)return;const i=await new Promise((n,r)=>{const u=new FileReader;u.onload=()=>n(String(u.result)),u.onerror=()=>r(u.error),u.readAsDataURL(s)});try{await h.setLibbyReference(e,i),this.refNote="",this.refStamp=Date.now(),await this.loadReferences()}catch(n){this.refNote=n.message}}async clearReference(e){try{await h.deleteLibbyReference(e),this.refNote="",await this.loadReferences()}catch(t){this.refNote=t.message}}referenceTile(e,t){var i;const s=!!((i=this.refs)!=null&&i[e]);return a`<div style="display:flex;flex-direction:column;gap:6px;align-items:center;width:132px;">
       <div style="width:132px;height:176px;border-radius:12px;overflow:hidden;display:grid;place-items:center;
         background:var(--md-sys-color-surface-container-highest);color:var(--md-sys-color-on-surface-variant);font-size:12px;text-align:center;">
         ${s?a`<img src=${h.libbyReferenceURL(e,this.refStamp)} alt=${`Libby, ${t.toLowerCase()}`} style="width:100%;height:100%;object-fit:cover;"/>`:a`<span>No picture</span>`}
@@ -123,22 +123,22 @@ import{z as P,i as B,v as k,u as l,a as M,e as h,b as a,A as c,t as R,ag as z,ah
         <label class="btn-inline">
           ${s?"Replace":"Upload"}
           <input type="file" accept="image/*" hidden ?disabled=${!this.canEdit}
-            @change=${r=>void this.setReference(e,r.target)}/>
+            @change=${o=>void this.setReference(e,o.target)}/>
         </label>
         ${s?a`<button class="btn-inline" ?disabled=${!this.canEdit}
           @click=${()=>void this.clearReference(e)}>Remove</button>`:c}
       </div>
-    </div>`}async load(){try{const[e,t]=await Promise.all([h.getSettings(),h.stats()]);this.settings=e.settings,this.info=e.readOnly,this.stats=t}catch(e){this.loadError=e.message}try{this.apk=await h.apkInfo()}catch{this.apk={available:!1}}}get canEdit(){var e;return!!((e=this.user)!=null&&e.isAdmin)}openTab(e){G(()=>{this.tab=e}),e==="diagnostics"&&!this.diag&&!this.diagBusy&&this.loadDiagnostics(),e==="storage"&&!this.storage&&!this.storageBusy&&this.loadStorage(),e==="account"&&!this.passkeyList&&this.loadPasskeys()}editLora(e,t){var i;const s=[...((i=this.settings)==null?void 0:i.libbyGenLoras)??[]];s[e]&&(s[e]={...s[e],...t},this.edit({libbyGenLoras:s}))}edit(e){!this.settings||!this.canEdit||(this.settings={...this.settings,...e},this.dirty=!0,this.saved=!1)}async save(){if(this.settings){this.saving=!0;try{const e=await h.saveSettings(this.settings);this.settings=e.settings,this.info=e.readOnly,this.dirty=!1,this.saved=!0,F(!!e.settings.incognito),this.loadTTS(!0),this.loadDescribe()}catch(e){this.loadError=e.message}finally{this.saving=!1}}}pickTheme(e){this.theme=e,V(e),K(e)}pickFit(e){this.fit=e,W(e)}async changePassword(){if(this.pwMsg="",this.pwErr="",this.pwNew!==this.pwConfirm){this.pwErr="The new passwords don't match.";return}if(this.pwNew.length<8){this.pwErr="Use at least 8 characters.";return}this.pwBusy=!0;try{await h.changePassword(this.pwCurrent,this.pwNew),this.pwMsg="Password changed.",this.pwCurrent=this.pwNew=this.pwConfirm=""}catch(e){this.pwErr=e.message}finally{this.pwBusy=!1}}render(){if(this.only)return this.renderOnly(this.only);const e=ce.filter(r=>!r.adminOnly||this.canEdit),t=e.find(r=>r.id===this.tab)??e[0],s=this.dirty||this.saved;let i="";return a`
+    </div>`}async load(){try{const[e,t]=await Promise.all([h.getSettings(),h.stats()]);this.settings=e.settings,this.info=e.readOnly,this.stats=t}catch(e){this.loadError=e.message}try{this.apk=await h.apkInfo()}catch{this.apk={available:!1}}}get canEdit(){var e;return!!((e=this.user)!=null&&e.isAdmin)}openTab(e){F(()=>{this.tab=e}),e==="diagnostics"&&!this.diag&&!this.diagBusy&&this.loadDiagnostics(),e==="storage"&&!this.storage&&!this.storageBusy&&this.loadStorage(),e==="account"&&!this.passkeyList&&this.loadPasskeys()}editLora(e,t){var i;const s=[...((i=this.settings)==null?void 0:i.libbyGenLoras)??[]];s[e]&&(s[e]={...s[e],...t},this.edit({libbyGenLoras:s}))}edit(e){!this.settings||!this.canEdit||(this.settings={...this.settings,...e},this.dirty=!0,this.saved=!1)}async save(){if(this.settings){this.saving=!0;try{const e=await h.saveSettings(this.settings);this.settings=e.settings,this.info=e.readOnly,this.dirty=!1,this.saved=!0,V(!!e.settings.incognito),this.loadTTS(!0),this.loadDescribe()}catch(e){this.loadError=e.message}finally{this.saving=!1}}}pickTheme(e){this.theme=e,K(e),W(e)}pickFit(e){this.fit=e,j(e)}async changePassword(){if(this.pwMsg="",this.pwErr="",this.pwNew!==this.pwConfirm){this.pwErr="The new passwords don't match.";return}if(this.pwNew.length<8){this.pwErr="Use at least 8 characters.";return}this.pwBusy=!0;try{await h.changePassword(this.pwCurrent,this.pwNew),this.pwMsg="Password changed.",this.pwCurrent=this.pwNew=this.pwConfirm=""}catch(e){this.pwErr=e.message}finally{this.pwBusy=!1}}render(){if(this.only)return this.renderOnly(this.only);const e=ve.filter(o=>!o.adminOnly||this.canEdit),t=e.find(o=>o.id===this.tab)??e[0],s=this.dirty||this.saved;let i="";return a`
       <div class="shell">
         <nav class="cat-rail" aria-label="Settings categories">
-          ${e.map(r=>{const n=r.group===i?c:a`<div class="cat-head">${r.group}</div>`;return i=r.group,a`${n}
+          ${e.map(o=>{const n=o.group===i?c:a`<div class="cat-head">${o.group}</div>`;return i=o.group,a`${n}
               <button
-                class="cat-row ${r.id===this.tab?"on":""}"
-                aria-current=${r.id===this.tab?"page":"false"}
-                @click=${()=>this.openTab(r.id)}
+                class="cat-row ${o.id===this.tab?"on":""}"
+                aria-current=${o.id===this.tab?"page":"false"}
+                @click=${()=>this.openTab(o.id)}
               >
-                <span class="material-symbols-rounded">${r.icon}</span>
-                <span class="cat-label">${r.label}</span>
+                <span class="material-symbols-rounded">${o.icon}</span>
+                <span class="cat-label">${o.label}</span>
               </button>`})}
           <div class="cat-sep"></div>
           <button class="cat-row danger" @click=${()=>this.dispatchEvent(new CustomEvent("logout",{bubbles:!0,composed:!0}))}>
@@ -189,7 +189,7 @@ import{z as P,i as B,v as k,u as l,a as M,e as h,b as a,A as c,t as R,ag as z,ah
                   <div class="field-text">
                     <div class="field-label">oppailib.apk</div>
                     <div class="field-help">
-                      ${b(e.size??0)} · built
+                      ${f(e.size??0)} · built
                       ${new Date((e.modified??0)*1e3).toLocaleDateString()}
                       ${e.sha256?a`<br /><span style="font-family:monospace; font-size:11px;"
                             >sha256 ${e.sha256.slice(0,16)}…</span
@@ -326,7 +326,7 @@ import{z as P,i as B,v as k,u as l,a as M,e as h,b as a,A as c,t as R,ag as z,ah
               role="switch"
               aria-checked=${this.hideLibby?"true":"false"}
               aria-label="Hide Libby"
-              @click=${()=>{this.hideLibby=!this.hideLibby,j(this.hideLibby)}}
+              @click=${()=>{this.hideLibby=!this.hideLibby,H(this.hideLibby)}}
             ></button>
           </div>
         </div>
@@ -340,9 +340,9 @@ import{z as P,i as B,v as k,u as l,a as M,e as h,b as a,A as c,t as R,ag as z,ah
             </div>
           </div>
           <div class="field-control seg">
-            ${H.map(e=>a`<button
-              class=${q()===e?"on":""}
-              @click=${()=>{Y(e),this.requestUpdate()}}
+            ${q.map(e=>a`<button
+              class=${Y()===e?"on":""}
+              @click=${()=>{Q(e),this.requestUpdate()}}
             >${e}×</button>`)}
           </div>
         </div>
@@ -363,7 +363,7 @@ import{z as P,i as B,v as k,u as l,a as M,e as h,b as a,A as c,t as R,ag as z,ah
           </div>
         </div>
       </section>
-    `}renderLibbyVoice(){const e=this.settings;if(!e)return c;const t=this.tts,s=(t==null?void 0:t.voices)??[],i=s.filter(o=>o.installed),r=s.filter(o=>!o.installed),n=new Set((t==null?void 0:t.downloading)??[]);return a`<section class="card">
+    `}renderLibbyVoice(){const e=this.settings;if(!e)return c;const t=this.tts,s=(t==null?void 0:t.voices)??[],i=s.filter(r=>r.installed),o=s.filter(r=>!r.installed),n=new Set((t==null?void 0:t.downloading)??[]);return a`<section class="card">
       <h3><span class="material-symbols-rounded">record_voice_over</span>Libby’s voice</h3>
       <p class="card-sub">
         ${t===void 0?"Checking the server…":t?t.engine==="kokoro"&&t.ready?a`Speaking with <strong>Kokoro</strong>, the natural voice, on the server’s CPU. Turn playback on per device with the speaker button in Chat.`:t.engine==="piper"&&t.ready?a`Speaking with <strong>piper</strong> on the server’s CPU. Turn playback on per device with the speaker button in Chat.`:t.engine==="openai"&&t.ready?a`Speaking through the speech server at <code>${e.ttsUrl}</code>.`:a`Not speaking from the server${t.detail?a` — ${t.detail}`:c}. Devices fall back to their own voices.`:"The server did not answer about speech."}
@@ -375,8 +375,8 @@ import{z as P,i as B,v as k,u as l,a as M,e as h,b as a,A as c,t as R,ag as z,ah
           <div class="field-help">Auto uses the most natural voice the server has — Kokoro, then piper, then the speech server. Piper is quicker and flatter; Off leaves devices to their own voices.</div>
         </div>
         <div class="field-control">
-          <select ?disabled=${!this.canEdit} @change=${o=>this.edit({ttsEngine:o.target.value})}>
-            ${[["auto","Auto"],["kokoro",`Kokoro — natural${t&&!t.kokoroInstalled?" (not installed)":""}`],["piper",`Piper — light${t&&!t.piperInstalled?" (not installed)":""}`],["openai","Speech server"],["off","Off"]].map(([o,u])=>a`<option value=${o} ?selected=${e.ttsEngine===o}>${u}</option>`)}
+          <select ?disabled=${!this.canEdit} @change=${r=>this.edit({ttsEngine:r.target.value})}>
+            ${[["auto","Auto"],["kokoro",`Kokoro — natural${t&&!t.kokoroInstalled?" (not installed)":""}`],["piper",`Piper — light${t&&!t.piperInstalled?" (not installed)":""}`],["openai","Speech server"],["off","Off"]].map(([r,u])=>a`<option value=${r} ?selected=${e.ttsEngine===r}>${u}</option>`)}
           </select>
         </div>
       </div>
@@ -387,10 +387,10 @@ import{z as P,i as B,v as k,u as l,a as M,e as h,b as a,A as c,t as R,ag as z,ah
           <div class="field-help">${i.length?"Installed voices. Downloaded ones can be removed below.":"No voice is installed yet — download one below."}</div>
         </div>
         <div class="field-control" style="display:flex; gap:8px; align-items:center;">
-          <select ?disabled=${!this.canEdit} @change=${o=>this.edit({ttsVoice:o.target.value})}>
+          <select ?disabled=${!this.canEdit} @change=${r=>this.edit({ttsVoice:r.target.value})}>
             <option value="" ?selected=${!e.ttsVoice}>Engine’s default</option>
-            ${i.map(o=>a`<option value=${o.id} ?selected=${o.id===e.ttsVoice}>${o.label}${o.bundled?" · bundled":""}</option>`)}
-            ${e.ttsVoice&&!i.some(o=>o.id===e.ttsVoice)?a`<option value=${e.ttsVoice} selected>${e.ttsVoice} (not installed)</option>`:c}
+            ${i.map(r=>a`<option value=${r.id} ?selected=${r.id===e.ttsVoice}>${r.label}${r.bundled?" · bundled":""}</option>`)}
+            ${e.ttsVoice&&!i.some(r=>r.id===e.ttsVoice)?a`<option value=${e.ttsVoice} selected>${e.ttsVoice} (not installed)</option>`:c}
           </select>
           <button class="btn" ?disabled=${!(t!=null&&t.ready)} title="Hear the current voice" @click=${()=>void this.testVoice()}>Test</button>
         </div>
@@ -403,7 +403,7 @@ import{z as P,i as B,v as k,u as l,a as M,e as h,b as a,A as c,t as R,ag as z,ah
         </div>
         <div class="field-control">
           <input type="range" min="0.5" max="2" step="0.05" .value=${String(e.ttsSpeed)} ?disabled=${!this.canEdit}
-            @input=${o=>this.edit({ttsSpeed:Number(o.target.value)})} />
+            @input=${r=>this.edit({ttsSpeed:Number(r.target.value)})} />
         </div>
       </div>
 
@@ -414,11 +414,11 @@ import{z as P,i as B,v as k,u as l,a as M,e as h,b as a,A as c,t as R,ag as z,ah
         </div>
         <div class="field-control">
           <ul class="voice-list">
-            ${i.map(o=>a`<li><span>${o.label}<small>${o.quality??""}${o.bundled?" · bundled":""}</small></span>
-              ${!o.bundled&&this.canEdit?a`<button class="btn" @click=${()=>void this.deleteVoice(o.id)}>Remove</button>`:c}</li>`)}
-            ${r.map(o=>a`<li><span>${o.label}<small>${o.quality??""}${o.bytes?` · ${Math.round(o.bytes/1e6)} MB`:""}</small></span>
-              ${this.ttsErrors[o.id]?a`<em class="voice-error">${this.ttsErrors[o.id]}</em>`:c}
-              ${n.has(o.id)?a`<span class="hint">Downloading…</span>`:this.canEdit?a`<button class="btn" @click=${()=>void this.downloadVoice(o.id)}>Download</button>`:c}</li>`)}
+            ${i.map(r=>a`<li><span>${r.label}<small>${r.quality??""}${r.bundled?" · bundled":""}</small></span>
+              ${!r.bundled&&this.canEdit?a`<button class="btn" @click=${()=>void this.deleteVoice(r.id)}>Remove</button>`:c}</li>`)}
+            ${o.map(r=>a`<li><span>${r.label}<small>${r.quality??""}${r.bytes?` · ${Math.round(r.bytes/1e6)} MB`:""}</small></span>
+              ${this.ttsErrors[r.id]?a`<em class="voice-error">${this.ttsErrors[r.id]}</em>`:c}
+              ${n.has(r.id)?a`<span class="hint">Downloading…</span>`:this.canEdit?a`<button class="btn" @click=${()=>void this.downloadVoice(r.id)}>Download</button>`:c}</li>`)}
           </ul>
         </div>
       </div>`:c}
@@ -430,19 +430,19 @@ import{z as P,i as B,v as k,u as l,a as M,e as h,b as a,A as c,t as R,ag as z,ah
         </div>
         <div class="field-control">
           <input type="text" autocomplete="off" placeholder="http://host:8880" .value=${e.ttsUrl} ?disabled=${!this.canEdit}
-            @change=${o=>this.edit({ttsUrl:o.target.value})} />
+            @change=${r=>this.edit({ttsUrl:r.target.value})} />
         </div>
         <div class="field-control">
           <input type="text" autocomplete="off" placeholder="Model (default tts-1)" .value=${e.ttsModel} ?disabled=${!this.canEdit}
-            @change=${o=>this.edit({ttsModel:o.target.value})} />
+            @change=${r=>this.edit({ttsModel:r.target.value})} />
         </div>
         <div class="field-control">
           <input type="password" autocomplete="new-password" placeholder=${e.ttsApiKeySet?"API key saved — enter to replace":"API key (optional)"}
             .value=${e.ttsApiKey} ?disabled=${!this.canEdit}
-            @change=${o=>this.edit({ttsApiKey:o.target.value})} />
+            @change=${r=>this.edit({ttsApiKey:r.target.value})} />
         </div>
       </div>
-    </section>`}async loadTTS(e=!1){var t,s;this.tts=await N(e);try{this.ttsErrors=await h.ttsVoiceErrors()}catch{}(s=(t=this.tts)==null?void 0:t.downloading)!=null&&s.length&&window.setTimeout(()=>void this.loadTTS(!0),4e3)}async loadDescribe(){try{this.describe=await h.describeStatus()}catch{this.describe=null}}async probeVision(){this.describeBusy=!0,this.describeNote="";try{const e=await h.describeProbe();this.describeNote=`The model answered: “${e.description}”`}catch(e){this.describeNote=e.message}finally{this.describeBusy=!1}}async toggleBackfill(){var e;this.describeBusy=!0;try{(e=this.describe)!=null&&e.backfilling?await h.describeBackfillStop():await h.describeBackfill(),await this.loadDescribe()}catch(t){this.describeNote=t.message}finally{this.describeBusy=!1}}async testVoice(){D(),await Z("Hi. This is what I sound like. Saved to your library, by the way — nice pick.")}async downloadVoice(e){try{await h.downloadTTSVoice(e),await this.loadTTS(!0)}catch(t){this.loadError=t.message}}async deleteVoice(e){if(confirm(`Remove the ${e} voice from the server?`))try{await h.deleteTTSVoice(e),await this.loadTTS(!0)}catch(t){this.loadError=t.message}}renderLibbyModel(){const e=this.settings;return a`
+    </section>`}async loadTTS(e=!1){var t,s;this.tts=await D(e);try{this.ttsErrors=await h.ttsVoiceErrors()}catch{}(s=(t=this.tts)==null?void 0:t.downloading)!=null&&s.length&&window.setTimeout(()=>void this.loadTTS(!0),4e3)}async loadDescribe(){try{this.describe=await h.describeStatus()}catch{this.describe=null}}async probeVision(){this.describeBusy=!0,this.describeNote="";try{const e=await h.describeProbe();this.describeNote=`The model answered: “${e.description}”`}catch(e){this.describeNote=e.message}finally{this.describeBusy=!1}}async toggleBackfill(){var e;this.describeBusy=!0;try{(e=this.describe)!=null&&e.backfilling?await h.describeBackfillStop():await h.describeBackfill(),await this.loadDescribe()}catch(t){this.describeNote=t.message}finally{this.describeBusy=!1}}async testVoice(){z(),await ae("Hi. This is what I sound like. Saved to your library, by the way — nice pick.")}async downloadVoice(e){try{await h.downloadTTSVoice(e),await this.loadTTS(!0)}catch(t){this.loadError=t.message}}async deleteVoice(e){if(confirm(`Remove the ${e} voice from the server?`))try{await h.deleteTTSVoice(e),await this.loadTTS(!0)}catch(t){this.loadError=t.message}}renderLibbyModel(){const e=this.settings;return a`
       <section class="card">
         <h3><span class="material-symbols-rounded">memory</span>Her model</h3>
         <p class="card-sub">The chat backend every character talks through. Saved for the whole server.</p>
@@ -652,7 +652,7 @@ import{z as P,i as B,v as k,u as l,a as M,e as h,b as a,A as c,t as R,ag as z,ah
           pictures for you in chat. She always asks first — nothing is generated or saved until
           you press Allow.
         </p>
-      </section>`;const t=this.genModels,s=this.genLoras,i=e.libbyGenLoras??[],r=this.genBoards;return a`<section class="card">
+      </section>`;const t=this.genModels,s=this.genLoras,i=e.libbyGenLoras??[],o=this.genBoards;return a`<section class="card">
       <h3><span class="material-symbols-rounded">auto_awesome</span>Libby’s image generation</h3>
       <p class="card-sub">
         What she uses when she offers to make you a picture. She always asks first — nothing is
@@ -685,34 +685,34 @@ import{z as P,i as B,v as k,u as l,a as M,e as h,b as a,A as c,t as R,ag as z,ah
             LoRAs you like her drawn with.</div>
         </div>
         <div class="field-control" style="display:flex; flex-direction:column; gap:8px; align-items:stretch;">
-          ${i.map((n,o)=>a`<div style="display:flex; gap:8px; align-items:center;">
+          ${i.map((n,r)=>a`<div style="display:flex; gap:8px; align-items:center;">
             ${s.length?a`<select style="flex:1; min-width:0;" ?disabled=${!this.canEdit}
-                  aria-label="LoRA ${o+1}"
-                  @change=${u=>this.editLora(o,{name:u.target.value})}>
+                  aria-label="LoRA ${r+1}"
+                  @change=${u=>this.editLora(r,{name:u.target.value})}>
                   ${(s.includes(n.name)?s:[n.name,...s]).map(u=>a`<option value=${u} ?selected=${u===n.name}>${u}</option>`)}
                 </select>`:a`<input type="text" autocomplete="off" placeholder="LoRA name" style="flex:1; min-width:0;"
-                  aria-label="LoRA ${o+1}"
+                  aria-label="LoRA ${r+1}"
                   .value=${n.name} ?disabled=${!this.canEdit}
-                  @change=${u=>this.editLora(o,{name:u.target.value})} />`}
+                  @change=${u=>this.editLora(r,{name:u.target.value})} />`}
             <input type="number" step="0.05" min="-2" max="2" style="width:90px;"
-              aria-label="LoRA ${o+1} strength"
+              aria-label="LoRA ${r+1} strength"
               .value=${String(n.weight)} ?disabled=${!this.canEdit}
-              @change=${u=>this.editLora(o,{weight:Number(u.target.value)})} />
-            <button class="btn-inline" title="Remove" aria-label="Remove LoRA ${o+1}" ?disabled=${!this.canEdit}
-              @click=${()=>this.edit({libbyGenLoras:i.filter((u,f)=>f!==o)})}>
+              @change=${u=>this.editLora(r,{weight:Number(u.target.value)})} />
+            <button class="btn-inline" title="Remove" aria-label="Remove LoRA ${r+1}" ?disabled=${!this.canEdit}
+              @click=${()=>this.edit({libbyGenLoras:i.filter((u,g)=>g!==r)})}>
               <span class="material-symbols-rounded" style="font-size:18px;">delete</span>
             </button>
           </div>`)}
           <button class="btn-inline" style="align-self:flex-start; display:inline-flex; align-items:center; gap:6px;"
             ?disabled=${!this.canEdit||i.length>=8}
-            @click=${()=>this.edit({libbyGenLoras:[...i,{name:s.find(n=>!i.some(o=>o.name===n))??"",weight:1}]})}>
+            @click=${()=>this.edit({libbyGenLoras:[...i,{name:s.find(n=>!i.some(r=>r.name===n))??"",weight:1}]})}>
             <span class="material-symbols-rounded" style="font-size:18px;">add</span>
             ${i.length?"Add another LoRA":"Add a LoRA"}
           </button>
         </div>
       </div>
 
-      ${r.length?a`<div class="field">
+      ${o.length?a`<div class="field">
             <div class="field-text">
               <div class="field-label">Board</div>
               <div class="field-help">The InvokeAI board her pictures are filed into, so what she
@@ -722,7 +722,7 @@ import{z as P,i as B,v as k,u as l,a as M,e as h,b as a,A as c,t as R,ag as z,ah
               <select ?disabled=${!this.canEdit}
                 @change=${n=>this.edit({libbyGenBoard:n.target.value})}>
                 <option value="" ?selected=${!e.libbyGenBoard}>Uncategorized</option>
-                ${r.map(n=>a`<option value=${n} ?selected=${n===e.libbyGenBoard}>${n}</option>`)}
+                ${o.map(n=>a`<option value=${n} ?selected=${n===e.libbyGenBoard}>${n}</option>`)}
               </select>
             </div>
           </div>`:c}
@@ -1060,13 +1060,13 @@ import{z as P,i as B,v as k,u as l,a as M,e as h,b as a,A as c,t as R,ag as z,ah
       <section class="card">
         <h3><span class="material-symbols-rounded">inventory_2</span>Library</h3>
         <p class="card-sub">
-          ${e.items} ${e.items===1?"item":"items"} · ${b(e.bytes)} stored ·
+          ${e.items} ${e.items===1?"item":"items"} · ${f(e.bytes)} stored ·
           ${e.tags} ${e.tags===1?"tag":"tags"}
         </p>
         <div class="stat-grid">
-          ${Object.keys(E).map(s=>{const i=t.get(s);return a`<div class="stat">
+          ${Object.keys(A).map(s=>{const i=t.get(s);return a`<div class="stat">
               <div class="stat-num">${(i==null?void 0:i.count)??0}</div>
-              <div class="stat-label">${E[s].label} · ${b((i==null?void 0:i.bytes)??0)}</div>
+              <div class="stat-label">${A[s].label} · ${f((i==null?void 0:i.bytes)??0)}</div>
             </div>`})}
         </div>
       </section>
@@ -1137,8 +1137,8 @@ import{z as P,i as B,v as k,u as l,a as M,e as h,b as a,A as c,t as R,ag as z,ah
               </div>`:a`<div class="pk-name">${e.name}</div>`}
           <div class="pk-meta">
             ${e.synced?"Synced to your account":"This device only"}
-            · added ${L(e.createdAt)}
-            · ${e.lastUsedAt?`last used ${L(e.lastUsedAt)}`:"never used"}
+            · added ${P(e.createdAt)}
+            · ${e.lastUsedAt?`last used ${P(e.lastUsedAt)}`:"never used"}
           </div>
           ${s?a`<div class="pk-revoke">
                 <p class="field-help">
@@ -1255,12 +1255,12 @@ import{z as P,i as B,v as k,u as l,a as M,e as h,b as a,A as c,t as R,ag as z,ah
 
         ${e?a`
               ${e.pendingBytes>0?a`<p class="field-help">
-                    Uploads in progress still need about ${b(e.pendingBytes)}.
+                    Uploads in progress still need about ${f(e.pendingBytes)}.
                   </p>`:c}
               ${e.mappings.map(s=>this.renderMapping(s))}
               <h4 style="margin:18px 0 6px;">Reclaimable now</h4>
               ${e.reclaimable.map(s=>a`<p class="field-help">
-                ${s.label}: <strong>${b(s.bytes)}</strong>${s.note?a` — ${s.note}`:c}
+                ${s.label}: <strong>${f(s.bytes)}</strong>${s.note?a` — ${s.note}`:c}
               </p>`)}
             `:a`<p class="field-help">${this.storageBusy?"Reading…":"No reading yet."}</p>`}
       </section>
@@ -1276,8 +1276,8 @@ import{z as P,i as B,v as k,u as l,a as M,e as h,b as a,A as c,t as R,ag as z,ah
           <span style="display:block; height:100%; width:${t}%; background:${t>=90?"var(--oppai-error)":"var(--oppai-primary)"};"></span>
         </div>
         <p class="field-help">
-          ${e.error?e.error:a`${b(e.freeBytes)} free of ${b(e.totalBytes)} (${t}% used)`}
-          ${(e.contents??[]).map(s=>a` · ${s.label}: ${b(s.bytes)}${s.count?a` (${s.count})`:c}`)}
+          ${e.error?e.error:a`${f(e.freeBytes)} free of ${f(e.totalBytes)} (${t}% used)`}
+          ${(e.contents??[]).map(s=>a` · ${s.label}: ${f(s.bytes)}${s.count?a` (${s.count})`:c}`)}
         </p>
         <p class="field-help">${e.purpose} Set with <code>${e.env}</code>.</p>
       </div>
@@ -1317,7 +1317,7 @@ import{z as P,i as B,v as k,u as l,a as M,e as h,b as a,A as c,t as R,ag as z,ah
                   </div>`}
 
               <div class="stat-grid">
-                ${this.diagStat("Uptime",pe(e.uptimeSeconds))}
+                ${this.diagStat("Uptime",ge(e.uptimeSeconds))}
                 ${this.diagStat("Requests",String(e.metrics.counters["http.requests"]??0))}
                 ${this.diagStat("Server errors",String(e.metrics.counters["http.status.5xx"]??0))}
                 ${this.diagStat("Memory",`${e.heapMB} MB heap · ${e.sysMB} MB total`)}
@@ -1391,7 +1391,7 @@ import{z as P,i as B,v as k,u as l,a as M,e as h,b as a,A as c,t as R,ag as z,ah
       </section>
     `}renderFetchHealth(e){const t=e.metrics.counters,s=[["Fetches completed",t["scrape.fetch.ok"]??0,"Pages and listings fetched successfully."],["Retried",t["scrape.fetch.retry"]??0,"A site failed transiently and we tried again."],["Gave up",t["scrape.fetch.exhausted"]??0,"Still failing after every retry."],["Queued behind another request",t["scrape.host_queued"]??0,"A steady number here means we're fanning out wider than the site allows."],["Asked to back off",t["scrape.fetch.backoff_too_long"]??0,"A site asked for a longer wait than we'll hold a click open for."]];return s.every(([,i])=>i===0)?c:a`
       <h4 class="diag-head">Outbound fetches</h4>
-      ${s.map(([i,r,n])=>r===0?c:a`<div class="diag-row"><strong>${r}</strong> ${i} <span class="field-help">— ${n}</span></div>`)}
+      ${s.map(([i,o,n])=>o===0?c:a`<div class="diag-row"><strong>${o}</strong> ${i} <span class="field-help">— ${n}</span></div>`)}
     `}diagStat(e,t){return a`<div class="stat">
       <div class="stat-num diag-stat-num">${t}</div>
       <div class="stat-label">${e}</div>
@@ -1406,7 +1406,7 @@ import{z as P,i as B,v as k,u as l,a as M,e as h,b as a,A as c,t as R,ag as z,ah
         ${this.readOnlyField("Database","SQLite metadata store.",e.dbPath)}
         ${this.readOnlyField("Session length","How long a login stays valid.",`${e.sessionHours} hours`)}
       </section>
-    `:c}switchField(e,t,s,i,r=!1){const n=!this.canEdit||r;return a`
+    `:c}switchField(e,t,s,i,o=!1){const n=!this.canEdit||o;return a`
       <div class="field">
         <div class="field-text">
           <div class="field-label">${e}</div>
@@ -1431,7 +1431,7 @@ import{z as P,i as B,v as k,u as l,a as M,e as h,b as a,A as c,t as R,ag as z,ah
         </div>
         <div class="field-control"><span class="ro">${s}</span></div>
       </div>
-    `}};d.styles=[P,Q,B`
+    `}};d.styles=[B,J,M`
       :host {
         display: block;
       }
@@ -1951,4 +1951,4 @@ import{z as P,i as B,v as k,u as l,a as M,e as h,b as a,A as c,t as R,ag as z,ah
         gap: 12px;
         max-width: 360px;
       }
-    `];p([k({attribute:!1})],d.prototype,"user",2);p([k({attribute:!1})],d.prototype,"only",2);p([l()],d.prototype,"tab",2);p([l()],d.prototype,"settings",2);p([l()],d.prototype,"info",2);p([l()],d.prototype,"stats",2);p([l()],d.prototype,"apk",2);p([l()],d.prototype,"loadError",2);p([l()],d.prototype,"passkeyList",2);p([l()],d.prototype,"passkeyBusy",2);p([l()],d.prototype,"passkeyError",2);p([l()],d.prototype,"passkeyMsg",2);p([l()],d.prototype,"passkeyName",2);p([l()],d.prototype,"passkeyRenaming",2);p([l()],d.prototype,"passkeyRevoking",2);p([l()],d.prototype,"passkeyPassword",2);p([l()],d.prototype,"diag",2);p([l()],d.prototype,"uiDiag",2);p([l()],d.prototype,"storage",2);p([l()],d.prototype,"storageBusy",2);p([l()],d.prototype,"storageErr",2);p([l()],d.prototype,"diagBusy",2);p([l()],d.prototype,"diagErr",2);p([l()],d.prototype,"dirty",2);p([l()],d.prototype,"saving",2);p([l()],d.prototype,"saved",2);p([l()],d.prototype,"theme",2);p([l()],d.prototype,"fit",2);p([l()],d.prototype,"hideLibby",2);p([l()],d.prototype,"genModels",2);p([l()],d.prototype,"genLoras",2);p([l()],d.prototype,"genBoards",2);p([l()],d.prototype,"genError",2);p([l()],d.prototype,"pwCurrent",2);p([l()],d.prototype,"pwNew",2);p([l()],d.prototype,"pwConfirm",2);p([l()],d.prototype,"pwBusy",2);p([l()],d.prototype,"pwMsg",2);p([l()],d.prototype,"pwErr",2);p([l()],d.prototype,"refs",2);p([l()],d.prototype,"refStamp",2);p([l()],d.prototype,"refNote",2);p([l()],d.prototype,"tts",2);p([l()],d.prototype,"describe",2);p([l()],d.prototype,"describeBusy",2);p([l()],d.prototype,"describeNote",2);p([l()],d.prototype,"ttsErrors",2);d=p([R("oppai-settings")],d);function L(e){if(!e)return"never";const t=Math.max(0,(Date.now()-e)/1e3);if(t<90)return"just now";const s=Math.round(t/60);if(s<60)return`${s} min ago`;const i=Math.round(s/60);if(i<24)return`${i}h ago`;const r=Math.round(i/24);return r<=30?`${r} day${r===1?"":"s"} ago`:new Date(e).toLocaleDateString()}function pe(e){const t=Math.max(0,Math.floor(e)),s=Math.floor(t/86400),i=Math.floor(t%86400/3600),r=Math.floor(t%3600/60);return s>0?`${s}d ${i}h`:i>0?`${i}h ${r}m`:r>0?`${r}m ${t%60}s`:`${t}s`}function b(e){if(!e)return"0 B";const t=["B","KB","MB","GB","TB"];let s=e,i=0;for(;s>=1024&&i<t.length-1;)s/=1024,i++;return`${s<10&&i>0?s.toFixed(1):Math.round(s)} ${t[i]}`}const be=Object.freeze(Object.defineProperty({__proto__:null,get OppaiSettings(){return d}},Symbol.toStringTag,{value:"Module"}));export{ge as a,D as b,be as c,ve as l,Z as s};
+    `];p([S({attribute:!1})],d.prototype,"user",2);p([S({attribute:!1})],d.prototype,"only",2);p([l()],d.prototype,"tab",2);p([l()],d.prototype,"settings",2);p([l()],d.prototype,"info",2);p([l()],d.prototype,"stats",2);p([l()],d.prototype,"apk",2);p([l()],d.prototype,"loadError",2);p([l()],d.prototype,"passkeyList",2);p([l()],d.prototype,"passkeyBusy",2);p([l()],d.prototype,"passkeyError",2);p([l()],d.prototype,"passkeyMsg",2);p([l()],d.prototype,"passkeyName",2);p([l()],d.prototype,"passkeyRenaming",2);p([l()],d.prototype,"passkeyRevoking",2);p([l()],d.prototype,"passkeyPassword",2);p([l()],d.prototype,"diag",2);p([l()],d.prototype,"uiDiag",2);p([l()],d.prototype,"storage",2);p([l()],d.prototype,"storageBusy",2);p([l()],d.prototype,"storageErr",2);p([l()],d.prototype,"diagBusy",2);p([l()],d.prototype,"diagErr",2);p([l()],d.prototype,"dirty",2);p([l()],d.prototype,"saving",2);p([l()],d.prototype,"saved",2);p([l()],d.prototype,"theme",2);p([l()],d.prototype,"fit",2);p([l()],d.prototype,"hideLibby",2);p([l()],d.prototype,"genModels",2);p([l()],d.prototype,"genLoras",2);p([l()],d.prototype,"genBoards",2);p([l()],d.prototype,"genError",2);p([l()],d.prototype,"pwCurrent",2);p([l()],d.prototype,"pwNew",2);p([l()],d.prototype,"pwConfirm",2);p([l()],d.prototype,"pwBusy",2);p([l()],d.prototype,"pwMsg",2);p([l()],d.prototype,"pwErr",2);p([l()],d.prototype,"refs",2);p([l()],d.prototype,"refStamp",2);p([l()],d.prototype,"refNote",2);p([l()],d.prototype,"tts",2);p([l()],d.prototype,"describe",2);p([l()],d.prototype,"describeBusy",2);p([l()],d.prototype,"describeNote",2);p([l()],d.prototype,"ttsErrors",2);d=p([T("oppai-settings")],d);function P(e){if(!e)return"never";const t=Math.max(0,(Date.now()-e)/1e3);if(t<90)return"just now";const s=Math.round(t/60);if(s<60)return`${s} min ago`;const i=Math.round(s/60);if(i<24)return`${i}h ago`;const o=Math.round(i/24);return o<=30?`${o} day${o===1?"":"s"} ago`:new Date(e).toLocaleDateString()}function ge(e){const t=Math.max(0,Math.floor(e)),s=Math.floor(t/86400),i=Math.floor(t%86400/3600),o=Math.floor(t%3600/60);return s>0?`${s}d ${i}h`:i>0?`${i}h ${o}m`:o>0?`${o}m ${t%60}s`:`${t}s`}function f(e){if(!e)return"0 B";const t=["B","KB","MB","GB","TB"];let s=e,i=0;for(;s>=1024&&i<t.length-1;)s/=1024,i++;return`${s<10&&i>0?s.toFixed(1):Math.round(s)} ${t[i]}`}const we=Object.freeze(Object.defineProperty({__proto__:null,get OppaiSettings(){return d}},Symbol.toStringTag,{value:"Module"}));export{me as a,z as b,we as c,ye as l,ae as s};

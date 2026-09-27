@@ -592,6 +592,9 @@ data class ChatRequest(
     /** Where she is — the background id the call screen shows. Conversation state,
         sent back each turn for the same reason as [activity]. */
     val background: String = "",
+    /** What she has on when it is not her own clothes: "nothing", or what she changed
+        into. Conversation state, sent back each turn like [background]. */
+    val wearing: String = "",
     /** Library items attached to the latest message, by id. The server describes them
         to her from its own rows. */
     val sharedMediaIds: List<Long> = emptyList(),
@@ -676,6 +679,8 @@ data class LibbyIdentityMark(
 data class LibbyActResult(
     val message: String = "",
     val image: ChatImage? = null,
+    /** What a picture of her in something leaves her wearing; null when it did not say. */
+    val wearing: String? = null,
 )
 
 /** The approved half of a [LibbyAction], as the act endpoint takes it. */
@@ -692,6 +697,7 @@ data class LibbyActRequest(
         makes of herself is of her as she is now, and a shelf she builds skips what
         they have seen. */
     val outfit: String = "",
+    val wearing: String = "",
     val activity: String = "",
     val intensity: Int = 0,
     val recentMediaIds: List<Long> = emptyList(),
@@ -720,6 +726,9 @@ data class ChatResponse(
     /** Where she is leaving this turn: a background id, or blank for the plain call
         screen. Persists like [activity]. */
     val background: String = "",
+    /** What she has on leaving this turn: blank for her own clothes, "nothing", or what
+        she changed into. Persists like [activity]. */
+    val wearing: String = "",
     /** She rang: show an incoming-call popup, and only answering opens the call. */
     val callRequest: Boolean = false,
     /** She hung up an open call. */
@@ -886,6 +895,9 @@ data class ChatConversation(
     /** Where she is — a background id for the call screen, blank for none. Conversation
         state like [activity], and carried for the same reason. */
     val background: String = "",
+    /** What she has on when it is not her own clothes, blank for her own. Conversation
+        state like [activity], and carried for the same reason. */
+    val wearing: String = "",
     val progress: Double = intensity.toDouble(),
     val options: JsonObject = JsonObject(emptyMap()),
     /** The older part of the conversation, compressed into her notes by the web client,

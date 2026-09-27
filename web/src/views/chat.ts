@@ -19,7 +19,7 @@ import {
   type LibbyAutoDecision, type LibbyAutoSettings, type LibbyAutoState, type LibbyBond, type LibbyContext,
   type DiscordPlace, type DiscordState, type LibbyIdentity, type LibbyJournalEntry, type LibbyMemory, type LibbyThought, type LibbyWant, type SharedLink,
   type StoredChatMessage, type User, type ChatReplyRef, type LibbyAttachment, type LibbyBackground, type LibbyLink, type Media,
-  type LibbyActivityDef, type LibbyOutfit, type LibbyActContext,
+  type LibbyActivityDef, type LibbyOutfit, type LibbyActContext, type GenProgress,
   SEND_WEIGHTS,
 } from "../api.js";
 import { iconStyles, motionStyles } from "../theme.js";
@@ -47,8 +47,9 @@ import { profileUpdates } from "../ui-metrics.js";
 import { characterToCard, readCardFile } from "../character-card.js";
 import {
   ActionApprovals, actionCardStyles, attachmentStyles, KIND_ICONS, linkChipStyles, recentlyAttached, recentHeat, recentMoods, recentlySent,
-  renderActionCards, renderAttachments, renderLinkChips, requestOpenMedia,
+  renderActionCards, renderAttachments, renderGenProgress, renderLinkChips, requestOpenMedia,
 } from "../chat-links.js";
+import { newJobId, watchGeneration } from "../gen-watch.js";
 
 const MODES = [
   { id: "sweet", label: "sweet", emotion: "happy", topic: "Soft, warm, and unhurried." },
@@ -539,6 +540,12 @@ export class OppaiChat extends LitElement {
    * user gets to see it.
    */
   @state() private typingPhase: "idle" | "typing" | "thinking" = "idle";
+  /**
+   * Pictures she is making right now — one she is taking of herself, a place she is
+   * going — drawn at the foot of their conversation with the picture so far, instead
+   * of the typing dots and a long wait. Keyed by job id. See gen-watch.ts.
+   */
+  @state() private making: { jobId: string; conversationID: string; what: string; icon: string; progress: GenProgress | null }[] = [];
   /** The full-screen sprite view. Text chat keeps running underneath it. */
   @state() private callOpen = false;
   @state() private callSeconds = 0;
@@ -610,7 +617,8 @@ export class OppaiChat extends LitElement {
   @state() private imageSubject = "self";
 
   /** Which of her offers have been decided this session; see ActionApprovals. */
-  private approvals = new ActionApprovals(() => this.requestUpdate(), () => this.actContext(), (image) => this.receiveMadePicture(image));
+  private approvals = new ActionApprovals(() => this.requestUpdate(), () => this.actContext(), (image) => this.receiveMadePicture(image),
+    (result) => this.keepWearing(result));
 
   /**
    * A picture she made after you said yes to her offer. It arrives as a message of
@@ -647,6 +655,7 @@ export class OppaiChat extends LitElement {
     if (!conversation || conversation.characterId !== "libby") return {};
     return {
       outfit: loadLibbyOutfit() || undefined,
+      wearing: conversation.wearing || undefined,
       activity: conversation.activity || undefined,
       intensity: conversation.intensity,
       recentMediaIds: recentlyAttached(conversation.messages),
@@ -894,6 +903,8 @@ export class OppaiChat extends LitElement {
     .thought.aloud { font-style:normal; color:color-mix(in srgb,var(--md-sys-color-on-surface) 84%,transparent); }
     .thought.aloud .thought-label .material-symbols-rounded { color:var(--md-sys-color-tertiary,var(--accent)); }
     .typing-row .bubble { padding:11px 14px; }
+    .making-row .bubble { min-width:220px; }
+    .making-row .gen-progress { margin-top:0; }
     .dots { display:inline-flex; gap:4px; }
     .dots i { width:7px; height:7px; border-radius:50%; background:var(--muted); animation:chat-bounce 1.1s infinite ease-in-out; }
     .dots i:nth-child(2) { animation-delay:.16s; } .dots i:nth-child(3) { animation-delay:.32s; }
@@ -2641,6 +2652,8 @@ export class OppaiChat extends LitElement {
         // turns, so a state set three replies ago only survives because this says so.
         activity: conversation.activity || undefined,
         background: conversation.background || undefined,
+        // And what she has on, when she changed out of her own clothes.
+        wearing: conversation.wearing || undefined,
         // Library items attached to this message, by id.
         sharedMediaIds: sharedMediaIds.length ? sharedMediaIds : undefined,
         // That they have her on screen rather than in a transcript. Opening a call is
@@ -2690,6 +2703,7 @@ export class OppaiChat extends LitElement {
       // means she is doing nothing in particular.
       if (result.activity !== undefined) live.activity = result.activity;
       if (result.background !== undefined) live.background = result.background;
+      if (result.wearing !== undefined) live.wearing = result.wearing;
       const requested = normalizeIntensity(result.intensity ?? live.intensity);
       if (result.declared) {
         // The character named this mood, so it lands where it asked. Running it
@@ -3555,6 +3569,7 @@ export class OppaiChat extends LitElement {
         intensity: conversation.intensity,
         activity: conversation.activity ?? "",
         background: conversation.background ?? "",
+        wearing: conversation.wearing ?? "",
         options: conversation.options ?? {},
         updatedAt: conversation.updatedAt,
         messages: conversation.messages,
@@ -3740,11 +3755,12 @@ export class OppaiChat extends LitElement {
    * generator costs a fresh picture and never the picture itself.
    */
   private async takePicture(conversationID: string, request: { prompt: string; fallbackImageId?: string; fallbackAttachment?: LibbyAttachment }) {
-    this.typingPhase = "typing";
+    const stop = this.watchMaking(conversationID, "Taking a picture", "photo_camera");
     try {
-      const made = await api.libbyAct({ id: newID(), kind: "generate", label: "", detail: "", prompt: request.prompt }, this.actContext());
+      const made = await api.libbyAct({ id: newID(), kind: "generate", label: "", detail: "", prompt: request.prompt }, { ...this.actContext(), jobId: stop.jobId });
       const image = made.image as ChatImage | undefined;
       if (!image?.id) throw new Error("the generator sent nothing back");
+      this.keepWearing(made, conversationID);
       this.receiveMadePicture(image, conversationID);
     } catch {
       const live = this.liveConversation(conversationID);
@@ -3757,8 +3773,37 @@ export class OppaiChat extends LitElement {
       });
       live.updatedAt = Date.now(); this.touchWorkspace(); void this.scrollToEnd();
     } finally {
-      if (!this.busy) this.typingPhase = "idle";
+      stop();
     }
+  }
+
+  /**
+   * Shows a picture being made at the foot of its conversation until the returned stop
+   * is called, polling its progress under a fresh job id (`stop.jobId`, to send with
+   * the act).
+   */
+  private watchMaking(conversationID: string, what: string, icon: string): (() => void) & { jobId: string } {
+    const jobId = newJobId();
+    this.making = [...this.making, { jobId, conversationID, what, icon, progress: null }];
+    void this.scrollToEnd();
+    const stopWatching = watchGeneration(jobId, (progress) => {
+      this.making = this.making.map((entry) => (entry.jobId === jobId ? { ...entry, progress } : entry));
+    }, api.genProgress);
+    return Object.assign(() => {
+      stopWatching();
+      this.making = this.making.filter((entry) => entry.jobId !== jobId);
+    }, { jobId });
+  }
+
+  /** A picture of her in something leaves her in it: an act's result says what she has
+      on now, and the conversation keeps it. See libby_wearing.go. */
+  private keepWearing(result: Record<string, unknown>, conversationID = "") {
+    if (typeof result.wearing !== "string") return;
+    const live = (conversationID && this.liveConversation(conversationID)) || this.activeConversation;
+    if (!live || live.characterId !== "libby") return;
+    live.wearing = result.wearing;
+    live.updatedAt = Date.now();
+    this.touchWorkspace();
   }
 
   /**
@@ -3767,8 +3812,9 @@ export class OppaiChat extends LitElement {
    * the conversation, and she can be moved by hand as ever.
    */
   private async makeScene(conversationID: string, scene: { name: string; prompt: string }) {
+    const stop = this.watchMaking(conversationID, `Making ${scene.name || "the place"}`, "landscape");
     try {
-      const made = await api.libbyAct({ id: newID(), kind: "background", label: "", detail: "", prompt: scene.prompt, title: scene.name });
+      const made = await api.libbyAct({ id: newID(), kind: "background", label: "", detail: "", prompt: scene.prompt, title: scene.name }, { jobId: stop.jobId });
       const place = made.background as LibbyBackground | undefined;
       if (!place?.id) return;
       this.backgrounds = [...this.backgrounds.filter((bg) => bg.id !== place.id), place];
@@ -3776,7 +3822,9 @@ export class OppaiChat extends LitElement {
       if (!live) return;
       live.background = place.id; live.updatedAt = Date.now();
       this.touchWorkspace();
-    } catch { /* She stays where she was. */ }
+    } catch { /* She stays where she was. */ } finally {
+      stop();
+    }
   }
 
   /** Her card as it ships, for putting a field back; null until fetched. */
@@ -5173,7 +5221,7 @@ export class OppaiChat extends LitElement {
         ${this.renderAutopilotBar(character)}
         <section class="log">${messages.length ? nothing : html`<div class="intro">${this.avatar(character,"intro-avatar")}<h2>${character.name}</h2><p>${character.description || `This is the beginning of your conversation with ${character.name}.`}</p><p>${online?`Running on ${this.status!.model}.`:character.id === "libby" ? "Libby is using built-in local replies." : "Connect a local model to start chatting."}</p></div>`}
           ${conversation.summary ? html`<details class="summary-note"><summary>Earlier messages were compressed into ${character.name}'s notes${conversation.summarizedAt ? ` · ${listTimeOf(conversation.summarizedAt)}` : ""}</summary><p>${conversation.summary}</p></details>` : nothing}
-          ${messages.map((message,index)=>this.renderEntry(message,messages[index-1],messages[index+1]))}${this.busy&&this.typingPhase==="typing"?html`<div class="msg theirs last typing-row">${this.avatar(character,"avatar")}<div class="bubble-wrap"><div class="bubble" aria-label="${character.name} is typing"><span class="dots"><i></i><i></i><i></i></span></div></div></div>`:nothing}
+          ${messages.map((message,index)=>this.renderEntry(message,messages[index-1],messages[index+1]))}${this.making.filter((entry)=>entry.conversationID===conversation.id).map((entry)=>html`<div class="msg theirs last making-row">${this.avatar(character,"avatar")}<div class="bubble-wrap"><div class="bubble">${renderGenProgress(entry.progress,entry.what,entry.icon)}</div></div></div>`)}${this.busy&&this.typingPhase==="typing"?html`<div class="msg theirs last typing-row">${this.avatar(character,"avatar")}<div class="bubble-wrap"><div class="bubble" aria-label="${character.name} is typing"><span class="dots"><i></i><i></i><i></i></span></div></div></div>`:nothing}
         </section>${this.notice?html`<div class="notice ${this.noticeError?"error":""}" role=${this.noticeError?"alert":"status"}>${this.notice}</div>`:nothing}
         <form class="composer-form" @submit=${(event:Event)=>{event.preventDefault();void this.send();}}>
           ${this.pendingPhoto ? html`<div class="attachment"><img src=${api.chatImageURL(this.pendingPhoto.imageId)} alt=${`Attached photo: ${this.pendingPhoto.name}`}/>

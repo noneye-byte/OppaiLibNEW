@@ -6,7 +6,8 @@
 // items a reply named.
 
 import { css, html, nothing, type TemplateResult } from "lit";
-import { api, type ChatImage, type LibbyActContext, type LibbyAction, type LibbyAttachment, type LibbyLink, type StoredChatMessage } from "./api.js";
+import { api, type ChatImage, type GenProgress, type LibbyActContext, type LibbyAction, type LibbyAttachment, type LibbyLink, type StoredChatMessage } from "./api.js";
+import { newJobId, progressLabel, progressPercent, watchGeneration } from "./gen-watch.js";
 
 /**
  * The pictures already seen in this conversation, oldest first.
@@ -167,7 +168,40 @@ export const actionCardStyles = css`
     background:var(--oppai-accent, #f97316); color:var(--oppai-on-accent, #1b1206); border-color:transparent; font-weight:600;
   }
   .action-buttons button:disabled { opacity:.5; cursor:default; }
+  .gen-progress { display:flex; align-items:center; gap:10px; margin-top:6px; }
+  .gen-progress-shot {
+    width:56px; height:56px; flex:0 0 auto; border-radius:10px; overflow:hidden; display:grid; place-items:center;
+    background:var(--md-sys-color-surface-container-highest, rgba(255,255,255,.08));
+  }
+  .gen-progress-shot img { width:100%; height:100%; object-fit:cover; filter:blur(1.5px); }
+  .gen-progress-shot .material-symbols-rounded { font-size:22px; opacity:.6; animation:gen-pulse 1.4s ease-in-out infinite; }
+  .gen-progress-copy { flex:1; min-width:0; display:flex; flex-direction:column; gap:5px; font-size:12px; }
+  .gen-progress-bar { height:4px; border-radius:999px; overflow:hidden; background:var(--md-sys-color-surface-container-highest, rgba(255,255,255,.1)); }
+  .gen-progress-bar > i { display:block; height:100%; background:var(--oppai-accent, #f97316); transition:width .6s ease; }
+  @keyframes gen-pulse { 50% { opacity:.25; } }
+  @media (prefers-reduced-motion: reduce) {
+    .gen-progress-shot .material-symbols-rounded { animation:none; }
+    .gen-progress-bar > i { transition:none; }
+  }
 `;
+
+/**
+ * A picture being made: the picture so far beside a bar and a step count. Shared by
+ * an Allow card that is running and the chat's own "taking a picture" bubble, so the
+ * two read as the same thing. See gen-watch.ts.
+ */
+export function renderGenProgress(progress: GenProgress | null, what: string, icon = "photo_camera"): TemplateResult {
+  const percent = progressPercent(progress);
+  return html`<div class="gen-progress" role="status" aria-label=${`${what}: ${progressLabel(progress)}`}>
+    <div class="gen-progress-shot">${progress?.image
+      ? html`<img src=${progress.image} alt="The picture so far"/>`
+      : html`<span class="material-symbols-rounded">${icon}</span>`}</div>
+    <div class="gen-progress-copy">
+      <span>${what} · ${progressLabel(progress)}</span>
+      <div class="gen-progress-bar"><i style=${`width:${percent.toFixed(1)}%`}></i></div>
+    </div>
+  </div>`;
+}
 
 /**
  * Draws what Libby has offered to do, as things you have to say yes to.
@@ -178,12 +212,12 @@ export const actionCardStyles = css`
  */
 export function renderActionCards(
   actions: LibbyAction[] | undefined,
-  stateOf: (action: LibbyAction) => { state: ActionState; message?: string },
+  stateOf: (action: LibbyAction) => { state: ActionState; message?: string; progress?: GenProgress | null },
   decide: (action: LibbyAction, allow: boolean) => void,
 ): TemplateResult | typeof nothing {
   if (!actions?.length) return nothing;
   return html`<div class="actions-offered">${actions.map((action) => {
-    const { state, message } = stateOf(action);
+    const { state, message, progress } = stateOf(action);
     return html`<div class="action-card ${state}">
       <span class="material-symbols-rounded">${ACTION_ICONS[action.kind] ?? "bolt"}</span>
       <div class="action-body">
@@ -194,7 +228,9 @@ export function renderActionCards(
               <button class="allow" @click=${() => decide(action, true)}>Allow</button>
               <button @click=${() => decide(action, false)}>Not now</button>
             </div>`
-          : html`<span class="action-status ${state === "failed" ? "failed" : ""}">
+          : state === "running" && progress !== undefined
+            ? renderGenProgress(progress, action.kind === "background" ? "Making the place" : "Making it", action.kind === "background" ? "landscape" : "photo_camera")
+            : html`<span class="action-status ${state === "failed" ? "failed" : ""}">
               ${message ?? DEFAULT_STATUS[state]}
             </span>`}
       </div>
@@ -213,16 +249,19 @@ export function renderActionCards(
  * Shared by the Chat screen and the drawer so an approval behaves identically in both.
  */
 export class ActionApprovals {
-  private states = new Map<string, { state: ActionState; message?: string }>();
+  private states = new Map<string, { state: ActionState; message?: string; progress?: GenProgress | null }>();
 
   /** `onChange` is the host's requestUpdate: this is plain state, not reactive.
       `context` is read when Allow is pressed — see LibbyActContext. `onPicture` is
       where a picture she made goes: the Chat screen posts it into the conversation as
-      hers; a host without one (the drawer) only says where it went. */
+      hers; a host without one (the drawer) only says where it went. `onResult` sees
+      every successful result, for the state a result carries back (what she is wearing
+      after a picture of her in something). */
   constructor(
     private onChange: () => void,
     private context: () => LibbyActContext = () => ({}),
     private onPicture?: (image: ChatImage) => void,
+    private onResult?: (result: Record<string, unknown>) => void,
   ) {}
 
   stateOf = (action: LibbyAction) => this.states.get(action.id) ?? { state: "pending" as ActionState };
@@ -237,9 +276,19 @@ export class ActionApprovals {
       this.set(action.id, "declined");
       return;
     }
-    this.set(action.id, "running");
+    // A picture being made is watched while it is made, the way the studio watches one;
+    // until the first report lands the card says it is starting.
+    const makesPicture = action.kind === "generate" || action.kind === "background";
+    const jobId = makesPicture ? newJobId() : undefined;
+    this.set(action.id, "running", undefined, makesPicture ? null : undefined);
+    const stopWatching = jobId
+      ? watchGeneration(jobId, (progress) => {
+        if (this.states.get(action.id)?.state === "running") this.set(action.id, "running", undefined, progress);
+      }, api.genProgress)
+      : () => {};
     try {
-      const result = await api.libbyAct(action, this.context());
+      const result = await api.libbyAct(action, { ...this.context(), jobId });
+      this.onResult?.(result);
       // The server's own words where it has some: "Loading Qwen3-32B — she'll be back in a
       // minute or two" says what the table below cannot.
       let status = typeof result.message === "string" ? result.message : SUCCESS_STATUS[action.kind];
@@ -256,11 +305,13 @@ export class ActionApprovals {
       this.set(action.id, "done", status);
     } catch (error) {
       this.set(action.id, "failed", (error as Error).message);
+    } finally {
+      stopWatching();
     }
   };
 
-  private set(id: string, state: ActionState, message?: string) {
-    this.states.set(id, { state, message });
+  private set(id: string, state: ActionState, message?: string, progress?: GenProgress | null) {
+    this.states.set(id, { state, message, progress });
     this.onChange();
   }
 }

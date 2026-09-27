@@ -124,6 +124,10 @@ type chatRequest struct {
 	// Client-owned like Activity and for the same reason: it persists across turns and
 	// the server holds nothing between them. See libby_backgrounds.go.
 	Background string `json:"background,omitempty"`
+	// Wearing is what she has on when it is not her own clothes: "nothing", or what she
+	// changed into. Client-owned like Background and for the same reason. Empty is her
+	// own clothes — the worn outfit, or the bundled wardrobe's tier. See libby_wearing.go.
+	Wearing string `json:"wearing,omitempty"`
 	// SharedMediaIDs are the library items the user attached to their latest message —
 	// by reference, unlike a shared photo, so a video or a game can be shown to her
 	// without a copy. See chat_shared.go.
@@ -626,9 +630,13 @@ var libbyWardrobe = map[int]string{
 // the user is running one of their own outfits the sprite is theirs too, so the
 // tier table no longer applies — the outfit's name is all anyone here knows, and
 // saying so honestly beats describing a costume she is not wearing.
-func (s *Server) wardrobeDirective(character chatCharacter, intensity int, outfitID string) string {
+func (s *Server) wardrobeDirective(character chatCharacter, intensity int, outfitID, wearing string) string {
 	if character.ID != "libby" {
 		return ""
+	}
+	// Clothes she changed into earlier outrank the wardrobe until she changes back.
+	if wearing != "" {
+		return wearingDirective(wearing) + wearTagDirective
 	}
 	if outfitID = strings.TrimSpace(outfitID); outfitID != "" && validChatID(outfitID, false) {
 		// A worn outfit that cannot be read is treated as no outfit at all: falling
@@ -640,7 +648,7 @@ func (s *Server) wardrobeDirective(character chatCharacter, intensity int, outfi
 				name = name[:60]
 			}
 			return fmt.Sprintf("\nRight now you are wearing your %q outfit, not your usual clothes. "+
-				"You know how you look in it; do not describe yourself in anything else.", name)
+				"You know how you look in it; do not describe yourself in anything else.", name) + wearTagDirective
 		}
 	}
 	worn, known := libbyWardrobe[intensity]
@@ -649,7 +657,7 @@ func (s *Server) wardrobeDirective(character chatCharacter, intensity int, outfi
 	}
 	return "\nRight now you are wearing " + worn + ". " +
 		"This is what you actually have on, and it is what the user can see. " +
-		"Do not describe yourself in anything else, and do not announce it — let it show only when it would come up."
+		"Do not describe yourself in anything else, and do not announce it — let it show only when it would come up." + wearTagDirective
 }
 
 // selfPortraitFloor is how many of her own features a picture needs before she is
@@ -937,7 +945,8 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// not restart from neutral every turn — and the movement directive in the tail is what
 	// says it is a starting point rather than an instruction. See chat_mood.go.
 	modePrompt += fmt.Sprintf("\nTreat the character-card prompt strength as %.2f. You came into this turn looking %s at intensity %d of 5; that is where the last one left you, not a setting to hold. Carry it in, then feel what you actually feel now, and never announce either.", weight, emotion, in.Intensity)
-	modePrompt += s.wardrobeDirective(character, in.Intensity, in.Outfit)
+	in.Wearing = normalizeWearing(in.Wearing)
+	modePrompt += s.wardrobeDirective(character, in.Intensity, in.Outfit, in.Wearing)
 	// Kinks are the field most likely to be recited. Left unqualified a model reads a
 	// list of turn-ons as a topic list and works through it; what is wanted is a
 	// preference that shows in what she notices and steers towards.
@@ -1592,9 +1601,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// Where she moved to, whether she rang them or hung up, and which earlier message she
 	// is answering — all read before scrubbing deletes the tags. Resolved below.
 	sceneLabel, sceneDeclared := "", false
+	wearLabel, wearDeclared := "", false
 	callRequested, callEnded := false, false
 	if character.ID == "libby" {
 		sceneLabel, sceneDeclared = findSceneTag(reply)
+		wearLabel, wearDeclared = findWearTag(reply)
 		callRequested, callEnded = findCallTags(reply)
 	}
 	replyQuote, replyAsked := findReplyTag(reply)
@@ -1706,6 +1717,19 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		// See inferSceneMove.
 		if id, ok := inferSceneMove(latestUser, backgrounds); ok {
 			background = id
+		}
+	}
+	// What she has on leaving this turn. Unstated carries over; she changes it with the
+	// tag, and a picture she is taking of herself in something leaves her in it. See
+	// libby_wearing.go.
+	wearing := in.Wearing
+	if character.ID == "libby" {
+		if wearDeclared {
+			wearing = normalizeWearing(wearLabel)
+		} else if fresh.wanted {
+			if w, ok := clothesFromSubject(fresh.subject); ok {
+				wearing = w
+			}
 		}
 	}
 	// A ring only means something off a call, and a hang-up only on one. Both are
@@ -1950,6 +1974,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		// Where she is, which persists the same way. Empty means nowhere in particular
 		// — the plain call screen. See libby_backgrounds.go.
 		"background": background,
+		// What she has on, which persists the same way. Empty is her own clothes.
+		// See libby_wearing.go.
+		"wearing": wearing,
 		// A place she moved to that has to be made first: the client generates it,
 		// files it, and moves her there. Null otherwise. See libby_backgrounds.go.
 		"makeScene": makeScene,

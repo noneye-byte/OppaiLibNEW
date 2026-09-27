@@ -15,7 +15,7 @@ import (
 // stay, and line breaks read as pauses.
 func TestCleanForSpeech(t *testing.T) {
 	cases := map[string]string{
-		"*leans in* \"You kept it?\" **Good.** [mood: smug 3]":      "leans in \"You kept it?\" Good.",
+		"*leans in* \"You kept it?\" **Good.** [mood: smug 3]":      "\"You kept it?\" Good.",
 		"Try [Summer at the Coast](/media/12) tonight ~~or not~~ 🙂": "Try Summer at the Coast tonight or not",
 		"line one\nline two":  "line one. line two",
 		"code `x` here":       "code x here",

@@ -687,6 +687,7 @@ fun ChatScreen(
                         // What she is already doing, and where. States, not per-message values.
                         activity = pending.activity,
                         background = pending.background,
+                        wearing = pending.wearing,
                         // What she has on: the worn outfit is a per-device pref, so the
                         // server cannot know it unless this says so.
                         outfit = if (char.id == "libby") repo.prefs.libbyOutfit else "",
@@ -767,7 +768,7 @@ fun ChatScreen(
                                 emotion = reply.emotion, intensity = level, progress = progress,
                                 // Blank is a real answer here — it means she is doing nothing in
                                 // particular, or is nowhere in particular — so these are assigned.
-                                activity = reply.activity, background = reply.background,
+                                activity = reply.activity, background = reply.background, wearing = reply.wearing,
                                 messages = convo.messages + line, updatedAt = System.currentTimeMillis(),
                             ))
                             // Read aloud as it lands; the queue keeps bubbles in order.
@@ -775,7 +776,7 @@ fun ChatScreen(
                         }
                     } else {
                         val convo = live()
-                        commit(convo.copy(emotion = reply.emotion, intensity = level, progress = progress, activity = reply.activity, background = reply.background, updatedAt = System.currentTimeMillis()))
+                        commit(convo.copy(emotion = reply.emotion, intensity = level, progress = progress, activity = reply.activity, background = reply.background, wearing = reply.wearing, updatedAt = System.currentTimeMillis()))
                     }
                 }.onFailure { error ->
                     status = runCatching { repo.api.chatStatus() }.getOrNull() ?: status
@@ -1172,6 +1173,7 @@ fun ChatScreen(
                                     LibbyActRequest(
                                         kind = "",
                                         outfit = if (char.id == "libby") repo.prefs.libbyOutfit else "",
+                                        wearing = live.wearing,
                                         activity = live.activity,
                                         intensity = live.intensity,
                                         recentMediaIds = live.messages.flatMap { entry -> entry.attachments.map { it.id } }.distinct().takeLast(40),
@@ -1180,7 +1182,7 @@ fun ChatScreen(
                                 // A picture she made after Allow: it lands as her message, and
                                 // its record joins the gallery list first — the workspace save
                                 // keeps only the images this client knows of.
-                                onPicture = { image ->
+                                onPicture = { image, wearing ->
                                     val latest = workspace ?: ws
                                     val c = latest.conversations.firstOrNull { it.id == convo.id } ?: convo
                                     val now = System.currentTimeMillis()
@@ -1190,7 +1192,7 @@ fun ChatScreen(
                                     )
                                     save(latest.copy(
                                         images = (latest.images + image).distinctBy { it.id },
-                                        conversations = latest.conversations.map { if (it.id == c.id) c.copy(messages = c.messages + sent, updatedAt = now) else it },
+                                        conversations = latest.conversations.map { if (it.id == c.id) c.copy(messages = c.messages + sent, wearing = wearing ?: c.wearing, updatedAt = now) else it },
                                     ))
                                 },
                             )
@@ -2327,7 +2329,7 @@ private fun ChatMessageRow(
     onOpenSnap: (StoredChatMessage) -> Unit = {},
     receipt: String = "",
     actContext: () -> LibbyActRequest = { LibbyActRequest(kind = "") },
-    onPicture: (ChatImage) -> Unit = {},
+    onPicture: (ChatImage, String?) -> Unit = { _, _ -> },
 ) {
     if (entry.thought.isNotBlank()) { ChatThoughtRow(char, entry); return }
     val friend = entry.role == "assistant"
@@ -2500,7 +2502,7 @@ private fun ChatActionCards(
     repo: Repository,
     actions: List<LibbyAction>,
     actContext: () -> LibbyActRequest = { LibbyActRequest(kind = "") },
-    onPicture: (ChatImage) -> Unit = {},
+    onPicture: (ChatImage, String?) -> Unit = { _, _ -> },
 ) {
     if (actions.isEmpty()) return
     val scope = rememberCoroutineScope()
@@ -2532,7 +2534,7 @@ private fun ChatActionCards(
                                             status = result.message.ifBlank { actionDone(action.kind) }
                                             // A picture she made is sent, not filed: it lands
                                             // in the conversation as hers.
-                                            result.image?.let(onPicture)
+                                            result.image?.let { onPicture(it, result.wearing) }
                                         }
                                         .onFailure { state = "failed"; status = it.message ?: "That didn't work." }
                                 }
@@ -2555,7 +2557,7 @@ private fun ChatActionCards(
 private fun LibbyAction.toRequest(context: LibbyActRequest = LibbyActRequest(kind = "")) =
     LibbyActRequest(
         kind = kind, prompt = prompt, url = url, mediaId = mediaId, tags = tags, title = title,
-        outfit = context.outfit, activity = context.activity, intensity = context.intensity, recentMediaIds = context.recentMediaIds,
+        outfit = context.outfit, wearing = context.wearing, activity = context.activity, intensity = context.intensity, recentMediaIds = context.recentMediaIds,
     )
 
 /** Icon per action kind, falling back to a generic mark so a kind this build has never

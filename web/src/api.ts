@@ -739,6 +739,9 @@ export interface ChatTurn {
   /** Where she is — the background id the call screen shows. Sent back each turn for
       the same reason as activity. */
   background?: string;
+  /** What she has on when it is not her own clothes: "nothing", or what she changed
+      into. Sent back each turn for the same reason as activity. */
+  wearing?: string;
   /** Library items attached to the latest message, by id. The server describes them
       to her from its own rows. */
   sharedMediaIds?: number[];
@@ -814,6 +817,9 @@ export interface ChatResponse {
   /** Where she is leaving this turn: a background id, or empty for nowhere in
       particular. Persists like activity. Absent from older servers. */
   background?: string;
+  /** What she has on leaving this turn: empty for her own clothes, "nothing", or what
+      she changed into. Persists like activity. Absent from older servers. */
+  wearing?: string;
   /** She rang them. The client shows an incoming-call popup; only answering opens
       the call. */
   callRequest?: boolean;
@@ -1120,6 +1126,9 @@ export interface ChatConversation {
   /** Where she is — the id of a background the user added, chosen by her or by hand.
       Conversation state like activity. Empty means the plain call screen. */
   background?: string;
+  /** What she has on, when it is not her own clothes: "nothing", or the clothes she
+      changed into — held until she changes again. Empty means her own clothes. */
+  wearing?: string;
   progress?: number;
   options?: ChatOptions;
   /** The older part of the conversation, compressed into her notes, and when. Sent
@@ -1828,6 +1837,10 @@ export interface LibbyAction {
  */
 export interface LibbyActContext {
   outfit?: string;
+  /** What she has on in this conversation when it is not her own clothes. */
+  wearing?: string;
+  /** Names a generation so its progress can be watched; see gen-watch.ts. */
+  jobId?: string;
   activity?: string;
   intensity?: number;
   recentMediaIds?: number[];

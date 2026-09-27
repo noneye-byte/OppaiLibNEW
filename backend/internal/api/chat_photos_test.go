@@ -92,23 +92,23 @@ func TestSheKnowsWhatSheIsWearing(t *testing.T) {
 	s, _ := newTestServer(t)
 	libby := defaultLibbyCard()
 
-	calm := s.wardrobeDirective(libby, 1, "")
+	calm := s.wardrobeDirective(libby, 1, "", "")
 	if !strings.Contains(calm, "tank top") || !strings.Contains(calm, "shorts") {
 		t.Fatalf("tier 1 wardrobe = %q", calm)
 	}
-	if peak := s.wardrobeDirective(libby, 5, ""); !strings.Contains(peak, "bare") {
+	if peak := s.wardrobeDirective(libby, 5, "", ""); !strings.Contains(peak, "bare") {
 		t.Fatalf("tier 5 wardrobe = %q", peak)
 	}
 	// Every tier the artwork has must describe something; a gap here is a tier where
 	// she would be told nothing while the user can plainly see her.
 	for tier := 1; tier <= 5; tier++ {
-		if strings.TrimSpace(s.wardrobeDirective(libby, tier, "")) == "" {
+		if strings.TrimSpace(s.wardrobeDirective(libby, tier, "", "")) == "" {
 			t.Fatalf("tier %d has no wardrobe", tier)
 		}
 	}
 	// Somebody else's character has no bundled sprite, so inventing clothes for them
 	// would be describing art that does not exist.
-	if got := s.wardrobeDirective(chatCharacter{ID: strings.Repeat("a", 32)}, 1, ""); got != "" {
+	if got := s.wardrobeDirective(chatCharacter{ID: strings.Repeat("a", 32)}, 1, "", ""); got != "" {
 		t.Fatalf("an imported character was dressed: %q", got)
 	}
 }
@@ -129,7 +129,7 @@ func TestAWornOutfitReplacesTheTierWardrobe(t *testing.T) {
 		t.Fatalf("outfit response: %v %s", err, rec.Body)
 	}
 
-	worn := s.wardrobeDirective(defaultLibbyCard(), 1, outfit.ID)
+	worn := s.wardrobeDirective(defaultLibbyCard(), 1, outfit.ID, "")
 	if !strings.Contains(worn, "Nurse") {
 		t.Fatalf("worn outfit not named: %q", worn)
 	}
@@ -138,7 +138,7 @@ func TestAWornOutfitReplacesTheTierWardrobe(t *testing.T) {
 	}
 	// An outfit that has been deleted since it was selected falls back to the
 	// bundled wardrobe rather than naming something that no longer exists.
-	missing := s.wardrobeDirective(defaultLibbyCard(), 1, strings.Repeat("b", 32))
+	missing := s.wardrobeDirective(defaultLibbyCard(), 1, strings.Repeat("b", 32), "")
 	if !strings.Contains(missing, "tank top") {
 		t.Fatalf("a stale outfit id did not fall back: %q", missing)
 	}

@@ -57,6 +57,9 @@ var strayTag = regexp.MustCompile(`(?i)[*_~` + "`" + `]{0,2}\[\s*(?:(?:` +
 	// (chat_replies.go). These verbs are ordinary words too — "[rings the bell]",
 	// "[answering the door]" — so unlike the nouns above they are only a tag when bare
 	// or followed by a delimiter, which is the shape the parsers accept.
+	// What she has on, read before deletion (libby_wearing.go). Delimited, like the
+	// verbs below, so "[wearing a grin]" stays prose.
+	`|(?:wearing|wears|wear|clothes|clothing|dressed|outfit)\s*[:=][^\]\n]{0,300}` +
 	`|(?:call|videocall|video\s+call|facetime|ring|rings|ringing|hangup|hang\s+up|end\s+call)\s*(?:[:=-][^\]\n]{0,60})?` +
 	// No hyphen among the delimiters here: "[re-reads the note]" is prose.
 	`|(?:replying|reply|quoting|quote|answering|re)\b(?:\s+to\b|\s*[:=])[^\]\n]{0,300}` +

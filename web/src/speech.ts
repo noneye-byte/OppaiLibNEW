@@ -11,6 +11,8 @@
 // about the library. Off by default; the toggle lives in the chat header and on the
 // call screen.
 
+import { speechPieces } from "./speech-pieces.js";
+
 const SPEAK_KEY = "oppai_libby_speak";
 
 export interface TTSVoice {
@@ -72,6 +74,10 @@ interface Line {
   text: string;
   /** How keyed up she is on this line, 1–5, for the server's delivery. */
   heat: number;
+  /** The server's audio for it, asked for when the line was queued rather than when
+      its turn came: fetched then, the next bubble was synthesised only after the one
+      before it had finished playing, and every bubble began with that wait. */
+  audio: Promise<Blob | null>;
   /** Resolves when the line has been played or skipped. */
   done: () => void;
 }
@@ -81,6 +87,10 @@ let playing: HTMLAudioElement | null = null;
 let draining = false;
 /** Bumped by stopSpeaking so a fetch that lands afterwards is discarded. */
 let generation = 0;
+/** The last fetch asked for. Each waits on the one before it, so the server reads one
+    line at a time: asked for all at once, the first line shares the CPU with the rest
+    and is the slowest to arrive, which is the opposite of what is wanted. */
+let lastFetch: Promise<unknown> = Promise.resolve();
 
 /**
  * Says a line, after whatever is already being said. Resolves when it has been
@@ -88,17 +98,23 @@ let generation = 0;
  * a chat that errors because the speaker is off is worse than one that is quiet.
  */
 export function speak(text: string, heat = 0): Promise<void> {
-  const clean = text.trim();
-  if (!clean) return Promise.resolve();
-  return new Promise<void>((resolve) => {
-    queue.push({ text: clean, heat, done: resolve });
-    void drain();
-  });
+  const pieces = speechPieces(text);
+  if (!pieces.length) return Promise.resolve();
+  const gen = generation;
+  const said = pieces.map((piece) => new Promise<void>((resolve) => {
+    const audio = lastFetch.then(() => (gen === generation ? fetchAudio(piece, heat) : null));
+    lastFetch = audio.catch(() => null);
+    queue.push({ text: piece, heat, audio, done: resolve });
+  }));
+  void drain();
+  return Promise.all(said).then(() => undefined);
 }
 
 /** Stops the current line and forgets the rest. */
 export function stopSpeaking(): void {
   generation++;
+  // What is still being read for the old queue is not worth waiting behind.
+  lastFetch = Promise.resolve();
   for (const line of queue.splice(0)) line.done();
   if (playing) {
     playing.pause();
@@ -120,7 +136,7 @@ async function drain(): Promise<void> {
       const line = queue.shift()!;
       const gen = generation;
       try {
-        await sayOne(line.text, line.heat, gen);
+        await sayOne(line, gen);
       } catch {
         /* skipped */
       } finally {
@@ -132,14 +148,14 @@ async function drain(): Promise<void> {
   }
 }
 
-async function sayOne(text: string, heat: number, gen: number): Promise<void> {
-  const served = await fetchAudio(text, heat);
+async function sayOne(line: Line, gen: number): Promise<void> {
+  const served = await line.audio.catch(() => null);
   if (gen !== generation) return;
   if (served) {
     await playBlob(served, gen);
     return;
   }
-  await speakWithDevice(text, gen);
+  await speakWithDevice(line.text, gen);
 }
 
 /** Asks the server for the line; null when it has no engine. */

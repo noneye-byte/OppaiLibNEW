@@ -9,7 +9,7 @@ import (
 // not in the default sprite's clothes — and the state is gated the way the state is.
 func TestASelfieSheMakesIsDrawnInHerCurrentState(t *testing.T) {
 	s, _ := newTestServer(t)
-	prompt, tags := s.libbySelfiePrompt("libby, orange hair, glasses", "on the sofa", "", "napping", 1)
+	prompt, tags := s.libbySelfiePrompt("libby, orange hair, glasses", "on the sofa", "", "", "napping", 1)
 	for _, want := range []string{"libby, orange hair, glasses", "black tank top", "sleeping", "on the sofa"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("prompt lacks %q: %s", want, prompt)
@@ -24,11 +24,11 @@ func TestASelfieSheMakesIsDrawnInHerCurrentState(t *testing.T) {
 	}
 
 	// An intimate state at a calm heat does not reach the prompt.
-	calm, calmTags := s.libbySelfiePrompt("", "on the sofa", "", "vibrator", 2)
+	calm, calmTags := s.libbySelfiePrompt("", "on the sofa", "", "", "vibrator", 2)
 	if strings.Contains(calm, "vibrator") || len(calmTags) != 0 {
 		t.Errorf("calm heat drew an explicit state: %s %v", calm, calmTags)
 	}
-	hot, hotTags := s.libbySelfiePrompt("", "on the sofa", "", "vibrator", 4)
+	hot, hotTags := s.libbySelfiePrompt("", "on the sofa", "", "", "vibrator", 4)
 	if !strings.Contains(hot, "vibrator") || len(hotTags) != 1 {
 		t.Errorf("heat 4 refused the state: %s %v", hot, hotTags)
 	}
@@ -46,7 +46,7 @@ func TestASelfieWearsTheStudioOutfit(t *testing.T) {
 		t.Fatalf("save outfit: %d %s", rec.Code, rec.Body)
 	}
 	id := strings.Split(strings.Split(rec.Body.String(), `"id":"`)[1], `"`)[0]
-	prompt, tags := s.libbySelfiePrompt("libby", "at the beach", id, "", 3)
+	prompt, tags := s.libbySelfiePrompt("libby", "at the beach", id, "", "", 3)
 	if !strings.Contains(prompt, "red dress, black heels") || strings.Contains(prompt, "tank top") {
 		t.Errorf("prompt = %s", prompt)
 	}
@@ -68,7 +68,7 @@ func TestASelfieWearsTheStudioOutfit(t *testing.T) {
 func TestAPictureThatNamesHerClothesIsDrawnInOnlyThose(t *testing.T) {
 	s, token := newTestServer(t)
 	for _, subject := range []string{"in a red dress", "wearing a white hoodie", "naked on the bed", "in the bath", "in a bikini at the beach"} {
-		prompt, _ := s.libbySelfiePrompt("libby", subject, "", "", 3)
+		prompt, _ := s.libbySelfiePrompt("libby", subject, "", "", "", 3)
 		if strings.Contains(prompt, "tank top") || strings.Contains(prompt, "orange shorts") {
 			t.Errorf("%q still carries the default outfit: %s", subject, prompt)
 		}
@@ -81,11 +81,11 @@ func TestAPictureThatNamesHerClothesIsDrawnInOnlyThose(t *testing.T) {
 		t.Fatalf("save outfit: %d %s", rec.Code, rec.Body)
 	}
 	id := strings.Split(strings.Split(rec.Body.String(), `"id":"`)[1], `"`)[0]
-	if prompt, tags := s.libbySelfiePrompt("libby", "in pyjamas", id, "", 1); strings.Contains(prompt, "apron") || len(tags) != 0 {
+	if prompt, tags := s.libbySelfiePrompt("libby", "in pyjamas", id, "", "", 1); strings.Contains(prompt, "apron") || len(tags) != 0 {
 		t.Errorf("the worn studio outfit joined the pyjamas: %s %v", prompt, tags)
 	}
 	// Somewhere that says nothing about clothes still gets what she has on.
-	if prompt, _ := s.libbySelfiePrompt("libby", "at the beach", "", "", 1); !strings.Contains(prompt, "tank top") {
+	if prompt, _ := s.libbySelfiePrompt("libby", "at the beach", "", "", "", 1); !strings.Contains(prompt, "tank top") {
 		t.Errorf("a subject silent on clothes lost hers: %s", prompt)
 	}
 	// Words that merely contain a garment are not one.

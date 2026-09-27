@@ -190,6 +190,9 @@ type chatConversation struct {
 	// libby_backgrounds.go.
 	Activity   string              `json:"activity,omitempty"`
 	Background string              `json:"background,omitempty"`
+	// Wearing is what she has on when it is not her own clothes. Conversation state
+	// like the two above. See libby_wearing.go.
+	Wearing string                 `json:"wearing,omitempty"`
 	Options    map[string]any      `json:"options,omitempty"`
 	// Summary is the older part of the conversation, compressed; SummarizedAt is when it
 	// was last written, UnixMilli. Sent with every turn. See chat_compress.go.

@@ -15,20 +15,27 @@ import "regexp"
 // Scenes that decide the clothes count too. Nobody sits in the bath in a tank top; the
 // generator, told both, drew exactly that.
 
+// The three kinds of word that settle what she has on, kept apart because
+// clothesFromSubject (libby_wearing.go) treats them differently: a garment is what she
+// is now wearing, undress is nothing, and only some scenes say which of the two.
+const (
+	garmentWords = `dress(?:es)?|gown|sundress|skirt|miniskirt|bikini|swimsuit|swimwear|one-piece|lingerie|bra|bralette|panties|thong|underwear|knickers|` +
+		`shirt|t-shirt|tee|blouse|sweater|jumper|hoodie|cardigan|jacket|coat|blazer|vest|` +
+		`(?:crop|tank|tube|halter|bikini) top|jeans|pants|trousers|leggings|shorts|stockings|thigh-?highs|pantyhose|tights|socks|` +
+		`corset|bodysuit|leotard|catsuit|romper|jumpsuit|overalls|kimono|yukata|qipao|cheongsam|sari|robe|bathrobe|nightgown|nightie|` +
+		`pajamas|pyjamas|pjs|onesie|apron|towel|uniform|costume|cosplay|suit|heels|boots|` +
+		`maid|nurse|schoolgirl|cheerleader|bunny ?girl`
+	bareWords = `naked|nude|topless|bottomless|undressed|unclothed|nothing on|wearing nothing`
+	// bareScenes are the places nobody is dressed in; dressedScenes decide the clothes
+	// without saying what they are — a hot tub could be a swimsuit or nothing.
+	bareScenes    = `bath|bathtub|bubble bath|shower|onsen|sauna|skinny-?dipping`
+	dressedScenes = `hot tub|jacuzzi|swimming`
+)
+
 // subjectClothes matches a garment, a costume, a state of undress, or a scene that sets
 // what she wears. Whole words, so "dressing gown" matches and "address" does not.
 var subjectClothes = regexp.MustCompile(`(?i)\b(?:` +
-	// garments
-	`dress(?:es)?|gown|sundress|skirt|miniskirt|bikini|swimsuit|swimwear|one-piece|lingerie|bra|bralette|panties|thong|underwear|knickers|` +
-	`shirt|t-shirt|tee|blouse|sweater|jumper|hoodie|cardigan|jacket|coat|blazer|vest|` +
-	`(?:crop|tank|tube|halter|bikini) top|jeans|pants|trousers|leggings|shorts|stockings|thigh-?highs|pantyhose|tights|socks|` +
-	`corset|bodysuit|leotard|catsuit|romper|jumpsuit|overalls|kimono|yukata|qipao|cheongsam|sari|robe|bathrobe|nightgown|nightie|` +
-	`pajamas|pyjamas|pjs|onesie|apron|towel|uniform|costume|cosplay|suit|heels|boots|` +
-	`maid|nurse|schoolgirl|cheerleader|bunny ?girl|` +
-	// no clothes
-	`naked|nude|topless|bottomless|undressed|unclothed|nothing on|wearing nothing|` +
-	// a scene that decides them
-	`bath|bathtub|bubble bath|shower|hot tub|jacuzzi|onsen|sauna|swimming|skinny-?dipping` +
+	garmentWords + `|` + bareWords + `|` + bareScenes + `|` + dressedScenes +
 	`)\b|\bwearing\b`)
 
 // subjectDressesHer reports whether the subject settles what she has on.
