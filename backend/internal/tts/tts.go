@@ -163,8 +163,10 @@ func (s *Speaker) Configure(remote *Remote) {
 func (s *Speaker) Piper() *Piper { return s.piper }
 
 // Engine picks the engine for a mode: "auto", "kokoro", "piper", "openai" or "off".
-// Auto is Kokoro where it is installed, then piper, then the speech server: the most
-// natural voice the box has, without the user having to know which that is.
+// Auto is the speech server when one is configured — pointing her at a GPU voice is a
+// deliberate act, and it is the most natural voice there is — then Kokoro where it is
+// installed, then piper: the best voice available, without the user having to know
+// which that is.
 func (s *Speaker) Engine(mode string) Engine {
 	s.mu.Lock()
 	remote := s.remote
@@ -188,29 +190,52 @@ func (s *Speaker) Engine(mode string) Engine {
 		}
 		return nil
 	default:
-		if s.kokoro != nil {
-			return s.kokoro
-		}
-		if s.piper != nil && s.piper.HasVoices() {
-			return s.piper
-		}
 		if remote != nil {
 			return remote
 		}
-		if s.piper != nil {
-			return s.piper
-		}
-		return nil
+		return s.local()
 	}
 }
 
+// local is the best engine on this box, for auto without a server or when the server
+// fails.
+func (s *Speaker) local() Engine {
+	switch {
+	case s.kokoro != nil:
+		return s.kokoro
+	case s.piper != nil:
+		return s.piper
+	}
+	return nil
+}
+
 // Speak synthesises through the engine for mode, from the cache when it can.
+//
+// On auto, a speech server that fails hands the line to the voice on this box. The
+// server is a GPU container that can be restarting, or swapped off the card for a
+// picture, and her going silent for that is worse than her sounding like Kokoro for a
+// sentence. Asked for the server by name, she does not fall back: that is a test of
+// the server, and hiding its failure would be the wrong answer.
 func (s *Speaker) Speak(ctx context.Context, mode string, req Request) ([]byte, error) {
 	engine := s.Engine(mode)
 	if engine == nil {
 		return nil, ErrNoEngine
 	}
-	req.Text = CleanForSpeech(req.Text)
+	audio, err := s.speakWith(ctx, engine, req)
+	if _, remote := engine.(*Remote); err != nil && remote && mode != "openai" {
+		if local := s.local(); local != nil {
+			return s.speakWith(ctx, local, req)
+		}
+	}
+	return audio, err
+}
+
+func (s *Speaker) speakWith(ctx context.Context, engine Engine, req Request) ([]byte, error) {
+	style := SoundWords
+	if remote, ok := engine.(*Remote); ok {
+		style = remote.Sounds()
+	}
+	req.Text = CleanForSpeechWith(req.Text, style)
 	if req.Text == "" {
 		return nil, errors.New("nothing to say")
 	}
@@ -259,7 +284,10 @@ func cacheKey(engine string, req Request) string {
 // actions used to be kept and read out, which is how "*giggles*" came to be a word she
 // said; now they are the sound they describe or nothing, and the texting shorthand
 // around them is expanded. See spoken.go.
-func CleanForSpeech(text string) string {
+func CleanForSpeech(text string) string { return CleanForSpeechWith(text, SoundWords) }
+
+// CleanForSpeechWith is CleanForSpeech for an engine that performs sounds.
+func CleanForSpeechWith(text string, style SoundStyle) string {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return ""
@@ -274,7 +302,7 @@ func CleanForSpeech(text string) string {
 	text = inlineCode.ReplaceAllString(text, "$1")
 	// What would be said rather than what was typed — before the asterisks go, since
 	// an action is recognised by them.
-	text = Spoken(text)
+	text = SpokenWith(text, style)
 	// Emphasis and strike markers, headings, blockquotes.
 	text = strings.NewReplacer("**", "", "__", "", "~~", "", "*", "", "_ ", " ", " _", " ").Replace(text)
 	text = headingMark.ReplaceAllString(text, "")

@@ -64,28 +64,63 @@ var (
 	tilde      = regexp.MustCompile(`~+`)
 )
 
+// SoundStyle is how an engine takes a laugh or a sigh.
+//
+// Most voices can only say words, so a laugh is written as one ("haha") and a sigh is
+// left out. The expressive GPU voices perform them: Chatterbox Turbo reads "[laugh]" and
+// Orpheus reads "<laugh>" as the sound itself, in the voice, which is most of what makes
+// them sound like a person rather than a reader. Each spells its own set, and a tag it
+// does not know is read out as the word — so a sound with no tag in that engine's set
+// falls back to the words, never to a guessed tag.
+type SoundStyle int
+
+const (
+	// SoundWords is every engine that only reads text.
+	SoundWords SoundStyle = iota
+	// SoundBrackets is Chatterbox Turbo's paralinguistic tags: [laugh], [sigh].
+	SoundBrackets
+	// SoundAngles is Orpheus's emotion tags: <laugh>, <sigh>.
+	SoundAngles
+)
+
 // actionSound is what a stage direction sounds like, when it describes a sound: a laugh
-// is heard, a lean is not. Checked in order; the first match wins.
+// is heard, a lean is not. Checked in order; the first match wins. brackets and angles
+// are the engines' tags for it, empty where the engine has none.
 var actionSound = []struct {
-	pattern *regexp.Regexp
-	say     string
+	pattern          *regexp.Regexp
+	say              string
+	brackets, angles string
 }{
-	{regexp.MustCompile(`(?i)\bgiggl|\bteehee|\btitter`), "hehe"},
-	{regexp.MustCompile(`(?i)\blaugh|\bchuckl|\bsnicker|\bcackl`), "haha"},
-	{regexp.MustCompile(`(?i)\bhum(?:s|ming)?\b|\bmm+\b|\bhmm+\b`), "hmm"},
-	{regexp.MustCompile(`(?i)\bgasp`), "oh!"},
+	{regexp.MustCompile(`(?i)\bgiggl|\bteehee|\btitter`), "hehe", "laugh", "giggle"},
+	{regexp.MustCompile(`(?i)\bchuckl|\bsnicker`), "haha", "chuckle", "chuckle"},
+	{regexp.MustCompile(`(?i)\blaugh|\bcackl`), "haha", "laugh", "laugh"},
+	{regexp.MustCompile(`(?i)\bsigh`), "", "sigh", "sigh"},
+	{regexp.MustCompile(`(?i)\bgroan|\bmoan|\bwhimper`), "", "groan", "groan"},
+	{regexp.MustCompile(`(?i)\bgasp`), "oh!", "gasp", "gasp"},
+	{regexp.MustCompile(`(?i)\byawn`), "", "", "yawn"},
+	{regexp.MustCompile(`(?i)\bcough`), "", "cough", "cough"},
+	{regexp.MustCompile(`(?i)\bsniff`), "", "sniff", "sniffle"},
+	{regexp.MustCompile(`(?i)\bhum(?:s|ming)?\b|\bmm+\b|\bhmm+\b`), "hmm", "", ""},
 }
 
 // speakActions replaces each *action* with the sound it makes, or with nothing.
-func speakActions(text string) string {
+func speakActions(text string, style SoundStyle) string {
 	replace := func(m string) string {
 		parts := actionSpan.FindStringSubmatch(m)
 		say := " "
 		for _, sound := range actionSound {
-			if sound.pattern.MatchString(parts[2]) {
-				say = " " + sound.say + " "
-				break
+			if !sound.pattern.MatchString(parts[2]) {
+				continue
 			}
+			switch {
+			case style == SoundBrackets && sound.brackets != "":
+				say = " [" + sound.brackets + "] "
+			case style == SoundAngles && sound.angles != "":
+				say = " <" + sound.angles + "> "
+			case sound.say != "":
+				say = " " + sound.say + " "
+			}
+			break
 		}
 		return parts[1] + say + parts[3]
 	}
@@ -121,8 +156,11 @@ func collapseDrawl(text string) string {
 }
 
 // Spoken turns a written line into the words that would be said.
-func Spoken(text string) string {
-	text = speakActions(text)
+func Spoken(text string) string { return SpokenWith(text, SoundWords) }
+
+// SpokenWith is Spoken for an engine that performs sounds in the given style.
+func SpokenWith(text string, style SoundStyle) string {
+	text = speakActions(text, style)
 	text = withSlash.ReplaceAllStringFunc(text, func(m string) string {
 		if strings.HasSuffix(strings.ToLower(m), "o") {
 			return "without"

@@ -45,6 +45,21 @@ func NewRemote(rawURL, model, apiKey, defaultVoice string) *Remote {
 
 func (r *Remote) Name() string { return "openai" }
 
+// Sounds is how this server takes a laugh or a sigh, read from what it calls its
+// model. The OpenAI shape has no way to ask a server what it can perform, and the
+// model name is the one thing the operator already sets to say which server it is:
+// "chatterbox" (Turbo's [laugh]) or "orpheus" (<laugh>). Anything else only reads.
+func (r *Remote) Sounds() SoundStyle {
+	model := strings.ToLower(r.Model)
+	switch {
+	case strings.Contains(model, "chatterbox") || strings.Contains(model, "turbo"):
+		return SoundBrackets
+	case strings.Contains(model, "orpheus"):
+		return SoundAngles
+	}
+	return SoundWords
+}
+
 func (r *Remote) Ready(ctx context.Context) (bool, string) {
 	if r == nil {
 		return false, "no speech server is configured"

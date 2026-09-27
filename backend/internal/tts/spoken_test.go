@@ -70,3 +70,30 @@ func TestEmoticonsAndShoutingAreNotSpelledOut(t *testing.T) {
 		}
 	}
 }
+
+func TestAnExpressiveVoicePerformsTheSoundInItsOwnTags(t *testing.T) {
+	line := "*giggles* stop it *sighs* fine *yawns*"
+	cases := map[SoundStyle]string{
+		SoundWords:    "hehe stop it fine",
+		SoundBrackets: "[laugh] stop it [sigh] fine",
+		SoundAngles:   "<giggle> stop it <sigh> fine <yawn>",
+	}
+	for style, want := range cases {
+		if got := SpokenWith(line, style); got != want {
+			t.Errorf("style %d: %q, want %q", style, got, want)
+		}
+	}
+	// The tags survive the rest of the clean-up, which deletes other brackets.
+	if got := CleanForSpeechWith("okay *laughs* [mood: happy 2]", SoundBrackets); got != "okay [laugh]" {
+		t.Errorf("CleanForSpeechWith = %q", got)
+	}
+}
+
+func TestTheServerSaysWhichSoundsItTakesByItsModelName(t *testing.T) {
+	cases := map[string]SoundStyle{"chatterbox-turbo": SoundBrackets, "Orpheus": SoundAngles, "tts-1": SoundWords, "kokoro": SoundWords}
+	for model, want := range cases {
+		if got := NewRemote("http://x", model, "", "").Sounds(); got != want {
+			t.Errorf("%s: %d, want %d", model, got, want)
+		}
+	}
+}

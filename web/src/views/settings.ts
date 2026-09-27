@@ -1217,7 +1217,7 @@ export class OppaiSettings extends LitElement {
       <div class="field">
         <div class="field-text">
           <div class="field-label">Engine</div>
-          <div class="field-help">Auto uses the most natural voice the server has — Kokoro, then piper, then the speech server. Piper is quicker and flatter; Off leaves devices to their own voices.</div>
+          <div class="field-help">Auto uses the most natural voice there is — a speech server when one is set below (falling back to this box if it fails), then Kokoro, then piper. Piper is quicker and flatter; Off leaves devices to their own voices.</div>
         </div>
         <div class="field-control">
           <select ?disabled=${!this.canEdit} @change=${(e: Event) => this.edit({ ttsEngine: (e.target as HTMLSelectElement).value })}>
@@ -1274,7 +1274,7 @@ export class OppaiSettings extends LitElement {
       <div class="field stack">
         <div class="field-text">
           <div class="field-label">Speech server (optional)</div>
-          <div class="field-help">An OpenAI-compatible <code>/v1/audio/speech</code> server — Kokoro-FastAPI, openedai-speech — such as <code>http://host:8880</code>. Model and key as the server wants them.</div>
+          <div class="field-help">An OpenAI-compatible <code>/v1/audio/speech</code> server on a GPU — Chatterbox, Orpheus-FastAPI, Kokoro-FastAPI — such as <code>http://host:8004</code>. Set the model to <code>chatterbox</code> or <code>orpheus</code> and her laughs and sighs are performed as sounds rather than dropped.</div>
         </div>
         <div class="field-control">
           <input type="text" autocomplete="off" placeholder="http://host:8880" .value=${s.ttsUrl} ?disabled=${!this.canEdit}

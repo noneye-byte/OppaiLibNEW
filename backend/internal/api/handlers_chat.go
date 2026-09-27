@@ -885,7 +885,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		character = defaultLibbyCard()
 	}
 	if character.ID == "libby" {
-		modePrompt = libbyAutonomousStyle
+		modePrompt = libbyAutonomousStyle + libbyAdultStance
 	} else {
 		modePrompt = "You are roleplaying the adult character described below. Stay in character, respond naturally, and follow the selected style. " +
 			"Never involve minors, coercion, or real-person sexual exploitation. Selected style: " + in.Mode + " — " + modeStyles[in.Mode]
@@ -1498,6 +1498,20 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		rememberBlind(cur.ChatURL, model)
 		payloadMap["messages"] = withoutEyes(messages)
 		reply, err = s.postChatCompletion(ctx, payloadMap)
+	}
+	// A reply that declined is asked for once more, with the permission repeated where it
+	// weighs most. See chat_refusal.go.
+	if err == nil && character.ID == "libby" && soundsLikeRefusal(reply) {
+		s.log.Info("libby refused; asking again", "model", model)
+		// The list being sent, which may already be without its pictures (above).
+		if sent, plain := payloadMap["messages"].([]chatMessage); plain {
+			payloadMap["messages"] = insistOnAdult(sent)
+		} else {
+			payloadMap["messages"] = withPictures(insistOnAdult(messages), pictures)
+		}
+		if again, againErr := s.postChatCompletion(ctx, payloadMap); againErr == nil && strings.TrimSpace(again) != "" {
+			reply = again
+		}
 	}
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
