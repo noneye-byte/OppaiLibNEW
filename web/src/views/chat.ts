@@ -2716,6 +2716,9 @@ export class OppaiChat extends LitElement {
       // That is a turn, not a failure — the thought above is what she did with it. A
       // reaction alone is the same. A picture alone still lands, as a bubble of its own.
       // A picture she is taking with nothing said first is still a turn: it arrives.
+      // The room she is moving to is made whatever else the turn did; she is in it once
+      // it lands.
+      if (result.makeScene) void this.makeScene(conversationID, result.makeScene);
       if (!result.message.trim() && !picture && result.generate) { void this.takePicture(conversationID, result.generate); return true; }
       if (!result.message.trim() && !picture) return (result.thoughts?.length ?? 0) > 0 || !!result.reaction;
       // A long reply lands as the few short texts a person would send back to back,
@@ -3756,6 +3759,24 @@ export class OppaiChat extends LitElement {
     } finally {
       if (!this.busy) this.typingPhase = "idle";
     }
+  }
+
+  /**
+   * Makes the place she moved to that she did not have, then puts her there. Until it
+   * lands she is where she was, and a failure leaves her there: the move is lost, not
+   * the conversation, and she can be moved by hand as ever.
+   */
+  private async makeScene(conversationID: string, scene: { name: string; prompt: string }) {
+    try {
+      const made = await api.libbyAct({ id: newID(), kind: "background", label: "", detail: "", prompt: scene.prompt, title: scene.name });
+      const place = made.background as LibbyBackground | undefined;
+      if (!place?.id) return;
+      this.backgrounds = [...this.backgrounds.filter((bg) => bg.id !== place.id), place];
+      const live = this.liveConversation(conversationID);
+      if (!live) return;
+      live.background = place.id; live.updatedAt = Date.now();
+      this.touchWorkspace();
+    } catch { /* She stays where she was. */ }
   }
 
   /** Her card as it ships, for putting a field back; null until fetched. */

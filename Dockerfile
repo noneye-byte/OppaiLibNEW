@@ -6,7 +6,8 @@
 #   --target runtime        lean, cgo-free, heuristic tagging only
 #   --target runtime-onnx   default; bakes in ONNX Runtime + the wd14 tagger
 #                           model for real NSFW content tagging (~540MB, of
-#                           which the model is 379MB and the runtime .so 23MB)
+#                           which the model is 379MB and the runtime .so 23MB),
+#                           and Kokoro, Libby's natural voice (~165MB more)
 
 # --- Stage 1: web UI ----------------------------------------------------
 FROM node:22-alpine AS web
@@ -126,6 +127,28 @@ RUN locale="${PIPER_VOICE%%-*}"; rest="${PIPER_VOICE#*-}"; name="${rest%-*}"; qu
     && [ "$(wc -c < "/out/voices/${PIPER_VOICE}.onnx")" -gt 10000000 ] \
     && grep -q sample_rate "/out/voices/${PIPER_VOICE}.onnx.json"
 
+# --- Stage 2e: Libby's natural voice -------------------------------------
+# Kokoro-82M, fp16, run by the same ONNX Runtime as the tagger — so only the onnx
+# image has it, and the lean one keeps piper. The model and a handful of English
+# voice packs (half a megabyte each) are pinned to one revision of the onnx-community
+# export. fp16 rather than the smaller int8: measured on the CPU, int8 ran at about
+# real time whatever the thread count and fp16 four times faster, which is the
+# difference between a pause and a wait; espeak-ng, which phonemises for it, comes from Debian in the runtime stage.
+# See backend/internal/tts/kokoro.go.
+FROM debian:bookworm-slim AS kokorodeps
+ARG KOKORO_REV=1939ad2a8e416c0acfeecc08a694d14ef25f2231
+ARG KOKORO_VOICES="af_heart af_bella af_nicole af_aoede af_kore af_sarah af_nova af_sky bf_emma bf_isabella"
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+RUN base="https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/${KOKORO_REV}" \
+    && mkdir -p /out/kokoro/voices \
+    && curl -fL --retry 8 --retry-all-errors --retry-delay 3 -C - -o /out/kokoro/model.onnx "${base}/onnx/model_fp16.onnx" \
+    && [ "$(wc -c < /out/kokoro/model.onnx)" -gt 150000000 ] \
+    && for v in ${KOKORO_VOICES}; do \
+        curl -fL --retry 8 --retry-all-errors --retry-delay 3 -o "/out/kokoro/voices/${v}.bin" "${base}/voices/${v}.bin" \
+        && [ "$(wc -c < "/out/kokoro/voices/${v}.bin")" -eq 522240 ]; \
+    done
+
 # --- Stage 3: lean runtime (no AI model) --------------------------------
 FROM debian:bookworm-slim AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -157,15 +180,18 @@ ENTRYPOINT ["/usr/local/bin/oppailib"]
 
 # --- Stage 4: onnx runtime (default) ------------------------------------
 FROM debian:bookworm-slim AS runtime-onnx
-# libgomp1 is required by the ONNX Runtime CPU build.
+# libgomp1 is required by the ONNX Runtime CPU build; espeak-ng turns text into the
+# phonemes Kokoro reads.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates libgomp1 ffmpeg \
+        ca-certificates libgomp1 ffmpeg espeak-ng \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=backend-onnx /out/oppailib-onnx /usr/local/bin/oppailib
 COPY --from=onnxdeps /out/lib/ /usr/local/lib/
 # See the lean stage: Libby's voice.
 COPY --from=piperdeps /out/piper/ /opt/piper/
 COPY --from=piperdeps /out/voices/ /opt/oppailib/voices/
+# Her natural voice, preferred over piper wherever it is (Settings → Libby's voice).
+COPY --from=kokorodeps /out/kokoro/ /opt/oppailib/kokoro/
 # The model lives outside /config on purpose. /config is a VOLUME, and a bind
 # mount over it (what the Unraid template does) would hide anything baked
 # underneath — the model would silently vanish and tagging would fall back to
@@ -184,6 +210,7 @@ ENV OPPAI_HTTP_ADDR=:8080 \
     OPPAI_APK_PATH=/app/apk/oppailib.apk \
     OPPAI_TTS_PIPER=/opt/piper/piper \
     OPPAI_TTS_BUNDLED_VOICE_DIR=/opt/oppailib/voices \
+    OPPAI_TTS_KOKORO_DIR=/opt/oppailib/kokoro \
     ONNXRUNTIME_LIB_PATH=/usr/local/lib/libonnxruntime.so
 
 VOLUME ["/media", "/config", "/db"]

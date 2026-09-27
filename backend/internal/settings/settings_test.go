@@ -60,3 +60,27 @@ func TestHerEyesAndTheCardReadAnythingUnknownAsTheDefault(t *testing.T) {
 		t.Errorf("unknown values clamped to %q / %q, want both default", s.ChatVision, s.GPUShare)
 	}
 }
+
+// Her one LoRA from before the list existed is the first of the list after an upgrade,
+// with the old "unset means on" strength kept — and once the list is saved it is the
+// only thing read, so clearing it does not bring the old one back.
+func TestHerOldSingleLoraBecomesTheFirstOfHerList(t *testing.T) {
+	got := Merge(Settings{}, map[string]string{keyLibbyGenLora: "libby_v2", keyLibbyGenLoraWeight: "0"})
+	if len(got.LibbyGenLoras) != 1 || got.LibbyGenLoras[0] != (LoraChoice{Name: "libby_v2", Weight: 1}) {
+		t.Fatalf("upgraded list = %+v", got.LibbyGenLoras)
+	}
+	cleared := Merge(Settings{}, map[string]string{keyLibbyGenLora: "libby_v2", keyLibbyGenLoras: "[]"})
+	if len(cleared.LibbyGenLoras) != 0 {
+		t.Fatalf("a cleared list came back as %+v", cleared.LibbyGenLoras)
+	}
+	s := Settings{LibbyGenLoras: []LoraChoice{{Name: " libby ", Weight: 3}, {Name: ""}, {Name: "detail", Weight: -5}, {Name: "libby", Weight: 0.5}}}
+	s.Clamp()
+	want := []LoraChoice{{Name: "libby", Weight: 2}, {Name: "detail", Weight: -2}}
+	if len(s.LibbyGenLoras) != 2 || s.LibbyGenLoras[0] != want[0] || s.LibbyGenLoras[1] != want[1] {
+		t.Fatalf("cleaned list = %+v", s.LibbyGenLoras)
+	}
+	back := Merge(Settings{}, s.Map())
+	if len(back.LibbyGenLoras) != 2 || back.LibbyGenLoras[1] != want[1] {
+		t.Fatalf("round trip = %+v", back.LibbyGenLoras)
+	}
+}

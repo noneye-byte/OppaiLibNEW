@@ -760,6 +760,14 @@ export class OppaiSettings extends LitElement {
   }
 
   // Edit server-side settings locally; nothing is sent until Save.
+  /** Changes one of Libby's LoRAs in place. */
+  private editLora(index: number, patch: Partial<{ name: string; weight: number }>) {
+    const list = [...(this.settings?.libbyGenLoras ?? [])];
+    if (!list[index]) return;
+    list[index] = { ...list[index], ...patch };
+    this.edit({ libbyGenLoras: list });
+  }
+
   private edit(patch: Partial<Settings>) {
     if (!this.settings || !this.canEdit) return;
     this.settings = { ...this.settings, ...patch };
@@ -1200,6 +1208,7 @@ export class OppaiSettings extends LitElement {
       <p class="card-sub">
         ${st === undefined ? "Checking the server…"
           : !st ? "The server did not answer about speech."
+          : st.engine === "kokoro" && st.ready ? html`Speaking with <strong>Kokoro</strong>, the natural voice, on the server’s CPU. Turn playback on per device with the speaker button in Chat.`
           : st.engine === "piper" && st.ready ? html`Speaking with <strong>piper</strong> on the server’s CPU. Turn playback on per device with the speaker button in Chat.`
           : st.engine === "openai" && st.ready ? html`Speaking through the speech server at <code>${s.ttsUrl}</code>.`
           : html`Not speaking from the server${st.detail ? html` — ${st.detail}` : nothing}. Devices fall back to their own voices.`}
@@ -1208,11 +1217,11 @@ export class OppaiSettings extends LitElement {
       <div class="field">
         <div class="field-text">
           <div class="field-label">Engine</div>
-          <div class="field-help">Auto prefers piper on the server and falls back to the speech server. Off leaves devices to their own voices.</div>
+          <div class="field-help">Auto uses the most natural voice the server has — Kokoro, then piper, then the speech server. Piper is quicker and flatter; Off leaves devices to their own voices.</div>
         </div>
         <div class="field-control">
           <select ?disabled=${!this.canEdit} @change=${(e: Event) => this.edit({ ttsEngine: (e.target as HTMLSelectElement).value })}>
-            ${[["auto", "Auto"], ["piper", `Piper on the server${st && !st.piperInstalled ? " (not installed)" : ""}`], ["openai", "Speech server"], ["off", "Off"]].map(([id, label]) =>
+            ${[["auto", "Auto"], ["kokoro", `Kokoro — natural${st && !st.kokoroInstalled ? " (not installed)" : ""}`], ["piper", `Piper — light${st && !st.piperInstalled ? " (not installed)" : ""}`], ["openai", "Speech server"], ["off", "Off"]].map(([id, label]) =>
               html`<option value=${id} ?selected=${s.ttsEngine === id}>${label}</option>`)}
           </select>
         </div>
@@ -1244,7 +1253,8 @@ export class OppaiSettings extends LitElement {
         </div>
       </div>
 
-      ${st?.piperInstalled ? html`<div class="field stack">
+      ${/* The list below is the speaking engine's, so it is piper's only when piper speaks. */
+        st?.piperInstalled && st.engine !== "kokoro" ? html`<div class="field stack">
         <div class="field-text">
           <div class="field-label">Piper voices</div>
           <div class="field-help">A curated handful from piper’s voice set, fetched from Hugging Face onto the server (20–110 MB each). Any other piper voice dropped into <code>/config/tts</code> is listed too.</div>
@@ -1598,6 +1608,7 @@ export class OppaiSettings extends LitElement {
     }
     const models = this.genModels;
     const loras = this.genLoras;
+    const chosen = s.libbyGenLoras ?? [];
     const boards = this.genBoards;
     return html`<section class="card">
       <h3><span class="material-symbols-rounded">auto_awesome</span>Libby’s image generation</h3>
@@ -1628,24 +1639,44 @@ export class OppaiSettings extends LitElement {
 
       <div class="field">
         <div class="field-text">
-          <div class="field-label">LoRA</div>
-          <div class="field-help">One LoRA applied to everything she makes — usually the one
-            that makes the picture look like her.</div>
+          <div class="field-label">LoRAs</div>
+          <div class="field-help">Applied to everything she makes, each at its own strength —
+            usually the one that makes the picture look like her, plus any style or detail
+            LoRAs you like her drawn with.</div>
         </div>
-        <div class="field-control" style="display:flex; gap:8px; align-items:center;">
-          ${loras.length
-            ? html`<select ?disabled=${!this.canEdit}
-                @change=${(e: Event) => this.edit({ libbyGenLora: (e.target as HTMLSelectElement).value })}>
-                <option value="" ?selected=${!s.libbyGenLora}>None</option>
-                ${loras.map((l) => html`<option value=${l} ?selected=${l === s.libbyGenLora}>${l}</option>`)}
-              </select>`
-            : html`<input type="text" autocomplete="off" placeholder="None"
-                .value=${s.libbyGenLora} ?disabled=${!this.canEdit}
-                @change=${(e: Event) => this.edit({ libbyGenLora: (e.target as HTMLInputElement).value })} />`}
-          <input type="number" step="0.05" min="-2" max="2" style="width:90px;"
-            aria-label="LoRA strength"
-            .value=${String(s.libbyGenLoraWeight || 1)} ?disabled=${!this.canEdit || !s.libbyGenLora}
-            @change=${(e: Event) => this.edit({ libbyGenLoraWeight: Number((e.target as HTMLInputElement).value) })} />
+        <div class="field-control" style="display:flex; flex-direction:column; gap:8px; align-items:stretch;">
+          ${chosen.map((lora, i) => html`<div style="display:flex; gap:8px; align-items:center;">
+            ${loras.length
+              ? html`<select style="flex:1; min-width:0;" ?disabled=${!this.canEdit}
+                  aria-label="LoRA ${i + 1}"
+                  @change=${(e: Event) => this.editLora(i, { name: (e.target as HTMLSelectElement).value })}>
+                  ${/* One saved before the generator last listed its LoRAs stays choosable. */
+                    (loras.includes(lora.name) ? loras : [lora.name, ...loras]).map((l) =>
+                      html`<option value=${l} ?selected=${l === lora.name}>${l}</option>`)}
+                </select>`
+              : html`<input type="text" autocomplete="off" placeholder="LoRA name" style="flex:1; min-width:0;"
+                  aria-label="LoRA ${i + 1}"
+                  .value=${lora.name} ?disabled=${!this.canEdit}
+                  @change=${(e: Event) => this.editLora(i, { name: (e.target as HTMLInputElement).value })} />`}
+            <input type="number" step="0.05" min="-2" max="2" style="width:90px;"
+              aria-label="LoRA ${i + 1} strength"
+              .value=${String(lora.weight)} ?disabled=${!this.canEdit}
+              @change=${(e: Event) => this.editLora(i, { weight: Number((e.target as HTMLInputElement).value) })} />
+            <button class="btn-inline" title="Remove" aria-label="Remove LoRA ${i + 1}" ?disabled=${!this.canEdit}
+              @click=${() => this.edit({ libbyGenLoras: chosen.filter((_, j) => j !== i) })}>
+              <span class="material-symbols-rounded" style="font-size:18px;">delete</span>
+            </button>
+          </div>`)}
+          <button class="btn-inline" style="align-self:flex-start; display:inline-flex; align-items:center; gap:6px;"
+            ?disabled=${!this.canEdit || chosen.length >= 8}
+            @click=${() => this.edit({ libbyGenLoras: [...chosen, {
+              // The first one not already on, so a picked list does not add a repeat.
+              name: loras.find((l) => !chosen.some((c) => c.name === l)) ?? "",
+              weight: 1,
+            }] })}>
+            <span class="material-symbols-rounded" style="font-size:18px;">add</span>
+            ${chosen.length ? "Add another LoRA" : "Add a LoRA"}
+          </button>
         </div>
       </div>
 

@@ -444,6 +444,8 @@ func (s *Server) handleLibbyAct(w http.ResponseWriter, r *http.Request) {
 	switch strings.ToLower(strings.TrimSpace(req.Kind)) {
 	case "generate":
 		s.actGenerate(w, r, cur, req)
+	case "background":
+		s.actBackground(w, r, cur, req)
 	case "import":
 		s.actImport(w, r, req)
 	case "tag":
@@ -538,13 +540,7 @@ func (s *Server) actGenerate(w http.ResponseWriter, r *http.Request, cur setting
 		Board:          cur.LibbyGenBoard,
 		Count:          1,
 	}
-	if cur.LibbyGenLora != "" {
-		weight := cur.LibbyGenLoraWeight
-		if weight == 0 {
-			weight = 1 // an unset strength means "on", not "off"
-		}
-		gen.Loras = []loraReq{{Name: cur.LibbyGenLora, Weight: weight}}
-	}
+	gen.Loras = libbyLoras(cur)
 	generated := s.delegate(r, s.handleImageGenGenerate, http.MethodPost, "/api/imagegen/generate", gen)
 	if generated.status < 200 || generated.status >= 300 {
 		relay(w, generated)
@@ -594,6 +590,15 @@ func (s *Server) actGenerate(w http.ResponseWriter, r *http.Request, cur setting
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// libbyLoras are her settings' LoRAs in the form a generation takes.
+func libbyLoras(cur settings.Settings) []loraReq {
+	out := make([]loraReq, 0, len(cur.LibbyGenLoras))
+	for _, l := range cur.LibbyGenLoras {
+		out = append(out, loraReq{Name: l.Name, Weight: l.Weight})
+	}
+	return out
 }
 
 // generatedChatImage is the gallery record for a picture she made of herself: hers by
@@ -657,7 +662,7 @@ func (s *Server) saveGeneratedToLibrary(r *http.Request, previewID, title string
 // tags that record the state it was made in.
 //
 // Order: her likeness, then the outfit she has on, then what she is doing, then the
-// subject asked for. The outfit comes from the worn wardrobe's own prompt when the
+// subject asked for — with the outfit left out when the subject names her clothes. The outfit comes from the worn wardrobe's own prompt when the
 // studio recorded one, and from the bundled wardrobe's tier description otherwise —
 // the same tiers wardrobeDirective tells her she is wearing, so the picture and her
 // account of herself agree. The activity is the MISC state's generator words, gated
@@ -674,8 +679,11 @@ func (s *Server) libbySelfiePrompt(likeness, subject, outfitID, activity string,
 	} else if intensity > 5 {
 		intensity = 5
 	}
+	// A subject that says what she is wearing is all she is wearing: see
+	// libby_selfie_clothes.go for the blend the worn outfit used to make of it.
+	dressed := subjectDressesHer(subject)
 	clothes := ""
-	if outfitID = strings.TrimSpace(outfitID); outfitID != "" && validChatID(outfitID, false) {
+	if outfitID = strings.TrimSpace(outfitID); outfitID != "" && validChatID(outfitID, false) && !dressed {
 		if outfit, err := s.readLibbyOutfit(outfitID); err == nil {
 			clothes = outfit.Prompt
 			if name := strings.TrimSpace(outfit.Name); name != "" {
@@ -683,7 +691,7 @@ func (s *Server) libbySelfiePrompt(likeness, subject, outfitID, activity string,
 			}
 		}
 	}
-	if clothes == "" {
+	if clothes == "" && !dressed {
 		clothes = libbyWardrobeGen[intensity]
 	}
 	if clothes != "" {

@@ -7,6 +7,7 @@
 package settings
 
 import (
+	"encoding/json"
 	"strconv"
 	"strings"
 	"sync"
@@ -159,10 +160,13 @@ type Settings struct {
 	// her offer has to produce her, consistently, without the user having to leave the
 	// conversation and set up a generation first. These are the defaults that make
 	// "make me a picture of you on the balcony" mean something.
-	LibbyGenModel      string  `json:"libbyGenModel"`      // checkpoint, blank = the generator's own default
-	LibbyGenLora       string  `json:"libbyGenLora"`       // one LoRA applied to everything she makes
-	LibbyGenLoraWeight float64 `json:"libbyGenLoraWeight"` // its strength, -2..2
-	LibbyGenBoard      string  `json:"libbyGenBoard"`      // InvokeAI board her pictures are filed into
+	LibbyGenModel string `json:"libbyGenModel"` // checkpoint, blank = the generator's own default
+	// LibbyGenLoras are applied to everything she makes, in order: usually the one
+	// that makes the picture look like her, and whatever style or detail LoRAs the
+	// user likes her drawn with. It was a single LoRA, which made the choice between
+	// her likeness and everything else.
+	LibbyGenLoras []LoraChoice `json:"libbyGenLoras"`
+	LibbyGenBoard string       `json:"libbyGenBoard"` // InvokeAI board her pictures are filed into
 	// LibbyGenPrompt is who she is, in generator words: the tokens that make a picture
 	// look like Libby rather than like a stranger. Prefixed to whatever she describes,
 	// so her offer only has to say what is happening in the picture.
@@ -244,7 +248,9 @@ const (
 	keyUploadStaleHours   = "storage.upload_stale_hours"
 	keyTempStaleHours     = "storage.temp_stale_hours"
 
-	keyLibbyGenModel      = "libby.gen.model"
+	keyLibbyGenModel = "libby.gen.model"
+	keyLibbyGenLoras = "libby.gen.loras"
+	// The single LoRA these replaced, read once so an upgrade keeps it. Never written.
 	keyLibbyGenLora       = "libby.gen.lora"
 	keyLibbyGenLoraWeight = "libby.gen.lora_weight"
 	keyLibbyGenBoard      = "libby.gen.board"
@@ -285,8 +291,19 @@ func Defaults(cfg *config.Config) Settings {
 		StorageWarnPercent:  10,
 		UploadStaleHours:    48,
 		TempStaleHours:      24,
+		LibbyGenLoras:       []LoraChoice{},
 	}
 }
+
+// LoraChoice is one LoRA and its strength, in the image studio's units.
+type LoraChoice struct {
+	Name   string  `json:"name"`
+	Weight float64 `json:"weight"`
+}
+
+// maxLibbyGenLoras bounds the list. Past a handful, LoRAs fight each other more than
+// they add anything, and every one is another model the generator has to load.
+const maxLibbyGenLoras = 8
 
 // Merge layers stored overrides on top of a baseline. Unparseable or absent
 // values leave the baseline field untouched, so a corrupt row can never wedge
@@ -419,11 +436,18 @@ func Merge(base Settings, stored map[string]string) Settings {
 	if v, ok := stored[keyLibbyGenModel]; ok {
 		s.LibbyGenModel = v
 	}
-	if v, ok := stored[keyLibbyGenLora]; ok {
-		s.LibbyGenLora = v
-	}
-	if v, err := strconv.ParseFloat(stored[keyLibbyGenLoraWeight], 64); err == nil {
-		s.LibbyGenLoraWeight = v
+	if v, ok := stored[keyLibbyGenLoras]; ok {
+		var loras []LoraChoice
+		if json.Unmarshal([]byte(v), &loras) == nil {
+			s.LibbyGenLoras = loras
+		}
+	} else if name := strings.TrimSpace(stored[keyLibbyGenLora]); name != "" {
+		// Stored before the list existed: the one LoRA becomes the first of it.
+		weight, err := strconv.ParseFloat(stored[keyLibbyGenLoraWeight], 64)
+		if err != nil || weight == 0 {
+			weight = 1 // an unset strength meant "on", not "off"
+		}
+		s.LibbyGenLoras = []LoraChoice{{Name: name, Weight: weight}}
 	}
 	if v, ok := stored[keyLibbyGenBoard]; ok {
 		s.LibbyGenBoard = v
@@ -488,13 +512,12 @@ func (s Settings) Map() map[string]string {
 		keyUploadStaleHours:   strconv.Itoa(s.UploadStaleHours),
 		keyTempStaleHours:     strconv.Itoa(s.TempStaleHours),
 
-		keyLibbyGenModel:      s.LibbyGenModel,
-		keyLibbyGenLora:       s.LibbyGenLora,
-		keyLibbyGenLoraWeight: strconv.FormatFloat(s.LibbyGenLoraWeight, 'f', -1, 64),
-		keyLibbyGenBoard:      s.LibbyGenBoard,
-		keyLibbyGenPrompt:     s.LibbyGenPrompt,
-		keyLibbyGenNegative:   s.LibbyGenNegativePrompt,
-		keyLibbyGenToLibrary:  strconv.FormatBool(s.LibbyGenToLibrary),
+		keyLibbyGenModel:     s.LibbyGenModel,
+		keyLibbyGenLoras:     libbyLorasJSON(s.LibbyGenLoras),
+		keyLibbyGenBoard:     s.LibbyGenBoard,
+		keyLibbyGenPrompt:    s.LibbyGenPrompt,
+		keyLibbyGenNegative:  s.LibbyGenNegativePrompt,
+		keyLibbyGenToLibrary: strconv.FormatBool(s.LibbyGenToLibrary),
 
 		keyIncognito: strconv.FormatBool(s.Incognito),
 	}
@@ -602,7 +625,7 @@ func (s *Settings) Clamp() {
 	s.VisionAPIKey = strings.TrimSpace(s.VisionAPIKey)
 	s.VisionEnabled = s.VisionURL != ""
 	switch s.TTSEngine {
-	case "auto", "piper", "openai", "off":
+	case "auto", "kokoro", "piper", "openai", "off":
 	default:
 		s.TTSEngine = "auto"
 	}
@@ -643,18 +666,39 @@ func (s *Settings) Clamp() {
 		s.TempStaleHours = 24 * 90
 	}
 	s.LibbyGenModel = strings.TrimSpace(s.LibbyGenModel)
-	s.LibbyGenLora = strings.TrimSpace(s.LibbyGenLora)
-	// The same range the image studio allows, so a weight set here behaves the way the
-	// identical number does there. Zero means "unset" and is filled in at use, not
-	// here, so an explicit 0 is still storable.
-	if s.LibbyGenLoraWeight < -2 {
-		s.LibbyGenLoraWeight = -2
-	} else if s.LibbyGenLoraWeight > 2 {
-		s.LibbyGenLoraWeight = 2
-	}
+	s.LibbyGenLoras = cleanLoras(s.LibbyGenLoras)
 	s.LibbyGenBoard = strings.TrimSpace(s.LibbyGenBoard)
 	s.LibbyGenPrompt = strings.TrimSpace(s.LibbyGenPrompt)
 	s.LibbyGenNegativePrompt = strings.TrimSpace(s.LibbyGenNegativePrompt)
+}
+
+// cleanLoras trims names, drops blanks and repeats (the first strength wins), and
+// keeps each weight in the range the image studio allows, so a weight set here
+// behaves the way the identical number does there. Never nil, so the UI reads [].
+func cleanLoras(in []LoraChoice) []LoraChoice {
+	out := []LoraChoice{}
+	seen := map[string]bool{}
+	for _, l := range in {
+		l.Name = strings.TrimSpace(l.Name)
+		if l.Name == "" || seen[l.Name] {
+			continue
+		}
+		seen[l.Name] = true
+		l.Weight = min(max(l.Weight, -2), 2)
+		out = append(out, l)
+		if len(out) == maxLibbyGenLoras {
+			break
+		}
+	}
+	return out
+}
+
+func libbyLorasJSON(loras []LoraChoice) string {
+	raw, err := json.Marshal(cleanLoras(loras))
+	if err != nil {
+		return "[]"
+	}
+	return string(raw)
 }
 
 // ScrapeDelay is the politeness delay as a Duration.

@@ -56,7 +56,7 @@ func TestRemoteSpeakAndCache(t *testing.T) {
 	if err != nil || len(voices) != 2 || voices[0].ID != "af_bella" {
 		t.Fatalf("voices = %+v, %v", voices, err)
 	}
-	speaker := NewSpeaker(nil, remote)
+	speaker := NewSpeaker(nil, nil, remote)
 	if engine := speaker.Engine("auto"); engine == nil || engine.Name() != "openai" {
 		t.Fatal("auto should pick the remote engine when there is no piper")
 	}
@@ -72,7 +72,7 @@ func TestRemoteSpeakAndCache(t *testing.T) {
 	if calls != 1 {
 		t.Fatalf("the server was asked %d times; the second should have come from the cache", calls)
 	}
-	if _, err := NewSpeaker(nil, nil).Speak(context.Background(), "auto", Request{Text: "x"}); err != ErrNoEngine {
+	if _, err := NewSpeaker(nil, nil, nil).Speak(context.Background(), "auto", Request{Text: "x"}); err != ErrNoEngine {
 		t.Fatalf("no engine: %v", err)
 	}
 }

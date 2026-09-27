@@ -280,13 +280,13 @@ func TestBackgroundsStoreAndResolve(t *testing.T) {
 			t.Errorf("%q: (%q, %v), want (%q, %v)", tc.label, got, ok, tc.want, tc.ok)
 		}
 	}
-	directive := backgroundDirective(list, kitchen)
+	directive := backgroundDirective(list, kitchen, false)
 	for _, want := range []string{"[scene:", "Bedroom (bed, night, lamp)", "Right now you are in Kitchen"} {
 		if !strings.Contains(directive, want) {
 			t.Fatalf("directive missing %q: %s", want, directive)
 		}
 	}
-	if backgroundDirective(nil, "") != "" {
+	if backgroundDirective(nil, "", false) != "" {
 		t.Fatal("a directive with nowhere to go")
 	}
 	rec := do(t, s.Handler(), token, http.MethodDelete, "/api/libby/backgrounds/"+kitchen, "")

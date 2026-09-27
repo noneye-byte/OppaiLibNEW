@@ -30,6 +30,8 @@ export interface TTSStatus {
   mode: string;
   voice: string;
   speed: number;
+  /** The natural voice can run on this server (the default image). Absent from older servers. */
+  kokoroInstalled?: boolean;
   piperInstalled: boolean;
   remoteConfigured: boolean;
   voices: TTSVoice[];

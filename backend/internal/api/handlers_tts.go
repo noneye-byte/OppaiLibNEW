@@ -37,14 +37,17 @@ type speakRequest struct {
 // ttsStatus is what the clients read to decide whether to ask the server or the
 // device.
 type ttsStatus struct {
-	// Engine is what would speak now: piper, openai, or "" for nothing.
+	// Engine is what would speak now: kokoro, piper, openai, or "" for nothing.
 	Engine string `json:"engine"`
 	Ready  bool   `json:"ready"`
 	Detail string `json:"detail,omitempty"`
-	// Mode is the setting: auto, piper, openai, off.
+	// Mode is the setting: auto, kokoro, piper, openai, off.
 	Mode  string  `json:"mode"`
 	Voice string  `json:"voice"`
 	Speed float64 `json:"speed"`
+	// KokoroInstalled says the natural voice can run here: an image with ONNX Runtime,
+	// the model and espeak-ng.
+	KokoroInstalled bool `json:"kokoroInstalled"`
 	// PiperInstalled says the binary is on this box, whatever the voices.
 	PiperInstalled bool `json:"piperInstalled"`
 	// RemoteConfigured says a speech server URL is set.
@@ -71,6 +74,7 @@ func (s *Server) handleTTSStatus(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, out)
 		return
 	}
+	out.KokoroInstalled = s.speaker.Kokoro() != nil
 	out.PiperInstalled = s.speaker.Piper() != nil
 	out.RemoteConfigured = cur.TTSURL != ""
 	engine := s.speaker.Engine(cur.TTSEngine)
@@ -78,6 +82,8 @@ func (s *Server) handleTTSStatus(w http.ResponseWriter, r *http.Request) {
 		switch cur.TTSEngine {
 		case "off":
 			out.Detail = "server speech is switched off"
+		case "kokoro":
+			out.Detail = "Kokoro is not installed on this server (it needs the default image, with ONNX Runtime)"
 		case "piper":
 			out.Detail = "piper is not installed on this server"
 		case "openai":

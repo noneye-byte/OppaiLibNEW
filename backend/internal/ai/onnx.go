@@ -25,9 +25,9 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 
 	ort "github.com/yalue/onnxruntime_go"
+	"github.com/youruser/oppailib/internal/ortenv"
 	"golang.org/x/image/draw"
 )
 
@@ -40,11 +40,6 @@ var csvCategory = map[string]string{
 	"9": catRating,
 }
 
-// ortInit guards InitializeEnvironment, which must run exactly once per process.
-var (
-	ortInit    sync.Once
-	ortInitErr error
-)
 
 // modelConfig is /config/models/model.json — describes how to feed the model.
 // Every field is optional: names, input size and layout are read from the ONNX
@@ -299,17 +294,8 @@ func (t *onnxTagger) preprocess(src image.Image, dst []float32) {
 	}
 }
 
-// initORT points the binding at the shared library and initializes the runtime
-// once per process.
-func initORT() error {
-	ortInit.Do(func() {
-		if libPath := os.Getenv("ONNXRUNTIME_LIB_PATH"); libPath != "" {
-			ort.SetSharedLibraryPath(libPath)
-		}
-		ortInitErr = ort.InitializeEnvironment()
-	})
-	return ortInitErr
-}
+// initORT starts the runtime, shared with Libby's voice; see internal/ortenv.
+func initORT() error { return ortenv.Init() }
 
 // sessionOptions builds the execution-provider options for the requested device
 // and reports which provider is actually in use. A CUDA request that the runtime

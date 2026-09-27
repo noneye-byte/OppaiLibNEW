@@ -9,8 +9,8 @@ import (
 // not in the default sprite's clothes — and the state is gated the way the state is.
 func TestASelfieSheMakesIsDrawnInHerCurrentState(t *testing.T) {
 	s, _ := newTestServer(t)
-	prompt, tags := s.libbySelfiePrompt("libby, orange hair, glasses", "in the bath", "", "napping", 1)
-	for _, want := range []string{"libby, orange hair, glasses", "black tank top", "sleeping", "in the bath"} {
+	prompt, tags := s.libbySelfiePrompt("libby, orange hair, glasses", "on the sofa", "", "napping", 1)
+	for _, want := range []string{"libby, orange hair, glasses", "black tank top", "sleeping", "on the sofa"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("prompt lacks %q: %s", want, prompt)
 		}
@@ -19,7 +19,7 @@ func TestASelfieSheMakesIsDrawnInHerCurrentState(t *testing.T) {
 		t.Errorf("tags = %v", tags)
 	}
 	// Likeness first, subject last: the picture is of her, doing the thing.
-	if !strings.HasPrefix(prompt, "libby, orange hair") || !strings.HasSuffix(prompt, "in the bath") {
+	if !strings.HasPrefix(prompt, "libby, orange hair") || !strings.HasSuffix(prompt, "on the sofa") {
 		t.Errorf("order: %s", prompt)
 	}
 
@@ -60,6 +60,39 @@ func TestASelfieWearsTheStudioOutfit(t *testing.T) {
 	}
 	if outfit, err := s.readLibbyOutfit(id); err != nil || outfit.Prompt != "red dress, black heels" || outfit.Name != "Red Dress II" {
 		t.Errorf("after rename: %+v %v", outfit, err)
+	}
+}
+
+// Asked for her in a red dress, she is drawn in a red dress — not in the red dress and
+// the default tank top and shorts at once, which is the blend the generator made of it.
+func TestAPictureThatNamesHerClothesIsDrawnInOnlyThose(t *testing.T) {
+	s, token := newTestServer(t)
+	for _, subject := range []string{"in a red dress", "wearing a white hoodie", "naked on the bed", "in the bath", "in a bikini at the beach"} {
+		prompt, _ := s.libbySelfiePrompt("libby", subject, "", "", 3)
+		if strings.Contains(prompt, "tank top") || strings.Contains(prompt, "orange shorts") {
+			t.Errorf("%q still carries the default outfit: %s", subject, prompt)
+		}
+		if !strings.HasSuffix(prompt, subject) {
+			t.Errorf("%q lost the subject: %s", subject, prompt)
+		}
+	}
+	rec := do(t, s.Handler(), token, "POST", "/api/libby/outfits", `{"name":"Maid","prompt":"maid outfit, frilled apron"}`)
+	if rec.Code != 200 {
+		t.Fatalf("save outfit: %d %s", rec.Code, rec.Body)
+	}
+	id := strings.Split(strings.Split(rec.Body.String(), `"id":"`)[1], `"`)[0]
+	if prompt, tags := s.libbySelfiePrompt("libby", "in pyjamas", id, "", 1); strings.Contains(prompt, "apron") || len(tags) != 0 {
+		t.Errorf("the worn studio outfit joined the pyjamas: %s %v", prompt, tags)
+	}
+	// Somewhere that says nothing about clothes still gets what she has on.
+	if prompt, _ := s.libbySelfiePrompt("libby", "at the beach", "", "", 1); !strings.Contains(prompt, "tank top") {
+		t.Errorf("a subject silent on clothes lost hers: %s", prompt)
+	}
+	// Words that merely contain a garment are not one.
+	for _, subject := range []string{"at my address", "by the brass lamp", "with a teapot"} {
+		if subjectDressesHer(subject) {
+			t.Errorf("%q was read as naming clothes", subject)
+		}
 	}
 }
 

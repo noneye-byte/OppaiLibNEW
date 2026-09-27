@@ -215,6 +215,7 @@ func NewServer(cfg *config.Config, database *db.DB, store *storage.Store, sc *sc
 		genCache: newGenCache(),
 		genJobs:  newGenJobs(),
 		speaker: tts.NewSpeaker(
+			tts.FindKokoro(cfg.TTSKokoroDir, cfg.TTSEspeak),
 			tts.FindPiper(cfg.TTSPiper, dirOr(cfg.TTSVoiceDir, filepath.Join(cfg.ConfigDir, "tts")), cfg.TTSBundledVoiceDir),
 			nil,
 		),

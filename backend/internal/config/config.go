@@ -75,6 +75,11 @@ type Config struct {
 	TTSPiper           string
 	TTSVoiceDir        string
 	TTSBundledVoiceDir string
+	// TTSKokoroDir holds Kokoro's model.onnx and voices/*.bin, baked into the image;
+	// TTSEspeak is the espeak-ng binary that phonemises for it, blank to look on PATH.
+	// Either missing, or a build without ONNX Runtime, means no Kokoro.
+	TTSKokoroDir string
+	TTSEspeak    string
 	TTSURL             string
 
 	// ImageGenURL is the base URL of a local Automatic1111 / SD.Next-compatible
@@ -150,6 +155,8 @@ func Load() *Config {
 		TTSPiper:            env("OPPAI_TTS_PIPER", ""),
 		TTSVoiceDir:         env("OPPAI_TTS_VOICE_DIR", filepath.Join(configDir, "tts")),
 		TTSBundledVoiceDir:  env("OPPAI_TTS_BUNDLED_VOICE_DIR", "/opt/oppailib/voices"),
+		TTSKokoroDir:        env("OPPAI_TTS_KOKORO_DIR", "/opt/oppailib/kokoro"),
+		TTSEspeak:           env("OPPAI_TTS_ESPEAK", ""),
 		TTSURL:              env("OPPAI_TTS_URL", ""),
 		CivitaiAPIURL:       env("OPPAI_CIVITAI_API_URL", "https://civitai.red/api/v1"),
 		CivitaiAPIKey:       env("OPPAI_CIVITAI_API_KEY", ""),

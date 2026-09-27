@@ -1,4 +1,4 @@
-import{z as B,i as P,v as k,u as n,a as M,e as h,b as a,A as l,t as T,ag as z,ah as I,ai as O,m as C,aj as S,ak as _,x as U,al as G,am as F,an as V,ao as W,ap as K,aq as j,ar as H,as as q,at as Y,au as E,q as Q}from"./index-C4ibSovh.js";import{r as J,p as X}from"./passkeys-CZaix6ro.js";const N="oppai_libby_speak";function ve(){try{return localStorage.getItem(N)==="1"}catch{return!1}}function ge(e){try{localStorage.setItem(N,e?"1":"0")}catch{}e||D(),window.dispatchEvent(new CustomEvent("oppai-libby-speak",{detail:{on:e}}))}let y=null,A=0;async function R(e=!1){if(!e&&y&&Date.now()-A<6e4)return y;try{const t=await fetch("/api/tts/status",{credentials:"same-origin"});if(!t.ok)throw new Error(String(t.status));y=await t.json(),A=Date.now()}catch{y=null}return y}const $=[];let f=null,x=!1,w=0;function Z(e,t=0){const s=e.trim();return s?new Promise(r=>{$.push({text:s,heat:t,done:r}),ee()}):Promise.resolve()}function D(){var e;w++;for(const t of $.splice(0))t.done();f&&(f.pause(),f.src="",f=null);try{(e=window.speechSynthesis)==null||e.cancel()}catch{}}async function ee(){if(!x){x=!0;try{for(;$.length;){const e=$.shift(),t=w;try{await te(e.text,e.heat,t)}catch{}finally{e.done()}}}finally{x=!1}}}async function te(e,t,s){const r=await se(e,t);if(s===w){if(r){await ae(r,s);return}await ie(e,s)}}async function se(e,t){const s=await R();if(s&&!s.engine)return null;try{const r=await fetch("/api/tts/speak",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify({text:e,heat:t||void 0})});return r.status===503?(y=null,null):r.ok?await r.blob():null}catch{return null}}function ae(e,t){return new Promise(s=>{const r=URL.createObjectURL(e),i=new Audio(r);f=i;const p=()=>{f===i&&(f=null),URL.revokeObjectURL(r),s()};i.addEventListener("ended",p,{once:!0}),i.addEventListener("error",p,{once:!0}),i.play().catch(()=>{p()}),t!==w&&p()})}function ie(e,t){const s=window.speechSynthesis;return!s||typeof SpeechSynthesisUtterance>"u"?Promise.resolve():new Promise(r=>{const i=new SpeechSynthesisUtterance(e),p=re(s.getVoices());if(p&&(i.voice=p),i.rate=1.02,i.pitch=1.05,i.onend=()=>r(),i.onerror=()=>r(),t!==w){r();return}s.speak(i)})}function re(e){const t=e.filter(i=>/^en/i.test(i.lang)),s=t.length?t:e,r=i=>{let p=0;const o=i.name.toLowerCase();return/natural|neural|premium|enhanced/.test(o)&&(p+=4),/female|woman|aria|jenny|samantha|zira|karen|moira|tessa|fiona|libby|sonia|ava|allison|susan|emma/.test(o)&&(p+=3),/google/.test(o)&&(p+=1),i.default&&(p+=1),p};return[...s].sort((i,p)=>r(p)-r(i))[0]}var oe=Object.defineProperty,ne=Object.getOwnPropertyDescriptor,v=(e,t,s,r)=>{for(var i=r>1?void 0:r?ne(t,s):t,p=e.length-1,o;p>=0;p--)(o=e[p])&&(i=(r?o(t,s,i):o(i))||i);return r&&i&&oe(t,s,i),i};let u=class extends M{constructor(){super(...arguments),this.embedded=!1,this.backgrounds=[],this.defaultID="",this.loading=!0,this.busy=!1,this.note="",this.bad=!1,this.editing=null,this.draftName="",this.draftTags="",this.version=Date.now()}connectedCallback(){super.connectedCallback(),this.reload()}async reload(){this.loading=!0;try{const e=await h.libbyBackgrounds();this.backgrounds=e.backgrounds??[],this.defaultID=e.default??""}catch(e){this.say(e.message,!0)}finally{this.loading=!1}}say(e,t=!1){this.note=e,this.bad=t}changed(){this.dispatchEvent(new CustomEvent("changed",{bubbles:!0,composed:!0}))}startNew(){this.editing="new",this.draftName="",this.draftTags=""}startEdit(e){this.editing=e.id,this.draftName=e.name,this.draftTags=e.tags.join(", ")}async save(e){const t=this.draftName.trim();if(!t){this.say("A background needs a name.",!0);return}this.busy=!0;try{await h.saveLibbyBackground({id:e,name:t,tags:this.draftTags.split(",").map(s=>s.trim()).filter(Boolean)}),this.editing=null,await this.reload(),this.changed(),this.say(e?`Saved ${t}.`:`Added ${t}. Give it a picture so she can go there.`)}catch(s){this.say(s.message,!0)}finally{this.busy=!1}}async uploadPicture(e,t){var i;const s=t.target,r=(i=s.files)==null?void 0:i[0];if(s.value="",!!r){this.busy=!0;try{const p=await new Promise((o,g)=>{const m=new FileReader;m.onload=()=>o(String(m.result)),m.onerror=()=>g(m.error),m.readAsDataURL(r)});await h.setLibbyBackgroundImage(e,p),this.version=Date.now(),await this.reload(),this.changed(),this.say("Picture saved.")}catch(p){this.say(p.message,!0)}finally{this.busy=!1}}}async makeDefault(e){this.busy=!0;try{const t=this.defaultID===e?"":e;await h.setLibbyDefaultBackground(t),this.defaultID=t,this.changed(),this.say(t?"She starts here now.":"No default room — she starts nowhere in particular.")}catch(t){this.say(t.message,!0)}finally{this.busy=!1}}async deleteBackground(e){if(confirm(`Delete ${e.name}?`)){this.busy=!0;try{await h.deleteLibbyBackground(e.id),await this.reload(),this.changed(),this.say(`Deleted ${e.name}.`)}catch(t){this.say(t.message,!0)}finally{this.busy=!1}}}renderEditor(e){return a`<div class="edit">
+import{z as P,i as B,v as k,u as l,a as M,e as h,b as a,A as c,t as R,ag as z,ah as I,ai as O,m as C,aj as S,ak as _,x as U,al as G,am as F,an as V,ao as K,ap as W,aq as j,ar as H,as as q,at as Y,au as E,q as Q}from"./index-BlMifOrT.js";import{r as J,p as X}from"./passkeys-D__WvwRN.js";const T="oppai_libby_speak";function ve(){try{return localStorage.getItem(T)==="1"}catch{return!1}}function ge(e){try{localStorage.setItem(T,e?"1":"0")}catch{}e||D(),window.dispatchEvent(new CustomEvent("oppai-libby-speak",{detail:{on:e}}))}let m=null,A=0;async function N(e=!1){if(!e&&m&&Date.now()-A<6e4)return m;try{const t=await fetch("/api/tts/status",{credentials:"same-origin"});if(!t.ok)throw new Error(String(t.status));m=await t.json(),A=Date.now()}catch{m=null}return m}const $=[];let y=null,x=!1,w=0;function Z(e,t=0){const s=e.trim();return s?new Promise(i=>{$.push({text:s,heat:t,done:i}),ee()}):Promise.resolve()}function D(){var e;w++;for(const t of $.splice(0))t.done();y&&(y.pause(),y.src="",y=null);try{(e=window.speechSynthesis)==null||e.cancel()}catch{}}async function ee(){if(!x){x=!0;try{for(;$.length;){const e=$.shift(),t=w;try{await te(e.text,e.heat,t)}catch{}finally{e.done()}}}finally{x=!1}}}async function te(e,t,s){const i=await se(e,t);if(s===w){if(i){await ae(i,s);return}await ie(e,s)}}async function se(e,t){const s=await N();if(s&&!s.engine)return null;try{const i=await fetch("/api/tts/speak",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify({text:e,heat:t||void 0})});return i.status===503?(m=null,null):i.ok?await i.blob():null}catch{return null}}function ae(e,t){return new Promise(s=>{const i=URL.createObjectURL(e),r=new Audio(i);y=r;const n=()=>{y===r&&(y=null),URL.revokeObjectURL(i),s()};r.addEventListener("ended",n,{once:!0}),r.addEventListener("error",n,{once:!0}),r.play().catch(()=>{n()}),t!==w&&n()})}function ie(e,t){const s=window.speechSynthesis;return!s||typeof SpeechSynthesisUtterance>"u"?Promise.resolve():new Promise(i=>{const r=new SpeechSynthesisUtterance(e),n=re(s.getVoices());if(n&&(r.voice=n),r.rate=1.02,r.pitch=1.05,r.onend=()=>i(),r.onerror=()=>i(),t!==w){i();return}s.speak(r)})}function re(e){const t=e.filter(r=>/^en/i.test(r.lang)),s=t.length?t:e,i=r=>{let n=0;const o=r.name.toLowerCase();return/natural|neural|premium|enhanced/.test(o)&&(n+=4),/female|woman|aria|jenny|samantha|zira|karen|moira|tessa|fiona|libby|sonia|ava|allison|susan|emma/.test(o)&&(n+=3),/google/.test(o)&&(n+=1),r.default&&(n+=1),n};return[...s].sort((r,n)=>i(n)-i(r))[0]}var oe=Object.defineProperty,ne=Object.getOwnPropertyDescriptor,g=(e,t,s,i)=>{for(var r=i>1?void 0:i?ne(t,s):t,n=e.length-1,o;n>=0;n--)(o=e[n])&&(r=(i?o(t,s,r):o(r))||r);return i&&r&&oe(t,s,r),r};let v=class extends M{constructor(){super(...arguments),this.embedded=!1,this.backgrounds=[],this.defaultID="",this.loading=!0,this.busy=!1,this.note="",this.bad=!1,this.editing=null,this.draftName="",this.draftTags="",this.version=Date.now()}connectedCallback(){super.connectedCallback(),this.reload()}async reload(){this.loading=!0;try{const e=await h.libbyBackgrounds();this.backgrounds=e.backgrounds??[],this.defaultID=e.default??""}catch(e){this.say(e.message,!0)}finally{this.loading=!1}}say(e,t=!1){this.note=e,this.bad=t}changed(){this.dispatchEvent(new CustomEvent("changed",{bubbles:!0,composed:!0}))}startNew(){this.editing="new",this.draftName="",this.draftTags=""}startEdit(e){this.editing=e.id,this.draftName=e.name,this.draftTags=e.tags.join(", ")}async save(e){const t=this.draftName.trim();if(!t){this.say("A background needs a name.",!0);return}this.busy=!0;try{await h.saveLibbyBackground({id:e,name:t,tags:this.draftTags.split(",").map(s=>s.trim()).filter(Boolean)}),this.editing=null,await this.reload(),this.changed(),this.say(e?`Saved ${t}.`:`Added ${t}. Give it a picture so she can go there.`)}catch(s){this.say(s.message,!0)}finally{this.busy=!1}}async uploadPicture(e,t){var r;const s=t.target,i=(r=s.files)==null?void 0:r[0];if(s.value="",!!i){this.busy=!0;try{const n=await new Promise((o,u)=>{const f=new FileReader;f.onload=()=>o(String(f.result)),f.onerror=()=>u(f.error),f.readAsDataURL(i)});await h.setLibbyBackgroundImage(e,n),this.version=Date.now(),await this.reload(),this.changed(),this.say("Picture saved.")}catch(n){this.say(n.message,!0)}finally{this.busy=!1}}}async makeDefault(e){this.busy=!0;try{const t=this.defaultID===e?"":e;await h.setLibbyDefaultBackground(t),this.defaultID=t,this.changed(),this.say(t?"She starts here now.":"No default room — she starts nowhere in particular.")}catch(t){this.say(t.message,!0)}finally{this.busy=!1}}async deleteBackground(e){if(confirm(`Delete ${e.name}?`)){this.busy=!0;try{await h.deleteLibbyBackground(e.id),await this.reload(),this.changed(),this.say(`Deleted ${e.name}.`)}catch(t){this.say(t.message,!0)}finally{this.busy=!1}}}renderEditor(e){return a`<div class="edit">
       <label>Name
         <input type="text" .value=${this.draftName} placeholder="Bedroom" ?disabled=${this.busy}
           @input=${t=>this.draftName=t.target.value} /></label>
@@ -10,7 +10,7 @@ import{z as B,i as P,v as k,u as n,a as M,e as h,b as a,A as l,t as T,ag as z,ah
         <button ?disabled=${this.busy} @click=${()=>this.editing=null}>Cancel</button>
       </div>
     </div>`}render(){return a`
-      ${this.embedded?l:a`<div class="head">
+      ${this.embedded?c:a`<div class="head">
         <div>
           <h3><span class="material-symbols-rounded">wallpaper</span>Backgrounds</h3>
           <p>
@@ -28,7 +28,7 @@ import{z as B,i as P,v as k,u as n,a as M,e as h,b as a,A as l,t as T,ag as z,ah
               <div class="card ${e.id===this.defaultID?"is-default":""}">
                 <div class="shot">
                   ${e.hasImage?a`<img src=${h.libbyBackgroundURL(e.id,this.version)} alt=${`${e.name} background`} />`:a`<span class="none">No picture yet —<br />she won't go here</span>`}
-                  ${e.id===this.defaultID?a`<span class="flag">Default</span>`:l}
+                  ${e.id===this.defaultID?a`<span class="flag">Default</span>`:c}
                 </div>
                 <div class="body">
                   <span class="name">${e.name}</span>
@@ -56,9 +56,9 @@ import{z as B,i as P,v as k,u as n,a as M,e as h,b as a,A as l,t as T,ag as z,ah
                   New background</button>`}
           </div>`}
 
-      ${!this.loading&&!this.backgrounds.length&&this.editing!=="new"?a`<div class="empty">No rooms yet. Add one, give it a picture, and she can start moving around.</div>`:l}
-      ${this.note?a`<p class="note ${this.bad?"bad":""}">${this.note}</p>`:l}
-    `}};u.styles=[B,P`
+      ${!this.loading&&!this.backgrounds.length&&this.editing!=="new"?a`<div class="empty">No rooms yet. Add one, give it a picture, and she can start moving around.</div>`:c}
+      ${this.note?a`<p class="note ${this.bad?"bad":""}">${this.note}</p>`:c}
+    `}};v.styles=[P,B`
     :host { display: block; }
     .head { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 14px; }
     .head h3 { display: flex; align-items: center; gap: 8px; margin: 0 0 4px; font-size: 15px; }
@@ -113,7 +113,7 @@ import{z as B,i as P,v as k,u as n,a as M,e as h,b as a,A as l,t as T,ag as z,ah
     .note { margin: 12px 0 0; padding: 9px 12px; border-radius: 10px; background: var(--oppai-surface-2); font-size: 12.5px; }
     .note.bad { background: color-mix(in srgb, #f2b8b5 16%, transparent); color: #f2b8b5; }
     .empty { padding: 26px; text-align: center; color: var(--oppai-text-muted); font-size: 13px; }
-  `];v([k({type:Boolean})],u.prototype,"embedded",2);v([n()],u.prototype,"backgrounds",2);v([n()],u.prototype,"defaultID",2);v([n()],u.prototype,"loading",2);v([n()],u.prototype,"busy",2);v([n()],u.prototype,"note",2);v([n()],u.prototype,"bad",2);v([n()],u.prototype,"editing",2);v([n()],u.prototype,"draftName",2);v([n()],u.prototype,"draftTags",2);v([n()],u.prototype,"version",2);u=v([T("oppai-libby-backgrounds")],u);var de=Object.defineProperty,le=Object.getOwnPropertyDescriptor,c=(e,t,s,r)=>{for(var i=r>1?void 0:r?le(t,s):t,p=e.length-1,o;p>=0;p--)(o=e[p])&&(i=(r?o(t,s,i):o(i))||i);return r&&i&&de(t,s,i),i};const ce=[{id:"appearance",label:"Appearance",icon:"palette",group:"You"},{id:"account",label:"Account",icon:"account_circle",group:"You"},{id:"ai",label:"AI tagging",icon:"smart_toy",group:"Server",server:!0},{id:"scraping",label:"Scraping",icon:"travel_explore",group:"Server",server:!0},{id:"library",label:"Library",icon:"inventory_2",group:"Server"},{id:"android",label:"Android app",icon:"android",group:"Server"},{id:"storage",label:"Storage",icon:"hard_drive",group:"Server"},{id:"diagnostics",label:"Diagnostics",icon:"speed",group:"Server",adminOnly:!0},{id:"privacy",label:"Privacy",icon:"visibility_off",group:"Server",server:!0,adminOnly:!0},{id:"about",label:"About",icon:"info",group:"Server"}];let d=class extends M{constructor(){super(...arguments),this.only="",this.tab="appearance",this.settings=null,this.info=null,this.stats=null,this.apk=null,this.loadError="",this.passkeyList=null,this.passkeyBusy=!1,this.passkeyError="",this.passkeyMsg="",this.passkeyName="",this.passkeyRenaming=null,this.passkeyRevoking=null,this.passkeyPassword="",this.diag=null,this.uiDiag=null,this.storage=null,this.storageBusy=!1,this.storageErr="",this.diagBusy=!1,this.diagErr="",this.dirty=!1,this.saving=!1,this.saved=!1,this.theme=z(),this.fit=I(),this.hideLibby=O(),this.genModels=[],this.genLoras=[],this.genBoards=[],this.genError="",this.pwCurrent="",this.pwNew="",this.pwConfirm="",this.pwBusy=!1,this.pwMsg="",this.pwErr="",this.refs=null,this.refStamp=Date.now(),this.refNote="",this.tts=void 0,this.describe=null,this.describeBusy=!1,this.describeNote="",this.ttsErrors={},this.addPasskey=async()=>{this.passkeyBusy=!0,this.passkeyError="",this.passkeyMsg="";try{const e=await J(this.passkeyName.trim());this.passkeyName="",this.passkeyMsg=`Added “${e.name}”. You can sign in with it now.`,await this.loadPasskeys()}catch(e){const t=X(e);t&&(this.passkeyError=t)}finally{this.passkeyBusy=!1}},this.cancelRevoke=()=>{this.passkeyRevoking=null,this.passkeyPassword=""},this.loadStorage=async()=>{this.storageBusy=!0,this.storageErr="";try{this.storage=await h.storage()}catch(e){this.storageErr=e.message}finally{this.storageBusy=!1}},this.runCleanup=async()=>{this.storageBusy=!0,this.storageErr="";try{const e=await h.cleanupStorage(["uploads","temp"]);this.storage=e.storage,C(`Reclaimed ${e.freedHuman}.`,"success")}catch(e){this.storageErr=e.message}finally{this.storageBusy=!1}},this.loadDiagnostics=async()=>{this.diagBusy=!0,this.diagErr="";try{this.diag=await h.diagnostics(),this.uiDiag=S()}catch(e){this.diagErr=e.message}finally{this.diagBusy=!1}},this.resetDiagnostics=async()=>{this.diagBusy=!0,this.diagErr="";try{_(),await h.resetDiagnostics(),this.diag=await h.diagnostics(),this.uiDiag=S()}catch(e){this.diagErr=e.message}finally{this.diagBusy=!1}}}connectedCallback(){super.connectedCallback(),U(this,"settings"),this.load(),this.loadGenLists(),this.loadTTS(),this.loadDescribe(),this.loadReferences()}async loadReferences(){try{this.refs=await h.libbyReferences()}catch{this.refs=null}}async setReference(e,t){var i;const s=(i=t.files)==null?void 0:i[0];if(t.value="",!s)return;const r=await new Promise((p,o)=>{const g=new FileReader;g.onload=()=>p(String(g.result)),g.onerror=()=>o(g.error),g.readAsDataURL(s)});try{await h.setLibbyReference(e,r),this.refNote="",this.refStamp=Date.now(),await this.loadReferences()}catch(p){this.refNote=p.message}}async clearReference(e){try{await h.deleteLibbyReference(e),this.refNote="",await this.loadReferences()}catch(t){this.refNote=t.message}}referenceTile(e,t){var r;const s=!!((r=this.refs)!=null&&r[e]);return a`<div style="display:flex;flex-direction:column;gap:6px;align-items:center;width:132px;">
+  `];g([k({type:Boolean})],v.prototype,"embedded",2);g([l()],v.prototype,"backgrounds",2);g([l()],v.prototype,"defaultID",2);g([l()],v.prototype,"loading",2);g([l()],v.prototype,"busy",2);g([l()],v.prototype,"note",2);g([l()],v.prototype,"bad",2);g([l()],v.prototype,"editing",2);g([l()],v.prototype,"draftName",2);g([l()],v.prototype,"draftTags",2);g([l()],v.prototype,"version",2);v=g([R("oppai-libby-backgrounds")],v);var le=Object.defineProperty,de=Object.getOwnPropertyDescriptor,p=(e,t,s,i)=>{for(var r=i>1?void 0:i?de(t,s):t,n=e.length-1,o;n>=0;n--)(o=e[n])&&(r=(i?o(t,s,r):o(r))||r);return i&&r&&le(t,s,r),r};const ce=[{id:"appearance",label:"Appearance",icon:"palette",group:"You"},{id:"account",label:"Account",icon:"account_circle",group:"You"},{id:"ai",label:"AI tagging",icon:"smart_toy",group:"Server",server:!0},{id:"scraping",label:"Scraping",icon:"travel_explore",group:"Server",server:!0},{id:"library",label:"Library",icon:"inventory_2",group:"Server"},{id:"android",label:"Android app",icon:"android",group:"Server"},{id:"storage",label:"Storage",icon:"hard_drive",group:"Server"},{id:"diagnostics",label:"Diagnostics",icon:"speed",group:"Server",adminOnly:!0},{id:"privacy",label:"Privacy",icon:"visibility_off",group:"Server",server:!0,adminOnly:!0},{id:"about",label:"About",icon:"info",group:"Server"}];let d=class extends M{constructor(){super(...arguments),this.only="",this.tab="appearance",this.settings=null,this.info=null,this.stats=null,this.apk=null,this.loadError="",this.passkeyList=null,this.passkeyBusy=!1,this.passkeyError="",this.passkeyMsg="",this.passkeyName="",this.passkeyRenaming=null,this.passkeyRevoking=null,this.passkeyPassword="",this.diag=null,this.uiDiag=null,this.storage=null,this.storageBusy=!1,this.storageErr="",this.diagBusy=!1,this.diagErr="",this.dirty=!1,this.saving=!1,this.saved=!1,this.theme=z(),this.fit=I(),this.hideLibby=O(),this.genModels=[],this.genLoras=[],this.genBoards=[],this.genError="",this.pwCurrent="",this.pwNew="",this.pwConfirm="",this.pwBusy=!1,this.pwMsg="",this.pwErr="",this.refs=null,this.refStamp=Date.now(),this.refNote="",this.tts=void 0,this.describe=null,this.describeBusy=!1,this.describeNote="",this.ttsErrors={},this.addPasskey=async()=>{this.passkeyBusy=!0,this.passkeyError="",this.passkeyMsg="";try{const e=await J(this.passkeyName.trim());this.passkeyName="",this.passkeyMsg=`Added “${e.name}”. You can sign in with it now.`,await this.loadPasskeys()}catch(e){const t=X(e);t&&(this.passkeyError=t)}finally{this.passkeyBusy=!1}},this.cancelRevoke=()=>{this.passkeyRevoking=null,this.passkeyPassword=""},this.loadStorage=async()=>{this.storageBusy=!0,this.storageErr="";try{this.storage=await h.storage()}catch(e){this.storageErr=e.message}finally{this.storageBusy=!1}},this.runCleanup=async()=>{this.storageBusy=!0,this.storageErr="";try{const e=await h.cleanupStorage(["uploads","temp"]);this.storage=e.storage,C(`Reclaimed ${e.freedHuman}.`,"success")}catch(e){this.storageErr=e.message}finally{this.storageBusy=!1}},this.loadDiagnostics=async()=>{this.diagBusy=!0,this.diagErr="";try{this.diag=await h.diagnostics(),this.uiDiag=S()}catch(e){this.diagErr=e.message}finally{this.diagBusy=!1}},this.resetDiagnostics=async()=>{this.diagBusy=!0,this.diagErr="";try{_(),await h.resetDiagnostics(),this.diag=await h.diagnostics(),this.uiDiag=S()}catch(e){this.diagErr=e.message}finally{this.diagBusy=!1}}}connectedCallback(){super.connectedCallback(),U(this,"settings"),this.load(),this.loadGenLists(),this.loadTTS(),this.loadDescribe(),this.loadReferences()}async loadReferences(){try{this.refs=await h.libbyReferences()}catch{this.refs=null}}async setReference(e,t){var r;const s=(r=t.files)==null?void 0:r[0];if(t.value="",!s)return;const i=await new Promise((n,o)=>{const u=new FileReader;u.onload=()=>n(String(u.result)),u.onerror=()=>o(u.error),u.readAsDataURL(s)});try{await h.setLibbyReference(e,i),this.refNote="",this.refStamp=Date.now(),await this.loadReferences()}catch(n){this.refNote=n.message}}async clearReference(e){try{await h.deleteLibbyReference(e),this.refNote="",await this.loadReferences()}catch(t){this.refNote=t.message}}referenceTile(e,t){var i;const s=!!((i=this.refs)!=null&&i[e]);return a`<div style="display:flex;flex-direction:column;gap:6px;align-items:center;width:132px;">
       <div style="width:132px;height:176px;border-radius:12px;overflow:hidden;display:grid;place-items:center;
         background:var(--md-sys-color-surface-container-highest);color:var(--md-sys-color-on-surface-variant);font-size:12px;text-align:center;">
         ${s?a`<img src=${h.libbyReferenceURL(e,this.refStamp)} alt=${`Libby, ${t.toLowerCase()}`} style="width:100%;height:100%;object-fit:cover;"/>`:a`<span>No picture</span>`}
@@ -123,22 +123,22 @@ import{z as B,i as P,v as k,u as n,a as M,e as h,b as a,A as l,t as T,ag as z,ah
         <label class="btn-inline">
           ${s?"Replace":"Upload"}
           <input type="file" accept="image/*" hidden ?disabled=${!this.canEdit}
-            @change=${i=>void this.setReference(e,i.target)}/>
+            @change=${r=>void this.setReference(e,r.target)}/>
         </label>
         ${s?a`<button class="btn-inline" ?disabled=${!this.canEdit}
-          @click=${()=>void this.clearReference(e)}>Remove</button>`:l}
+          @click=${()=>void this.clearReference(e)}>Remove</button>`:c}
       </div>
-    </div>`}async load(){try{const[e,t]=await Promise.all([h.getSettings(),h.stats()]);this.settings=e.settings,this.info=e.readOnly,this.stats=t}catch(e){this.loadError=e.message}try{this.apk=await h.apkInfo()}catch{this.apk={available:!1}}}get canEdit(){var e;return!!((e=this.user)!=null&&e.isAdmin)}openTab(e){G(()=>{this.tab=e}),e==="diagnostics"&&!this.diag&&!this.diagBusy&&this.loadDiagnostics(),e==="storage"&&!this.storage&&!this.storageBusy&&this.loadStorage(),e==="account"&&!this.passkeyList&&this.loadPasskeys()}edit(e){!this.settings||!this.canEdit||(this.settings={...this.settings,...e},this.dirty=!0,this.saved=!1)}async save(){if(this.settings){this.saving=!0;try{const e=await h.saveSettings(this.settings);this.settings=e.settings,this.info=e.readOnly,this.dirty=!1,this.saved=!0,F(!!e.settings.incognito),this.loadTTS(!0),this.loadDescribe()}catch(e){this.loadError=e.message}finally{this.saving=!1}}}pickTheme(e){this.theme=e,V(e),W(e)}pickFit(e){this.fit=e,K(e)}async changePassword(){if(this.pwMsg="",this.pwErr="",this.pwNew!==this.pwConfirm){this.pwErr="The new passwords don't match.";return}if(this.pwNew.length<8){this.pwErr="Use at least 8 characters.";return}this.pwBusy=!0;try{await h.changePassword(this.pwCurrent,this.pwNew),this.pwMsg="Password changed.",this.pwCurrent=this.pwNew=this.pwConfirm=""}catch(e){this.pwErr=e.message}finally{this.pwBusy=!1}}render(){if(this.only)return this.renderOnly(this.only);const e=ce.filter(i=>!i.adminOnly||this.canEdit),t=e.find(i=>i.id===this.tab)??e[0],s=this.dirty||this.saved;let r="";return a`
+    </div>`}async load(){try{const[e,t]=await Promise.all([h.getSettings(),h.stats()]);this.settings=e.settings,this.info=e.readOnly,this.stats=t}catch(e){this.loadError=e.message}try{this.apk=await h.apkInfo()}catch{this.apk={available:!1}}}get canEdit(){var e;return!!((e=this.user)!=null&&e.isAdmin)}openTab(e){G(()=>{this.tab=e}),e==="diagnostics"&&!this.diag&&!this.diagBusy&&this.loadDiagnostics(),e==="storage"&&!this.storage&&!this.storageBusy&&this.loadStorage(),e==="account"&&!this.passkeyList&&this.loadPasskeys()}editLora(e,t){var i;const s=[...((i=this.settings)==null?void 0:i.libbyGenLoras)??[]];s[e]&&(s[e]={...s[e],...t},this.edit({libbyGenLoras:s}))}edit(e){!this.settings||!this.canEdit||(this.settings={...this.settings,...e},this.dirty=!0,this.saved=!1)}async save(){if(this.settings){this.saving=!0;try{const e=await h.saveSettings(this.settings);this.settings=e.settings,this.info=e.readOnly,this.dirty=!1,this.saved=!0,F(!!e.settings.incognito),this.loadTTS(!0),this.loadDescribe()}catch(e){this.loadError=e.message}finally{this.saving=!1}}}pickTheme(e){this.theme=e,V(e),K(e)}pickFit(e){this.fit=e,W(e)}async changePassword(){if(this.pwMsg="",this.pwErr="",this.pwNew!==this.pwConfirm){this.pwErr="The new passwords don't match.";return}if(this.pwNew.length<8){this.pwErr="Use at least 8 characters.";return}this.pwBusy=!0;try{await h.changePassword(this.pwCurrent,this.pwNew),this.pwMsg="Password changed.",this.pwCurrent=this.pwNew=this.pwConfirm=""}catch(e){this.pwErr=e.message}finally{this.pwBusy=!1}}render(){if(this.only)return this.renderOnly(this.only);const e=ce.filter(r=>!r.adminOnly||this.canEdit),t=e.find(r=>r.id===this.tab)??e[0],s=this.dirty||this.saved;let i="";return a`
       <div class="shell">
         <nav class="cat-rail" aria-label="Settings categories">
-          ${e.map(i=>{const p=i.group===r?l:a`<div class="cat-head">${i.group}</div>`;return r=i.group,a`${p}
+          ${e.map(r=>{const n=r.group===i?c:a`<div class="cat-head">${r.group}</div>`;return i=r.group,a`${n}
               <button
-                class="cat-row ${i.id===this.tab?"on":""}"
-                aria-current=${i.id===this.tab?"page":"false"}
-                @click=${()=>this.openTab(i.id)}
+                class="cat-row ${r.id===this.tab?"on":""}"
+                aria-current=${r.id===this.tab?"page":"false"}
+                @click=${()=>this.openTab(r.id)}
               >
-                <span class="material-symbols-rounded">${i.icon}</span>
-                <span class="cat-label">${i.label}</span>
+                <span class="material-symbols-rounded">${r.icon}</span>
+                <span class="cat-label">${r.label}</span>
               </button>`})}
           <div class="cat-sep"></div>
           <button class="cat-row danger" @click=${()=>this.dispatchEvent(new CustomEvent("logout",{bubbles:!0,composed:!0}))}>
@@ -152,20 +152,20 @@ import{z as B,i as P,v as k,u as n,a as M,e as h,b as a,A as l,t as T,ag as z,ah
           ${this.loadError?a`<div class="banner error">
                 <span class="material-symbols-rounded" style="font-size:18px;">error</span>
                 ${this.loadError}
-              </div>`:l}
+              </div>`:c}
           ${!this.canEdit&&this.settings&&t.server?a`<div class="banner info">
                 <span class="material-symbols-rounded" style="font-size:18px;">lock</span>
                 Server settings are read-only — only an admin can change them.
-              </div>`:l}
+              </div>`:c}
           ${this.renderTab()}
-          ${s?this.renderSaveBar():l}
+          ${s?this.renderSaveBar():c}
         </div>
       </div>
     `}renderOnly(e){const t={"libby-general":()=>this.renderLibby(),"libby-model":()=>this.renderLibbyModel(),"libby-voice":()=>this.renderLibbyVoice(),"libby-pictures":()=>a`${this.renderLibbyImageGen()}${this.renderLibbyReferences()}`}[e];return a`<div class="embedded">
-      ${this.loadError?a`<div class="banner error"><span class="material-symbols-rounded" style="font-size:18px;">error</span>${this.loadError}</div>`:l}
-      ${!this.canEdit&&this.settings&&e!=="libby-general"?a`<div class="banner info"><span class="material-symbols-rounded" style="font-size:18px;">lock</span>Server settings are read-only — only an admin can change them.</div>`:l}
+      ${this.loadError?a`<div class="banner error"><span class="material-symbols-rounded" style="font-size:18px;">error</span>${this.loadError}</div>`:c}
+      ${!this.canEdit&&this.settings&&e!=="libby-general"?a`<div class="banner info"><span class="material-symbols-rounded" style="font-size:18px;">lock</span>Server settings are read-only — only an admin can change them.</div>`:c}
       ${t()}
-      ${this.dirty||this.saved?this.renderSaveBar():l}
+      ${this.dirty||this.saved?this.renderSaveBar():c}
     </div>`}renderTab(){switch(this.tab){case"appearance":return this.renderAppearance();case"libby":return this.renderLibby();case"backgrounds":return a`<section class="card"><oppai-libby-backgrounds></oppai-libby-backgrounds></section>`;case"ai":return this.renderAI();case"scraping":return this.renderScraping();case"library":return this.renderLibrary();case"android":return this.renderAndroid();case"account":return this.renderAccount();case"storage":return this.renderStorage();case"diagnostics":return this.renderDiagnostics();case"privacy":return this.renderPrivacy();default:return this.renderAbout()}}renderSaveBar(){return a`
       <div class="savebar">
         <span class="grow">
@@ -193,7 +193,7 @@ import{z as B,i as P,v as k,u as n,a as M,e as h,b as a,A as l,t as T,ag as z,ah
                       ${new Date((e.modified??0)*1e3).toLocaleDateString()}
                       ${e.sha256?a`<br /><span style="font-family:monospace; font-size:11px;"
                             >sha256 ${e.sha256.slice(0,16)}…</span
-                          >`:l}
+                          >`:c}
                     </div>
                   </div>
                   <div class="field-control">
@@ -363,20 +363,20 @@ import{z as B,i as P,v as k,u as n,a as M,e as h,b as a,A as l,t as T,ag as z,ah
           </div>
         </div>
       </section>
-    `}renderLibbyVoice(){const e=this.settings;if(!e)return l;const t=this.tts,s=(t==null?void 0:t.voices)??[],r=s.filter(o=>o.installed),i=s.filter(o=>!o.installed),p=new Set((t==null?void 0:t.downloading)??[]);return a`<section class="card">
+    `}renderLibbyVoice(){const e=this.settings;if(!e)return c;const t=this.tts,s=(t==null?void 0:t.voices)??[],i=s.filter(o=>o.installed),r=s.filter(o=>!o.installed),n=new Set((t==null?void 0:t.downloading)??[]);return a`<section class="card">
       <h3><span class="material-symbols-rounded">record_voice_over</span>Libby’s voice</h3>
       <p class="card-sub">
-        ${t===void 0?"Checking the server…":t?t.engine==="piper"&&t.ready?a`Speaking with <strong>piper</strong> on the server’s CPU. Turn playback on per device with the speaker button in Chat.`:t.engine==="openai"&&t.ready?a`Speaking through the speech server at <code>${e.ttsUrl}</code>.`:a`Not speaking from the server${t.detail?a` — ${t.detail}`:l}. Devices fall back to their own voices.`:"The server did not answer about speech."}
+        ${t===void 0?"Checking the server…":t?t.engine==="kokoro"&&t.ready?a`Speaking with <strong>Kokoro</strong>, the natural voice, on the server’s CPU. Turn playback on per device with the speaker button in Chat.`:t.engine==="piper"&&t.ready?a`Speaking with <strong>piper</strong> on the server’s CPU. Turn playback on per device with the speaker button in Chat.`:t.engine==="openai"&&t.ready?a`Speaking through the speech server at <code>${e.ttsUrl}</code>.`:a`Not speaking from the server${t.detail?a` — ${t.detail}`:c}. Devices fall back to their own voices.`:"The server did not answer about speech."}
       </p>
 
       <div class="field">
         <div class="field-text">
           <div class="field-label">Engine</div>
-          <div class="field-help">Auto prefers piper on the server and falls back to the speech server. Off leaves devices to their own voices.</div>
+          <div class="field-help">Auto uses the most natural voice the server has — Kokoro, then piper, then the speech server. Piper is quicker and flatter; Off leaves devices to their own voices.</div>
         </div>
         <div class="field-control">
           <select ?disabled=${!this.canEdit} @change=${o=>this.edit({ttsEngine:o.target.value})}>
-            ${[["auto","Auto"],["piper",`Piper on the server${t&&!t.piperInstalled?" (not installed)":""}`],["openai","Speech server"],["off","Off"]].map(([o,g])=>a`<option value=${o} ?selected=${e.ttsEngine===o}>${g}</option>`)}
+            ${[["auto","Auto"],["kokoro",`Kokoro — natural${t&&!t.kokoroInstalled?" (not installed)":""}`],["piper",`Piper — light${t&&!t.piperInstalled?" (not installed)":""}`],["openai","Speech server"],["off","Off"]].map(([o,u])=>a`<option value=${o} ?selected=${e.ttsEngine===o}>${u}</option>`)}
           </select>
         </div>
       </div>
@@ -384,13 +384,13 @@ import{z as B,i as P,v as k,u as n,a as M,e as h,b as a,A as l,t as T,ag as z,ah
       <div class="field">
         <div class="field-text">
           <div class="field-label">Voice</div>
-          <div class="field-help">${r.length?"Installed voices. Downloaded ones can be removed below.":"No voice is installed yet — download one below."}</div>
+          <div class="field-help">${i.length?"Installed voices. Downloaded ones can be removed below.":"No voice is installed yet — download one below."}</div>
         </div>
         <div class="field-control" style="display:flex; gap:8px; align-items:center;">
           <select ?disabled=${!this.canEdit} @change=${o=>this.edit({ttsVoice:o.target.value})}>
             <option value="" ?selected=${!e.ttsVoice}>Engine’s default</option>
-            ${r.map(o=>a`<option value=${o.id} ?selected=${o.id===e.ttsVoice}>${o.label}${o.bundled?" · bundled":""}</option>`)}
-            ${e.ttsVoice&&!r.some(o=>o.id===e.ttsVoice)?a`<option value=${e.ttsVoice} selected>${e.ttsVoice} (not installed)</option>`:l}
+            ${i.map(o=>a`<option value=${o.id} ?selected=${o.id===e.ttsVoice}>${o.label}${o.bundled?" · bundled":""}</option>`)}
+            ${e.ttsVoice&&!i.some(o=>o.id===e.ttsVoice)?a`<option value=${e.ttsVoice} selected>${e.ttsVoice} (not installed)</option>`:c}
           </select>
           <button class="btn" ?disabled=${!(t!=null&&t.ready)} title="Hear the current voice" @click=${()=>void this.testVoice()}>Test</button>
         </div>
@@ -407,21 +407,21 @@ import{z as B,i as P,v as k,u as n,a as M,e as h,b as a,A as l,t as T,ag as z,ah
         </div>
       </div>
 
-      ${t!=null&&t.piperInstalled?a`<div class="field stack">
+      ${t!=null&&t.piperInstalled&&t.engine!=="kokoro"?a`<div class="field stack">
         <div class="field-text">
           <div class="field-label">Piper voices</div>
           <div class="field-help">A curated handful from piper’s voice set, fetched from Hugging Face onto the server (20–110 MB each). Any other piper voice dropped into <code>/config/tts</code> is listed too.</div>
         </div>
         <div class="field-control">
           <ul class="voice-list">
-            ${r.map(o=>a`<li><span>${o.label}<small>${o.quality??""}${o.bundled?" · bundled":""}</small></span>
-              ${!o.bundled&&this.canEdit?a`<button class="btn" @click=${()=>void this.deleteVoice(o.id)}>Remove</button>`:l}</li>`)}
-            ${i.map(o=>a`<li><span>${o.label}<small>${o.quality??""}${o.bytes?` · ${Math.round(o.bytes/1e6)} MB`:""}</small></span>
-              ${this.ttsErrors[o.id]?a`<em class="voice-error">${this.ttsErrors[o.id]}</em>`:l}
-              ${p.has(o.id)?a`<span class="hint">Downloading…</span>`:this.canEdit?a`<button class="btn" @click=${()=>void this.downloadVoice(o.id)}>Download</button>`:l}</li>`)}
+            ${i.map(o=>a`<li><span>${o.label}<small>${o.quality??""}${o.bundled?" · bundled":""}</small></span>
+              ${!o.bundled&&this.canEdit?a`<button class="btn" @click=${()=>void this.deleteVoice(o.id)}>Remove</button>`:c}</li>`)}
+            ${r.map(o=>a`<li><span>${o.label}<small>${o.quality??""}${o.bytes?` · ${Math.round(o.bytes/1e6)} MB`:""}</small></span>
+              ${this.ttsErrors[o.id]?a`<em class="voice-error">${this.ttsErrors[o.id]}</em>`:c}
+              ${n.has(o.id)?a`<span class="hint">Downloading…</span>`:this.canEdit?a`<button class="btn" @click=${()=>void this.downloadVoice(o.id)}>Download</button>`:c}</li>`)}
           </ul>
         </div>
-      </div>`:l}
+      </div>`:c}
 
       <div class="field stack">
         <div class="field-text">
@@ -442,7 +442,7 @@ import{z as B,i as P,v as k,u as n,a as M,e as h,b as a,A as l,t as T,ag as z,ah
             @change=${o=>this.edit({ttsApiKey:o.target.value})} />
         </div>
       </div>
-    </section>`}async loadTTS(e=!1){var t,s;this.tts=await R(e);try{this.ttsErrors=await h.ttsVoiceErrors()}catch{}(s=(t=this.tts)==null?void 0:t.downloading)!=null&&s.length&&window.setTimeout(()=>void this.loadTTS(!0),4e3)}async loadDescribe(){try{this.describe=await h.describeStatus()}catch{this.describe=null}}async probeVision(){this.describeBusy=!0,this.describeNote="";try{const e=await h.describeProbe();this.describeNote=`The model answered: “${e.description}”`}catch(e){this.describeNote=e.message}finally{this.describeBusy=!1}}async toggleBackfill(){var e;this.describeBusy=!0;try{(e=this.describe)!=null&&e.backfilling?await h.describeBackfillStop():await h.describeBackfill(),await this.loadDescribe()}catch(t){this.describeNote=t.message}finally{this.describeBusy=!1}}async testVoice(){D(),await Z("Hi. This is what I sound like. Saved to your library, by the way — nice pick.")}async downloadVoice(e){try{await h.downloadTTSVoice(e),await this.loadTTS(!0)}catch(t){this.loadError=t.message}}async deleteVoice(e){if(confirm(`Remove the ${e} voice from the server?`))try{await h.deleteTTSVoice(e),await this.loadTTS(!0)}catch(t){this.loadError=t.message}}renderLibbyModel(){const e=this.settings;return a`
+    </section>`}async loadTTS(e=!1){var t,s;this.tts=await N(e);try{this.ttsErrors=await h.ttsVoiceErrors()}catch{}(s=(t=this.tts)==null?void 0:t.downloading)!=null&&s.length&&window.setTimeout(()=>void this.loadTTS(!0),4e3)}async loadDescribe(){try{this.describe=await h.describeStatus()}catch{this.describe=null}}async probeVision(){this.describeBusy=!0,this.describeNote="";try{const e=await h.describeProbe();this.describeNote=`The model answered: “${e.description}”`}catch(e){this.describeNote=e.message}finally{this.describeBusy=!1}}async toggleBackfill(){var e;this.describeBusy=!0;try{(e=this.describe)!=null&&e.backfilling?await h.describeBackfillStop():await h.describeBackfill(),await this.loadDescribe()}catch(t){this.describeNote=t.message}finally{this.describeBusy=!1}}async testVoice(){D(),await Z("Hi. This is what I sound like. Saved to your library, by the way — nice pick.")}async downloadVoice(e){try{await h.downloadTTSVoice(e),await this.loadTTS(!0)}catch(t){this.loadError=t.message}}async deleteVoice(e){if(confirm(`Remove the ${e} voice from the server?`))try{await h.deleteTTSVoice(e),await this.loadTTS(!0)}catch(t){this.loadError=t.message}}renderLibbyModel(){const e=this.settings;return a`
       <section class="card">
         <h3><span class="material-symbols-rounded">memory</span>Her model</h3>
         <p class="card-sub">The chat backend every character talks through. Saved for the whole server.</p>
@@ -637,7 +637,7 @@ import{z as B,i as P,v as k,u as n,a as M,e as h,b as a,A as l,t as T,ag as z,ah
                     only reach a model that can see (Her eyes, under Model &amp; generation). If the bare one is missing she uses the
                     clothed one.
                   </div>
-                  ${this.refNote?a`<div class="field-help" style="color:var(--md-sys-color-error);">${this.refNote}</div>`:l}
+                  ${this.refNote?a`<div class="field-help" style="color:var(--md-sys-color-error);">${this.refNote}</div>`:c}
                 </div>
                 <div class="field-control" style="display:flex;gap:16px;flex-wrap:wrap;">
                   ${this.referenceTile("clothed","Usual outfit")}
@@ -645,19 +645,19 @@ import{z as B,i as P,v as k,u as n,a as M,e as h,b as a,A as l,t as T,ag as z,ah
                 </div>
               </div>
       </section>
-    `}renderLibbyImageGen(){const e=this.settings;if(!e)return l;if(!e.imageGenEnabled)return a`<section class="card">
+    `}renderLibbyImageGen(){const e=this.settings;if(!e)return c;if(!e.imageGenEnabled)return a`<section class="card">
         <h3><span class="material-symbols-rounded">auto_awesome</span>Libby’s image generation</h3>
         <p class="card-sub">
           Set an image generator URL under <strong>Library</strong> and Libby can offer to make
           pictures for you in chat. She always asks first — nothing is generated or saved until
           you press Allow.
         </p>
-      </section>`;const t=this.genModels,s=this.genLoras,r=this.genBoards;return a`<section class="card">
+      </section>`;const t=this.genModels,s=this.genLoras,i=e.libbyGenLoras??[],r=this.genBoards;return a`<section class="card">
       <h3><span class="material-symbols-rounded">auto_awesome</span>Libby’s image generation</h3>
       <p class="card-sub">
         What she uses when she offers to make you a picture. She always asks first — nothing is
         generated or saved until you press Allow.
-        ${this.genError?a`<br /><span style="color:var(--oppai-danger,#ff6b6b);">${this.genError}</span>`:l}
+        ${this.genError?a`<br /><span style="color:var(--oppai-danger,#ff6b6b);">${this.genError}</span>`:c}
       </p>
 
       <div class="field">
@@ -668,33 +668,47 @@ import{z as B,i as P,v as k,u as n,a as M,e as h,b as a,A as l,t as T,ag as z,ah
         </div>
         <div class="field-control">
           ${t.length?a`<select ?disabled=${!this.canEdit}
-                @change=${i=>this.edit({libbyGenModel:i.target.value})}>
+                @change=${n=>this.edit({libbyGenModel:n.target.value})}>
                 <option value="" ?selected=${!e.libbyGenModel}>Generator’s default</option>
-                ${t.map(i=>a`<option value=${i} ?selected=${i===e.libbyGenModel}>${i}</option>`)}
+                ${t.map(n=>a`<option value=${n} ?selected=${n===e.libbyGenModel}>${n}</option>`)}
               </select>`:a`<input type="text" autocomplete="off" placeholder="Generator’s default"
                 .value=${e.libbyGenModel} ?disabled=${!this.canEdit}
-                @change=${i=>this.edit({libbyGenModel:i.target.value})} />`}
+                @change=${n=>this.edit({libbyGenModel:n.target.value})} />`}
         </div>
       </div>
 
       <div class="field">
         <div class="field-text">
-          <div class="field-label">LoRA</div>
-          <div class="field-help">One LoRA applied to everything she makes — usually the one
-            that makes the picture look like her.</div>
+          <div class="field-label">LoRAs</div>
+          <div class="field-help">Applied to everything she makes, each at its own strength —
+            usually the one that makes the picture look like her, plus any style or detail
+            LoRAs you like her drawn with.</div>
         </div>
-        <div class="field-control" style="display:flex; gap:8px; align-items:center;">
-          ${s.length?a`<select ?disabled=${!this.canEdit}
-                @change=${i=>this.edit({libbyGenLora:i.target.value})}>
-                <option value="" ?selected=${!e.libbyGenLora}>None</option>
-                ${s.map(i=>a`<option value=${i} ?selected=${i===e.libbyGenLora}>${i}</option>`)}
-              </select>`:a`<input type="text" autocomplete="off" placeholder="None"
-                .value=${e.libbyGenLora} ?disabled=${!this.canEdit}
-                @change=${i=>this.edit({libbyGenLora:i.target.value})} />`}
-          <input type="number" step="0.05" min="-2" max="2" style="width:90px;"
-            aria-label="LoRA strength"
-            .value=${String(e.libbyGenLoraWeight||1)} ?disabled=${!this.canEdit||!e.libbyGenLora}
-            @change=${i=>this.edit({libbyGenLoraWeight:Number(i.target.value)})} />
+        <div class="field-control" style="display:flex; flex-direction:column; gap:8px; align-items:stretch;">
+          ${i.map((n,o)=>a`<div style="display:flex; gap:8px; align-items:center;">
+            ${s.length?a`<select style="flex:1; min-width:0;" ?disabled=${!this.canEdit}
+                  aria-label="LoRA ${o+1}"
+                  @change=${u=>this.editLora(o,{name:u.target.value})}>
+                  ${(s.includes(n.name)?s:[n.name,...s]).map(u=>a`<option value=${u} ?selected=${u===n.name}>${u}</option>`)}
+                </select>`:a`<input type="text" autocomplete="off" placeholder="LoRA name" style="flex:1; min-width:0;"
+                  aria-label="LoRA ${o+1}"
+                  .value=${n.name} ?disabled=${!this.canEdit}
+                  @change=${u=>this.editLora(o,{name:u.target.value})} />`}
+            <input type="number" step="0.05" min="-2" max="2" style="width:90px;"
+              aria-label="LoRA ${o+1} strength"
+              .value=${String(n.weight)} ?disabled=${!this.canEdit}
+              @change=${u=>this.editLora(o,{weight:Number(u.target.value)})} />
+            <button class="btn-inline" title="Remove" aria-label="Remove LoRA ${o+1}" ?disabled=${!this.canEdit}
+              @click=${()=>this.edit({libbyGenLoras:i.filter((u,f)=>f!==o)})}>
+              <span class="material-symbols-rounded" style="font-size:18px;">delete</span>
+            </button>
+          </div>`)}
+          <button class="btn-inline" style="align-self:flex-start; display:inline-flex; align-items:center; gap:6px;"
+            ?disabled=${!this.canEdit||i.length>=8}
+            @click=${()=>this.edit({libbyGenLoras:[...i,{name:s.find(n=>!i.some(o=>o.name===n))??"",weight:1}]})}>
+            <span class="material-symbols-rounded" style="font-size:18px;">add</span>
+            ${i.length?"Add another LoRA":"Add a LoRA"}
+          </button>
         </div>
       </div>
 
@@ -706,12 +720,12 @@ import{z as B,i as P,v as k,u as n,a as M,e as h,b as a,A as l,t as T,ag as z,ah
             </div>
             <div class="field-control">
               <select ?disabled=${!this.canEdit}
-                @change=${i=>this.edit({libbyGenBoard:i.target.value})}>
+                @change=${n=>this.edit({libbyGenBoard:n.target.value})}>
                 <option value="" ?selected=${!e.libbyGenBoard}>Uncategorized</option>
-                ${r.map(i=>a`<option value=${i} ?selected=${i===e.libbyGenBoard}>${i}</option>`)}
+                ${r.map(n=>a`<option value=${n} ?selected=${n===e.libbyGenBoard}>${n}</option>`)}
               </select>
             </div>
-          </div>`:l}
+          </div>`:c}
 
       <div class="field stack">
         <div class="field-text">
@@ -726,7 +740,7 @@ import{z as B,i as P,v as k,u as n,a as M,e as h,b as a,A as l,t as T,ag as z,ah
           <textarea rows="3" style="width:100%;"
             placeholder="1girl, long orange hair, red eyes, glasses, …"
             .value=${e.libbyGenPrompt} ?disabled=${!this.canEdit}
-            @change=${i=>this.edit({libbyGenPrompt:i.target.value})}></textarea>
+            @change=${n=>this.edit({libbyGenPrompt:n.target.value})}></textarea>
         </div>
       </div>
 
@@ -739,7 +753,7 @@ import{z as B,i as P,v as k,u as n,a as M,e as h,b as a,A as l,t as T,ag as z,ah
           <textarea rows="2" style="width:100%;"
             placeholder="lowres, bad anatomy, watermark, …"
             .value=${e.libbyGenNegativePrompt} ?disabled=${!this.canEdit}
-            @change=${i=>this.edit({libbyGenNegativePrompt:i.target.value})}></textarea>
+            @change=${n=>this.edit({libbyGenNegativePrompt:n.target.value})}></textarea>
         </div>
       </div>
 
@@ -814,7 +828,7 @@ import{z as B,i as P,v as k,u as n,a as M,e as h,b as a,A as l,t as T,ag as z,ah
                     ${this.readOnlyField("Active tagger","Chosen at startup.",t.aiTagger)}
                     ${this.readOnlyField("Inference device","OPPAI_AI_DEVICE — needs a restart to change.",t.aiDevice)}
                     ${this.readOnlyField("Model directory","OPPAI_AI_MODEL_DIR — needs a restart to change.",t.aiModelDir)}
-                  `:l}
+                  `:c}
             `:a`<div class="field-help">Loading…</div>`}
       </section>
       ${this.renderVision()}
@@ -859,7 +873,7 @@ import{z as B,i as P,v as k,u as n,a as M,e as h,b as a,A as l,t as T,ag as z,ah
                   <div class="field-label">Check the model</div>
                   <div class="field-help">
                     Sends a generated test picture and shows what comes back. Save the URL first.
-                    ${this.describeNote?a`<div style="margin-top:6px; color:var(--oppai-text);">${this.describeNote}</div>`:l}
+                    ${this.describeNote?a`<div style="margin-top:6px; color:var(--oppai-text);">${this.describeNote}</div>`:c}
                   </div>
                 </div>
                 <div class="field-control">
@@ -958,7 +972,7 @@ import{z as B,i as P,v as k,u as n,a as M,e as h,b as a,A as l,t as T,ag as z,ah
                 ${e.civitaiKeySet?a`<div class="field-control">
                   <button type="button" class="btn-inline" ?disabled=${!this.canEdit}
                     @click=${()=>this.edit({civitaiApiKey:"",civitaiKeySet:!1})}>Clear saved key</button>
-                </div>`:l}
+                </div>`:c}
               </div>
 
               <div class="field stack">
@@ -984,7 +998,7 @@ import{z as B,i as P,v as k,u as n,a as M,e as h,b as a,A as l,t as T,ag as z,ah
                 ${e.rule34ApiKeySet?a`<div class="field-control">
                   <button type="button" class="btn-inline" ?disabled=${!this.canEdit}
                     @click=${()=>this.edit({rule34ApiKey:"",rule34ApiKeySet:!1})}>Clear saved key</button>
-                </div>`:l}
+                </div>`:c}
               </div>
 
               <div class="field stack">
@@ -1042,7 +1056,7 @@ import{z as B,i as P,v as k,u as n,a as M,e as h,b as a,A as l,t as T,ag as z,ah
               </div>
             `:a`<div class="field-help">Loading…</div>`}
       </section>
-    `}renderLibrary(){const e=this.stats;if(!e)return l;const t=new Map(e.kinds.map(s=>[s.kind,s]));return a`
+    `}renderLibrary(){const e=this.stats;if(!e)return c;const t=new Map(e.kinds.map(s=>[s.kind,s]));return a`
       <section class="card">
         <h3><span class="material-symbols-rounded">inventory_2</span>Library</h3>
         <p class="card-sub">
@@ -1050,9 +1064,9 @@ import{z as B,i as P,v as k,u as n,a as M,e as h,b as a,A as l,t as T,ag as z,ah
           ${e.tags} ${e.tags===1?"tag":"tags"}
         </p>
         <div class="stat-grid">
-          ${Object.keys(E).map(s=>{const r=t.get(s);return a`<div class="stat">
-              <div class="stat-num">${(r==null?void 0:r.count)??0}</div>
-              <div class="stat-label">${E[s].label} · ${b((r==null?void 0:r.bytes)??0)}</div>
+          ${Object.keys(E).map(s=>{const i=t.get(s);return a`<div class="stat">
+              <div class="stat-num">${(i==null?void 0:i.count)??0}</div>
+              <div class="stat-label">${E[s].label} · ${b((i==null?void 0:i.bytes)??0)}</div>
             </div>`})}
         </div>
       </section>
@@ -1067,15 +1081,15 @@ import{z as B,i as P,v as k,u as n,a as M,e as h,b as a,A as l,t as T,ag as z,ah
 
         ${this.passkeyError?a`<div class="banner error">
               <span class="material-symbols-rounded" style="font-size:18px;">error</span>${this.passkeyError}
-            </div>`:l}
+            </div>`:c}
         ${this.passkeyMsg?a`<div class="banner ok">
               <span class="material-symbols-rounded" style="font-size:18px;">check_circle</span>${this.passkeyMsg}
-            </div>`:l}
+            </div>`:c}
 
         ${e&&!e.available?a`<div class="banner info">
               <span class="material-symbols-rounded" style="font-size:18px;">lock</span>
               ${e.reason}
-            </div>`:l}
+            </div>`:c}
 
         ${e===null?a`<p class="field-help">Checking…</p>`:e.passkeys.length===0?a`<p class="field-help">
                 No passkeys yet. Your password keeps working either way — it's also how you
@@ -1100,13 +1114,13 @@ import{z as B,i as P,v as k,u as n,a as M,e as h,b as a,A as l,t as T,ag as z,ah
                   ${this.passkeyBusy?"Waiting for your device…":"Add a passkey"}
                 </button>
               </div>
-            `:l}
+            `:c}
 
         ${e!=null&&e.relyingPartyId?a`<p class="field-help">
               Passkeys added here are tied to <code>${e.relyingPartyId}</code>. That's how
               WebAuthn works — reach OppaiLib at a different address and your device won't
               offer them, so add one per address you actually use.
-            </p>`:l}
+            </p>`:c}
       </section>
     `}renderPasskeyRow(e){const t=this.passkeyRenaming===e.id,s=this.passkeyRevoking===e.id;return a`
       <div class="pk-row">
@@ -1116,7 +1130,7 @@ import{z as B,i as P,v as k,u as n,a as M,e as h,b as a,A as l,t as T,ag as z,ah
                 <input
                   type="text"
                   .value=${this.passkeyName}
-                  @input=${r=>this.passkeyName=r.target.value}
+                  @input=${i=>this.passkeyName=i.target.value}
                 />
                 <button @click=${()=>void this.savePasskeyName(e)}>Save</button>
                 <button @click=${()=>this.passkeyRenaming=null}>Cancel</button>
@@ -1137,7 +1151,7 @@ import{z as B,i as P,v as k,u as n,a as M,e as h,b as a,A as l,t as T,ag as z,ah
                   autocomplete="current-password"
                   placeholder="Your password"
                   .value=${this.passkeyPassword}
-                  @input=${r=>this.passkeyPassword=r.target.value}
+                  @input=${i=>this.passkeyPassword=i.target.value}
                 />
                 <div class="pk-revoke-actions">
                   <button @click=${this.cancelRevoke}>Cancel</button>
@@ -1146,9 +1160,9 @@ import{z as B,i as P,v as k,u as n,a as M,e as h,b as a,A as l,t as T,ag as z,ah
                     ${this.passkeyBusy?"Removing…":"Remove it"}
                   </button>
                 </div>
-              </div>`:l}
+              </div>`:c}
         </div>
-        ${t||s?l:a`<div class="pk-actions">
+        ${t||s?c:a`<div class="pk-actions">
               <button title="Rename" @click=${()=>this.startRename(e)}>
                 <span class="material-symbols-rounded" style="font-size:18px;">edit</span>
               </button>
@@ -1167,10 +1181,10 @@ import{z as B,i as P,v as k,u as n,a as M,e as h,b as a,A as l,t as T,ag as z,ah
 
         ${this.pwErr?a`<div class="banner error">
               <span class="material-symbols-rounded" style="font-size:18px;">error</span>${this.pwErr}
-            </div>`:l}
+            </div>`:c}
         ${this.pwMsg?a`<div class="banner ok">
               <span class="material-symbols-rounded" style="font-size:18px;">check_circle</span>${this.pwMsg}
-            </div>`:l}
+            </div>`:c}
 
         <div class="pw">
           <input
@@ -1217,7 +1231,7 @@ import{z as B,i as P,v as k,u as n,a as M,e as h,b as a,A as l,t as T,ag as z,ah
 
         ${this.storageErr?a`<div class="banner error">
               <span class="material-symbols-rounded" style="font-size:18px;">error</span>${this.storageErr}
-            </div>`:l}
+            </div>`:c}
 
         ${((e==null?void 0:e.warnings)??[]).map(s=>a`<div class="banner error">
           <span class="material-symbols-rounded" style="font-size:18px;">warning</span>${s}
@@ -1231,7 +1245,7 @@ import{z as B,i as P,v as k,u as n,a as M,e as h,b as a,A as l,t as T,ag as z,ah
           ${(t=this.user)!=null&&t.isAdmin?a`<button ?disabled=${this.storageBusy} @click=${this.runCleanup}>
                 <span class="material-symbols-rounded" style="font-size:20px;">mop</span>
                 Reclaim space
-              </button>`:l}
+              </button>`:c}
           <span class="field-help grow">
             Reclaiming removes only what can be recreated: chunks of uploads nobody
             came back to finish, and scratch files from jobs that have ended. It never
@@ -1242,11 +1256,11 @@ import{z as B,i as P,v as k,u as n,a as M,e as h,b as a,A as l,t as T,ag as z,ah
         ${e?a`
               ${e.pendingBytes>0?a`<p class="field-help">
                     Uploads in progress still need about ${b(e.pendingBytes)}.
-                  </p>`:l}
+                  </p>`:c}
               ${e.mappings.map(s=>this.renderMapping(s))}
               <h4 style="margin:18px 0 6px;">Reclaimable now</h4>
               ${e.reclaimable.map(s=>a`<p class="field-help">
-                ${s.label}: <strong>${b(s.bytes)}</strong>${s.note?a` — ${s.note}`:l}
+                ${s.label}: <strong>${b(s.bytes)}</strong>${s.note?a` — ${s.note}`:c}
               </p>`)}
             `:a`<p class="field-help">${this.storageBusy?"Reading…":"No reading yet."}</p>`}
       </section>
@@ -1255,15 +1269,15 @@ import{z as B,i as P,v as k,u as n,a as M,e as h,b as a,A as l,t as T,ag as z,ah
         <div style="display:flex; align-items:baseline; gap:8px; flex-wrap:wrap;">
           <strong>${e.label}</strong>
           <code style="font-size:12px; opacity:.8;">${e.path}</code>
-          ${e.exists?l:a`<span class="field-help" style="color:var(--oppai-error);">not mapped</span>`}
-          ${e.exists&&!e.writable?a`<span class="field-help" style="color:var(--oppai-error);">read-only</span>`:l}
+          ${e.exists?c:a`<span class="field-help" style="color:var(--oppai-error);">not mapped</span>`}
+          ${e.exists&&!e.writable?a`<span class="field-help" style="color:var(--oppai-error);">read-only</span>`:c}
         </div>
         <div style="height:6px; border-radius:999px; background:var(--oppai-surface-2); overflow:hidden; margin:6px 0;">
           <span style="display:block; height:100%; width:${t}%; background:${t>=90?"var(--oppai-error)":"var(--oppai-primary)"};"></span>
         </div>
         <p class="field-help">
           ${e.error?e.error:a`${b(e.freeBytes)} free of ${b(e.totalBytes)} (${t}% used)`}
-          ${(e.contents??[]).map(s=>a` · ${s.label}: ${b(s.bytes)}${s.count?a` (${s.count})`:l}`)}
+          ${(e.contents??[]).map(s=>a` · ${s.label}: ${b(s.bytes)}${s.count?a` (${s.count})`:c}`)}
         </p>
         <p class="field-help">${e.purpose} Set with <code>${e.env}</code>.</p>
       </div>
@@ -1277,7 +1291,7 @@ import{z as B,i as P,v as k,u as n,a as M,e as h,b as a,A as l,t as T,ag as z,ah
 
         ${this.diagErr?a`<div class="banner error">
               <span class="material-symbols-rounded" style="font-size:18px;">error</span>${this.diagErr}
-            </div>`:l}
+            </div>`:c}
 
         <div class="diag-actions">
           <button class="btn-primary" ?disabled=${this.diagBusy} @click=${this.loadDiagnostics}>
@@ -1295,7 +1309,7 @@ import{z as B,i as P,v as k,u as n,a as M,e as h,b as a,A as l,t as T,ag as z,ah
         </div>
 
         ${e?a`
-              ${e.dbWal?l:a`<div class="banner error">
+              ${e.dbWal?c:a`<div class="banner error">
                     <span class="material-symbols-rounded" style="font-size:18px;">warning</span>
                     The database isn't in WAL mode, so every query runs one at a time.
                     This is usually because it lives on a network share — move it to a
@@ -1375,9 +1389,9 @@ import{z as B,i as P,v as k,u as n,a as M,e as h,b as a,A as l,t as T,ag as z,ah
                   `:a`<p class="field-help">Refresh to read browser timings.</p>`}
             `:a`<p class="field-help">${this.diagBusy?"Reading…":"No snapshot yet."}</p>`}
       </section>
-    `}renderFetchHealth(e){const t=e.metrics.counters,s=[["Fetches completed",t["scrape.fetch.ok"]??0,"Pages and listings fetched successfully."],["Retried",t["scrape.fetch.retry"]??0,"A site failed transiently and we tried again."],["Gave up",t["scrape.fetch.exhausted"]??0,"Still failing after every retry."],["Queued behind another request",t["scrape.host_queued"]??0,"A steady number here means we're fanning out wider than the site allows."],["Asked to back off",t["scrape.fetch.backoff_too_long"]??0,"A site asked for a longer wait than we'll hold a click open for."]];return s.every(([,r])=>r===0)?l:a`
+    `}renderFetchHealth(e){const t=e.metrics.counters,s=[["Fetches completed",t["scrape.fetch.ok"]??0,"Pages and listings fetched successfully."],["Retried",t["scrape.fetch.retry"]??0,"A site failed transiently and we tried again."],["Gave up",t["scrape.fetch.exhausted"]??0,"Still failing after every retry."],["Queued behind another request",t["scrape.host_queued"]??0,"A steady number here means we're fanning out wider than the site allows."],["Asked to back off",t["scrape.fetch.backoff_too_long"]??0,"A site asked for a longer wait than we'll hold a click open for."]];return s.every(([,i])=>i===0)?c:a`
       <h4 class="diag-head">Outbound fetches</h4>
-      ${s.map(([r,i,p])=>i===0?l:a`<div class="diag-row"><strong>${i}</strong> ${r} <span class="field-help">— ${p}</span></div>`)}
+      ${s.map(([i,r,n])=>r===0?c:a`<div class="diag-row"><strong>${r}</strong> ${i} <span class="field-help">— ${n}</span></div>`)}
     `}diagStat(e,t){return a`<div class="stat">
       <div class="stat-num diag-stat-num">${t}</div>
       <div class="stat-label">${e}</div>
@@ -1392,7 +1406,7 @@ import{z as B,i as P,v as k,u as n,a as M,e as h,b as a,A as l,t as T,ag as z,ah
         ${this.readOnlyField("Database","SQLite metadata store.",e.dbPath)}
         ${this.readOnlyField("Session length","How long a login stays valid.",`${e.sessionHours} hours`)}
       </section>
-    `:l}switchField(e,t,s,r,i=!1){const p=!this.canEdit||i;return a`
+    `:c}switchField(e,t,s,i,r=!1){const n=!this.canEdit||r;return a`
       <div class="field">
         <div class="field-text">
           <div class="field-label">${e}</div>
@@ -1404,8 +1418,8 @@ import{z as B,i as P,v as k,u as n,a as M,e as h,b as a,A as l,t as T,ag as z,ah
             role="switch"
             aria-checked=${s?"true":"false"}
             aria-label=${e}
-            ?disabled=${p}
-            @click=${()=>r(!s)}
+            ?disabled=${n}
+            @click=${()=>i(!s)}
           ></button>
         </div>
       </div>
@@ -1417,7 +1431,7 @@ import{z as B,i as P,v as k,u as n,a as M,e as h,b as a,A as l,t as T,ag as z,ah
         </div>
         <div class="field-control"><span class="ro">${s}</span></div>
       </div>
-    `}};d.styles=[B,Q,P`
+    `}};d.styles=[P,Q,B`
       :host {
         display: block;
       }
@@ -1937,4 +1951,4 @@ import{z as B,i as P,v as k,u as n,a as M,e as h,b as a,A as l,t as T,ag as z,ah
         gap: 12px;
         max-width: 360px;
       }
-    `];c([k({attribute:!1})],d.prototype,"user",2);c([k({attribute:!1})],d.prototype,"only",2);c([n()],d.prototype,"tab",2);c([n()],d.prototype,"settings",2);c([n()],d.prototype,"info",2);c([n()],d.prototype,"stats",2);c([n()],d.prototype,"apk",2);c([n()],d.prototype,"loadError",2);c([n()],d.prototype,"passkeyList",2);c([n()],d.prototype,"passkeyBusy",2);c([n()],d.prototype,"passkeyError",2);c([n()],d.prototype,"passkeyMsg",2);c([n()],d.prototype,"passkeyName",2);c([n()],d.prototype,"passkeyRenaming",2);c([n()],d.prototype,"passkeyRevoking",2);c([n()],d.prototype,"passkeyPassword",2);c([n()],d.prototype,"diag",2);c([n()],d.prototype,"uiDiag",2);c([n()],d.prototype,"storage",2);c([n()],d.prototype,"storageBusy",2);c([n()],d.prototype,"storageErr",2);c([n()],d.prototype,"diagBusy",2);c([n()],d.prototype,"diagErr",2);c([n()],d.prototype,"dirty",2);c([n()],d.prototype,"saving",2);c([n()],d.prototype,"saved",2);c([n()],d.prototype,"theme",2);c([n()],d.prototype,"fit",2);c([n()],d.prototype,"hideLibby",2);c([n()],d.prototype,"genModels",2);c([n()],d.prototype,"genLoras",2);c([n()],d.prototype,"genBoards",2);c([n()],d.prototype,"genError",2);c([n()],d.prototype,"pwCurrent",2);c([n()],d.prototype,"pwNew",2);c([n()],d.prototype,"pwConfirm",2);c([n()],d.prototype,"pwBusy",2);c([n()],d.prototype,"pwMsg",2);c([n()],d.prototype,"pwErr",2);c([n()],d.prototype,"refs",2);c([n()],d.prototype,"refStamp",2);c([n()],d.prototype,"refNote",2);c([n()],d.prototype,"tts",2);c([n()],d.prototype,"describe",2);c([n()],d.prototype,"describeBusy",2);c([n()],d.prototype,"describeNote",2);c([n()],d.prototype,"ttsErrors",2);d=c([T("oppai-settings")],d);function L(e){if(!e)return"never";const t=Math.max(0,(Date.now()-e)/1e3);if(t<90)return"just now";const s=Math.round(t/60);if(s<60)return`${s} min ago`;const r=Math.round(s/60);if(r<24)return`${r}h ago`;const i=Math.round(r/24);return i<=30?`${i} day${i===1?"":"s"} ago`:new Date(e).toLocaleDateString()}function pe(e){const t=Math.max(0,Math.floor(e)),s=Math.floor(t/86400),r=Math.floor(t%86400/3600),i=Math.floor(t%3600/60);return s>0?`${s}d ${r}h`:r>0?`${r}h ${i}m`:i>0?`${i}m ${t%60}s`:`${t}s`}function b(e){if(!e)return"0 B";const t=["B","KB","MB","GB","TB"];let s=e,r=0;for(;s>=1024&&r<t.length-1;)s/=1024,r++;return`${s<10&&r>0?s.toFixed(1):Math.round(s)} ${t[r]}`}const be=Object.freeze(Object.defineProperty({__proto__:null,get OppaiSettings(){return d}},Symbol.toStringTag,{value:"Module"}));export{ge as a,D as b,be as c,ve as l,Z as s};
+    `];p([k({attribute:!1})],d.prototype,"user",2);p([k({attribute:!1})],d.prototype,"only",2);p([l()],d.prototype,"tab",2);p([l()],d.prototype,"settings",2);p([l()],d.prototype,"info",2);p([l()],d.prototype,"stats",2);p([l()],d.prototype,"apk",2);p([l()],d.prototype,"loadError",2);p([l()],d.prototype,"passkeyList",2);p([l()],d.prototype,"passkeyBusy",2);p([l()],d.prototype,"passkeyError",2);p([l()],d.prototype,"passkeyMsg",2);p([l()],d.prototype,"passkeyName",2);p([l()],d.prototype,"passkeyRenaming",2);p([l()],d.prototype,"passkeyRevoking",2);p([l()],d.prototype,"passkeyPassword",2);p([l()],d.prototype,"diag",2);p([l()],d.prototype,"uiDiag",2);p([l()],d.prototype,"storage",2);p([l()],d.prototype,"storageBusy",2);p([l()],d.prototype,"storageErr",2);p([l()],d.prototype,"diagBusy",2);p([l()],d.prototype,"diagErr",2);p([l()],d.prototype,"dirty",2);p([l()],d.prototype,"saving",2);p([l()],d.prototype,"saved",2);p([l()],d.prototype,"theme",2);p([l()],d.prototype,"fit",2);p([l()],d.prototype,"hideLibby",2);p([l()],d.prototype,"genModels",2);p([l()],d.prototype,"genLoras",2);p([l()],d.prototype,"genBoards",2);p([l()],d.prototype,"genError",2);p([l()],d.prototype,"pwCurrent",2);p([l()],d.prototype,"pwNew",2);p([l()],d.prototype,"pwConfirm",2);p([l()],d.prototype,"pwBusy",2);p([l()],d.prototype,"pwMsg",2);p([l()],d.prototype,"pwErr",2);p([l()],d.prototype,"refs",2);p([l()],d.prototype,"refStamp",2);p([l()],d.prototype,"refNote",2);p([l()],d.prototype,"tts",2);p([l()],d.prototype,"describe",2);p([l()],d.prototype,"describeBusy",2);p([l()],d.prototype,"describeNote",2);p([l()],d.prototype,"ttsErrors",2);d=p([R("oppai-settings")],d);function L(e){if(!e)return"never";const t=Math.max(0,(Date.now()-e)/1e3);if(t<90)return"just now";const s=Math.round(t/60);if(s<60)return`${s} min ago`;const i=Math.round(s/60);if(i<24)return`${i}h ago`;const r=Math.round(i/24);return r<=30?`${r} day${r===1?"":"s"} ago`:new Date(e).toLocaleDateString()}function pe(e){const t=Math.max(0,Math.floor(e)),s=Math.floor(t/86400),i=Math.floor(t%86400/3600),r=Math.floor(t%3600/60);return s>0?`${s}d ${i}h`:i>0?`${i}h ${r}m`:r>0?`${r}m ${t%60}s`:`${t}s`}function b(e){if(!e)return"0 B";const t=["B","KB","MB","GB","TB"];let s=e,i=0;for(;s>=1024&&i<t.length-1;)s/=1024,i++;return`${s<10&&i>0?s.toFixed(1):Math.round(s)} ${t[i]}`}const be=Object.freeze(Object.defineProperty({__proto__:null,get OppaiSettings(){return d}},Symbol.toStringTag,{value:"Module"}));export{ge as a,D as b,be as c,ve as l,Z as s};

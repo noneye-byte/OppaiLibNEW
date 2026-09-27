@@ -1,6 +1,8 @@
 // Package tts gives Libby a voice.
 //
-// Two engines, one interface. Piper is the one this exists for: a small VITS model
+// Three engines, one interface. Kokoro (kokoro.go) is the natural one: a larger model
+// run through ONNX Runtime, which sounds like a person rather than a reader, and is
+// preferred wherever it is installed. Piper is the one this started with: a small VITS model
 // per voice (twenty to sixty megabytes), synthesised by a single C++ binary on the
 // CPU faster than the words would be spoken — a sentence takes a tenth of a second
 // of inference and a quarter of a second to load the voice. It needs no GPU, no
@@ -125,6 +127,7 @@ const cacheMax = 64
 
 // Speaker is the front door: it picks the engine per the settings and caches.
 type Speaker struct {
+	kokoro *Kokoro
 	piper  *Piper
 	remote *Remote
 
@@ -138,11 +141,14 @@ type cacheEntry struct {
 	at    time.Time
 }
 
-// NewSpeaker builds the front door. piper may be nil (binary not found) and remote
-// may be nil (no URL); a Speaker with neither answers ErrNoEngine.
-func NewSpeaker(piper *Piper, remote *Remote) *Speaker {
-	return &Speaker{piper: piper, remote: remote, cache: map[string]cacheEntry{}}
+// NewSpeaker builds the front door. Any engine may be nil — no Kokoro in this build or
+// on this box, no piper binary, no URL — and a Speaker with none answers ErrNoEngine.
+func NewSpeaker(kokoro *Kokoro, piper *Piper, remote *Remote) *Speaker {
+	return &Speaker{kokoro: kokoro, piper: piper, remote: remote, cache: map[string]cacheEntry{}}
 }
+
+// Kokoro returns the natural engine, or nil.
+func (s *Speaker) Kokoro() *Kokoro { return s.kokoro }
 
 // Configure swaps the remote engine, for a settings change at runtime.
 func (s *Speaker) Configure(remote *Remote) {
@@ -156,13 +162,20 @@ func (s *Speaker) Configure(remote *Remote) {
 // Piper returns the local engine, or nil.
 func (s *Speaker) Piper() *Piper { return s.piper }
 
-// Engine picks the engine for a mode: "auto", "piper", "openai" or "off".
+// Engine picks the engine for a mode: "auto", "kokoro", "piper", "openai" or "off".
+// Auto is Kokoro where it is installed, then piper, then the speech server: the most
+// natural voice the box has, without the user having to know which that is.
 func (s *Speaker) Engine(mode string) Engine {
 	s.mu.Lock()
 	remote := s.remote
 	s.mu.Unlock()
 	switch mode {
 	case "off":
+		return nil
+	case "kokoro":
+		if s.kokoro != nil {
+			return s.kokoro
+		}
 		return nil
 	case "piper":
 		if s.piper != nil {
@@ -175,6 +188,9 @@ func (s *Speaker) Engine(mode string) Engine {
 		}
 		return nil
 	default:
+		if s.kokoro != nil {
+			return s.kokoro
+		}
 		if s.piper != nil && s.piper.HasVoices() {
 			return s.piper
 		}

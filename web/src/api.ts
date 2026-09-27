@@ -487,8 +487,8 @@ export interface Settings {
       the studio's own controls: this is the fixed setup that makes what she produces
       look like her, without the user leaving the conversation to configure a run. */
   libbyGenModel: string;
-  libbyGenLora: string;
-  libbyGenLoraWeight: number;
+  /** Applied to everything she makes, in order, each at its own strength (-2..2). */
+  libbyGenLoras: { name: string; weight: number }[];
   libbyGenBoard: string;
   /** Who she is in generator words, prefixed to whatever she describes. */
   libbyGenPrompt: string;
@@ -788,6 +788,9 @@ export interface ChatResponse {
   /** A picture she is taking now: generate it and post it as hers, or send the
       fallback if the generator fails. Only on a turn that sent `canGenerate`. */
   generate?: { prompt: string; fallbackImageId?: string; fallbackAttachment?: LibbyAttachment } | null;
+  /** A place she moved to that she does not have yet: make it (a `background` act),
+      then put her there. Only on a turn that sent `canGenerate`. */
+  makeScene?: { name: string; prompt: string } | null;
   /** Library items this reply points at. Absent from older servers. */
   links?: LibbyLink[];
   /** Library items this reply hands over: something she chose to show, or a picture

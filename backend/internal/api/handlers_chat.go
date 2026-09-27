@@ -1140,6 +1140,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// call screen. Only Libby has a place to be; only read when there is something to
 	// choose from. See libby_backgrounds.go.
 	var backgrounds []libbyBackgroundView
+	// canMakeScene is whether a place she moves to that does not exist can be made:
+	// the same client promise and generator a picture she takes needs.
+	canMakeScene := character.ID == "libby" && in.CanGenerate && cur.ImageGenEnabled
 	if character.ID == "libby" {
 		backgrounds = s.listLibbyBackgrounds()
 		// A conversation with no room of its own is in the default one, when there is
@@ -1237,7 +1240,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		// never did. Also wanted when she is nowhere yet — the first move has to come from
 		// somewhere, and a character who has never been given a room reads as one who has
 		// no rooms. The same ceiling as the photo catalogue beside it, for the same reason.
-		addDeferred("where she is", rankActivity, "\n\n"+backgroundDirective(backgrounds, in.Background),
+		addDeferred("where she is", rankActivity, "\n\n"+backgroundDirective(backgrounds, in.Background, canMakeScene),
 			in.Call || signals.place || in.Intensity >= 3 || in.Background == "")
 		// Learning is Libby's alone, like the library snapshot and actions: she is the
 		// one who lives here, so she is the one who remembers the person she lives with.
@@ -1687,9 +1690,15 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// a stated place that exists takes, one that matches nothing is ignored, and "none"
 	// is the only thing that clears it.
 	background := in.Background
+	// A place she moved to that is not one she has, made for her. Her current room
+	// stays until it lands; the client moves her when it does. See libby_backgrounds.go.
+	var makeScene *sceneToMake
 	if sceneDeclared {
-		if id, ok := resolveBackground(sceneLabel, backgrounds); ok {
-			background = id
+		if makeScene = sceneToMakeFor(sceneLabel, backgrounds, canMakeScene); makeScene == nil {
+			place, _ := sceneLabelPlace(sceneLabel)
+			if id, ok := resolveBackground(place, backgrounds); ok {
+				background = id
+			}
 		}
 	} else if character.ID == "libby" {
 		// No tag. A move they asked for by name is theirs to have: "can you move to the
@@ -1941,6 +1950,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		// Where she is, which persists the same way. Empty means nowhere in particular
 		// — the plain call screen. See libby_backgrounds.go.
 		"background": background,
+		// A place she moved to that has to be made first: the client generates it,
+		// files it, and moves her there. Null otherwise. See libby_backgrounds.go.
+		"makeScene": makeScene,
 		// She rang them: the client shows an incoming-call popup and only their answer
 		// opens the call. And she hung up: the client ends the open call. See chat_call.go.
 		"callRequest": callRequest,
