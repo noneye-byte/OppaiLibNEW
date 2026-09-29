@@ -28,7 +28,7 @@ import { markArrival } from "../motion.js";
 import { loadSpeakPref, saveSpeakPref, speak, stopSpeaking } from "../speech.js";
 import {
   activityLabel, AMBIENT_MAX_INTENSITY, DEFAULT_LIBBY_PFP, applyImageFallback, libbyAssetCandidates, libbyHidden, loadLibbyOutfit, saveLibbyOutfit,
-  EMOTION_LABELS, LIBBY_EMOTIONS, normalizeEmotion, normalizeIntensity, type LibbyEmotion,
+  EMOTION_LABELS, LIBBY_EMOTIONS, normalizeEmotion, normalizeIntensity, portraitPose, type LibbyEmotion,
 } from "../libby.js";
 // Registers <oppai-libby-backgrounds>, which her world panel embeds.
 import "./libby-backgrounds.js";
@@ -3203,7 +3203,7 @@ export class OppaiChat extends LitElement {
     if (!this.callOpen) return nothing;
     const pose = this.poseOf(character, conversation);
     if (!pose) return nothing;
-    const { emotion, intensity, typing, activity, assets } = pose;
+    const { emotion, typing, assets, key } = pose;
     const place = this.backgrounds.find((bg) => bg.id === (conversation.background || this.defaultBackground) && bg.hasImage);
     // The last few lines as subtitles, newest at the bottom. Thoughts are not speech.
     const recent = conversation.messages.filter((message) => !message.thought).slice(-3);
@@ -3215,7 +3215,7 @@ export class OppaiChat extends LitElement {
         <!-- Keyed on the pose: a mood change replaces the element instead of
              mutating src, so the fade-in replays and the fallback chain restarts
              from the top for the new emotion's art. -->
-        <span class="call-hold libby-breathe">${keyed(`${emotion}-${intensity}-${activity}-${this.spoken}`, html`<img
+        <span class="call-hold libby-breathe">${keyed(key, html`<img
           class="call-sprite" src=${assets[0]} data-fallback-index="0"
           alt=${`${character.name} looking ${emotion}`}
           @error=${(event:Event) => applyImageFallback(event.target as HTMLImageElement, assets)} />`)}</span>
@@ -3273,15 +3273,15 @@ export class OppaiChat extends LitElement {
   private poseOf(character: ChatCharacter, conversation: ChatConversation) {
     if (character.id === "libby" && libbyHidden()) return null;
     const emotion = normalizeEmotion(conversation.emotion), intensity = normalizeIntensity(conversation.intensity);
+    // The dots follow the typing rhythm — they stop for a reading pause or a second
+    // thought — but the portrait holds the typing art for the whole turn. See portraitPose.
     const typing = this.busy && this.typingPhase === "typing";
-    // While she writes, the outfit's typing art (if it drew one) stands in for a state
-    // she is not otherwise in, and a bubble of dots sits by her head either way.
-    const activity = conversation.activity || (typing ? "typing" : "");
+    const { activity, key } = portraitPose(this.busy, conversation.activity || "", emotion, intensity, this.spoken);
     const assets = this.spriteFor(character, emotion, intensity, activity);
     // Nothing to stand on the stage: a character with no art gets no column at all
     // rather than an empty one. Their picture is set from the character card.
     if (!assets.length) return null;
-    return { emotion, intensity, typing, activity, assets, key: `${emotion}-${intensity}-${activity}-${this.spoken}` };
+    return { emotion, intensity, typing, activity, assets, key };
   }
 
   /**
@@ -3313,7 +3313,7 @@ export class OppaiChat extends LitElement {
   private renderStage(character: ChatCharacter, conversation: ChatConversation) {
     const pose = this.poseOf(character, conversation);
     if (!pose) return nothing;
-    const { emotion, intensity, typing, activity, assets } = pose;
+    const { emotion, intensity, typing, activity, assets, key } = pose;
     const status = this.busy ? "Typing…" : this.autoRunning ? "Talking on their own" : this.status?.enabled ? this.status.model : "Local replies";
     const place = this.backgrounds.find((bg) => bg.id === (conversation.background || this.defaultBackground) && bg.hasImage);
     // Her last line, up by her head, between replies. Thoughts are not speech, and a
@@ -3330,10 +3330,11 @@ export class OppaiChat extends LitElement {
         <div class="stage-ground"></div>
         <div class="stage-art">
           <!-- Keyed on the pose *and* on how many things have been said, so the sprite
-               rocks into every new line rather than only when her mood changes — and
+               rocks into every new reply rather than only when her mood changes — and
                so a mood change still replaces the element, restarting the artwork
-               fallback chain for the new pose. -->
-          <span class="sprite-hold libby-breathe">${keyed(`${emotion}-${intensity}-${activity}-${this.spoken}`, html`<img
+               fallback chain for the new pose. Held still while she is replying: see
+               portraitPose. -->
+          <span class="sprite-hold libby-breathe">${keyed(key, html`<img
             class="sprite ${this.busy ? "" : "libby-speak"}" src=${assets[0]} data-fallback-index="0"
             alt=${activity ? `${character.name} ${activity}, looking ${emotion}` : `${character.name} looking ${emotion}`}
             @error=${(event:Event) => applyImageFallback(event.target as HTMLImageElement, assets)} />`)}</span>

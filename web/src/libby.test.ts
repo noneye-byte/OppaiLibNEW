@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import test from "node:test";
-import { LIBBY_EMOTIONS, defaultLibbyActivityArt, defaultLibbyArt, libbyAssetCandidates } from "./libby.ts";
+import { LIBBY_EMOTIONS, defaultLibbyActivityArt, defaultLibbyArt, libbyAssetCandidates, portraitPose } from "./libby.ts";
 
 // The bundled art is addressed by a naming convention rather than a lookup table, so
 // a single typo in that convention breaks every portrait in the app at once and does
@@ -57,4 +57,15 @@ test("a state is drawn from the bundled set before the emotion art, after the ou
   assert.ok(chain.indexOf(defaultLibbyArt("happy", 2)) > 1);
   // With no outfit the state art leads outright.
   assert.equal(libbyAssetCandidates("happy", 2, "", "reading")[0], defaultLibbyActivityArt("reading"));
+});
+
+test("she stays in the typing pose until the last bubble has landed", () => {
+  // Mid-reply the mood, the heat and the count of bubbles all move; the portrait must not.
+  const first = portraitPose(true, "reading", "happy", 3, 4);
+  const later = portraitPose(true, "reading", "smug", 4, 6);
+  assert.deepEqual(first, { activity: "typing", key: "typing" });
+  assert.deepEqual(later, first);
+  // Done, she settles into what she is doing and feeling, once.
+  assert.deepEqual(portraitPose(false, "reading", "smug", 4, 6), { activity: "reading", key: "smug-4-reading-6" });
+  assert.deepEqual(portraitPose(false, "", "smug", 4, 6), { activity: "", key: "smug-4--6" });
 });

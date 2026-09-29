@@ -117,6 +117,21 @@ export function defaultLibbyActivityArt(activity: LibbyActivity): string {
 }
 
 /**
+ * Which of her states the portrait shows, and the key that decides when it is redrawn.
+ *
+ * A reply is on its way from the moment the request goes out until its last bubble has
+ * landed, and all of that is her typing. The portrait used to follow the dots instead,
+ * which stop for the reading pause, for a second thought, and between every bubble — so
+ * one three-bubble reply swapped her between typing and her mood art half a dozen times,
+ * and each bubble that landed remounted the sprite again. Held on the typing pose under
+ * one key for the whole turn, she settles into her mood once, when she has finished.
+ */
+export function portraitPose(replying: boolean, activity: string, emotion: string, intensity: number, spoken: number) {
+  if (replying) return { activity: "typing", key: "typing" };
+  return { activity, key: `${emotion}-${intensity}-${activity}-${spoken}` };
+}
+
+/**
  * The hottest tier Libby is drawn at outside a conversation.
  *
  * The heat meter is a *chat* thing — it belongs to a conversation you chose to

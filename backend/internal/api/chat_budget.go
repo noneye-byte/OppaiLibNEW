@@ -403,6 +403,7 @@ const (
 	rankReadyPicture    = 45 // what the picture she is about to send actually shows
 	rankActions         = 50 // what she may offer to do to the collection
 	rankSummary         = 55 // this conversation before the messages she can see
+	rankPastHonesty     = 58 // that what is not written down is not remembered
 	rankMemoryList      = 60 // what she knows about them
 	rankSelfFacts       = 65 // who she has said she is — shed last of all
 )

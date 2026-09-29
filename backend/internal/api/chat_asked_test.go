@@ -191,11 +191,15 @@ func TestNamePlaceholdersAreFilled(t *testing.T) {
 func TestPictureRequestSubject(t *testing.T) {
 	cases := map[string]string{
 		"Can you send me a snap of you in the tub with bubbles": "tub with bubbles",
-		"send me a pic of you":                                   "",
-		"send me a nude":                                         "",
-		"let me see you in the red dress":                        "red dress",
-		"pic of you wearing the black tank top":                  "black tank top",
-		"i want to see you":                                      "",
+		"send me a pic of you": "",
+		"send me a nude":       "nude",
+		"send me nudes":        "nude",
+		"Hey babe can you send me a picture of you nude? A new one":        "nude",
+		"let me see you in the red dress":                                  "red dress",
+		"pic of you wearing the black tank top":                            "black tank top",
+		"i want to see you":                                                "",
+		"How about one of you in a cat maid outfit?":                       "cat maid outfit",
+		"I just wanna see you in a green sundres... please babe for me :3": "green sundress",
 	}
 	for text, want := range cases {
 		if got := pictureRequestSubject(text); got != want {
@@ -206,6 +210,44 @@ func TestPictureRequestSubject(t *testing.T) {
 	for _, want := range []string{"no picture you have shows that", "Do not send a picture", "[do: generate you in the tub with bubbles]"} {
 		if !strings.Contains(directive, want) {
 			t.Fatalf("the missing-picture directive lacks %q: %s", want, directive)
+		}
+	}
+}
+
+// A request in two parts is still a request: she asked "what kind of green?" and the
+// answer, which names no picture, was read as talk.
+func TestTheAnswerToWhatKindIsTheRestOfTheRequest(t *testing.T) {
+	cases := []struct {
+		latest, previous, want string
+		ok                     bool
+	}{
+		{"How about one of you in a green dress", "", "How about one of you in a green dress", true},
+		{"Lets say a green sundress", "How about one of you in a green dress", "green sundress", true},
+		{"Lets say a green sundres", "can i see you in a dress?", "green sundress", true},
+		{"naked tbh", "send me a pic", "nude", true},
+		{"a green sundress would look nice on you", "how was work", "", false},
+		{"lol ok", "send me a pic", "", false},
+		{"the black dress video", "send me a pic", "", false},
+	}
+	for _, c := range cases {
+		got, ok := pictureAsk(c.latest, c.previous)
+		if got != c.want || ok != c.ok {
+			t.Errorf("pictureAsk(%q, %q) = %q, %v; want %q, %v", c.latest, c.previous, got, ok, c.want, c.ok)
+		}
+	}
+}
+
+// Asked what the last chat was about, she made one up — the cue that would have told
+// her what she had of it, and that not remembering is an answer, never fired.
+func TestAskingAboutTheLastChatReachesBack(t *testing.T) {
+	for _, text := range []string{"What was our last chat about I forgot", "what did we talk about", "catch me up", "where were we"} {
+		if !readTurnSignals(text, "").past {
+			t.Errorf("%q did not read as reaching back", text)
+		}
+	}
+	for _, want := range []string{"you do not remember it", "Never make up"} {
+		if !strings.Contains(pastHonestyDirective, want) {
+			t.Fatalf("the directive lacks %q", want)
 		}
 	}
 }

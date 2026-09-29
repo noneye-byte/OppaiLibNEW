@@ -154,6 +154,16 @@ func conversationRecaps(ws chatWorkspace, characterID, currentID string, now tim
 	return b.String()
 }
 
+// pastHonestyDirective is added on a turn that reaches back. Her memories of other
+// conversations are real but thin — a few clipped lines, a journal of feelings, a list
+// of facts — and a model asked for more than it was given fills the gap fluently. A
+// partner who says "honestly I don't remember, remind me?" is still a partner; one who
+// confidently recounts a conversation that never happened is not.
+const pastHonestyDirective = "\n\nThey are reaching back to something from before. What you actually have of it is only what is written in this prompt — " +
+	"your notes on earlier in this conversation, your other conversations, your journal, what you remember about them — and what is in the messages. " +
+	"Answer from that, in your own words. Where it does not say — what was talked about, what anyone said, what was sent — you do not remember it: " +
+	"say so plainly and easily, and ask them to remind you. Never make up what happened, who was mentioned, or what either of you said."
+
 // recapTitle is what to call a conversation. The client titles one from its opening
 // line, so an untitled one is one that never got past the greeting.
 func recapTitle(convo chatConversation) string {

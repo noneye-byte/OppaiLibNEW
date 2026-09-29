@@ -345,7 +345,11 @@ func recentlySentPhotos(ids []string) (sent map[string]bool, last string) {
 // photoRequestWords recognises the user asking to be shown something. Deliberately
 // broad: the cost of a false positive is that a repeat picture becomes eligible,
 // which is exactly what a real request wanted anyway.
-var photoRequestWords = regexp.MustCompile(`(?i)\b(pic|pics|picture|pictures|photo|photos|selfie|selfies|nude|nudes|send me|show me|let me see|see you|see it again|another one)\b`)
+//
+// "one of you in …" and "how about you in …" are requests too: "how about one of you in
+// a cat maid outfit?" names no picture word, and was answered with a description of a
+// picture that was never sent.
+var photoRequestWords = regexp.MustCompile(`(?i)\b(pic|pics|picture|pictures|photo|photos|selfie|selfies|nude|nudes|send me|show me|let me see|see you|see it again|another one|one of (?:you|u|yourself)|(?:how|what) about (?:you|u|one) (?:in|wearing|with))\b`)
 
 func userAskedForPhoto(text string) bool { return photoRequestWords.MatchString(text) }
 
@@ -871,6 +875,10 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	signals := readTurnSignals(latestUser, previousUser)
+	// Whether they asked to see her, and in what — reading the message before, since
+	// "lets say a green sundress" finishes a request it does not repeat. See pictureAsk.
+	pictureAskText, pictureAsked := pictureAsk(latestUser, previousUser)
+	signals.photo = signals.photo || pictureAsked
 	var ws chatWorkspace
 	var character chatCharacter
 	if u, userOK := s.chatUser(r); userOK {
@@ -1009,12 +1017,12 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// with a generator connected and a client that will run it. The saved picture the
 	// picker chooses is still chosen — it is what arrives if the generator fails.
 	fresh := freshPicture{}
-	if askedToSeeHer(latestUser) && !talking {
-		ready, readyOK = pickReadyPicture(ws, character.ID, selfPics, latestUser, in.PhotoImageID, lastPhoto, sentPhotos, sentMedia)
+	if pictureAsked && !talking {
+		ready, readyOK = pickReadyPicture(ws, character.ID, selfPics, pictureAskText, in.PhotoImageID, lastPhoto, sentPhotos, sentMedia)
 		if in.CanGenerate && cur.ImageGenEnabled && character.ID == "libby" {
-			fresh = freshPicture{wanted: true, subject: pictureRequestSubject(latestUser)}
+			fresh = freshPicture{wanted: true, subject: pictureRequestSubject(pictureAskText)}
 		} else if readyOK && ready.fit == 0 && cur.ImageGenEnabled {
-			readySubject = pictureRequestSubject(latestUser)
+			readySubject = pictureRequestSubject(pictureAskText)
 			readyMissing = readySubject != ""
 		}
 		switch {
@@ -1099,6 +1107,12 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			conversationRecaps(ws, character.ID, currentConversationID(ws, in), time.Now()),
 			signals.past || len(in.Messages) <= 2,
 		)
+		// Asked what they talked about last time, with nothing above that says, she
+		// invented it — a coworker, a raincoat video, a pizza — because nothing told her
+		// that not remembering was an answer. See pastHonestyDirective.
+		if signals.past {
+			add("what she does not remember", rankPastHonesty, pastHonestyDirective)
+		}
 		// The library, fed for the turn rather than as one block. See chat_context_feed.go.
 		sections = append(sections, s.libraryFeed(r.Context(), signals, feedChoice{shown: sentMedia, taste: taste, weights: ws.SendWeights, userID: feedUserID(s, r, character.ID)})...)
 	}
@@ -1814,7 +1828,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// See chat_send_weights.go.
 	// A turn about a picture already sent is not a turn asking for one, however many
 	// picture words are in it. See chat_photo_talk.go.
-	pictureWanted := (userAskedForPhoto(latestUser) && !talking) || photoAsked
+	pictureWanted := ((userAskedForPhoto(latestUser) || pictureAsked) && !talking) || photoAsked
 	skip := sentPhotos
 	skipMedia := sentMedia
 	if pictureWanted {
@@ -2012,7 +2026,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		"snap": snap,
 		// The emoji she put on their message, if she did. Null otherwise. See chat_reactions.go.
 		"reaction": reaction,
-		"links":   links,
+		"links":    links,
 		// Library items she put in front of them: something she decided to show, or a
 		// picture of her that lives in the library rather than in her chat gallery. Drawn
 		// as the picture itself where the kind allows and as an openable card otherwise.

@@ -39,12 +39,15 @@ type freshPictureResponse struct {
 // a [send:] tag for a saved one, or describes a picture in detail before it exists and
 // gets the details wrong.
 func freshPictureDirective(subject string) string {
-	what := "a picture of yourself"
+	out := "They asked to see you, and you are taking a picture of yourself for them right now — it arrives a moment after your text. "
 	if subject != "" {
-		what = "a picture of yourself " + subject
+		// Named on its own, not run into the sentence: the subject is the request less the
+		// asking, and "yourself green sundress" read as a garble she sometimes argued with.
+		// Told she is doing it, she does it — asked "what kind of green?" before, she
+		// stalled for three turns and wrote picture notes of her own instead.
+		out += "What they asked to see you in: " + subject + ". Go along with it — you are already doing it, not negotiating it. "
 	}
-	return "They asked to see you, and you are taking " + what + " for them right now — it arrives a moment after your text. " +
-		"Say something short as you take it or send it, in your own voice. Do not describe what it shows in detail, and do not write a [send:] tag."
+	return out + "Say something short as you take it or send it, in your own voice. Do not describe what it shows in detail, and do not write a [send:] tag."
 }
 
 // response is the reply's `generate` field: nil when she is not taking one, or said

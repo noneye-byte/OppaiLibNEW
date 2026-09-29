@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode"
 )
 
 // Sending the picture that was asked for.
@@ -46,6 +47,41 @@ var libraryKindWords = regexp.MustCompile(`(?i)\b(video|videos|comic|comics|game
 // request with no library kind named in it.
 func askedToSeeHer(text string) bool {
 	return userAskedForPhoto(text) && !libraryKindWords.MatchString(text)
+}
+
+// pictureAsk is what this turn asks to see her in, reading the message before it too.
+//
+// A request often arrives in two parts. "How about one of you in a green dress" — she
+// asks what kind of green — "lets say a green sundress": the second names no picture
+// at all, so it was read as talk, and she answered it with an invented one. When the
+// message before was a request to see her and this one names clothes, this one is the
+// rest of that request, and what it names is the subject.
+//
+// text is what the ready picture is matched against; ok is false when neither asks.
+func pictureAsk(latest, previous string) (text string, ok bool) {
+	if askedToSeeHer(latest) {
+		return latest, true
+	}
+	if previous != "" && askedToSeeHer(previous) && !libraryKindWords.MatchString(latest) {
+		if clothes, dressed := clothesFromSubject(mendSpelling(latest)); dressed && clothes != wearingNothing {
+			return clothes, true
+		}
+		if bareMatch.MatchString(latest) {
+			return "nude", true
+		}
+	}
+	return "", false
+}
+
+// mendSpelling applies subjectSpelling word by word, keeping everything else as it was.
+func mendSpelling(text string) string {
+	fields := strings.Fields(text)
+	for i, field := range fields {
+		if mended, ok := subjectSpelling[strings.ToLower(strings.Trim(field, ".,;:!?\"'()…"))]; ok {
+			fields[i] = mended
+		}
+	}
+	return strings.Join(fields, " ")
 }
 
 // pictureRef is one picture she could send, from either pool: her chat gallery, by
@@ -138,6 +174,10 @@ func readyPictureDirective(ready readyPicture, asked string) string {
 // describe a picture: "can you send me a snap of you in the tub with bubbles" less
 // these is "tub bubbles", and "send me a pic of you" less these is nothing. Kept apart
 // from the ready pick's own matching, which must keep every word: "nude" is a tag.
+//
+// "nude" is not one of them. It was, as the name of a kind of picture, and "send me a
+// picture of you nude" reached the generator as "you, a selfie" — which dressed her in
+// whatever she had on, and a nude came back in shorts.
 var pictureAskWords = map[string]bool{
 	"can": true, "could": true, "would": true, "will": true, "you": true, "u": true, "me": true, "i": true,
 	"please": true, "pls": true, "hey": true, "babe": true, "libby": true, "now": true, "again": true,
@@ -148,8 +188,17 @@ var pictureAskWords = map[string]bool{
 	"this": true, "for": true, "it": true, "is": true, "be": true,
 	"pic": true, "pics": true, "picture": true, "pictures": true, "photo": true, "photos": true,
 	"selfie": true, "selfies": true, "snaps": true, "image": true, "images": true, "shot": true,
-	"nude": true, "nudes": true, "quick": true, "new": true, "little": true, "cute": true, "sexy": true,
+	"quick": true, "new": true, "little": true, "cute": true, "sexy": true,
 	"hot": true, "nice": true, "right": true, "real": true, "actual": true, "just": true, "also": true,
+	"how": true, "what": true, "about": true, "lets": true, "let's": true, "say": true, "maybe": true,
+	"ok": true, "okay": true, "then": true, "instead": true,
+}
+
+// subjectSpelling mends the misspellings that decide what she is wearing. "sundres"
+// was not a garment, so the picture of her in one was blended with the tank top she
+// had on, and a tank top is what it showed.
+var subjectSpelling = map[string]string{
+	"nudes": "nude", "dres": "dress", "sundres": "sundress", "bikiny": "bikini", "lingere": "lingerie",
 }
 
 // subjectGlue are the words a subject is phrased with rather than made of: "in the
@@ -168,9 +217,13 @@ func pictureRequestSubject(asked string) string {
 	fields := strings.Fields(strings.ToLower(asked))
 	kept := make([]string, 0, len(fields))
 	for _, field := range fields {
-		word := strings.Trim(field, ".,;:!?\"'()[]*_")
-		if word == "" || pictureAskWords[word] {
+		word := strings.Trim(field, ".,;:!?\"'()[]*_…")
+		// Emoticons are not a subject: "please :3" put a 3 in the picture's prompt.
+		if word == "" || pictureAskWords[word] || !strings.ContainsFunc(word, unicode.IsLetter) {
 			continue
+		}
+		if mended, ok := subjectSpelling[word]; ok {
+			word = mended
 		}
 		kept = append(kept, word)
 	}

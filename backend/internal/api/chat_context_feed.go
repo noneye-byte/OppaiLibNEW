@@ -85,7 +85,9 @@ var (
 	// made a room change an action, and the short message after it — "Can you
 	// masturbate?" — the answer to an offer she had never made. See actFollowUp.
 	actionCue    = regexp.MustCompile(`(?i)\b(tag|tags|retag|rename|delete|remove|favou?rite|collection|add (?:it|this|that|them|these)|save (?:it|this|that)|organi[sz]e|clean up|sort|rate|rating|move (?:it|this|that|them|these)|hide|scan|fix|tidy)\b`)
-	pastCue      = regexp.MustCompile(`(?i)\b(last time|other day|yesterday|earlier|before|remember|we talked|you said|you told|last night|that time|previous|previously|again|still)\b`)
+	// "What was our last chat about, I forgot" matched none of the first list, so the
+	// turn that most needed what she had of it got the least, and she made one up.
+	pastCue      = regexp.MustCompile(`(?i)\b(last time|other day|yesterday|earlier|before|remember|recall|we talked|did we (?:talk|chat)|we (?:did|said|were doing)|you said|you told|last night|that time|previous|previously|again|still|forgot|forget|last (?:chat|conversation|convo|talk|session)|our (?:chat|conversation|convo|talk)|catch me up|where were we|where did we leave)\b`)
 	placeCue     = regexp.MustCompile(`(?i)\b(bed|bedroom|sofa|couch|kitchen|outside|balcony|bath|shower|room|where are you|go to|come to|let'?s go|move to|somewhere|scene|background|place)\b`)
 	// actionFollowUpCue is a message that comes back to something she offered to do:
 	// "did you rename it?", "is it done", "did that work". Read against the latest
