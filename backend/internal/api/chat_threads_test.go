@@ -25,7 +25,9 @@ func chatStub(t *testing.T, s *Server, reply string) (prompt *string, history *[
 			Messages []chatMessage `json:"messages"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
-		if len(body.Messages) > 0 {
+		// The picture's scene is its own call after her turn; recording it would put its
+		// instructions where the test looks for hers. See chat_picture_prompt.go.
+		if len(body.Messages) > 0 && !strings.HasPrefix(body.Messages[0].Content, pictureSceneMark) {
 			*prompt = body.Messages[0].Content
 			*history = body.Messages[1:]
 		}

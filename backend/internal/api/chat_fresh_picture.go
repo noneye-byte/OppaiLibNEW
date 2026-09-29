@@ -23,6 +23,9 @@ type freshPicture struct {
 	wanted bool
 	// subject is what they asked to see her in, "" for just her.
 	subject string
+	// scene is the picture written for the moment, "" when it could not be. See
+	// chat_picture_prompt.go.
+	scene string
 }
 
 // freshPictureResponse is the `generate` field of a chat reply.
@@ -56,10 +59,7 @@ func (f freshPicture) response(silent bool, ready readyPicture, readyOK bool) *f
 	if !f.wanted || silent {
 		return nil
 	}
-	out := &freshPictureResponse{Prompt: "you, a selfie"}
-	if f.subject != "" {
-		out.Prompt = "you " + f.subject
-	}
+	out := &freshPictureResponse{Prompt: freshPicturePrompt(f.subject, f.scene)}
 	if readyOK {
 		if ready.pic.isSelf {
 			out.FallbackAttachment = &libbyAttachment{libbyLink: ready.pic.self.link, Self: true}

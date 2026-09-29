@@ -192,6 +192,10 @@ var pictureAskWords = map[string]bool{
 	"hot": true, "nice": true, "right": true, "real": true, "actual": true, "just": true, "also": true,
 	"how": true, "what": true, "about": true, "lets": true, "let's": true, "say": true, "maybe": true,
 	"ok": true, "okay": true, "then": true, "instead": true,
+	// Texting shorthand for "now" and "please". "send me a pic of you rn" reached the
+	// generator as "you rn", which describes nothing.
+	"rn": true, "rq": true, "atm": true, "currently": true, "plz": true, "pleaseee": true,
+	"gimme": true, "lemme": true, "ya": true, "ur": true,
 }
 
 // subjectSpelling mends the misspellings that decide what she is wearing. "sundres"

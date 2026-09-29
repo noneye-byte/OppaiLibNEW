@@ -308,7 +308,9 @@ func classifyChatTask(in chatRequest, latestUser string) chatTask {
 	// A long scene, or an explicitly explicit one. Both want the hot preset: the mode is
 	// the user's own statement of what this conversation is, and a wall of text from them
 	// is a scene in progress rather than texting.
-	if in.Mode == "roleplay" || in.Mode == "horny" || in.Intensity >= 4 || len(latestUser) > 600 {
+	// So is a request to go into detail, whatever the mode: it asks for the scene written
+	// out, and the casual cap would end it after a paragraph. See chat_detail.go.
+	if in.Mode == "roleplay" || in.Mode == "horny" || in.Intensity >= 4 || len(latestUser) > 600 || detailAsked(latestUser) {
 		return taskCreative
 	}
 	// Feeling, either theirs or hers. Checked after the scene classes so an emotional line

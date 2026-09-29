@@ -1370,7 +1370,14 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// an imported card sends a wall of five bubbles for the same reasons she did, and
 	// the number asserts nothing about who the character is. See chat_texts.go.
 	texts := textsForTurn(task, latestUser, rollTexts())
-	tail.WriteString("\n\n" + textCountDirective(texts))
+	// Asked to go into detail, she writes the scene out instead, and it is kept whole:
+	// its paragraphs are one scene, not a burst of texts. See chat_detail.go.
+	detailed := detailAsked(latestUser) && task == taskCreative
+	if detailed {
+		tail.WriteString("\n\n" + detailDirective)
+	} else {
+		tail.WriteString("\n\n" + textCountDirective(texts))
+	}
 	// Then make it fit. Past the model's window a local backend drops the *front* of the
 	// prompt, which is the character card — so the trimming happens here, in a stated order,
 	// and what was cut is reported to the client. See chat_budget.go.
@@ -1961,7 +1968,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 	// No more texts than she was asked for, give or take one. The ones past that are the
 	// likeliest to be a conversation she wrote both sides of. See chat_texts.go.
-	reply = capTexts(reply, texts)
+	if !detailed {
+		reply = capTexts(reply, texts)
+	}
 	// Whatever she wrote, an address she wrote is one she made up: she cannot browse, and
 	// nothing in the prompt hands her URLs to repeat. See chat_hallucinations.go.
 	reply = scrubInventedURLs(reply, knownURLs(in))
@@ -1989,6 +1998,25 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	var reaction *libbyReaction
 	if reacted {
 		reaction = &libbyReaction{Emoji: reactionEmoji, To: latestUserMessageID(in.Messages)}
+	}
+	// The picture she is taking, written from the moment rather than from the one line
+	// that asked for it: where she is, what she has on, what she just said. Written last,
+	// once her state leaving the turn is settled. See chat_picture_prompt.go.
+	if fresh.wanted && !silent {
+		place := backgroundWords(background, backgrounds)
+		if makeScene != nil {
+			place = makeScene.Prompt
+		}
+		dressed := "her own clothes"
+		if wearing != "" {
+			dressed = wearing
+		}
+		fresh.scene = s.writePictureScene(r.Context(), model, pictureScene{
+			asked: pictureAskText, subject: fresh.subject, reply: reply,
+			recent: recentBeforeAsk(in.Messages),
+			place:  place, wearing: dressed, doing: libbyActivityByID[activity].Says,
+			vocabulary: pictureVocabulary(ws, selfPics),
+		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"message":   reply,
