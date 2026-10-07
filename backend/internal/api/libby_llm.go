@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 )
 
 // One round of a tool-capable chat completion.
@@ -19,10 +20,13 @@ import (
 // engine uses: it sends the tool set, and returns her words and her calls separately
 // whichever of the three shapes the backend answered in (see libby_toolcalls.go).
 //
-// The mode is decided per backend and model, once. "auto" sends tools; a backend that
-// answers a request carrying them with an error is remembered as tool-less and asked
-// again in JSON mode, and every later turn goes straight there. "native" and "json"
-// in settings pin it, for a backend whose failure is not recognisable as a refusal.
+// The mode is decided per backend and model, once. "auto" asks the backend first, with
+// one tiny request carrying one tool (probeToolCalls), because the common failure is not
+// a refusal: text-generation-webui takes a tools field and answers 200 whether or not
+// the loaded model's chat template renders it, and a roleplay fine-tune's template
+// usually does not. She was then told every action is a tool call, given none, and
+// wrote "*sends a pic*" instead. A backend that refuses tools mid-turn is still caught
+// and remembered as well. "native" and "json" in settings pin it.
 
 // llmTool is one tool in the OpenAI shape.
 type llmTool struct {
@@ -44,38 +48,100 @@ const (
 	toolsJSON   toolMode = "json"
 )
 
-// toolless remembers backends that refused tools, by URL and model, for the life of the
-// process. A restart asks again, which is right: the operator may have swapped the
-// loader for one that takes them.
-var toolless = struct {
+// toolModes remembers what each backend and model was found to take, for the life of
+// the process. A restart asks again, which is right: the operator may have swapped the
+// loader or the template for one that takes tools.
+var toolModes = struct {
 	sync.Mutex
-	m map[string]bool
-}{m: map[string]bool{}}
+	m map[string]toolMode
+}{m: map[string]toolMode{}}
 
-func knownToolless(url, model string) bool {
-	toolless.Lock()
-	defer toolless.Unlock()
-	return toolless.m[url+"\x00"+model]
+func knownToolMode(url, model string) (toolMode, bool) {
+	toolModes.Lock()
+	defer toolModes.Unlock()
+	mode, ok := toolModes.m[url+"\x00"+model]
+	return mode, ok
 }
 
-func rememberToolless(url, model string) {
-	toolless.Lock()
-	toolless.m[url+"\x00"+model] = true
-	toolless.Unlock()
+func rememberToolMode(url, model string, mode toolMode) {
+	toolModes.Lock()
+	toolModes.m[url+"\x00"+model] = mode
+	toolModes.Unlock()
 }
 
-// resolveToolMode is the mode a turn starts in.
-func resolveToolMode(setting, url, model string) toolMode {
+func rememberToolless(url, model string) { rememberToolMode(url, model, toolsJSON) }
+
+// resolveToolMode is the mode a turn starts in, when it is already settled — pinned in
+// settings, or found out earlier. ok is false when only asking the backend can tell.
+func resolveToolMode(setting, url, model string) (toolMode, bool) {
 	switch strings.ToLower(strings.TrimSpace(setting)) {
 	case "json":
-		return toolsJSON
+		return toolsJSON, true
 	case "native":
-		return toolsNative
+		return toolsNative, true
 	}
-	if knownToolless(url, model) {
-		return toolsJSON
+	return knownToolMode(url, model)
+}
+
+// toolModeFor is the mode a turn starts in, asking the backend the first time.
+func (s *Server) toolModeFor(ctx context.Context, setting, url, model string) toolMode {
+	if mode, ok := resolveToolMode(setting, url, model); ok {
+		return mode
 	}
-	return toolsNative
+	mode, ok := s.probeToolCalls(ctx, model)
+	if ok {
+		s.log.Info("libby: tool mode decided", "model", model, "mode", string(mode))
+		rememberToolMode(url, model, mode)
+	}
+	return mode
+}
+
+// toolProbeName is the probe's one tool. It is a name nothing could guess: the probe
+// never says it in words, so a model can only call it if the template showed it the
+// tool — which is the whole question. A guessable name ("ping") would be written out
+// as bare JSON by a model that never saw a schema, and read back as a working call.
+const toolProbeName = "amber_lantern"
+
+// probeToolCalls asks the backend whether tools reach the model at all. ok is false
+// when the answer is not an answer — the backend is down or slow — so the turn goes on
+// natively, where a refusal is still caught, and the next turn asks again.
+func (s *Server) probeToolCalls(ctx context.Context, model string) (toolMode, bool) {
+	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	defer cancel()
+	payload := map[string]any{
+		"stream":     false,
+		"max_tokens": 160,
+		"messages": []llmMessage{
+			{Role: "system", Content: "You have been given exactly one tool. Reply only by calling it, never with text."},
+			{Role: "user", Content: "Call your tool now, with ready set to true."},
+		},
+		"tools": []llmTool{{Type: "function", Function: llmToolFunction{
+			Name:        toolProbeName,
+			Description: "Call this to show you can call tools.",
+			Parameters: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"ready": map[string]any{"type": "boolean"}},
+				"required":   []any{"ready"},
+			},
+		}}},
+		"tool_choice": "auto",
+	}
+	if model != "" {
+		payload["model"] = model
+	}
+	reply, err := s.postTurn(ctx, payload, map[string]bool{toolProbeName: true})
+	switch {
+	case err == nil && len(reply.Calls) > 0:
+		return toolsNative, true
+	case err == nil:
+		s.log.Info("libby: backend took tools but the model never saw them; using JSON mode", "model", model, "reply", truncateRunes(reply.Text, 120))
+		return toolsJSON, true
+	case refusedTools(err):
+		s.log.Info("libby: backend refused tools; using JSON mode", "model", model, "err", err)
+		return toolsJSON, true
+	}
+	s.log.Info("libby: couldn't ask the backend about tools", "model", model, "err", err)
+	return toolsNative, false
 }
 
 // refusedTools reads a backend's error for a refusal of the tools field itself, rather

@@ -203,9 +203,10 @@ type Settings struct {
 	// LibbyStoriesPerDay a day. See api.libby_stories.go.
 	LibbyStories       bool `json:"libbyStories"`
 	LibbyStoriesPerDay int  `json:"libbyStoriesPerDay"`
-	// ChatToolMode is how her actions reach the server: "" reads it off the backend —
-	// native tool calls, and JSON mode for a backend that refuses them — while
-	// "native" and "json" pin one. See api.libby_llm.go.
+	// ChatToolMode is how her actions reach the server: "" asks the backend once per
+	// model — native tool calls when a probe call comes back, JSON mode when tools are
+	// refused or silently dropped — while "native" and "json" pin one. See
+	// api.libby_llm.go.
 	ChatToolMode string `json:"chatToolMode"`
 
 	// Incognito dresses this install as a Nextcloud instance.

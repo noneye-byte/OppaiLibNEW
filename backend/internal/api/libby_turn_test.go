@@ -16,13 +16,26 @@ import (
 )
 
 // fakeTurnBackend is one local server playing both her model and the generator. script
-// answers the n-th chat completion (from 0) given its decoded body.
+// answers the n-th chat completion (from 0) given its decoded body. The tool-mode probe
+// is answered apart and not counted, so a script numbers only the turn's own requests;
+// dropsTools makes it a backend that takes tools and never shows them to the model.
 type fakeTurnBackend struct {
-	mu      sync.Mutex
-	bodies  []map[string]any
-	gens    []map[string]any
-	script  func(n int, body map[string]any) (status int, reply map[string]any)
-	pngSeed uint8
+	mu         sync.Mutex
+	bodies     []map[string]any
+	gens       []map[string]any
+	script     func(n int, body map[string]any) (status int, reply map[string]any)
+	pngSeed    uint8
+	dropsTools bool
+	probes     int
+}
+
+func isToolProbe(body map[string]any) bool {
+	tools, _ := body["tools"].([]any)
+	if len(tools) != 1 {
+		return false
+	}
+	fn, _ := tools[0].(map[string]any)["function"].(map[string]any)
+	return fn["name"] == toolProbeName
 }
 
 func (f *fakeTurnBackend) chats() []map[string]any {
@@ -76,6 +89,17 @@ func newFakeTurnBackend(t *testing.T, script func(n int, body map[string]any) (i
 			var body map[string]any
 			_ = json.Unmarshal(raw, &body)
 			f.mu.Lock()
+			if isToolProbe(body) {
+				f.probes++
+				reply := say("", callTool("p", toolProbeName, map[string]any{"ready": true}))
+				if f.dropsTools {
+					reply = say("Sure! I'm ready.")
+				}
+				f.mu.Unlock()
+				out, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"message": reply}}})
+				_, _ = w.Write(out)
+				return
+			}
 			n := len(f.bodies)
 			f.bodies = append(f.bodies, body)
 			f.mu.Unlock()
@@ -203,6 +227,52 @@ func TestATurnStoresTheirMessageAndHerTextsAsSeparateBubbles(t *testing.T) {
 	system := body["messages"].([]any)[0].(map[string]any)["content"].(string)
 	if !strings.Contains(system, "How you act") || strings.Contains(system, "[mood:") {
 		t.Fatalf("system prompt still teaches tags: %s", system)
+	}
+}
+
+// text-generation-webui answers 200 to a request carrying tools whether or not the
+// model's template shows them; the model then narrates "*sends a pic*" and nothing
+// happens. Asking once, with a tool it could not guess, is what tells the two apart.
+func TestABackendThatSilentlyDropsToolsGetsHerActionsAsJSON(t *testing.T) {
+	envelope, _ := json.Marshal(map[string]any{
+		"messages": []string{"hiii", "missed you too"},
+		"actions":  []any{map[string]any{"tool": toolSetState, "args": map[string]any{"mood": "happy", "heat": 2}}},
+	})
+	s, token, f := turnServer(t, func(n int, body map[string]any) (int, map[string]any) {
+		return http.StatusOK, say(string(envelope))
+	})
+	f.dropsTools = true
+	events := runTurn(t, s, token, firstTurn)
+	if got := len(eventsNamed(events, "message")); got != 2 {
+		t.Fatalf("the envelope's texts arrived as %d messages", got)
+	}
+	body := f.chats()[0]
+	if _, ok := body["tools"]; ok {
+		t.Fatal("tools were still sent to a backend that drops them")
+	}
+	if !strings.Contains(systemPrompt(body), "Answer with one JSON object") {
+		t.Fatal("she was not told how to act without tools")
+	}
+	if c := storedConversation(t, s); c.Emotion != "happy" || c.Intensity != 2 {
+		t.Fatalf("the action in the envelope did not run: %s/%d", c.Emotion, c.Intensity)
+	}
+	runTurn(t, s, token, turnFor("again", ""))
+	if f.probes != 1 {
+		t.Fatalf("the backend was asked about tools %d times", f.probes)
+	}
+}
+
+func TestABackendThatShowsToolsKeepsNativeCallsAndIsAskedOnce(t *testing.T) {
+	s, token, f := turnServer(t, func(n int, body map[string]any) (int, map[string]any) { return http.StatusOK, say("hi") })
+	runTurn(t, s, token, firstTurn)
+	runTurn(t, s, token, turnFor("again", ""))
+	if f.probes != 1 {
+		t.Fatalf("the backend was asked about tools %d times", f.probes)
+	}
+	for _, body := range f.chats() {
+		if _, ok := body["tools"]; !ok {
+			t.Fatal("a backend that calls tools was not sent them")
+		}
 	}
 }
 

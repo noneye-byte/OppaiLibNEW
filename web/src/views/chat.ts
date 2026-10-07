@@ -136,6 +136,9 @@ interface CapturedTurn {
   debug: ChatDebug;
   /** The tools she called, in order, with their arguments. */
   calls?: unknown;
+  /** How her actions travelled — "native" or "json". A capture with no calls is
+      unreadable without it: she may have had no tools at all. */
+  toolMode?: string;
 }
 
 /** How many captured turns a conversation keeps. An evening is hundreds of turns and
@@ -2848,7 +2851,7 @@ export class OppaiChat extends LitElement {
         if (data.sampling) this.lastSampling = data.sampling as ChatSampling;
         if (data.debug) {
           const log = this.turnLog.get(conversationID) ?? [];
-          log.push({ at: Date.now(), request: { photoTags: [], photoImageId: "", task: "" }, debug: data.debug as ChatDebug, calls: data.calls });
+          log.push({ at: Date.now(), request: { photoTags: [], photoImageId: "", task: "" }, debug: data.debug as ChatDebug, calls: data.calls, toolMode: (data.sampling as ChatSampling | undefined)?.toolMode });
           this.turnLog.set(conversationID, log.slice(-MAX_CAPTURED_TURNS));
         }
         this.touchWorkspace();
@@ -4232,7 +4235,7 @@ export class OppaiChat extends LitElement {
           <button class="secondary" @click=${() => void this.copySampling()}>Copy settings</button>
         </div>` : nothing}
         ${this.lastSampling?.toolMode ? html`<div class="sampling">
-          <span>Her actions went out as <strong>${this.lastSampling.toolMode === "json" ? "JSON answers" : "native tool calls"}</strong>${this.lastSampling.toolMode === "json" ? " — this backend refused tools" : ""}</span>
+          <span>Her actions went out as <strong>${this.lastSampling.toolMode === "json" ? "JSON answers" : "native tool calls"}</strong>${this.lastSampling.toolMode === "json" ? " — tools don't reach this model" : ""}</span>
         </div>` : nothing}
         <details>
           <summary>Advanced API options</summary>

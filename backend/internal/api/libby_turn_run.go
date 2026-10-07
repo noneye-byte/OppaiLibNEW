@@ -118,7 +118,7 @@ func (t *turnRun) run() error {
 	if t.req.Debug {
 		debug = buildChatDebug(t.p.sections, budget.DroppedSections, budget.ClearedSections, fitted, t.p.signals)
 	}
-	mode := resolveToolMode(cur.ChatToolMode, cur.ChatURL, t.model)
+	mode := s.toolModeFor(t.ctx, cur.ChatToolMode, cur.ChatURL, t.model)
 	msgs := toLLMMessages(fitted, t.p.pictures)
 	t.stream.send("status", map[string]any{"phase": "typing"})
 

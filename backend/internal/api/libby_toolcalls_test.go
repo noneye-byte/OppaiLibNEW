@@ -93,11 +93,17 @@ func TestToolExchangesBecomeTextForATemplateWithoutTools(t *testing.T) {
 }
 
 func TestAPinnedModeWinsAndAToollessBackendIsRemembered(t *testing.T) {
-	if resolveToolMode("json", "u", "m") != toolsJSON || resolveToolMode("native", "u", "m") != toolsNative {
-		t.Fatal("a pinned mode was not honoured")
+	if m, _ := resolveToolMode("json", "u", "m"); m != toolsJSON {
+		t.Fatal("a pinned JSON mode was not honoured")
+	}
+	if m, _ := resolveToolMode("native", "u", "m"); m != toolsNative {
+		t.Fatal("a pinned native mode was not honoured")
+	}
+	if _, ok := resolveToolMode("", "u-unasked", "m"); ok {
+		t.Fatal("a backend never asked was taken as settled")
 	}
 	rememberToolless("u-remember", "m")
-	if resolveToolMode("auto", "u-remember", "m") != toolsJSON {
+	if m, ok := resolveToolMode("auto", "u-remember", "m"); !ok || m != toolsJSON {
 		t.Fatal("a backend that refused tools was asked again")
 	}
 }
