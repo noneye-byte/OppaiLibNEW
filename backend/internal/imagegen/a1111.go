@@ -47,6 +47,11 @@ type txt2imgPayload struct {
 	OverrideSettings map[string]any `json:"override_settings,omitempty"`
 	RestoreAfter     bool           `json:"override_settings_restore_afterwards"`
 	AlwaysOnScripts  map[string]any `json:"alwayson_scripts,omitempty"`
+	// img2img only. The same endpoint shape otherwise, which is why one struct serves
+	// both: A1111 ignores fields an endpoint does not use, and omitempty keeps them
+	// off a txt2img call altogether.
+	InitImages        []string `json:"init_images,omitempty"`
+	DenoisingStrength float64  `json:"denoising_strength,omitempty"`
 }
 
 // txt2imgResponse is the relevant slice of the API's reply. Info is a JSON *string*
@@ -96,6 +101,18 @@ func (c *Client) a1111Generate(ctx context.Context, base string, req GenerateReq
 			}}},
 		}
 	}
+	endpoint := "/sdapi/v1/txt2img"
+	if len(req.InitImage) > 0 {
+		endpoint = "/sdapi/v1/img2img"
+		payload.InitImages = []string{base64.StdEncoding.EncodeToString(req.InitImage)}
+		payload.DenoisingStrength = clampDenoise(req.Denoise)
+	}
+	if len(req.Controls) > 0 {
+		if payload.AlwaysOnScripts == nil {
+			payload.AlwaysOnScripts = map[string]any{}
+		}
+		payload.AlwaysOnScripts["controlnet"] = map[string]any{"args": a1111ControlArgs(req.Controls)}
+	}
 	if req.Checkpoint != "" || req.VAE != "" {
 		payload.OverrideSettings = map[string]any{}
 		if req.Checkpoint != "" {
@@ -110,7 +127,7 @@ func (c *Client) a1111Generate(ctx context.Context, base string, req GenerateReq
 	if err != nil {
 		return nil, err
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/sdapi/v1/txt2img", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, base+endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -134,6 +151,9 @@ func (c *Client) a1111Generate(ctx context.Context, base string, req GenerateReq
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<10))
+		if len(req.Controls) > 0 && controlNetMissing(string(msg)) {
+			return nil, ErrControlUnsupported
+		}
 		return nil, fmt.Errorf("image generator returned %d: %s", resp.StatusCode, bytes.TrimSpace(msg))
 	}
 
@@ -174,6 +194,51 @@ func (c *Client) a1111Generate(ctx context.Context, base string, req GenerateReq
 		}
 	}
 	return res, nil
+}
+
+// a1111ControlArgs is the ControlNet extension's unit list. "image" is the field the
+// current extension and Forge's built-in port both read; pixel_perfect lets the
+// preprocessor pick its own resolution, which is what the UI defaults to and what a
+// pose read off somebody's phone photo needs.
+func a1111ControlArgs(units []ControlUnit) []map[string]any {
+	out := make([]map[string]any, 0, len(units))
+	for _, u := range units {
+		weight := u.Weight
+		if weight <= 0 {
+			weight = 1
+		}
+		out = append(out, map[string]any{
+			"enabled":       true,
+			"image":         base64.StdEncoding.EncodeToString(u.Image),
+			"module":        u.Module,
+			"model":         u.Model,
+			"weight":        weight,
+			"resize_mode":   "Crop and Resize",
+			"pixel_perfect": true,
+			"control_mode":  "Balanced",
+		})
+	}
+	return out
+}
+
+// controlNetMissing reads an A1111 error body for the extension not being there. The
+// API names the script it could not find, so this is matching its own message rather
+// than guessing.
+func controlNetMissing(body string) bool {
+	lower := strings.ToLower(body)
+	return strings.Contains(lower, "controlnet") && (strings.Contains(lower, "not found") || strings.Contains(lower, "no such"))
+}
+
+// clampDenoise keeps an img2img strength inside what A1111 accepts, and makes an unset
+// one a modest edit rather than a no-op.
+func clampDenoise(d float64) float64 {
+	switch {
+	case d <= 0:
+		return 0.55
+	case d > 1:
+		return 1
+	}
+	return d
 }
 
 func (c *Client) a1111SupportsADetailer(ctx context.Context, base string) bool {

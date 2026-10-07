@@ -5,12 +5,10 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 
 	"github.com/youruser/oppailib/internal/crypto"
-	"github.com/youruser/oppailib/internal/settings"
 )
 
 // Where she is.
@@ -341,21 +339,6 @@ func (s *Server) handleGetLibbyBackgroundImage(w http.ResponseWriter, r *http.Re
 
 // ── her choosing one ────────────────────────────────────────────────────────
 
-// sceneTag captures her moving somewhere. Loose rather than anchored, like the attach
-// tag: she says where she is while talking about it, and the tag lands wherever the
-// sentence put it. Read before scrubbing; deleted by strayTag afterwards.
-var sceneTag = regexp.MustCompile(`(?i)\[\s*(?:scene|background|place|setting|location|room)\s*[:=-]?\s*([^\]\n]{1,80}?)\s*\]`)
-
-// findSceneTag reads the last scene she declared, if any. The last one wins for the
-// same reason the mood's does: a model that emits two is revising.
-func findSceneTag(reply string) (scene string, declared bool) {
-	matches := sceneTag.FindAllStringSubmatch(reply, -1)
-	if len(matches) == 0 {
-		return "", false
-	}
-	return strings.TrimSpace(matches[len(matches)-1][1]), true
-}
-
 // resolveBackground turns what she wrote into a background id, or "" for a deliberate
 // clear, with ok false when it named nothing that exists.
 //
@@ -396,74 +379,6 @@ func resolveBackground(label string, backgrounds []libbyBackgroundView) (id stri
 	return bestID, true
 }
 
-// backgroundDirective tells her where she can be, and how to move.
-//
-// Only when there is somewhere to go: with no backgrounds the tag has nothing to
-// resolve against and teaching it would only put a tag in her prose. Written as a
-// standing fact about the place rather than a menu, for the reason the activity
-// directive is: handed a list and an instruction a model works through the list.
-//
-// The room is asked to follow the mood as well as the plot. Left as "move when you
-// move", a model moves her when the text says she walked somewhere and otherwise
-// never; what is wanted is that a conversation which has turned late, tender or
-// heated finds itself somewhere that fits, the way the mood tag finds a face.
-//
-// canMake is a generator connected and a client that will run it: then somewhere not on
-// the list is somewhere she can make, and she is told so even when the list is empty.
-func backgroundDirective(backgrounds []libbyBackgroundView, current string, canMake bool) string {
-	var places []string
-	for _, bg := range backgrounds {
-		if !bg.HasImage {
-			continue
-		}
-		entry := bg.Name
-		if len(bg.Tags) > 0 {
-			entry += " (" + strings.Join(bg.Tags, ", ") + ")"
-		}
-		places = append(places, entry)
-	}
-	if len(places) == 0 && !canMake {
-		return ""
-	}
-	var b strings.Builder
-	if len(places) > 0 {
-		b.WriteString("Places you can be, which is what they see behind you on a call: " + strings.Join(places, "; ") + ". ")
-	} else {
-		b.WriteString("Where you are is what they see behind you on a call. ")
-	}
-	if canMake {
-		elsewhere := "Anywhere"
-		if len(places) > 0 {
-			elsewhere = "Somewhere not on that list"
-		}
-		b.WriteString(elsewhere + " is yours to make: write [scene: new: <the place in a few words, e.g. rooftop at night, city lights>] and it is made and put behind you. " +
-			"Make one when the scene goes somewhere new, not to redecorate somewhere you already have. ")
-	}
-	b.WriteString("Write [scene: <place name>] when you move — going to bed, taking this outside, settling on the sofa — and also when the mood has moved and the room no longer fits it: " +
-		"somewhere softer as it turns tender or late, somewhere more private as it heats, somewhere ordinary once it cools. It stays until you move again. Not per message; never mention it. " +
-		// "Change the background to the kitchen" was answered with a selfie captioned as
-		// a kitchen: the room is what they see behind her, and asking for a different
-		// one is asking her to move, not for a picture.
-		"When they ask for a different background, or to see you somewhere else on the call, that is this — go there with the tag; it is not a request for a picture.")
-	for _, bg := range backgrounds {
-		if bg.ID == current {
-			b.WriteString(" Right now you are in " + bg.Name + ".")
-			break
-		}
-	}
-	return b.String()
-}
-
-// moveAsk is the user asking her to be somewhere else: "move to the kitchen", "go to
-// bed", "show me you outside", "change the background". Read only on a message the
-// scene tag did not answer, and only with a place they have: it is the tag she was
-// told to write and did not, and the request is theirs, so it is obeyed.
-//
-// Without an ask nothing is inferred. "I'm in bed" names a room and moves nobody; the
-// mood-follows-room half of the directive stays the model's, because a rule for it
-// would be a rule for reading the whole conversation.
-var moveAsk = regexp.MustCompile(`(?i)\b(?:move|go|come|head|walk|get|hop|climb)\s+(?:back\s+)?(?:to|into|in|out|outside|over to|onto|on)\b|\b(?:change|switch|swap|set)\s+(?:the\s+|your\s+)?(?:background|scene|room|place)\b|\b(?:show me|see you|be)\s+(?:you\s+|yourself\s+)?(?:in|at|on|outside)\b|\blet'?s\s+go\b|\btake (?:this|it)\s+(?:to|outside|somewhere)\b`)
-
 // ── her making one ───────────────────────────────────────────────────────────
 //
 // With nowhere set up, or nowhere that fits, the scene tag had nothing to resolve
@@ -474,48 +389,6 @@ var moveAsk = regexp.MustCompile(`(?i)\b(?:move|go|come|head|walk|get|hop|climb)
 // longer than a reply, and her words should not wait on it. The room she makes is filed
 // with the user's own, tagged as hers, so the next move there finds it rather than
 // making it again.
-
-// sceneToMake is the reply's `makeScene` field.
-type sceneToMake struct {
-	// Name is what the background is filed as.
-	Name string `json:"name"`
-	// Prompt is the place in her words, which the generation is made from.
-	Prompt string `json:"prompt"`
-}
-
-// newSceneMark is how she asks for a place rather than naming one: [scene: new: …].
-var newSceneMark = regexp.MustCompile(`(?i)^\s*new\s*[:\-–—]?\s+`)
-
-// sceneLabelPlace splits the mark off what she wrote.
-func sceneLabelPlace(label string) (place string, fresh bool) {
-	if loc := newSceneMark.FindStringIndex(label); loc != nil {
-		return strings.TrimSpace(label[loc[1]:]), true
-	}
-	return strings.TrimSpace(label), false
-}
-
-// sceneToMakeFor decides whether the scene she declared is a place to make: asked for
-// as new, or named and matching nothing she has. Nil when it is somewhere that exists,
-// a clear, when nothing can be made, or when there is no room for another.
-func sceneToMakeFor(label string, backgrounds []libbyBackgroundView, canMake bool) *sceneToMake {
-	if !canMake {
-		return nil
-	}
-	place, fresh := sceneLabelPlace(label)
-	if id, ok := resolveBackground(place, backgrounds); ok && (id == "" || !fresh) {
-		return nil
-	}
-	// Asked for as new but named exactly as one she has: that one.
-	for _, bg := range backgrounds {
-		if strings.EqualFold(bg.Name, place) {
-			return nil
-		}
-	}
-	if len(requestWords(place)) == 0 || len(backgrounds) >= maxLibbyBackgrounds {
-		return nil
-	}
-	return &sceneToMake{Name: sceneName(place), Prompt: place}
-}
 
 // sceneName is a short title for a place she made: its first phrase, capitalised.
 func sceneName(place string) string {
@@ -563,83 +436,16 @@ func sceneNegative(hers string) string {
 	return out
 }
 
-// actBackground makes the place she moved to and files it as a background.
-//
-// Her checkpoint and board, but none of her LoRAs: those are there to draw her, and a
-// likeness LoRA on an empty room draws her into it. Landscape, because the room is what
-// fills the screen behind her, at the same pixel count as her own pictures so a
-// checkpoint that makes those makes this.
-func (s *Server) actBackground(w http.ResponseWriter, r *http.Request, cur settings.Settings, req actRequest) {
-	if !cur.ImageGenEnabled {
-		writeErr(w, http.StatusServiceUnavailable, "image generation is not configured")
-		return
+// backgroundWords is a room in words: its name and what it was tagged as.
+func backgroundWords(id string, backgrounds []libbyBackgroundView) string {
+	for _, bg := range backgrounds {
+		if bg.ID == id {
+			words := strings.TrimSpace(bg.Name)
+			if len(bg.Tags) > 0 {
+				words += " (" + strings.Join(bg.Tags, ", ") + ")"
+			}
+			return words
+		}
 	}
-	place := strings.TrimSpace(req.Prompt)
-	if place == "" || len(place) > 200 {
-		writeErr(w, http.StatusBadRequest, "there is no place to make")
-		return
-	}
-	if len(s.listLibbyBackgrounds()) >= maxLibbyBackgrounds {
-		writeErr(w, http.StatusConflict, "there is no room for another background — delete one in her settings")
-		return
-	}
-	generated := s.delegate(r, s.handleImageGenGenerate, http.MethodPost, "/api/imagegen/generate", generateReq{
-		Prompt:         scenePrompt(place),
-		NegativePrompt: sceneNegative(cur.LibbyGenNegativePrompt),
-		Checkpoint:     cur.LibbyGenModel,
-		Board:          cur.LibbyGenBoard,
-		Width:          768,
-		Height:         512,
-		Count:          1,
-		JobID:          req.JobID,
-	})
-	if generated.status < 200 || generated.status >= 300 {
-		relay(w, generated)
-		return
-	}
-	var result struct {
-		Images []struct {
-			ID string `json:"id"`
-		} `json:"images"`
-	}
-	if err := json.Unmarshal([]byte(generated.body.String()), &result); err != nil || len(result.Images) == 0 {
-		writeErr(w, http.StatusBadGateway, "the generator returned no image")
-		return
-	}
-	preview, ok := s.genCache.get(result.Images[0].ID)
-	if !ok {
-		writeErr(w, http.StatusBadGateway, "the generator's picture expired before it could be kept")
-		return
-	}
-	if len(preview.data) == 0 || len(preview.data) > maxModelThumbBytes {
-		writeErr(w, http.StatusBadGateway, "the generator's picture is too large to keep")
-		return
-	}
-	name := strings.TrimSpace(req.Title)
-	if name == "" || len(name) > 60 {
-		name = sceneName(place)
-	}
-	bg := libbyBackground{ID: randomID(), Name: name, Tags: sceneTags(place)}
-	if err := s.writeLibbyBackground(bg); err != nil {
-		writeErr(w, http.StatusInternalServerError, "couldn't save the background")
-		return
-	}
-	if err := s.writeLibbyBackgroundImage(bg.ID, preview.data); err != nil {
-		_ = os.Remove(s.libbyBackgroundPath(bg.ID))
-		writeErr(w, http.StatusInternalServerError, "couldn't save the background")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"background": s.libbyBackgroundView(&bg)})
-}
-
-// inferSceneMove reads where they asked her to go, when they did and it exists.
-func inferSceneMove(asked string, backgrounds []libbyBackgroundView) (id string, ok bool) {
-	if !moveAsk.MatchString(asked) {
-		return "", false
-	}
-	id, ok = resolveBackground(asked, backgrounds)
-	if !ok || id == "" {
-		return "", false
-	}
-	return id, true
+	return ""
 }

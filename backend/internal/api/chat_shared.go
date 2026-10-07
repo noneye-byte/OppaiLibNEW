@@ -89,7 +89,7 @@ func (s *Server) sharedItemsDirective(ctx context.Context, ids []int64, isLibby 
 	}
 	out := "\n\nWith this message they attached from their own library: " + strings.Join(lines, "; ") + ". " +
 		"They are showing you these — react to what they are, as someone who knows this collection, not by listing them back. " +
-		"You may [link: <title>] one to make it tappable, and [attach: <title>] it only if you are genuinely handing it back."
+		"You may [link: <title>] one to make it tappable, and send it from the library only if you are genuinely handing it back."
 	if selfCount > 0 {
 		out += " React to seeing yourself the way you would — flattered, smug, critical of the likeness — never as a stranger."
 	}

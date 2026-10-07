@@ -4,8 +4,8 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// The icon font is subset to the glyphs the source asks for, which is 240 of the 4,284
-// Material Symbols — 57 kB instead of 3.5 MB. The cost of that is a failure mode with
+// The icon font is subset to the glyphs the source asks for, which is 251 of the 4,299
+// Material Symbols — 60 kB instead of 3.5 MB. The cost of that is a failure mode with
 // no error message: add an icon to a menu and forget to re-run the subset, and the
 // button renders the *word* "bookmarks" in the icon font, which comes out as garbled
 // capitals. It happened once already, in the Collections nav item.

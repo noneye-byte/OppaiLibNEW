@@ -370,26 +370,23 @@ func (s *Server) discordReply(ctx context.Context, settings discordSettings, cha
 		return "", err
 	}
 
-	// Her mood tag is read and dropped rather than applied: the face it moves is beside
-	// the chat screen, and there is nothing over here for it to move.
-	reply, _, _, _ := splitMood(raw)
-	reply, _, _ = splitSnapRequest(reply)
-	reply, _, _ = splitPhotoRequest(reply)
-	// Memory capture, when the two surfaces share one. This is the "shared memory rules"
-	// the brief asks for made concrete: with "shared" she can learn from Discord exactly
-	// as she learns in the app; with "none" the tags are scrubbed and nothing is kept.
+	// Memory capture, when the two surfaces share one: what the person she answers to
+	// stated outright, the same fallback the app keeps when she does not file it
+	// herself. With "none" nothing from here is kept. She only answers the users on the
+	// allowlist, so the message she is answering is one of theirs.
 	if shared && settings.OwnerUserID > 0 {
-		if facts := findRememberTags(reply); len(facts) > 0 {
+		if facts := captureUserFacts(target.Content, ""); len(facts) > 0 {
 			s.chatMu.Lock()
-			if _, err := s.appendLibbyMemories(settings.OwnerUserID, facts); err != nil {
+			if _, err := s.appendLibbyMemories(settings.OwnerUserID, facts[:min(len(facts), maxRememberedPerReply)]); err != nil {
 				s.log.Debug("discord: remember", "err", err)
 			}
 			s.chatMu.Unlock()
 		}
 	}
-	// Everything else goes. A tag that leaks here is visible to everyone in somebody
-	// else's server, and none of them do anything from Discord anyway.
-	reply = scrubDirectives(reply)
+	// She acts through tools in the app and has none here, so anything bracketed that a
+	// habit put in the reply is deleted. A tag that leaks here is visible to everyone in
+	// somebody else's server.
+	reply := scrubDirectives(raw)
 	// Link tags name library items, which nobody on Discord can open. Resolving them to
 	// their titles keeps the sentence readable instead of leaving a dangling tag.
 	reply, _ = s.resolveLibraryLinks(ctx, reply, nil)

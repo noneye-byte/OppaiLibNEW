@@ -41,7 +41,7 @@ library bundled in the image; there is no second service to orchestrate.
                         │   ├── /api/resume      where you were       │
                         │   ├── /api/tags/top    filter chips         │
                         │   ├── /api/scrape      URL → media + meta   │
-                        │   ├── /api/chat        Libby                │
+                        │   ├── /api/libby/turn  Libby (streamed)     │
                         │   ├── /api/imagegen    the studio           │
                         │   └── /api/ai          auto-tag jobs        │
                         │                                            │
@@ -180,7 +180,8 @@ The repo layout in §5 is the skeleton; the parts of the tree it does not mentio
 
 | Area | Where | What |
 |------|-------|------|
-| Libby | `api/handlers_libby*.go`, `api/chat_*.go` | the character: chat, memory, bond, activities, backgrounds, identity |
+| Libby | `api/libby_turn*.go`, `api/libby_tools.go`, `api/libby_prompt.go`, `api/handlers_libby*.go`, `api/chat_*.go` | the character: a turn engine that streams her replies and acts through tool calls, memory, bond, activities, rooms, identity, stories, watching together |
+| Her camera | `api/libby_camera.go`, `api/camera_shot.go`, `api/libby_clips.go`, `imagegen/comfy.go` | candidates judged by a model that can see, adults-only checks, edits by img2img, pose and face references through ControlNet, clips through a ComfyUI workflow |
 | Image generation | `internal/imagegen/`, `api/handlers_imagegen.go` | A1111/InvokeAI/ComfyUI clients, the outfit studio, the gallery |
 | Voice | `internal/tts/piper.go` | local Piper TTS |
 | Vision | `internal/vision/`, `api/vision_describe.go` | a local multimodal LLM describes pictures and clips in prose |
@@ -219,3 +220,16 @@ outlives the change:
 - **The image is not ~20 MB.** §1's justification for Go still holds, but the shipped
   image carries ffmpeg, the ONNX runtime, Piper and ~68 MB of Libby's artwork embedded
   in the binary. There is a lean image variant for boxes that do not want all of it.
+- **Libby acts through tools, not tags.** For twenty-odd releases her actions were
+  bracket tags in her prose — `[mood: …]`, `[send: …]`, `[wearing: …]`, a dozen more —
+  read back out with anchored patterns, a deletion net for the ones the model mangled,
+  and regexes that guessed whether you had asked for a picture. Most of the releases in
+  that stretch fixed some version of a tag that did not arrive. The models she runs on
+  speak OpenAI tool calls, so her turn is now a tool loop (`api/libby_turn*.go`): her
+  words are her words, her actions are typed calls the server validates, and a result
+  — what a picture actually shows — goes back to her before she says anything about it.
+  A backend that refuses tools gets a JSON envelope instead. The turn runs on the
+  server: the client sends only what you said, the server writes her replies into the
+  conversation and streams them, and the workspace save merges by revision rather than
+  overwriting. The client no longer generates pictures or rooms, keeps her mood run or
+  her sent list, or splits replies into bubbles.

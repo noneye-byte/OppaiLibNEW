@@ -288,6 +288,7 @@ func (s *Server) StartBackgroundJobs() {
 	go s.resumeParkedCard()
 	// Looking back over conversations that have gone quiet. See libby_reflect.go.
 	go s.startReflecting()
+	go s.startStories()
 	go s.backfillThumbnails()
 	go s.backfillImageThumbs()
 	go s.backfillComics()
@@ -714,7 +715,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/chat/libby-default", s.requireAuth(s.handleLibbyDefaultCard))
 	mux.HandleFunc("GET /api/chat/images/{id}", s.requireAuth(s.handleGetChatImage))
 	mux.HandleFunc("DELETE /api/chat/images/{id}", s.requireAuth(s.handleDeleteChatImage))
-	mux.HandleFunc("POST /api/chat", s.requireAuth(s.handleChat))
+	mux.HandleFunc("POST /api/libby/turn", s.requireAuth(s.handleLibbyTurn))
+	mux.HandleFunc("POST /api/libby/photos/{id}/rate", s.requireAuth(s.handleRateLibbyPhoto))
+	mux.HandleFunc("POST /api/libby/photos/{id}/keep", s.requireAuth(s.handleKeepLibbyPhoto))
+	mux.HandleFunc("GET /api/libby/stories", s.requireAuth(s.handleListLibbyStories))
+	mux.HandleFunc("POST /api/libby/stories", s.requireAuth(s.handlePostLibbyStory))
+	mux.HandleFunc("POST /api/libby/stories/{id}/seen", s.requireAuth(s.handleSeenLibbyStory))
+	mux.HandleFunc("POST /api/libby/watch", s.requireAuth(s.handleLibbyWatch))
 	// Summarises the older part of a conversation for the client to keep. See chat_compress.go.
 	mux.HandleFunc("POST /api/chat/compress", s.requireAuth(s.handleCompressConversation))
 

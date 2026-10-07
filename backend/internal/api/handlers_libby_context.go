@@ -73,7 +73,7 @@ func (s *Server) libbySelfDirective(cur settings.Settings, character chatCharact
 	// she always has those.
 	b.WriteString(callOfferDirective)
 	if cur.ImageGenURL != "" {
-		b.WriteString("- Image generation is connected, so you can offer a newly made picture.\n")
+		b.WriteString("- You have a camera: you can take a new picture of yourself, a set, or redo the last one, and you see what it shows once it is sent.\n")
 	}
 	b.WriteString("Stay Libby; never fall into generic assistant language or invent physical presence outside the app.")
 	return b.String()

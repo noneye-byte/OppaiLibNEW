@@ -1,16 +1,7 @@
 package api
 
 import (
-	"bytes"
-	"encoding/base64"
 	"encoding/json"
-	"image"
-	"image/color"
-	"image/png"
-	"net/http"
-	"net/http/httptest"
-	"strings"
-	"sync"
 	"testing"
 )
 
@@ -80,82 +71,6 @@ func TestARefusedPictureIsRememberedAndTheDirectiveComesBackOut(t *testing.T) {
 	}
 	if messages[0].Content == "card" {
 		t.Fatal("withoutEyes changed the caller's slice")
-	}
-}
-
-// The whole path: a photo she is sent reaches a seeing model as a picture, and a model
-// that refuses it still gets the turn — answered from the tags, told nothing about eyes.
-func TestAPhotoReachesASeeingModelAndARefusalIsAnsweredBlind(t *testing.T) {
-	for _, refuse := range []bool{false, true} {
-		var mu sync.Mutex
-		var bodies []map[string]any
-		llm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == "/v1/internal/model/info" {
-				_, _ = w.Write([]byte(`{"model_name":"Qwen2.5-VL-32B-Instruct"}`))
-				return
-			}
-			var body map[string]any
-			_ = json.NewDecoder(r.Body).Decode(&body)
-			mu.Lock()
-			bodies = append(bodies, body)
-			mu.Unlock()
-			if refuse && strings.Contains(mustJSON(body), "image_url") {
-				w.WriteHeader(http.StatusBadRequest)
-				_, _ = w.Write([]byte(`{"error":{"message":"image input is not supported"}}`))
-				return
-			}
-			_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"oh that's cute"}}]}`))
-		}))
-
-		s, token := newTestServer(t)
-		cur := s.settings.Get()
-		cur.ChatURL = llm.URL
-		s.settings.Set(cur)
-
-		var pic bytes.Buffer
-		img := image.NewRGBA(image.Rect(0, 0, 32, 32))
-		for i := range img.Pix {
-			img.Pix[i] = 200
-		}
-		img.Set(3, 3, color.RGBA{R: 255, A: 255})
-		_ = png.Encode(&pic, img)
-		up := do(t, s.Handler(), token, http.MethodPost, "/api/chat/images",
-			`{"characterId":"libby","name":"mine","imageData":"data:image/png;base64,`+base64.StdEncoding.EncodeToString(pic.Bytes())+`","tags":["red dress"]}`)
-		if up.Code != http.StatusOK {
-			t.Fatalf("upload: %d %s", up.Code, up.Body.String())
-		}
-		var meta chatImage
-		_ = json.Unmarshal(up.Body.Bytes(), &meta)
-
-		rec := do(t, s.Handler(), token, http.MethodPost, "/api/chat",
-			`{"mode":"sweet","messages":[{"role":"user","content":"what do you think?","imageId":"`+meta.ID+`"}],"photoImageId":"`+meta.ID+`","photoTags":["red dress"]}`)
-		llm.Close()
-		if rec.Code != http.StatusOK {
-			t.Fatalf("refuse=%v: chat %d %s", refuse, rec.Code, rec.Body.String())
-		}
-		first := mustJSON(bodies[0])
-		if !strings.Contains(first, "image_url") || !strings.Contains(first, "you can see them") {
-			t.Fatalf("refuse=%v: first request carried no picture", refuse)
-		}
-		if !refuse {
-			if len(bodies) != 1 {
-				t.Fatalf("a seeing model was asked %d times", len(bodies))
-			}
-			continue
-		}
-		if len(bodies) != 2 {
-			t.Fatalf("a refusal was asked %d times, want a single retry", len(bodies))
-		}
-		retry := mustJSON(bodies[1])
-		if strings.Contains(retry, "image_url") || strings.Contains(retry, "you can see them") {
-			t.Fatal("the retry still claimed she could see")
-		}
-		if !strings.Contains(retry, "red dress") {
-			t.Fatal("the retry lost the tags she answers from")
-		}
-		if !knownBlind(llm.URL, "Qwen2.5-VL-32B-Instruct") {
-			t.Fatal("the refusal was not remembered")
-		}
 	}
 }
 

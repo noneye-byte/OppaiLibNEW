@@ -1,7 +1,6 @@
 package api
 
 import (
-	"strings"
 	"testing"
 )
 
@@ -76,52 +75,5 @@ func TestBuildLibbyActionResolvesLibraryTargets(t *testing.T) {
 	got, ok = s.buildLibbyAction("favourite", "summer at the coast", allCaps, candidates)
 	if !ok || got.Kind != "favorite" || got.MediaID != 42 {
 		t.Fatalf("favourite: got %+v ok=%v", got, ok)
-	}
-}
-
-// The tag must never survive into the prose, whether or not it produced a proposal.
-func TestParseLibbyActionsStripsTagsFromTheReply(t *testing.T) {
-	s := &Server{}
-	text, actions := s.parseLibbyActions(t.Context(),
-		"Want me to make one? [do: generate you in the rain]", allCaps)
-	if text != "Want me to make one?" {
-		t.Errorf("tag left in prose: %q", text)
-	}
-	if len(actions) != 1 || actions[0].ID == "" {
-		t.Fatalf("got %d actions, want 1 with an id", len(actions))
-	}
-
-	// An action that resolved to nothing still leaves clean prose.
-	text, actions = s.parseLibbyActions(t.Context(),
-		"I'll grab that. [do: import that place]", allCaps)
-	if text != "I'll grab that." {
-		t.Errorf("unresolvable tag left in prose: %q", text)
-	}
-	if len(actions) != 0 {
-		t.Errorf("got %d actions from an unresolvable tag, want 0", len(actions))
-	}
-}
-
-func TestParseLibbyActionsBoundsProposalsPerReply(t *testing.T) {
-	s := &Server{}
-	_, actions := s.parseLibbyActions(t.Context(),
-		"[do: generate a] [do: generate b] [do: generate c] [do: generate d]", allCaps)
-	if len(actions) > maxLibbyActions {
-		t.Errorf("got %d actions, want at most %d", len(actions), maxLibbyActions)
-	}
-}
-
-// The directive must never describe a capability that is switched off, or a model
-// will offer things that can only ever be refused by the machine.
-func TestActionDirectiveDescribesOnlyWhatIsWired(t *testing.T) {
-	if got := actionDirective(actionCapabilities{}); got != "" {
-		t.Errorf("with no capabilities the directive should be empty, got %q", got)
-	}
-	noGen := actionDirective(actionCapabilities{Library: true})
-	if strings.Contains(noGen, "generate") {
-		t.Error("offered generation with no generator configured")
-	}
-	if !strings.Contains(noGen, "import") {
-		t.Error("library actions missing when the library is available")
 	}
 }

@@ -16,6 +16,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	_ "image/gif"
@@ -264,12 +265,41 @@ type GenerateRequest struct {
 	Count          int    // how many images to produce
 	Loras          []LoraWeight
 	Detailer       Detailer
+	// InitImage makes the job an img2img: the picture is started from these bytes
+	// rather than from noise, and Denoise says how far it may move away from them
+	// (0 keeps it, 1 ignores it). This is how Libby redoes the picture she just sent
+	// with one thing changed and still sends the same woman in the same room — a new
+	// txt2img on the same seed changes everything the prompt did not pin down.
+	InitImage []byte
+	Denoise   float64
+	// Controls are pictures that steer the run without being started from: a pose to
+	// copy, a face to keep. Automatic1111 and Forge apply them through the ControlNet
+	// extension; a backend that cannot fails with ErrControlUnsupported so the caller
+	// can decide whether the picture is still worth taking without them.
+	Controls []ControlUnit
 	// Progress, when set, is called as the generator reports on the run: the step
 	// count and, every few steps, a preview of the picture so far. Called from a
 	// goroutine beside the request, so it must be safe to call concurrently with the
 	// caller and cheap. See progress.go.
 	Progress func(Progress)
 }
+
+// ControlUnit is one ControlNet input: the picture, the preprocessor that reads it, and
+// the model that applies what was read. Module and Model are the extension's own names
+// ("openpose_full", "ip-adapter_clip_sd15"), which are installation-specific, so they
+// come from settings rather than being guessed here.
+type ControlUnit struct {
+	Image  []byte
+	Module string
+	Model  string
+	Weight float64
+}
+
+// ErrControlUnsupported is a generator that cannot apply control units at all —
+// InvokeAI's graphs need per-install model records this client does not resolve, and an
+// A1111 without the ControlNet extension rejects the field. Distinguished so a picture
+// can be retaken without the pose or face lock instead of not being taken.
+var ErrControlUnsupported = errors.New("this generator cannot apply pose or face references")
 
 // Detailer configures either the ADetailer Automatic1111 extension or InvokeAI's
 // adetailer node. The shared fields deliberately map to both APIs.

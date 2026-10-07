@@ -1,13 +1,10 @@
 package api
 
 import (
-	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -98,28 +95,6 @@ func TestAModelSheNamesMustBeOneTheBackendListed(t *testing.T) {
 	}
 }
 
-func TestServerActionsAreOnlyOfferedToAnAdminOnAServerTurn(t *testing.T) {
-	s, _ := newTestServer(t)
-	reply := "want me to swap? [do: load Qwen3-32B-Q4_K_M] or tidy up [do: cleanup]"
-	models := []string{"Qwen3-32B-Q4_K_M"}
-
-	_, none := s.parseLibbyActions(t.Context(), reply, actionCapabilities{Library: true, Models: models})
-	if len(none) != 0 {
-		t.Fatalf("offered without the server capability: %+v", none)
-	}
-	text, offered := s.parseLibbyActions(t.Context(), reply, actionCapabilities{Library: true, Server: true, Models: models})
-	if len(offered) != 2 || offered[0].Kind != "load" || offered[0].Prompt != "Qwen3-32B-Q4_K_M" || offered[1].Kind != "cleanup" {
-		t.Fatalf("offered = %+v", offered)
-	}
-	if strings.Contains(text, "[do:") {
-		t.Fatalf("tags left in the prose: %q", text)
-	}
-	_, invented := s.parseLibbyActions(t.Context(), "[do: load Llama-3.3-70B]", actionCapabilities{Server: true, Models: models})
-	if len(invented) != 0 {
-		t.Fatalf("an invented model became a card: %+v", invented)
-	}
-}
-
 func TestAnAllowedServerActionIsRefusedToANonAdmin(t *testing.T) {
 	s, _ := newTestServer(t)
 	uid, err := s.db.CreateUser(t.Context(), "housemate", "x", false)
@@ -134,54 +109,6 @@ func TestAnAllowedServerActionIsRefusedToANonAdmin(t *testing.T) {
 		if rec.Code != http.StatusForbidden {
 			t.Errorf("%s as a non-admin: %d, want 403", kind, rec.Code)
 		}
-	}
-}
-
-// The whole path: asked how the server is doing, an admin's Libby is told what she runs
-// on and what else is on disk, and a load she offers comes back as a card.
-func TestAskedAboutTheServerSheCanOfferToLoadAnotherModel(t *testing.T) {
-	var mu sync.Mutex
-	var prompt string
-	llm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/v1/internal/model/info":
-			_, _ = w.Write([]byte(`{"model_name":"Mistral-Small-3.2-24B-Q6_K"}`))
-		case "/v1/internal/model/list":
-			_, _ = w.Write([]byte(`{"model_names":["Mistral-Small-3.2-24B-Q6_K","Qwen3-32B-Q4_K_M"]}`))
-		case "/v1/chat/completions":
-			var body map[string]any
-			_ = json.NewDecoder(r.Body).Decode(&body)
-			mu.Lock()
-			prompt = mustJSON(body)
-			mu.Unlock()
-			_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"all good babe. want me on the qwen for a bit? [do: load Qwen3-32B-Q4_K_M]"}}]}`))
-		default:
-			w.WriteHeader(http.StatusNotFound)
-		}
-	}))
-	defer llm.Close()
-	s, token := newTestServer(t)
-	cur := s.settings.Get()
-	cur.ChatURL = llm.URL
-	s.settings.Set(cur)
-
-	rec := do(t, s.Handler(), token, http.MethodPost, "/api/chat",
-		`{"mode":"sweet","messages":[{"role":"user","content":"how's the server doing? could you run a different model?"}]}`)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("chat: %d %s", rec.Code, rec.Body.String())
-	}
-	for _, want := range []string{"How the server you live on is doing", "Qwen3-32B-Q4_K_M", "[do: load"} {
-		if !strings.Contains(prompt, want) {
-			t.Errorf("prompt is missing %q", want)
-		}
-	}
-	var out struct {
-		Message string        `json:"message"`
-		Actions []libbyAction `json:"actions"`
-	}
-	_ = json.Unmarshal(rec.Body.Bytes(), &out)
-	if len(out.Actions) != 1 || out.Actions[0].Kind != "load" || out.Actions[0].Detail != "Qwen3-32B-Q4_K_M" {
-		t.Fatalf("actions = %+v (message %q)", out.Actions, out.Message)
 	}
 }
 

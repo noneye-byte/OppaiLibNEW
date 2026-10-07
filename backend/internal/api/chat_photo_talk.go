@@ -31,11 +31,6 @@ const pictureNoun = `(?:photo|photos|pic|pics|picture|pictures|selfie|selfies|im
 // "this pic", "what is this a photo of", "the story behind that one you sent".
 var aboutPictureCue = regexp.MustCompile(`(?i)\b(?:that|this|the|your|it)\b[^.?!\n]{0,40}?\b` + pictureNoun + `\b|\b` + pictureNoun + `\b[^.?!\n]{0,40}?\b(?:that|this|it|behind|about|of)\b`)
 
-// anotherPictureCue reads a message as asking for a picture to be *sent*, which
-// outranks it merely being about one: "send me the photo of you in the red dress"
-// mentions a picture and wants one, and the ready-picture path is the right answer.
-var anotherPictureCue = regexp.MustCompile(`(?i)\b(?:another|again|one more|more|new one|different|next|other one|send|show|let me see|see you|take one|take a|give me|got any|any more)\b`)
-
 // askedAboutPicture reports whether the message is about a picture already in the
 // conversation rather than asking for one.
 func askedAboutPicture(text string) bool {
@@ -146,23 +141,7 @@ func pictureInQuestionDirective(m chatMessage, d historyDescriber) string {
 	return ""
 }
 
-// photoNarrationCue reads a reply, before scrubbing, as having *said* it was sending a
-// picture — "*sends you a pic*", "here's a selfie", "took one for you" — which is the
-// case the unprompted picture path exists for: the narration is scrubbed, and the
-// picture it announced has to arrive or the reply reads as a promise broken.
-//
-// A reply that never mentioned a picture is not sending one. Before this gate her
-// prose was matched against her gallery's tags on every turn, and a paragraph that
-// mentioned her orange hair and her phone met the three-word floor against a picture
-// tagged "orange hair, phone" — a selfie nobody asked for and she never said she took.
-var photoNarrationCue = regexp.MustCompile(`(?i)\b(?:photo|photos|pic|pics|picture|pictures|selfie|selfies|snap|snaps|image|images|nude|nudes|camera|took one|take one|taking one)\b|\[\s*(?:send|show|snap|photo|pic|image)\b`)
-
-// sheSaidSheWasSending reports whether the reply, as the model wrote it, spoke of a
-// picture at all.
-//
-// A catalogue line she copied is not her speaking of one: "(video; 1girl, …, photo
-// (medium), …)" has "photo" in it because a tag does, and reading that as narration is
-// how a question about a video was answered with a selfie tagged like the video.
-func sheSaidSheWasSending(raw string) bool {
-	return photoNarrationCue.MatchString(strayCatalogueNote.ReplaceAllString(raw, ""))
-}
+// anotherPictureCue reads a message as asking for a picture to be *sent*, which
+// outranks it merely being about one: "send me the photo of you in the red dress"
+// mentions a picture and wants one, and the ready-picture path is the right answer.
+var anotherPictureCue = regexp.MustCompile(`(?i)\b(?:another|again|one more|more|new one|different|next|other one|send|show|let me see|see you|take one|take a|give me|got any|any more)\b`)

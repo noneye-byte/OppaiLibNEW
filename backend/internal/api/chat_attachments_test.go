@@ -2,9 +2,7 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -15,47 +13,6 @@ func libbySelfies() []selfPicture {
 			tags: []string{"rooftop", "sunset", "red dress"}},
 		{link: libbyLink{ID: 12, Title: "Kitchen morning", Kind: "image"},
 			tags: []string{"kitchen", "morning", "oversized shirt"}},
-	}
-}
-
-// The bug this whole file starts from: "attach" meant a selfie, so a request to hand
-// over a library item was parsed as a picture request, matched nothing, and vanished.
-// It has to reach the attachment reader with the reply intact.
-func TestAttachRequestIsNotEatenByThePhotoParser(t *testing.T) {
-	reply := "You never finished this one. [attach: Summer at the Coast]"
-	if _, _, asked := splitPhotoRequest(reply); asked {
-		t.Fatal("an attach request was read as a request for a selfie")
-	}
-	if _, asked := findLoosePhotoRequest(reply); asked {
-		t.Fatal("the loose photo parser claimed an attach request")
-	}
-	got := findAttachRequests(reply)
-	if len(got) != 1 || got[0] != "Summer at the Coast" {
-		t.Fatalf("attach requests = %v, want [Summer at the Coast]", got)
-	}
-	// And the user must never see the tag, whichever parser ends up owning it.
-	if strings.Contains(scrubDirectives(reply), "attach") {
-		t.Fatalf("the tag survived scrubbing: %q", scrubDirectives(reply))
-	}
-}
-
-// A [send: …] request is still a selfie request. The two verbs are the whole protocol
-// distinction, so this is the other half of the test above.
-func TestSendRequestIsStillAPhotoRequest(t *testing.T) {
-	if _, request, asked := splitPhotoRequest("here you go [send: rooftop, sunset]"); !asked || request != "rooftop, sunset" {
-		t.Fatalf("send tag parsed as %q asked=%v", request, asked)
-	}
-	if got := findAttachRequests("here you go [send: rooftop, sunset]"); got != nil {
-		t.Fatalf("the attachment reader claimed a selfie request: %v", got)
-	}
-}
-
-// One reply hands over one thing. A model that lists four items is writing search
-// results, and the cap is what stops that reaching the user as four cards.
-func TestAttachRequestsAreCapped(t *testing.T) {
-	reply := "[attach: one] and [attach: two] and [attach: three] and [attach: ]"
-	if got := findAttachRequests(reply); len(got) != maxAttachmentsPerReply {
-		t.Fatalf("attach requests = %v, want %d of them", got, maxAttachmentsPerReply)
 	}
 }
 
@@ -84,7 +41,7 @@ func TestCatalogueListsLibraryPicturesOfHer(t *testing.T) {
 	// With no gallery at all she is still told how to send one — the library pool
 	// carries the whole catalogue on its own.
 	alone := photoCatalogue(chatWorkspace{}, "libby", nil, libbySelfies(), nil, "", "")
-	if !strings.Contains(alone, "[send:") {
+	if !strings.Contains(alone, "send_saved_photo") {
 		t.Fatalf("library-only catalogue never says how to send one: %s", alone)
 	}
 	if photoCatalogue(chatWorkspace{}, "libby", nil, nil, nil, "", "") != "" {
@@ -191,101 +148,6 @@ func TestAFailedAttachFallsBackToWhatTheUserAsked(t *testing.T) {
 	both := s.resolveLibraryAttachments(ctx, []string{"Summer at the Coast"}, "put on Summer at the Coast", "", nil, nil, nil)
 	if len(both) != 1 {
 		t.Fatalf("a working request grew a second item: %+v", both)
-	}
-}
-
-// End to end, the way the user meets it: they ask to be shown something, she agrees and
-// tags it loosely, and the item comes back on the reply.
-func TestChatAttachesWhenDirected(t *testing.T) {
-	var prompt string
-	llm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/v1/internal/model/info" {
-			_, _ = w.Write([]byte(`{"model_name":"test-local"}`))
-			return
-		}
-		var body struct {
-			Messages []chatMessage `json:"messages"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&body)
-		if len(body.Messages) > 0 {
-			prompt = body.Messages[0].Content
-		}
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"Of course — putting it on now.\n[attach: the beach one]"}}]}`))
-	}))
-	defer llm.Close()
-
-	s, token := newTestServer(t)
-	id := seedTitledMedia(t, s, "Untitled import 4192", "video", "beach")
-	cur := s.settings.Get()
-	cur.ChatURL = llm.URL
-	s.settings.Set(cur)
-
-	rec := do(t, s.Handler(), token, http.MethodPost, "/api/chat",
-		`{"mode":"sweet","characterId":"libby","messages":[{"role":"user","content":"show me the beach one"}]}`)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("chat: %d %s", rec.Code, rec.Body)
-	}
-	// The directive has to say what triggers it, or a 7B never reaches for the tag.
-	for _, want := range []string{"[attach:", "\"show me\""} {
-		if !strings.Contains(prompt, want) {
-			t.Fatalf("system prompt missing %q", want)
-		}
-	}
-	var out struct {
-		Message     string            `json:"message"`
-		Attachments []libbyAttachment `json:"attachments"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if strings.Contains(out.Message, "attach") {
-		t.Fatalf("the tag was left in the prose: %q", out.Message)
-	}
-	if len(out.Attachments) != 1 || out.Attachments[0].ID != id {
-		t.Fatalf("attachments = %+v, want the beach video (%d)", out.Attachments, id)
-	}
-}
-
-// A reply allowance the client asked for may be shorter than the budget's but never
-// longer: past it the backend drops the front of the prompt, which is the character card,
-// and the whole point of fitting the turn was to stop exactly that happening silently.
-func TestClientMaxTokensCannotExceedTheFittedAllowance(t *testing.T) {
-	var asked int
-	llm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/v1/internal/model/info" {
-			_, _ = w.Write([]byte(`{"model_name":"test-local"}`))
-			return
-		}
-		var body struct {
-			MaxTokens int `json:"max_tokens"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&body)
-		asked = body.MaxTokens
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`))
-	}))
-	defer llm.Close()
-
-	s, token := newTestServer(t)
-	cur := s.settings.Get()
-	cur.ChatURL = llm.URL
-	s.settings.Set(cur)
-
-	rec := do(t, s.Handler(), token, http.MethodPost, "/api/chat",
-		`{"mode":"sweet","characterId":"libby","options":{"max_tokens":99999},"messages":[{"role":"user","content":"hi"}]}`)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("chat: %d %s", rec.Code, rec.Body)
-	}
-	if asked <= 0 || asked > samplingBounds.maxTokMax {
-		t.Fatalf("max_tokens sent to the backend = %d, want the fitted allowance", asked)
-	}
-	// Smaller is a real choice and is honoured as written.
-	rec = do(t, s.Handler(), token, http.MethodPost, "/api/chat",
-		`{"mode":"sweet","characterId":"libby","options":{"max_tokens":80},"messages":[{"role":"user","content":"hi"}]}`)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("chat: %d %s", rec.Code, rec.Body)
-	}
-	if asked != 80 {
-		t.Fatalf("a smaller override was not honoured: max_tokens = %d", asked)
 	}
 }
 

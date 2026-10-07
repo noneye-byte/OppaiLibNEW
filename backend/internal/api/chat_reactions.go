@@ -1,7 +1,6 @@
 package api
 
 import (
-	"regexp"
 	"strings"
 	"unicode"
 )
@@ -69,30 +68,10 @@ var reactionEmoji = map[string]string{
 	"peach": "🍑", "eggplant": "🍆", "tongue": "👅", "sweat": "💦", "wet": "💦",
 	"thinking": "🤔", "hmm": "🤔",
 	"nervous": "😅", "sweatsmile": "😅", "oops": "😅",
-	"wink": "😉",
+	"wink":       "😉",
 	"heart eyes": "😍", "hearteyes": "😍", "gorgeous": "😍",
 	"broken heart": "💔", "heartbreak": "💔",
 	"thumbs down": "👎", "no": "👎", "nope": "👎",
-}
-
-// reactDirective teaches the tag. Beside the others in the tail; brief, with the one
-// thing a model gets wrong stated — that a reaction can be the whole reply.
-const reactDirective = "You can put an emoji on their latest message with [react: <one emoji>] — a heart, a laugh, eyes, fire. " +
-	"Sometimes that is the whole answer to a small message: react and say nothing, or react and add one short line. One at most, and not every time."
-
-// reactTag captures the reaction wherever it landed. Loose like the remember tag and
-// for the same reason: a one-emoji tag sits anywhere in a reply, and a model that is
-// told to react instead of speak puts it on a line of its own with nothing around it.
-var reactTag = regexp.MustCompile(`(?i)\[\s*(?:react|reacts|reacting|reaction)\s*[:=-]?\s*([^\]\n]{1,40}?)\s*\]`)
-
-// findReactTag reads the reaction out of a reply, resolved to one emoji. The first one
-// wins: a message has one reaction from her.
-func findReactTag(reply string) (emoji string, ok bool) {
-	match := reactTag.FindStringSubmatch(reply)
-	if match == nil {
-		return "", false
-	}
-	return resolveReactionEmoji(match[1])
 }
 
 // resolveReactionEmoji turns what she wrote into an emoji: a word from the table, or

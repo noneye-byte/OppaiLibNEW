@@ -172,53 +172,6 @@ func TestLibraryPictureOfHerIsChosenByTags(t *testing.T) {
 	}
 }
 
-// A snap is a send with one extra bit, read wherever it sat, and never also a send.
-func TestSnapIsReadAsAPictureRequest(t *testing.T) {
-	text, request, ok := splitSnapRequest("look what i'm wearing rn [snap: mirror, lingerie] 😏")
-	if !ok || request != "mirror, lingerie" {
-		t.Fatalf("snap not read: %q %v", request, ok)
-	}
-	if strings.Contains(text, "[snap") {
-		t.Fatalf("tag left in prose: %q", text)
-	}
-	if _, _, asked := splitPhotoRequest(text); asked {
-		t.Fatal("a snap was also read as a send")
-	}
-	if scrubbed := scrubDirectives("here [snap: mirror] ok"); strings.Contains(scrubbed, "[") {
-		t.Fatalf("scrubber left the snap tag: %q", scrubbed)
-	}
-}
-
-// Reactions: an emoji or a word for one, the first wins, and a tag alone is legal.
-func TestReactionTagResolvesToOneEmoji(t *testing.T) {
-	for reply, want := range map[string]string{
-		"[react: ❤️]":              "❤️",
-		"aww [react: heart] night": "❤️",
-		"[react: 😂😂😂]":             "😂😂😂",
-		"[reaction: fire]":         "🔥",
-		"[react: with a big heart]": "❤️",
-	} {
-		got, ok := findReactTag(reply)
-		if !ok || got != want {
-			t.Fatalf("%q → %q %v, want %q", reply, got, ok, want)
-		}
-	}
-	if _, ok := findReactTag("[react: whatever this is]"); ok {
-		t.Fatal("an unknown word became a reaction")
-	}
-	if got := scrubDirectives("goodnight [react: ❤️]"); got != "goodnight" {
-		t.Fatalf("scrubber left the react tag: %q", got)
-	}
-	// Their reactions on her messages reach her as prose.
-	note := reactionsNote(chatMessage{Role: "assistant", Content: "x", Reactions: []chatReaction{{Emoji: "❤️", By: "user"}}})
-	if !strings.Contains(note, "they reacted ❤️") {
-		t.Fatalf("reaction note = %q", note)
-	}
-	if got := normalizeReactions([]chatReaction{{Emoji: "not an emoji", By: "user"}, {Emoji: "🔥", By: "nobody"}}); len(got) != 1 || got[0].By != "user" {
-		t.Fatalf("normalised reactions = %+v", got)
-	}
-}
-
 // A burst of texts is one turn: merged for the model, and read whole for signals.
 func TestBurstOfTextsIsOneTurn(t *testing.T) {
 	messages := []chatMessage{
@@ -242,12 +195,12 @@ func TestBurstOfTextsIsOneTurn(t *testing.T) {
 // What they state outright about themselves is filed whether or not she thought to.
 func TestPlainlyStatedFactsAreCaptured(t *testing.T) {
 	for text, want := range map[string]string{
-		"my name's Owen btw":                       "Their name is Owen",
-		"I live in Leeds, it's grim":               "They live in Leeds",
-		"i work as a nurse and it's exhausting":    "They work as a nurse",
-		"honestly I hate horror films":             "They hate horror films",
-		"I really love rainy nights":               "They love rainy nights",
-		"please don't bring up my ex again":        "They asked me never to bring up my ex again",
+		"my name's Owen btw":                    "Their name is Owen",
+		"I live in Leeds, it's grim":            "They live in Leeds",
+		"i work as a nurse and it's exhausting": "They work as a nurse",
+		"honestly I hate horror films":          "They hate horror films",
+		"I really love rainy nights":            "They love rainy nights",
+		"please don't bring up my ex again":     "They asked me never to bring up my ex again",
 		// The boundary cuts at a conjunction. This pattern shipped with a literal
 		// backspace where the word boundary should have been, so it never cut here.
 		"never mention my brother but you can ask": "They asked me never to mention my brother",

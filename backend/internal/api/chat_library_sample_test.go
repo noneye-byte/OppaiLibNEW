@@ -35,7 +35,7 @@ func TestSuggestShelfReachesPastTheNewest(t *testing.T) {
 	if old < 10 {
 		t.Fatalf("the shelf reached only %d of the 20 older videos over 40 turns: %v", old, seen)
 	}
-	if !strings.Contains(s.librarySuggestBlock(context.Background(), feedChoice{}), "[attach: <title>]") {
+	if !strings.Contains(s.librarySuggestBlock(context.Background(), feedChoice{}), "send_from_library") {
 		t.Fatal("the shelf should say she can attach what she suggests")
 	}
 }

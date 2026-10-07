@@ -90,27 +90,3 @@ func TestScrubDirectivesKeepsATagOnlyReply(t *testing.T) {
 		t.Errorf("scrubDirectives(%q) = %q, want it unchanged", reply, got)
 	}
 }
-
-func TestFindLooseMoodReadsLastTagAnywhere(t *testing.T) {
-	emotion, intensity, ok := findLooseMood("[mood: happy 2] Actually no. [mood: mischievous 4] There.")
-	if !ok || emotion != "mischievous" || intensity != 4 {
-		t.Fatalf("got (%q, %d, %v), want (mischievous, 4, true)", emotion, intensity, ok)
-	}
-	if _, _, ok := findLooseMood("Nothing to see here."); ok {
-		t.Error("found a mood in prose that has none")
-	}
-	// An unreadable label is not a mood, even though the tag is scrubbed either way.
-	if _, _, ok := findLooseMood("[mood: sideways 3]"); ok {
-		t.Error("accepted a label that maps to no pose")
-	}
-}
-
-func TestFindLoosePhotoRequestReadsFirstTag(t *testing.T) {
-	request, ok := findLoosePhotoRequest("Here. [send: lingerie, bed] And [send: shower] too.")
-	if !ok || request != "lingerie, bed" {
-		t.Fatalf("got (%q, %v), want (\"lingerie, bed\", true)", request, ok)
-	}
-	if _, ok := findLoosePhotoRequest("No tags at all."); ok {
-		t.Error("found a picture request in prose that has none")
-	}
-}

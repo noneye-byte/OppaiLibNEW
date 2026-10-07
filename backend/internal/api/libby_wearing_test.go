@@ -50,24 +50,6 @@ func TestWhatSheSaysSheHasOnIsNormalised(t *testing.T) {
 	}
 }
 
-func TestTheWearTagIsReadAndThenScrubbed(t *testing.T) {
-	reply := "Give me a sec. *slips out of the dress* [wearing: nothing] Better?"
-	label, ok := findWearTag(reply)
-	if !ok || normalizeWearing(label) != wearingNothing {
-		t.Fatalf("findWearTag = %q, %v", label, ok)
-	}
-	if cleaned := scrubDirectives(reply); strings.Contains(cleaned, "[") {
-		t.Errorf("tag left in the prose: %q", cleaned)
-	}
-	// A bracketed stage direction that happens to start with the word is prose.
-	if _, ok := findWearTag("[wearing a grin] hi"); ok {
-		t.Error("an undelimited stage direction was read as a change of clothes")
-	}
-	if cleaned := scrubDirectives("[wearing a grin] hi"); !strings.Contains(cleaned, "grin") {
-		t.Errorf("stage direction deleted: %q", cleaned)
-	}
-}
-
 // Once she has changed, a picture that does not say what she has on is drawn in what
 // she changed into — not in the outfit she took off.
 func TestASelfieAfterSheChangedIsInWhatSheChangedInto(t *testing.T) {
@@ -103,7 +85,7 @@ func TestSheIsToldWhatSheChangedInto(t *testing.T) {
 	if d := s.wardrobeDirective(libby, 1, "", wearingNothing); !strings.Contains(d, "nothing on") {
 		t.Errorf("directive: %s", d)
 	}
-	if d := s.wardrobeDirective(libby, 1, "", ""); !strings.Contains(d, "tank top") || !strings.Contains(d, "[wearing:") {
+	if d := s.wardrobeDirective(libby, 1, "", ""); !strings.Contains(d, "tank top") || !strings.Contains(d, "set_state's wearing") {
 		t.Errorf("directive: %s", d)
 	}
 }

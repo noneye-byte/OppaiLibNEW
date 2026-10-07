@@ -5,7 +5,15 @@ import android.os.Build
 import coil.ImageLoader
 import coil.decode.GifDecoder
 import coil.decode.ImageDecoderDecoder
+import kotlinx.serialization.DeserializationStrategy
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import java.util.concurrent.TimeUnit
@@ -46,6 +54,32 @@ class Repository(private val appContext: Context, val prefs: Prefs) {
     @Volatile private var baseUrl: String = normalize(prefs.serverUrl ?: "http://10.0.2.2:8080/")
     @Volatile lateinit var api: ApiService
         private set
+
+    /**
+     * Runs one of her turns and emits each event as the server sends it. The body is
+     * read on IO line by line, so her texts and the camera's progress arrive while the
+     * turn is still running; the collector decides how fast to draw them.
+     */
+    fun libbyTurn(body: LibbyTurnRequest): Flow<TurnEvent> = flow {
+        api.libbyTurn(body).use { stream ->
+            val source = stream.source()
+            val parser = EventStreamParser()
+            while (true) {
+                val line = source.readUtf8Line() ?: break
+                val (event, data) = parser.line(line) ?: continue
+                val obj = runCatching { json.parseToJsonElement(data).jsonObject }.getOrNull() ?: JsonObject(emptyMap())
+                emit(TurnEvent(event, obj))
+            }
+            parser.line("")?.let { (event, data) ->
+                runCatching { json.parseToJsonElement(data).jsonObject }.getOrNull()?.let { emit(TurnEvent(event, it)) }
+            }
+        }
+    }.flowOn(Dispatchers.IO)
+
+    /** Decodes part of an event with the same lenient settings as every API reply. */
+    fun <T> fromJson(deserializer: DeserializationStrategy<T>, element: JsonElement): T =
+        json.decodeFromJsonElement(deserializer, element)
+
     @Volatile lateinit var imageLoader: ImageLoader
         private set
 

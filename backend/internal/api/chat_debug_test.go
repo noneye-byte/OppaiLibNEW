@@ -23,20 +23,22 @@ func stubLLM(t *testing.T, reply string) *httptest.Server {
 	}))
 }
 
-// chatDebugOf sends one turn with debug on and returns the receipts.
-func chatDebugOf(t *testing.T, s *Server, token, request string) chatDebug {
+// chatDebugOf runs one turn with debug on, in a conversation that starts at heat, and
+// returns the receipts.
+func chatDebugOf(t *testing.T, s *Server, token, text string, heat int) chatDebug {
 	t.Helper()
-	rec := do(t, s.Handler(), token, http.MethodPost, "/api/chat", request)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("chat: %d %s", rec.Code, rec.Body.String())
-	}
+	u, _ := s.db.UserByName(t.Context(), "tester")
+	s.chatMu.Lock()
+	ws, _ := s.readChatWorkspace(u.ID)
+	ws.Conversations = []chatConversation{{ID: testConversation, CharacterID: "libby", Title: "t", Mode: "sweet",
+		Emotion: "neutral", Intensity: heat, Progress: float64(heat), Messages: []storedChatMessage{}}}
+	_ = s.writeChatWorkspace(u.ID, ws)
+	s.chatMu.Unlock()
+	done := eventsNamed(runTurn(t, s, token, turnFor(text, `,"debug":true`)), "done")
 	var out struct {
 		Debug *chatDebug `json:"debug"`
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if out.Debug == nil {
+	if len(done) == 0 || json.Unmarshal(done[0].Data, &out) != nil || out.Debug == nil {
 		t.Fatal("debug was asked for and not returned")
 	}
 	return *out.Debug
@@ -50,8 +52,7 @@ func TestChatDebugEchoesTheAssembledTurn(t *testing.T) {
 	cur.ChatURL = llm.URL
 	s.settings.Set(cur)
 
-	debug := chatDebugOf(t, s, token,
-		`{"mode":"playful","messages":[{"role":"user","content":"hello"}],"debug":true}`)
+	debug := chatDebugOf(t, s, token, "hello", 1)
 
 	// The prompt as sent, system message first.
 	if len(debug.Messages) < 2 || debug.Messages[0].Role != "system" {
@@ -68,30 +69,6 @@ func TestChatDebugEchoesTheAssembledTurn(t *testing.T) {
 	}
 	if debug.Signals == nil {
 		t.Fatal("no signals reported")
-	}
-}
-
-func TestChatDebugIsOffUnlessAsked(t *testing.T) {
-	llm := stubLLM(t, "Hello")
-	defer llm.Close()
-	s, token := newTestServer(t)
-	cur := s.settings.Get()
-	cur.ChatURL = llm.URL
-	s.settings.Set(cur)
-
-	rec := do(t, s.Handler(), token, http.MethodPost, "/api/chat",
-		`{"mode":"playful","messages":[{"role":"user","content":"hello"}]}`)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("chat: %d %s", rec.Code, rec.Body.String())
-	}
-	var out struct {
-		Debug *chatDebug `json:"debug"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
-		t.Fatal(err)
-	}
-	if out.Debug != nil {
-		t.Fatal("an ordinary turn carried debug receipts")
 	}
 }
 
@@ -118,16 +95,14 @@ func TestSheIsToldWhereSheCanBeOnAnOrdinaryTurn(t *testing.T) {
 
 	// No place word, no call — but the scene has warmed, which is exactly when the
 	// room is supposed to follow it.
-	warm := chatDebugOf(t, s, token,
-		`{"mode":"playful","intensity":3,"messages":[{"role":"user","content":"you look nice today"}],"debug":true}`)
+	warm := chatDebugOf(t, s, token, "you look nice today", 3)
 	if !kept(warm, "where she is") {
 		t.Error("at heat 3 she was never told she had anywhere to go")
 	}
 
 	// And on a cool turn where she is nowhere yet: the first move has to start
 	// somewhere, and a character never handed a room reads as one with no rooms.
-	nowhere := chatDebugOf(t, s, token,
-		`{"mode":"playful","intensity":1,"messages":[{"role":"user","content":"what's up"}],"debug":true}`)
+	nowhere := chatDebugOf(t, s, token, "what's up", 1)
 	if !kept(nowhere, "where she is") {
 		t.Error("with no background set she was not told any existed")
 	}

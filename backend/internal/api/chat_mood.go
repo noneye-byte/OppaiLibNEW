@@ -95,7 +95,7 @@ func moodRunLength(recent []string, current string) int {
 // instruction, which is worse than a stuck one — a mood that means nothing is not a
 // mood. What is wanted is that each turn is actually *read*, and that the last answer
 // is not treated as the current state by default.
-const moodMovementDirective = "Work out what you feel from this turn, not from the tag you wrote last time — the emotion named above is where you were, not where you are. " +
+const moodMovementDirective = "Work out what you feel from this turn, not from how you felt last time — the emotion named above is where you were, not where you are. " +
 	"Things move you: a joke landing, the subject turning, being teased, being ignored, wanting something, getting bored. Let them, and let the number move with it. " +
 	"Holding one feeling for several replies is something you do when it is genuinely still true, not the default."
 
@@ -112,7 +112,7 @@ func moodStuckDirective(mood string, run int) string {
 	}
 	return "\n\nYou have looked " + mood + " for your last " + plural(run, "reply", "replies") + " running. " +
 		"Nobody is asking you to cheer up or calm down — but check whether it is still true, because a conversation has happened since. " +
-		"If something in it moved you, even slightly, say so with the tag and move the number too. If you genuinely still feel exactly that, keep it and mean it."
+		"If something in it moved you, even slightly, show it with set_state and move the heat too. If you genuinely still feel exactly that, keep it and mean it."
 }
 
 // moodPromptBlock renders both halves for the turn.

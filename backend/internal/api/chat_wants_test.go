@@ -6,29 +6,6 @@ import (
 	"testing"
 )
 
-func TestFindWantTags(t *testing.T) {
-	// One want, in her own words, read out of the middle of a reply.
-	wants := findWantTags("god i'd kill for [want: a black lace set to wear] anyway. how was your day?")
-	if len(wants) != 1 || wants[0] != "a black lace set to wear" {
-		t.Fatalf("got %#v, want the single desire", wants)
-	}
-	// [craving: …] is the same tag under another word models reach for.
-	wants = findWantTags("[craving: something rougher than what's on the shelves]")
-	if len(wants) != 1 || wants[0] != "something rougher than what's on the shelves" {
-		t.Fatalf("got %#v, want the craving", wants)
-	}
-	// Hard cap at one, even when a model tries to file a wishlist.
-	if wants = findWantTags("[want: a] [want: b] [want: c]"); len(wants) != maxWantsPerReply {
-		t.Fatalf("got %d wants, want it capped at %d", len(wants), maxWantsPerReply)
-	}
-	if got := findWantTags("just a normal line with no desire in it."); got != nil {
-		t.Errorf("found a want in prose that has none: %#v", got)
-	}
-	if got := findWantTags("[want:   ]"); got != nil {
-		t.Errorf("accepted an empty want tag: %#v", got)
-	}
-}
-
 // The want tag is machinery the user must never read, so scrubbing takes it out the same
 // way it takes out the remember tag it is modelled on.
 func TestScrubDirectivesRemovesWantTag(t *testing.T) {

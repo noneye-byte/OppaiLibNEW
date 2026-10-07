@@ -30,20 +30,6 @@ const wearingNothing = "nothing"
 // garments is all it ever needs to hold.
 const maxWearing = 120
 
-// wearTag is her saying what she has on now. The delimiter is required: "[wearing a
-// grin]" is a stage direction, not a change of clothes.
-var wearTag = regexp.MustCompile(`(?i)\[\s*(?:wearing|wears|wear|clothes|clothing|dressed|outfit)\s*[:=]\s*([^\]\n]{0,160}?)\s*\]`)
-
-// findWearTag reads the last change of clothes she declared. The last wins for the
-// reason the mood's does: a model that writes two is revising.
-func findWearTag(reply string) (label string, declared bool) {
-	matches := wearTag.FindAllStringSubmatch(reply, -1)
-	if len(matches) == 0 {
-		return "", false
-	}
-	return matches[len(matches)-1][1], true
-}
-
 // ownClothes are the ways of saying she is back in her own things.
 var ownClothes = map[string]bool{
 	"": true, "usual": true, "my usual": true, "my usual clothes": true, "usual clothes": true, "normal": true,
@@ -167,5 +153,5 @@ func wearingDirective(wearing string) string {
 
 // wearTagDirective is how she changes. Stated as a standing fact like the scene tag,
 // for the reason that one is: handed a menu, a model works through it.
-const wearTagDirective = " When what you have on changes — you get dressed, undress, take something off, change into something — write [wearing: <what you now have on, in a few words>], " +
-	"or [wearing: nothing], or [wearing: usual] once you are back in your own clothes. It stays until you change again. Not per message; never mention it."
+const wearTagDirective = " When what you have on changes — you get dressed, undress, take something off, change into something — set it with set_state's wearing, in a few words, " +
+	"or \"nothing\", or \"my own clothes\" once you are back in them. It stays until you change again."

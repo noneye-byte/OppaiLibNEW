@@ -178,6 +178,36 @@ type Settings struct {
 	// chat gallery keeps it. The library is the user's collection, not her camera roll.
 	LibbyGenToLibrary bool `json:"libbyGenToLibrary"`
 
+	// Libby's camera: how she takes the pictures she sends. See api.libby_camera.go.
+	//
+	// LibbyCameraCandidates is how many pictures are made for one shot so the judge can
+	// send the best: 1 sends the first, up to 4. Judging needs a model that can see —
+	// the vision model, or her own when it can — and without one only the first is made.
+	LibbyCameraCandidates int `json:"libbyCameraCandidates"`
+	// The ControlNet extension's names for copying a pose from a photo they send and
+	// for keeping her face from a reference picture. Blank model = that feature off.
+	// Install-specific, which is why they are settings: "openpose_full" with
+	// "control_v11p_sd15_openpose" on one box is "dw_openpose_full" with an SDXL union
+	// model on the next.
+	LibbyPoseModule string `json:"libbyPoseModule"`
+	LibbyPoseModel  string `json:"libbyPoseModel"`
+	LibbyFaceModule string `json:"libbyFaceModule"`
+	LibbyFaceModel  string `json:"libbyFaceModel"`
+	// LibbyClipURL is a ComfyUI server, and LibbyClipWorkflow an API-format workflow
+	// with {{image}}, {{prompt}}, {{negative}} and {{seed}} placeholders, that turns a
+	// still of her into a few seconds of video. Both blank = no clips. See
+	// imagegen/comfy.go.
+	LibbyClipURL      string `json:"libbyClipUrl"`
+	LibbyClipWorkflow string `json:"libbyClipWorkflow"`
+	// LibbyStories lets her post a picture and a line while they are away, at most
+	// LibbyStoriesPerDay a day. See api.libby_stories.go.
+	LibbyStories       bool `json:"libbyStories"`
+	LibbyStoriesPerDay int  `json:"libbyStoriesPerDay"`
+	// ChatToolMode is how her actions reach the server: "" reads it off the backend —
+	// native tool calls, and JSON mode for a backend that refuses them — while
+	// "native" and "json" pin one. See api.libby_llm.go.
+	ChatToolMode string `json:"chatToolMode"`
+
 	// Incognito dresses this install as a Nextcloud instance.
 	//
 	// A private media library is a thing you may not want to explain — to someone
@@ -257,6 +287,16 @@ const (
 	keyLibbyGenPrompt     = "libby.gen.prompt"
 	keyLibbyGenNegative   = "libby.gen.negative_prompt"
 	keyLibbyGenToLibrary  = "libby.gen.to_library"
+	keyLibbyCameraCands   = "libby.camera.candidates"
+	keyLibbyPoseModule    = "libby.camera.pose_module"
+	keyLibbyPoseModel     = "libby.camera.pose_model"
+	keyLibbyFaceModule    = "libby.camera.face_module"
+	keyLibbyFaceModel     = "libby.camera.face_model"
+	keyLibbyClipURL       = "libby.clip.url"
+	keyLibbyClipWorkflow  = "libby.clip.workflow"
+	keyLibbyStories       = "libby.stories"
+	keyLibbyStoriesPerDay = "libby.stories.per_day"
+	keyChatToolMode       = "chat.tool_mode"
 
 	keyIncognito = "ui.incognito"
 )
@@ -264,34 +304,38 @@ const (
 // Defaults derives the baseline from environment config.
 func Defaults(cfg *config.Config) Settings {
 	return Settings{
-		AIEnabled:           cfg.AIEnabled,
-		AIAutoTag:           true,
-		AIMinScore:          0.35,
-		AIMaxTags:           20,
-		ScrapeDelayMs:       int(cfg.ScrapeDelay / time.Millisecond),
-		ScrapeUserAgent:     cfg.ScrapeUserAgent,
-		ScrapeRespectRobots: cfg.ScrapeRespectRobots,
-		F95Username:         cfg.F95Username,
-		F95Password:         cfg.F95Password,
-		ImageGenURL:         cfg.ImageGenURL,
-		CivitaiAPIURL:       cfg.CivitaiAPIURL,
-		CivitaiAPIKey:       cfg.CivitaiAPIKey,
-		Rule34UserID:        cfg.Rule34UserID,
-		Rule34APIKey:        cfg.Rule34APIKey,
-		ChatURL:             cfg.ChatURL,
-		ChatModel:           cfg.ChatModel,
-		ChatContextTokens:   cfg.ChatContextTokens,
-		ChatAPIKey:          cfg.ChatAPIKey,
-		VisionURL:           cfg.VisionURL,
-		VisionModel:         cfg.VisionModel,
-		VisionAuto:          true,
-		TTSEngine:           "auto",
-		TTSSpeed:            1,
-		TTSURL:              cfg.TTSURL,
-		StorageWarnPercent:  10,
-		UploadStaleHours:    48,
-		TempStaleHours:      24,
-		LibbyGenLoras:       []LoraChoice{},
+		AIEnabled:             cfg.AIEnabled,
+		AIAutoTag:             true,
+		AIMinScore:            0.35,
+		AIMaxTags:             20,
+		ScrapeDelayMs:         int(cfg.ScrapeDelay / time.Millisecond),
+		ScrapeUserAgent:       cfg.ScrapeUserAgent,
+		ScrapeRespectRobots:   cfg.ScrapeRespectRobots,
+		F95Username:           cfg.F95Username,
+		F95Password:           cfg.F95Password,
+		ImageGenURL:           cfg.ImageGenURL,
+		CivitaiAPIURL:         cfg.CivitaiAPIURL,
+		CivitaiAPIKey:         cfg.CivitaiAPIKey,
+		Rule34UserID:          cfg.Rule34UserID,
+		Rule34APIKey:          cfg.Rule34APIKey,
+		ChatURL:               cfg.ChatURL,
+		ChatModel:             cfg.ChatModel,
+		ChatContextTokens:     cfg.ChatContextTokens,
+		ChatAPIKey:            cfg.ChatAPIKey,
+		VisionURL:             cfg.VisionURL,
+		VisionModel:           cfg.VisionModel,
+		VisionAuto:            true,
+		TTSEngine:             "auto",
+		TTSSpeed:              1,
+		TTSURL:                cfg.TTSURL,
+		StorageWarnPercent:    10,
+		UploadStaleHours:      48,
+		TempStaleHours:        24,
+		LibbyGenLoras:         []LoraChoice{},
+		LibbyCameraCandidates: 2,
+		LibbyPoseModule:       "openpose_full",
+		LibbyFaceModule:       "ip-adapter-auto",
+		LibbyStoriesPerDay:    2,
 	}
 }
 
@@ -461,6 +505,25 @@ func Merge(base Settings, stored map[string]string) Settings {
 	if v, ok := parseBool(stored[keyLibbyGenToLibrary]); ok {
 		s.LibbyGenToLibrary = v
 	}
+	if v, err := strconv.Atoi(stored[keyLibbyCameraCands]); err == nil {
+		s.LibbyCameraCandidates = v
+	}
+	for key, field := range map[string]*string{
+		keyLibbyPoseModule: &s.LibbyPoseModule, keyLibbyPoseModel: &s.LibbyPoseModel,
+		keyLibbyFaceModule: &s.LibbyFaceModule, keyLibbyFaceModel: &s.LibbyFaceModel,
+		keyLibbyClipURL: &s.LibbyClipURL, keyLibbyClipWorkflow: &s.LibbyClipWorkflow,
+		keyChatToolMode: &s.ChatToolMode,
+	} {
+		if v, ok := stored[key]; ok {
+			*field = v
+		}
+	}
+	if v, ok := parseBool(stored[keyLibbyStories]); ok {
+		s.LibbyStories = v
+	}
+	if v, err := strconv.Atoi(stored[keyLibbyStoriesPerDay]); err == nil {
+		s.LibbyStoriesPerDay = v
+	}
 	if v, ok := parseBool(stored[keyIncognito]); ok {
 		s.Incognito = v
 	}
@@ -512,12 +575,22 @@ func (s Settings) Map() map[string]string {
 		keyUploadStaleHours:   strconv.Itoa(s.UploadStaleHours),
 		keyTempStaleHours:     strconv.Itoa(s.TempStaleHours),
 
-		keyLibbyGenModel:     s.LibbyGenModel,
-		keyLibbyGenLoras:     libbyLorasJSON(s.LibbyGenLoras),
-		keyLibbyGenBoard:     s.LibbyGenBoard,
-		keyLibbyGenPrompt:    s.LibbyGenPrompt,
-		keyLibbyGenNegative:  s.LibbyGenNegativePrompt,
-		keyLibbyGenToLibrary: strconv.FormatBool(s.LibbyGenToLibrary),
+		keyLibbyGenModel:      s.LibbyGenModel,
+		keyLibbyGenLoras:      libbyLorasJSON(s.LibbyGenLoras),
+		keyLibbyGenBoard:      s.LibbyGenBoard,
+		keyLibbyGenPrompt:     s.LibbyGenPrompt,
+		keyLibbyGenNegative:   s.LibbyGenNegativePrompt,
+		keyLibbyGenToLibrary:  strconv.FormatBool(s.LibbyGenToLibrary),
+		keyLibbyCameraCands:   strconv.Itoa(s.LibbyCameraCandidates),
+		keyLibbyPoseModule:    s.LibbyPoseModule,
+		keyLibbyPoseModel:     s.LibbyPoseModel,
+		keyLibbyFaceModule:    s.LibbyFaceModule,
+		keyLibbyFaceModel:     s.LibbyFaceModel,
+		keyLibbyClipURL:       s.LibbyClipURL,
+		keyLibbyClipWorkflow:  s.LibbyClipWorkflow,
+		keyLibbyStories:       strconv.FormatBool(s.LibbyStories),
+		keyLibbyStoriesPerDay: strconv.Itoa(s.LibbyStoriesPerDay),
+		keyChatToolMode:       s.ChatToolMode,
 
 		keyIncognito: strconv.FormatBool(s.Incognito),
 	}
@@ -670,6 +743,27 @@ func (s *Settings) Clamp() {
 	s.LibbyGenBoard = strings.TrimSpace(s.LibbyGenBoard)
 	s.LibbyGenPrompt = strings.TrimSpace(s.LibbyGenPrompt)
 	s.LibbyGenNegativePrompt = strings.TrimSpace(s.LibbyGenNegativePrompt)
+	if s.LibbyCameraCandidates < 1 {
+		s.LibbyCameraCandidates = 1
+	} else if s.LibbyCameraCandidates > 4 {
+		s.LibbyCameraCandidates = 4
+	}
+	s.LibbyPoseModule = strings.TrimSpace(s.LibbyPoseModule)
+	s.LibbyPoseModel = strings.TrimSpace(s.LibbyPoseModel)
+	s.LibbyFaceModule = strings.TrimSpace(s.LibbyFaceModule)
+	s.LibbyFaceModel = strings.TrimSpace(s.LibbyFaceModel)
+	s.LibbyClipURL = strings.TrimRight(strings.TrimSpace(s.LibbyClipURL), "/")
+	s.LibbyClipWorkflow = strings.TrimSpace(s.LibbyClipWorkflow)
+	// A workflow is a big blob of JSON; past a quarter of a megabyte it is not a workflow.
+	if len(s.LibbyClipWorkflow) > 256<<10 {
+		s.LibbyClipWorkflow = ""
+	}
+	if s.LibbyStoriesPerDay < 1 {
+		s.LibbyStoriesPerDay = 1
+	} else if s.LibbyStoriesPerDay > 6 {
+		s.LibbyStoriesPerDay = 6
+	}
+	s.ChatToolMode = oneOf(strings.ToLower(strings.TrimSpace(s.ChatToolMode)), "native", "json")
 }
 
 // cleanLoras trims names, drops blanks and repeats (the first strength wins), and

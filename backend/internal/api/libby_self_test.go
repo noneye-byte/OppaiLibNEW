@@ -1,12 +1,8 @@
 package api
 
 import (
-	"encoding/json"
 	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 )
@@ -101,41 +97,5 @@ func TestWhoSheIsHasItsOwnSectionAndLeavesTheirs(t *testing.T) {
 	}
 	if hers := selfPromptBlock(store); !strings.Contains(hers, "by the sea") || strings.Contains(hers, "Sam") {
 		t.Fatalf("self block = %q", hers)
-	}
-}
-
-// The whole path: something she says about herself in one turn is in front of her on
-// the next.
-func TestWhatSheSaysAboutHerselfIsThereNextTime(t *testing.T) {
-	var mu sync.Mutex
-	var prompts []string
-	llm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/v1/internal/model/info" {
-			_, _ = w.Write([]byte(`{"model_name":"m-24B"}`))
-			return
-		}
-		var body map[string]any
-		_ = json.NewDecoder(r.Body).Decode(&body)
-		mu.Lock()
-		prompts = append(prompts, mustJSON(body))
-		mu.Unlock()
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"mm. I grew up in a tiny fishing town, it was so quiet"}}]}`))
-	}))
-	defer llm.Close()
-	s, token := newTestServer(t)
-	cur := s.settings.Get()
-	cur.ChatURL = llm.URL
-	s.settings.Set(cur)
-	for i := 0; i < 2; i++ {
-		rec := do(t, s.Handler(), token, http.MethodPost, "/api/chat", `{"mode":"sweet","messages":[{"role":"user","content":"where are you from?"}]}`)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("chat: %d %s", rec.Code, rec.Body.String())
-		}
-	}
-	if strings.Contains(prompts[0], "Who you are, beyond the card") {
-		t.Fatal("the first turn already had a self section")
-	}
-	if !strings.Contains(prompts[1], "Who you are, beyond the card") || !strings.Contains(prompts[1], "tiny fishing town") {
-		t.Fatal("the second turn did not know where she grew up")
 	}
 }

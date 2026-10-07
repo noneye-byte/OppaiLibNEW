@@ -10,7 +10,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -73,11 +72,6 @@ type libbyAction struct {
 	Title string `json:"title,omitempty"`
 }
 
-// actionTag captures a request to do something. Same tolerance as the other protocol
-// tags — models paraphrase the syntax they are given — and unanchored, because an
-// action naturally lands mid-paragraph where she offers it.
-var actionTag = regexp.MustCompile(`(?i)\[\s*(?:do|action)\s*[:=-]?\s*([a-z]+)\s*[:|,-]?\s*([^\]\n]{0,400}?)\s*\]`)
-
 // actionCapabilities says which actions are on the table for this request.
 type actionCapabilities struct {
 	Generate bool // image generation is configured
@@ -101,112 +95,6 @@ type actionCapabilities struct {
 
 func libbyCapabilities(cur settings.Settings) actionCapabilities {
 	return actionCapabilities{Generate: cur.ImageGenEnabled, Library: true}
-}
-
-// actionDirective tells her what she may ask to do.
-//
-// Only the capabilities that are actually wired up are described. A model told it can
-// generate pictures on a server with no generator configured will offer to, and an
-// offer that can only ever be declined by the machine is worse than never made.
-//
-// The "you are asking, not doing" framing is repeated because it is load-bearing for
-// the writing rather than the security: the approval gate is enforced by the client
-// regardless, but a character who believes she has already done the thing writes
-// "done, it's in your library" over a card the user has not pressed yet.
-func actionDirective(caps actionCapabilities) string {
-	var lines []string
-	if caps.Generate {
-		line := "- [do: generate <what the picture shows>] — offer to make a picture. Describe the subject and setting in plain words; " +
-			"the generator's model, style, and your own likeness are already configured, so do not write model names or settings."
-		if caps.SelfieReady {
-			// The failure this answers: asked for a picture she already has, she offered
-			// to make one. The catalogue is the first answer to "show me"; generating
-			// is for what it does not hold.
-			line += " Never offer this when a picture of you in the list above already fits what they asked for — send that one."
-		}
-		lines = append(lines, line)
-	}
-	if caps.Library {
-		lines = append(lines,
-			"- [do: import <url>] — offer to add something at a web address to their library. Only a URL the user themselves wrote in this conversation, copied exactly; you have no addresses of your own and must never make one up.",
-			"- [do: tag <title> | <tag, tag>] — offer to add tags to something in the library, named by its title.",
-			"- [do: favorite <title>] — offer to favourite something in the library.",
-			"- [do: rename <title> | <new title>] — offer to rename something in the library. Only when they asked for a better name or the current one is plainly a filename or a number.",
-			"- [do: shelf <what tonight is for, in a few words>] — offer to put together tonight's shelf: a short collection called \""+libbyShelfName+"\", picked by you from what they like and what you want to show them. "+
-				"For when they ask what to watch tonight, want a few things lined up, or tell you to choose for them.")
-	}
-	if caps.Server {
-		lines = append(lines,
-			"- [do: load <model name>] — offer to load a different chat model: one of the other chat models on disk named in the server's state, written exactly. That swaps out your own mind for a minute or two; only when they ask for a different model or the one you are on is plainly wrong for what they want.",
-			"- [do: cleanup] — offer to clear abandoned uploads and leftover scratch files. It never touches media or your memories.")
-		if caps.Describe {
-			lines = append(lines, "- [do: describe] — offer to have the vision model write descriptions for everything in the library that has none yet. It runs in the background.")
-		}
-		if caps.Generate {
-			lines = append(lines, "- [do: free card] — offer to make the image generator let go of the graphics card memory it is holding.")
-		}
-	}
-	if len(lines) == 0 {
-		return ""
-	}
-	return "You can offer to do things for the user, by ending a sentence with one of these tags:\n" +
-		strings.Join(lines, "\n") +
-		"\n\nThese are requests, not actions. Writing the tag shows the user a card with an Allow button on it — nothing happens " +
-		"until they press it. So offer in your own words and stop there: never say you have done it, never say it is finished or saved " +
-		"or on its way, and never promise what the result will look like. Offer at most one thing per reply, only when it genuinely " +
-		"follows from what you were talking about, and not in most replies. If they say no, let it go."
-
-}
-
-// parseLibbyActions pulls the action tags out of a reply, returning the cleaned text
-// and the proposals.
-//
-// Tags are removed from the prose rather than substituted: unlike a link, which stands
-// in for an item's name mid-sentence, an action tag is an aside about the app. The card
-// beneath the message is what the user reads.
-//
-// Resolution of a title to a real row happens here, so an action naming something that
-// is not in the library is dropped entirely. Handing a client a "tag that item" card
-// that resolves to nothing would produce a button whose only possible outcome is an
-// error, which is a worse answer than her simply not having offered.
-func (s *Server) parseLibbyActions(ctx context.Context, reply string, caps actionCapabilities) (string, []libbyAction) {
-	matches := actionTag.FindAllStringSubmatch(reply, -1)
-	if len(matches) == 0 {
-		return reply, nil
-	}
-	// Titles are ciphertext, so resolving them means decrypting a run of rows. Gather
-	// the words from every action first and look the whole set up once.
-	var words []string
-	for _, match := range matches {
-		switch strings.ToLower(match[1]) {
-		case "tag", "favorite", "favourite", "fav", "rename", "retitle", "call":
-			words = append(words, normalizeLookupWords(actionTitle(match[2]))...)
-		}
-	}
-	var candidates []libraryCandidate
-	if len(words) > 0 {
-		candidates = s.libraryCandidates(ctx, words)
-	}
-
-	var actions []libbyAction
-	for _, match := range matches {
-		if len(actions) >= maxLibbyActions {
-			break
-		}
-		action, ok := s.buildLibbyAction(strings.ToLower(match[1]), strings.TrimSpace(match[2]), caps, candidates)
-		if !ok {
-			continue
-		}
-		action.ID = randomID()
-		actions = append(actions, action)
-	}
-	// Every tag comes out of the prose whether or not it produced a proposal: one we
-	// could not act on is still not something the user should be made to read.
-	text := strings.TrimSpace(actionTag.ReplaceAllString(reply, ""))
-	if text == "" {
-		text = reply
-	}
-	return text, actions
 }
 
 // actionTitle takes the item-naming half of a tag argument, which is everything before
@@ -450,8 +338,6 @@ func (s *Server) handleLibbyAct(w http.ResponseWriter, r *http.Request) {
 	switch strings.ToLower(strings.TrimSpace(req.Kind)) {
 	case "generate":
 		s.actGenerate(w, r, cur, req)
-	case "background":
-		s.actBackground(w, r, cur, req)
 	case "import":
 		s.actImport(w, r, req)
 	case "tag":
@@ -617,6 +503,12 @@ func libbyLoras(cur settings.Settings) []loraReq {
 // construction, so its subject is set rather than left to the scanner, and the scanner's
 // tags join hers so the picker can match it by what is actually in it.
 func generatedChatImage(r *http.Request, s *Server, raw []byte, title string, tags []string) chatImage {
+	return generatedChatImageCtx(r.Context(), s, raw, title, tags, true)
+}
+
+// generatedChatImageCtx is generatedChatImage without a request behind it. scan runs the
+// tagger; the camera passes false when it already has the tagger's words.
+func generatedChatImageCtx(ctx context.Context, s *Server, raw []byte, title string, tags []string, scan bool) chatImage {
 	seen := map[string]bool{}
 	var all []string
 	add := func(tag string) {
@@ -628,8 +520,8 @@ func generatedChatImage(r *http.Request, s *Server, raw []byte, title string, ta
 	for _, tag := range tags {
 		add(tag)
 	}
-	if decoded, _, err := image.Decode(bytes.NewReader(raw)); err == nil {
-		if suggestions, err := s.ai.TagImage(r.Context(), decoded); err == nil {
+	if decoded, _, err := image.Decode(bytes.NewReader(raw)); scan && err == nil {
+		if suggestions, err := s.ai.TagImage(ctx, decoded); err == nil {
 			for _, suggestion := range suggestions {
 				add(suggestion.Name)
 			}
@@ -862,14 +754,4 @@ func (s *Server) applyMediaPatch(w http.ResponseWriter, r *http.Request, id int6
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "id": id})
-}
-
-// hasActionOfKind reports whether a reply already proposes an action of that kind.
-func hasActionOfKind(actions []libbyAction, kind string) bool {
-	for _, action := range actions {
-		if action.Kind == kind {
-			return true
-		}
-	}
-	return false
 }

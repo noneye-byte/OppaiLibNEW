@@ -475,24 +475,6 @@ data class HealthResponse(
     val aiTagger: String = "",
 )
 
-@Serializable
-data class ChatMessage(
-    val role: String,
-    val content: String,
-    /** The client's id for this message, so a reply can point at it. */
-    val id: String = "",
-    /** The earlier message this one answers, when it was written as a reply. */
-    val replyTo: ChatReplyRef? = null,
-    /** The chat image this message carried, so the server can say what was in it on
-        every later turn rather than only the one it was sent on. */
-    val imageId: String = "",
-    /** Library items this message attached, by id, for the same reason. */
-    val mediaIds: List<Long> = emptyList(),
-    /** The emoji either of them put on this message, so she knows a heart was put on
-        what she said. */
-    val reactions: List<ChatReaction> = emptyList(),
-)
-
 /** One emoji on one message, and whose it is: "user" or "assistant". */
 @Serializable
 data class ChatReaction(
@@ -518,86 +500,6 @@ data class ChatReplyRef(
     /** Who wrote the quoted message — "user" or "assistant". */
     val role: String = "user",
     val excerpt: String = "",
-)
-
-@Serializable
-data class ChatRequest(
-    val mode: String,
-    val messages: List<ChatMessage>,
-    /** The conversation's compressed older part; see [ChatConversation.summary]. */
-    val summary: String = "",
-    val emotion: String = "neutral",
-    val intensity: Int = 1,
-    val options: JsonObject = JsonObject(emptyMap()),
-    val characterId: String = "libby",
-    /**
-     * Which conversation this turn belongs to.
-     *
-     * The server keeps no per-conversation state, but it does hold every conversation
-     * — the log round-trips through the workspace — and it reads the other ones back
-     * into her prompt so she remembers them. This is how it knows which one she is
-     * currently in, and therefore which one not to recap back at her.
-     */
-    val conversationId: String = "",
-    /** Tags and id for the photo attached to the newest user message. Text-only
-        models receive the tags, while the id keeps that same photo out of replies. */
-    val photoTags: List<String> = emptyList(),
-    val photoImageId: String = "",
-    /**
-     * Pictures already seen in this conversation, oldest first. The server keeps no
-     * memory between requests, so what has already been shown has to travel with the
-     * turn — it is what stops the same photo coming back every reply.
-     */
-    val recentImageIds: List<String> = emptyList(),
-    /**
-     * Library items she has already attached in this conversation, oldest first. The
-     * same bookkeeping as [recentImageIds] and needed for the same reason: she hands
-     * over library items now, and a picture of her taken from the library is one.
-     */
-    val recentMediaIds: List<Long> = emptyList(),
-    /**
-     * The emotions her recent replies displayed, oldest first.
-     *
-     * The same bookkeeping as [recentImageIds] and needed for the same reason: the
-     * server keeps no per-conversation state, so a mood she has worn for a dozen
-     * replies is indistinguishable from one she just arrived at. It uses this to ask
-     * her, in the prompt, whether the face is still true.
-     */
-    val recentMoods: List<String> = emptyList(),
-    /** The heat her last replies sat at, oldest first — the same bookkeeping, so a
-        number that has not moved all evening can be noticed. */
-    val recentHeat: List<Int> = emptyList(),
-    /**
-     * Whether the user has her on the call screen rather than in the message log.
-     *
-     * A call is not a skin on the chat window — they are watching her instead of
-     * reading her, and there is no camera pointed back at them. The server has no
-     * other way to know one was opened.
-     */
-    val call: Boolean = false,
-    /**
-     * The MISC state she is currently in — what she is doing rather than what she is
-     * feeling. Sent back each turn because the server keeps nothing between them:
-     * without it a state she set three replies ago would last exactly one message.
-     */
-    val activity: String = "",
-    /**
-     * The id of the outfit Libby is wearing on this device, empty for her bundled
-     * artwork. Which outfit is worn is a per-device choice the server does not
-     * store, so it has to be told — otherwise she describes the default sprite
-     * while you are looking at something else. The server resolves the id to the
-     * outfit's name itself.
-     */
-    val outfit: String = "",
-    /** Where she is — the background id the call screen shows. Conversation state,
-        sent back each turn for the same reason as [activity]. */
-    val background: String = "",
-    /** What she has on when it is not her own clothes: "nothing", or what she changed
-        into. Conversation state, sent back each turn like [background]. */
-    val wearing: String = "",
-    /** Library items attached to the latest message, by id. The server describes them
-        to her from its own rows. */
-    val sharedMediaIds: List<Long> = emptyList(),
 )
 
 @Serializable
@@ -701,67 +603,6 @@ data class LibbyActRequest(
     val activity: String = "",
     val intensity: Int = 0,
     val recentMediaIds: List<Long> = emptyList(),
-)
-
-/**
- * Something Libby wrote that was not addressed to you.
- *
- * "thought" is private — she thought it and did not say it. "aside" is her talking to
- * herself out loud, which you overhear. The distinction is whether you were meant to
- * have heard it, which is why it is two kinds and not one.
- */
-@Serializable
-data class LibbyThought(val kind: String = "thought", val text: String = "")
-
-@Serializable
-data class ChatResponse(
-    /** What she actually said. Blank is legal — see [thoughts]. */
-    val message: String = "",
-    val emotion: String = "neutral",
-    val intensity: Int = 1,
-    /** The MISC state she is in leaving this turn, blank for nothing in particular.
-        It persists until she changes it, so the client stores it on the conversation
-        and sends it back with the next turn. */
-    val activity: String = "",
-    /** Where she is leaving this turn: a background id, or blank for the plain call
-        screen. Persists like [activity]. */
-    val background: String = "",
-    /** What she has on leaving this turn: blank for her own clothes, "nothing", or what
-        she changed into. Persists like [activity]. */
-    val wearing: String = "",
-    /** She rang: show an incoming-call popup, and only answering opens the call. */
-    val callRequest: Boolean = false,
-    /** She hung up an open call. */
-    val callEnd: Boolean = false,
-    /** The earlier message this reply answers, drawn as a quote above it. Null when it
-        answers the latest one, which is the ordinary case. */
-    val replyTo: ChatReplyRef? = null,
-    val imageId: String = "",
-    /** That the picture on this reply is a snap: tap to open, seen once, then gone. */
-    val snap: Boolean = false,
-    /** The emoji she put on one of your messages, if she did. */
-    val reaction: LibbyReaction? = null,
-    /** Library items this reply points at. The titles are already substituted into
-        the prose server-side, so a client that does not draw chips still reads right. */
-    val links: List<LibbyLink> = emptyList(),
-    /** Library items this reply hands over — something she chose to show, or a picture
-        of her that lives in the library rather than her chat gallery. */
-    val attachments: List<LibbyAttachment> = emptyList(),
-    /** Things Libby has asked to do. Proposals only — a card with an Allow button is
-        what turns one into an action. */
-    val actions: List<LibbyAction> = emptyList(),
-    /**
-     * What she thought or muttered rather than said. Drawn as its own kind of entry
-     * and never as speech. When [message] is blank and this is not, she looked at
-     * something, had a reaction, and decided to say nothing — a turn, not a failure.
-     */
-    val thoughts: List<LibbyThought> = emptyList(),
-    /**
-     * True when the character stated its own mood rather than one being inferred.
-     * A stated mood is applied as-is; an inferred one drifts by the session
-     * multiplier. Absent from older servers, which is treated as inferred.
-     */
-    val declared: Boolean = false,
 )
 
 @Serializable
@@ -877,6 +718,13 @@ data class StoredChatMessage(
     val readAt: Long = 0,
     /** The emoji on this message, from either side. */
     val reactions: List<ChatReaction> = emptyList(),
+    /** A set of pictures sent as one message; [imageId] is the first of them. */
+    val images: List<String> = emptyList(),
+    /** A voice note: the content is what she says, played rather than read. */
+    val voice: Boolean = false,
+    /** The conversation revision the server wrote this message at; 0 for yours. Carried
+        so a save from the phone tells the server which of its messages it has seen. */
+    val rev: Long = 0,
 )
 
 @Serializable
@@ -908,6 +756,11 @@ data class ChatConversation(
     val messages: List<StoredChatMessage> = emptyList(),
     val createdAt: Long,
     val updatedAt: Long,
+    /** How many times the server has written to this conversation. Kept current from
+        the turn stream and sent back on save, so a save cannot erase her replies. */
+    val rev: Long = 0,
+    /** The scene she planned, while it is under way. */
+    val scene: LibbyScene? = null,
 )
 
 @Serializable
@@ -927,6 +780,10 @@ data class ChatImage(
         upload and from the web client's Images panel; carried here for the same
         reason as [weight]. */
     val subject: String = "",
+    /** What you thought of a picture she sent: love, like or dislike. */
+    val rating: String = "",
+    /** The library item it was kept as, 0 while it lives only in the chat. */
+    val kept: Long = 0,
 )
 
 @Serializable

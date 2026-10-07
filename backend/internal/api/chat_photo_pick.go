@@ -1,7 +1,6 @@
 package api
 
 import (
-	"regexp"
 	"sort"
 	"strings"
 	"unicode"
@@ -36,54 +35,6 @@ import (
 // over several. Every send is reported back to the client with why it was chosen, so
 // a wrong picture is a thing that can be read off the reply rather than guessed at.
 
-// libraryKindWords are the words that make "show me …" a request for something on
-// the shelf rather than for her. userAskedForPhoto is deliberately broad — a false
-// positive there only relaxes the repeat rule — but choosing a selfie in advance and
-// telling her to describe it is a push, and "show me the beach video" must not be
-// answered with a picture of her on the beach.
-var libraryKindWords = regexp.MustCompile(`(?i)\b(video|videos|comic|comics|game|games|gif|gifs|clip|clips|movie|movies|episode|episodes|scene|library|item|collection|watch|play|read)\b`)
-
-// askedToSeeHer reports whether the message asks for a picture of *her*: a picture
-// request with no library kind named in it.
-func askedToSeeHer(text string) bool {
-	return userAskedForPhoto(text) && !libraryKindWords.MatchString(text)
-}
-
-// pictureAsk is what this turn asks to see her in, reading the message before it too.
-//
-// A request often arrives in two parts. "How about one of you in a green dress" — she
-// asks what kind of green — "lets say a green sundress": the second names no picture
-// at all, so it was read as talk, and she answered it with an invented one. When the
-// message before was a request to see her and this one names clothes, this one is the
-// rest of that request, and what it names is the subject.
-//
-// text is what the ready picture is matched against; ok is false when neither asks.
-func pictureAsk(latest, previous string) (text string, ok bool) {
-	if askedToSeeHer(latest) {
-		return latest, true
-	}
-	if previous != "" && askedToSeeHer(previous) && !libraryKindWords.MatchString(latest) {
-		if clothes, dressed := clothesFromSubject(mendSpelling(latest)); dressed && clothes != wearingNothing {
-			return clothes, true
-		}
-		if bareMatch.MatchString(latest) {
-			return "nude", true
-		}
-	}
-	return "", false
-}
-
-// mendSpelling applies subjectSpelling word by word, keeping everything else as it was.
-func mendSpelling(text string) string {
-	fields := strings.Fields(text)
-	for i, field := range fields {
-		if mended, ok := subjectSpelling[strings.ToLower(strings.Trim(field, ".,;:!?\"'()…"))]; ok {
-			fields[i] = mended
-		}
-	}
-	return strings.Join(fields, " ")
-}
-
 // pictureRef is one picture she could send, from either pool: her chat gallery, by
 // id, or a library picture recognised as her. One type so the two pools can be drawn
 // from together, on one scale, rather than the gallery always winning a tie.
@@ -114,95 +65,6 @@ func pictureCandidates(ws chatWorkspace, characterID string, selfPics []selfPict
 		out = append(out, weightedCandidate[pictureRef]{item: pictureRef{self: c.item, isSelf: true, tags: c.item.tags}, score: c.score, weight: c.weight})
 	}
 	return out
-}
-
-// readyPicture is the picture chosen before she writes, when the user asked to see
-// her. She is told what it shows; if she sends one this turn, it is this one.
-type readyPicture struct {
-	pic pictureRef
-	// fit is how well it matched the user's words. Zero means nothing did and the
-	// preferences alone chose — "send me a pic" — which she is told, so she does not
-	// claim it is what was asked for.
-	fit int
-}
-
-// pickReadyPicture chooses the picture for a request in the user's own words.
-//
-// Only the best-fitting tier is in the draw: a request that named something is
-// answered with the pictures that fit it best, and the user's preferences decide
-// among *those* — never promote something that fits it worse. With nothing fitting
-// at all, every picture is equal on fit and the preferences alone choose, exactly as
-// "send me a pic" always worked.
-func pickReadyPicture(ws chatWorkspace, characterID string, selfPics []selfPicture, request, excludeID string, lastPhoto string, sentPhotos map[string]bool, sentMedia map[int64]bool) (readyPicture, bool) {
-	skip := map[string]bool{}
-	if lastPhoto != "" {
-		skip[lastPhoto] = true
-	}
-	candidates := pictureCandidates(ws, characterID, selfPics, request, excludeID, skip, sentPhotos, nil, sentMedia)
-	if len(candidates) == 0 {
-		return readyPicture{}, false
-	}
-	best := bestScore(candidates)
-	pic, ok := drawWeighted(candidates, best, nil)
-	if !ok {
-		return readyPicture{}, false
-	}
-	return readyPicture{pic: pic, fit: best}, true
-}
-
-// readyPictureDirective tells her what the picture ready to send shows, and that her
-// words have to be about that picture and no other. When the request matched nothing
-// she is told so, plainly, so she can say "not that one, but here's this" instead of
-// captioning a beach picture as the red dress.
-func readyPictureDirective(ready readyPicture, asked string) string {
-	tags := ready.pic.tags
-	if len(tags) > 12 {
-		tags = tags[:12]
-	}
-	handle := readyPictureHandle(ready)
-	out := "They asked to see you, and the picture ready to send shows: " + strings.Join(tags, ", ") + ". " +
-		"If you send a picture this reply, it is this one and no other: end your reply with [send: " + handle + "]. " +
-		"Describe only what is in it — nothing it does not show — and do not invent a different picture. "
-	if ready.fit == 0 && strings.TrimSpace(asked) != "" {
-		out += "It is not specifically what they asked for; be honest that you do not have that one, and offer this instead or nothing. "
-	}
-	out += "If you would rather not send one right now, say so and write no tag."
-	return out
-}
-
-// pictureAskWords are the words a request to see her is made of, none of which
-// describe a picture: "can you send me a snap of you in the tub with bubbles" less
-// these is "tub bubbles", and "send me a pic of you" less these is nothing. Kept apart
-// from the ready pick's own matching, which must keep every word: "nude" is a tag.
-//
-// "nude" is not one of them. It was, as the name of a kind of picture, and "send me a
-// picture of you nude" reached the generator as "you, a selfie" — which dressed her in
-// whatever she had on, and a nude came back in shorts.
-var pictureAskWords = map[string]bool{
-	"can": true, "could": true, "would": true, "will": true, "you": true, "u": true, "me": true, "i": true,
-	"please": true, "pls": true, "hey": true, "babe": true, "libby": true, "now": true, "again": true,
-	"send": true, "sends": true, "show": true, "give": true, "take": true, "snap": true, "shoot": true,
-	"get": true, "text": true, "share": true, "see": true, "let": true, "want": true, "wanna": true,
-	"need": true, "like": true, "love": true, "to": true, "another": true,
-	"one": true, "more": true, "some": true, "yourself": true, "that": true,
-	"this": true, "for": true, "it": true, "is": true, "be": true,
-	"pic": true, "pics": true, "picture": true, "pictures": true, "photo": true, "photos": true,
-	"selfie": true, "selfies": true, "snaps": true, "image": true, "images": true, "shot": true,
-	"quick": true, "new": true, "little": true, "cute": true, "sexy": true,
-	"hot": true, "nice": true, "right": true, "real": true, "actual": true, "just": true, "also": true,
-	"how": true, "what": true, "about": true, "lets": true, "let's": true, "say": true, "maybe": true,
-	"ok": true, "okay": true, "then": true, "instead": true,
-	// Texting shorthand for "now" and "please". "send me a pic of you rn" reached the
-	// generator as "you rn", which describes nothing.
-	"rn": true, "rq": true, "atm": true, "currently": true, "plz": true, "pleaseee": true,
-	"gimme": true, "lemme": true, "ya": true, "ur": true,
-}
-
-// subjectSpelling mends the misspellings that decide what she is wearing. "sundres"
-// was not a garment, so the picture of her in one was blended with the tank top she
-// had on, and a tank top is what it showed.
-var subjectSpelling = map[string]string{
-	"nudes": "nude", "dres": "dress", "sundres": "sundress", "bikiny": "bikini", "lingere": "lingerie",
 }
 
 // subjectGlue are the words a subject is phrased with rather than made of: "in the
@@ -241,24 +103,6 @@ func pictureRequestSubject(asked string) string {
 		return ""
 	}
 	return strings.Join(kept, " ")
-}
-
-// missingPictureDirective is the ready-picture line for a request nothing fits, when a
-// picture can be made. Handed a sex picture and told it "is not specifically" the bath
-// they asked for, a small model described the bath and sent the sex picture; told
-// there is no such picture and that she can make one, it has somewhere to go.
-func missingPictureDirective(subject string) string {
-	return "They asked to see you " + subject + ", and no picture you have shows that — not one. " +
-		"Do not send a picture this reply and do not describe one: say plainly that you don't have that one. " +
-		"Image generation is connected, so you can offer to make it: end a sentence with [do: generate you " + subject + "] and stop there — an offer, not a delivery."
-}
-
-// readyPictureHandle is the tag handle the directive asks her to write for the ready
-// picture: its first three tags. The catalogue's example uses the same one on a turn
-// with a ready picture, so the two directives never name different pictures.
-func readyPictureHandle(ready readyPicture) string {
-	tags := ready.pic.tags
-	return strings.Join(tags[:min(3, len(tags))], ", ")
 }
 
 // scoreTagsWeighted is the tag overlap between a request and a picture with the
@@ -334,72 +178,37 @@ func tagFrequency(pictures [][]string) map[string]int {
 	return out
 }
 
-// photoPickReport is what the reply says about the picture it carries, or did not.
-// Diagnostics for the conversation log, so "why did she send that?" has an answer:
-// which path chose it, what it was matched against, how well it fitted.
-type photoPickReport struct {
-	// Source is which path chose it: "ready" (chosen from the user's words before she
-	// wrote), "model" (from the tags she wrote), "rescue" (she said she was sending one
-	// and nothing fitted), "inferred" (unprompted, her words matched a picture), or ""
-	// when nothing was sent.
-	Source string `json:"source"`
-	// Request is the text the picture was matched against.
-	Request string `json:"request,omitempty"`
-	// Fit is the winning picture's tag overlap with that text.
-	Fit int `json:"fit"`
-	// Tags are the winning picture's tags, so the log shows what was actually sent.
-	Tags []string `json:"tags,omitempty"`
-	// Candidates is how many pictures were in the draw.
-	Candidates int `json:"candidates"`
+// pictureAskWords are the words a request to see her is made of, none of which
+// describe a picture: "can you send me a snap of you in the tub with bubbles" less
+// these is "tub bubbles", and "send me a pic of you" less these is nothing. Kept apart
+// from the ready pick's own matching, which must keep every word: "nude" is a tag.
+//
+// "nude" is not one of them. It was, as the name of a kind of picture, and "send me a
+// picture of you nude" reached the generator as "you, a selfie" — which dressed her in
+// whatever she had on, and a nude came back in shorts.
+var pictureAskWords = map[string]bool{
+	"can": true, "could": true, "would": true, "will": true, "you": true, "u": true, "me": true, "i": true,
+	"please": true, "pls": true, "hey": true, "babe": true, "libby": true, "now": true, "again": true,
+	"send": true, "sends": true, "show": true, "give": true, "take": true, "snap": true, "shoot": true,
+	"get": true, "text": true, "share": true, "see": true, "let": true, "want": true, "wanna": true,
+	"need": true, "like": true, "love": true, "to": true, "another": true,
+	"one": true, "more": true, "some": true, "yourself": true, "that": true,
+	"this": true, "for": true, "it": true, "is": true, "be": true,
+	"pic": true, "pics": true, "picture": true, "pictures": true, "photo": true, "photos": true,
+	"selfie": true, "selfies": true, "snaps": true, "image": true, "images": true, "shot": true,
+	"quick": true, "new": true, "little": true, "cute": true, "sexy": true,
+	"hot": true, "nice": true, "right": true, "real": true, "actual": true, "just": true, "also": true,
+	"how": true, "what": true, "about": true, "lets": true, "let's": true, "say": true, "maybe": true,
+	"ok": true, "okay": true, "then": true, "instead": true,
+	// Texting shorthand for "now" and "please". "send me a pic of you rn" reached the
+	// generator as "you rn", which describes nothing.
+	"rn": true, "rq": true, "atm": true, "currently": true, "plz": true, "pleaseee": true,
+	"gimme": true, "lemme": true, "ya": true, "ur": true,
 }
 
-// selfDescriptionWords are the words that describe *her* rather than any one picture
-// of her: the card's appearance ("long orange hair, glasses") and every tag on at
-// least half of her pictures ("1girl", "solo", "orange hair" again). Matching an
-// unprompted picture on these is matching it on nothing — a reply that mentions her
-// hair fits every picture she has equally — so the unprompted path strips them from
-// the text before scoring. See the handler's inferred case.
-func selfDescriptionWords(character chatCharacter, ws chatWorkspace, selfPics []selfPicture) map[string]bool {
-	words := map[string]bool{}
-	for _, feature := range appearanceTags(character.Appearance) {
-		for _, word := range strings.Fields(feature) {
-			words[word] = true
-		}
-	}
-	var pools [][]string
-	for _, img := range ws.Images {
-		if img.CharacterID == character.ID && isSelfPicture(img) {
-			pools = append(pools, img.Tags)
-		}
-	}
-	for _, pic := range selfPics {
-		pools = append(pools, pic.tags)
-	}
-	for tag, n := range tagFrequency(pools) {
-		if len(pools) >= 2 && n*2 >= len(pools) {
-			for _, word := range strings.Fields(tag) {
-				words[word] = true
-			}
-		}
-	}
-	return words
-}
-
-// withoutWords is text with the given words removed, for matching on what is left.
-// Case-insensitive, whole words only; punctuation stays, which the tokeniser that
-// reads the result (requestWords) discards anyway.
-func withoutWords(text string, drop map[string]bool) string {
-	if len(drop) == 0 {
-		return text
-	}
-	fields := strings.Fields(text)
-	kept := fields[:0]
-	for _, field := range fields {
-		word := strings.ToLower(strings.Trim(field, ".,;:!?\"'()[]*_"))
-		if drop[word] {
-			continue
-		}
-		kept = append(kept, field)
-	}
-	return strings.Join(kept, " ")
+// subjectSpelling mends the misspellings that decide what she is wearing. "sundres"
+// was not a garment, so the picture of her in one was blended with the tank top she
+// had on, and a tank top is what it showed.
+var subjectSpelling = map[string]string{
+	"nudes": "nude", "dres": "dress", "sundres": "sundress", "bikiny": "bikini", "lingere": "lingerie",
 }

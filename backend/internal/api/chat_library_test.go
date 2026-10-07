@@ -2,10 +2,6 @@ package api
 
 import (
 	"context"
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -119,59 +115,6 @@ func TestViewingDirectiveIncludesUntrustedBrowseFrame(t *testing.T) {
 		if !strings.Contains(block, want) {
 			t.Fatalf("browse frame missing %q: %s", want, block)
 		}
-	}
-}
-
-// End to end: what she wrote as a link comes back as an item the client can open,
-// and the browse-together screen is what puts the shelf in front of her.
-func TestChatResolvesLinksForABrowseTogetherTurn(t *testing.T) {
-	var prompt string
-	llm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/v1/internal/model/info" {
-			_, _ = w.Write([]byte(`{"model_name":"test-local"}`))
-			return
-		}
-		var body struct {
-			Messages []chatMessage `json:"messages"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&body)
-		if len(body.Messages) > 0 {
-			prompt = body.Messages[0].Content
-		}
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"Open [link: Summer at the Coast] instead.\n[mood: mischievous 3]"}}]}`))
-	}))
-	defer llm.Close()
-
-	s, token := newTestServer(t)
-	id := seedTitledMedia(t, s, "Summer at the Coast", "video", "beach")
-	cur := s.settings.Get()
-	cur.ChatURL = llm.URL
-	s.settings.Set(cur)
-
-	rec := do(t, s.Handler(), token, http.MethodPost, "/api/chat",
-		`{"mode":"playful","messages":[{"role":"user","content":"what should I watch"}],"viewing":{"focusId":`+
-			strconv.FormatInt(id, 10)+`,"ids":[`+strconv.FormatInt(id, 10)+`],"section":"their videos"}}`)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("chat: %d %s", rec.Code, rec.Body)
-	}
-	if !strings.Contains(prompt, "browsing together") && !strings.Contains(prompt, "going through their library together") {
-		t.Fatalf("system prompt never mentioned browsing together: %s", prompt)
-	}
-	if !strings.Contains(prompt, "[link:") {
-		t.Fatalf("system prompt never explained linking: %s", prompt)
-	}
-	var out struct {
-		Message string      `json:"message"`
-		Links   []libbyLink `json:"links"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if out.Message != "Open Summer at the Coast instead." {
-		t.Fatalf("message = %q", out.Message)
-	}
-	if len(out.Links) != 1 || out.Links[0].ID != id {
-		t.Fatalf("links = %+v", out.Links)
 	}
 }
 

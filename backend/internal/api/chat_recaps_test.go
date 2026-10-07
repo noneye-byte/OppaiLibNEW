@@ -96,26 +96,3 @@ func TestConversationRecapsSkipsThoughtsAndBoundsItself(t *testing.T) {
 		}
 	}
 }
-
-func TestCurrentConversationIDPrefersTheClientAndFallsBackToTheTail(t *testing.T) {
-	ws := chatWorkspace{Conversations: []chatConversation{
-		recapConvo("stated", "a", time.Now(), said("user", "one"), said("assistant", "two")),
-		// The stored copy is a turn behind the request, which is the ordinary case:
-		// the client posts the new message and saves the workspace in parallel.
-		recapConvo("guessed", "b", time.Now(), said("user", "earlier"), said("assistant", "a reply")),
-	}}
-	in := chatRequest{
-		CharacterID: "libby",
-		Messages: []chatMessage{
-			{Role: "user", Content: "earlier"},
-			{Role: "assistant", Content: "a reply"},
-			{Role: "user", Content: "the new one, not saved yet"},
-		},
-	}
-	if got := currentConversationID(ws, chatRequest{ConversationID: "stated", Messages: in.Messages}); got != "stated" {
-		t.Fatalf("the stated id was ignored: %q", got)
-	}
-	if got := currentConversationID(ws, in); got != "guessed" {
-		t.Fatalf("the tail fallback found %q, want \"guessed\"", got)
-	}
-}

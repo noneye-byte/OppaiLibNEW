@@ -40,7 +40,7 @@ func TestMoodStuckDirectiveOnlyFiresOnARun(t *testing.T) {
 		t.Fatalf("a real run went unremarked: %s", block)
 	}
 	// The standing half is always there, whatever the run.
-	if !strings.Contains(block, "not from the tag you wrote last time") {
+	if !strings.Contains(block, "not from how you felt last time") {
 		t.Fatalf("the standing movement directive is missing: %s", block)
 	}
 }

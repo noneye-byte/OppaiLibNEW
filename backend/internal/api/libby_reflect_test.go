@@ -211,32 +211,3 @@ func TestSheNeverWritesWhileSomeoneIsChatting(t *testing.T) {
 		t.Fatalf("reflected %d times with a chat a moment ago", n)
 	}
 }
-
-// The whole loop: what she wrote comes back as her own recollection when the next
-// conversation opens, and "write one now" works from the settings screen.
-func TestWhatSheWroteIsWithHerWhenTheNextConversationOpens(t *testing.T) {
-	s, token, _, prompts := reflectFixture(t, true)
-	rec := do(t, s.Handler(), token, http.MethodPost, "/api/libby/journal/reflect", "")
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "rough week") {
-		t.Fatalf("reflect now: %d %s", rec.Code, rec.Body.String())
-	}
-	rec = do(t, s.Handler(), token, http.MethodPost, "/api/chat", `{"mode":"sweet","messages":[{"role":"user","content":"hey you"}]}`)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("chat: %d %s", rec.Code, rec.Body.String())
-	}
-	last := (*prompts)[len(*prompts)-1]
-	if !strings.Contains(last, "What you wrote to yourself") || !strings.Contains(last, "rough week") {
-		t.Fatal("the opening turn did not carry her journal")
-	}
-	rec = do(t, s.Handler(), token, http.MethodGet, "/api/libby/journal", "")
-	var out struct {
-		Entries []libbyJournalEntry `json:"entries"`
-	}
-	_ = json.Unmarshal(rec.Body.Bytes(), &out)
-	if len(out.Entries) != 1 {
-		t.Fatalf("journal listing = %s", rec.Body.String())
-	}
-	if rec := do(t, s.Handler(), token, http.MethodDelete, "/api/libby/journal/"+out.Entries[0].ID, ""); rec.Code != http.StatusOK {
-		t.Fatalf("forget entry: %d", rec.Code)
-	}
-}

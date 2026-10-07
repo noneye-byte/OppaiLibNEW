@@ -27,6 +27,8 @@ block
 blur_on
 bolt
 book
+bookmark_add
+bookmark_added
 bookmarks
 box
 browse
@@ -64,6 +66,7 @@ colorize
 compare
 content_copy
 contrast
+cooking
 create_new_folder
 crop_square
 dark_mode
@@ -82,6 +85,7 @@ edit
 edit_note
 edit_square
 error
+event
 expand_less
 expand_more
 explicit
@@ -132,6 +136,7 @@ light_mode
 link
 link_off
 list
+live_tv
 local_fire_department
 location_on
 lock
@@ -140,6 +145,7 @@ logout
 memory
 menu
 menu_book
+message
 mic
 mood
 mop
@@ -161,6 +167,7 @@ person_add
 pest_control
 photo_camera
 photo_library
+pin
 play_arrow
 play_circle
 playlist_add
@@ -188,6 +195,7 @@ right_panel_close
 room
 routine
 save
+scene
 score
 screenshot
 sd
@@ -212,12 +220,15 @@ storage
 style
 styler
 swap_horiz
+sweep
 switch
 sync
 tab
+tabs
 tag
 text_fields
 texture
+theaters
 timeline
 title
 toast

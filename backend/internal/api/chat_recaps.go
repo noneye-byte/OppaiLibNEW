@@ -65,47 +65,6 @@ func spokenChatMessages(convo chatConversation) []storedChatMessage {
 	return out
 }
 
-// currentConversationID is which conversation this turn belongs to, so it can be left
-// out of its own recap.
-//
-// The client says so when it can. When it cannot — an older build, or any client that
-// has not been taught the field — the conversation is identified by its tail instead:
-// the stored copy of an in-flight turn is usually one or two messages behind what is
-// being sent, because the client posts the new message and saves the workspace in
-// parallel, so the newest incoming lines are matched rather than only the last one.
-//
-// A miss costs one duplicated block, not a wrong answer, which is why a heuristic is
-// acceptable here and would not be for anything that writes.
-func currentConversationID(ws chatWorkspace, in chatRequest) string {
-	if id := strings.TrimSpace(in.ConversationID); id != "" {
-		return id
-	}
-	if len(in.Messages) == 0 {
-		return ""
-	}
-	recent := map[string]bool{}
-	for i := len(in.Messages) - 1; i >= 0 && len(recent) < recapMatchDepth; i-- {
-		if text := strings.TrimSpace(in.Messages[i].Content); text != "" {
-			recent[text] = true
-		}
-	}
-	best := ""
-	var bestAt int64
-	for _, convo := range ws.Conversations {
-		if convo.CharacterID != in.CharacterID {
-			continue
-		}
-		spoken := spokenChatMessages(convo)
-		if len(spoken) == 0 {
-			continue
-		}
-		if recent[strings.TrimSpace(spoken[len(spoken)-1].Content)] && convo.UpdatedAt >= bestAt {
-			best, bestAt = convo.ID, convo.UpdatedAt
-		}
-	}
-	return best
-}
-
 // conversationRecaps renders the other conversations into the system prompt.
 //
 // Empty when there are none, like every other optional block, so a user with one chat

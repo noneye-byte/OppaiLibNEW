@@ -3,7 +3,6 @@ package api
 import (
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -31,108 +30,6 @@ func TestWholeTagMatchOutranksScatteredWords(t *testing.T) {
 	// A single-word tag still counts its word, so "dress" alone reaches a sundress.
 	if scoreTags(requestWords("a dress"), []string{"dress"}) != 1 {
 		t.Fatal("a one-word tag lost its word")
-	}
-}
-
-// The one-in-four: asked for the red dress, the draw used to reach five other
-// pictures that each shared one word. Chosen from the user's words before she writes,
-// among only the best-fitting tier, it is the red dress every time.
-func TestAskedForPictureIsChosenFromTheUsersWords(t *testing.T) {
-	ws := redDressGallery()
-	counts := tally(200, func() string {
-		ready, ok := pickReadyPicture(ws, "libby", nil, "send me a pic of you in a red dress", "", "", nil, nil)
-		if !ok {
-			return ""
-		}
-		return ready.pic.imageID
-	})
-	if counts["dress"] != 200 {
-		t.Fatalf("the red dress was not chosen every time: %v", counts)
-	}
-	// With nothing fitting, the preferences alone choose and the fit says so — which
-	// is what lets her be honest that this is not the one they asked for.
-	ready, ok := pickReadyPicture(ws, "libby", nil, "send me a pic", "", "", nil, nil)
-	if !ok || ready.fit != 0 {
-		t.Fatalf("an unspecific request should still find something, at fit 0: %+v ok=%v", ready, ok)
-	}
-	if !strings.Contains(readyPictureDirective(ready, "send me a pic of you in a green hat"), "not specifically what they asked for") {
-		t.Fatal("a picture that does not fit the request was not flagged as such")
-	}
-	if !strings.Contains(readyPictureDirective(readyPicture{pic: ready.pic, fit: 3}, "red dress"), "[send: ") {
-		t.Fatal("the directive never says how to send it")
-	}
-}
-
-// End to end: the model paraphrases the request as [send: dress] and describes the
-// picture it was told about; the picture that goes out is the one it was told about,
-// and the reply says why.
-func TestChatSendsTheReadyPictureWhateverTagsSheWrote(t *testing.T) {
-	var prompt string
-	llm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/v1/internal/model/info" {
-			_, _ = w.Write([]byte(`{"model_name":"test-local"}`))
-			return
-		}
-		var body struct {
-			Messages []chatMessage `json:"messages"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&body)
-		if len(body.Messages) > 0 {
-			prompt = body.Messages[0].Content
-		}
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"Here — the red one you like.\n[send: dress]"}}]}`))
-	}))
-	defer llm.Close()
-
-	s, token := newTestServer(t)
-	cur := s.settings.Get()
-	cur.ChatURL = llm.URL
-	s.settings.Set(cur)
-	gallery := redDressGallery()
-	for i := range gallery.Images {
-		gallery.Images[i].Subject = chatSubjectSelf
-	}
-	if err := s.writeChatWorkspace(1, gallery); err != nil {
-		t.Fatalf("seed gallery: %v", err)
-	}
-	for i := 0; i < 8; i++ {
-		rec := do(t, s.Handler(), token, http.MethodPost, "/api/chat",
-			`{"mode":"sweet","characterId":"libby","messages":[{"role":"user","content":"send me a pic of you in a red dress"}]}`)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("chat: %d %s", rec.Code, rec.Body)
-		}
-		var out struct {
-			ImageID string          `json:"imageId"`
-			Photo   photoPickReport `json:"photo"`
-		}
-		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
-			t.Fatalf("decode: %v", err)
-		}
-		if out.ImageID != "dress" {
-			t.Fatalf("sent %q, want the red dress (report %+v)", out.ImageID, out.Photo)
-		}
-		if out.Photo.Source != "ready" || !containsString(out.Photo.Tags, "red dress") {
-			t.Fatalf("the report does not say why: %+v", out.Photo)
-		}
-	}
-	// She was told what the picture shows before she wrote, and told to describe that.
-	if !strings.Contains(prompt, "the picture ready to send shows: red dress") || !strings.Contains(prompt, "Describe only what is in it") {
-		t.Fatalf("prompt never named the ready picture: %s", prompt)
-	}
-}
-
-// "Show me" is broad on purpose, but a picture is only chosen in advance when the
-// request is for her: naming a library kind means the shelf, not a selfie.
-func TestReadyPictureIsOnlyForRequestsAboutHer(t *testing.T) {
-	for _, her := range []string{"send me a pic of you in a red dress", "show me you", "selfie?", "let me see you"} {
-		if !askedToSeeHer(her) {
-			t.Errorf("%q was not read as asking to see her", her)
-		}
-	}
-	for _, shelf := range []string{"show me the beach video", "send me that comic", "let me see the game you saved", "show me something to watch"} {
-		if askedToSeeHer(shelf) {
-			t.Errorf("%q was read as asking to see her", shelf)
-		}
 	}
 }
 
@@ -283,40 +180,17 @@ func TestImportOfferNeedsAnAddressTheUserWrote(t *testing.T) {
 	}
 }
 
-// She can offer to rename something, by its real title; the card carries the new
-// name, and only Allow performs it.
-func TestRenameIsOfferedThenPerformedOnApproval(t *testing.T) {
-	s, token := newTestServer(t)
-	id := seedTitledMedia(t, s, "Untitled import 4192", "video", "beach")
-	reply, actions := s.parseLibbyActions(t.Context(), `That name is a serial number. [do: rename Untitled import 4192 | "Beach afternoon"] Want me to?`, allCaps)
-	if strings.Contains(reply, "[do:") {
-		t.Fatalf("tag left in the prose: %q", reply)
-	}
-	if len(actions) != 1 || actions[0].Kind != "rename" || actions[0].MediaID != id || actions[0].Title != "Beach afternoon" {
-		t.Fatalf("actions = %+v", actions)
-	}
-	if !strings.Contains(actions[0].Detail, "→ Beach afternoon") {
-		t.Fatalf("card does not show the change: %+v", actions[0])
-	}
-	// The same name is not a rename, and a name for nothing resolves to nothing.
-	if _, actions := s.parseLibbyActions(t.Context(), `[do: rename Untitled import 4192 | untitled import 4192]`, allCaps); len(actions) != 0 {
-		t.Fatalf("a no-op rename was offered: %+v", actions)
-	}
-	rec := do(t, s.Handler(), token, http.MethodPost, "/api/libby/act",
-		`{"kind":"rename","mediaId":`+jsonInt(id)+`,"title":"Beach afternoon"}`)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("act: %d %s", rec.Code, rec.Body)
-	}
-	item, err := s.db.GetMedia(t.Context(), id)
-	if err != nil {
-		t.Fatalf("get media: %v", err)
-	}
-	if got := s.decrypt(item.TitleEnc, "title"); got != "Beach afternoon" {
-		t.Fatalf("title after rename = %q", got)
-	}
-}
-
 func jsonInt(n int64) string {
 	b, _ := json.Marshal(n)
 	return string(b)
+}
+
+// "send me a pic of you rn" is a request to see her and nothing more; "rn" is not a
+// thing to draw.
+func TestTextingShorthandIsNotASubject(t *testing.T) {
+	for _, ask := range []string{"send me a pic of you rn", "pic of u rn plz", "lemme see you atm"} {
+		if got := pictureRequestSubject(ask); got != "" {
+			t.Fatalf("%q left %q as the subject", ask, got)
+		}
+	}
 }

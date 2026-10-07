@@ -60,6 +60,11 @@ ldflags, so there is nothing to edit there.
 - **Android re-serializes the chat workspace on save.** A field added to the Go
   `chatCharacter` must also be added to `android/.../data/Models.kt`, or the phone reads
   it, drops it, and writes the object back without it.
+- **Her turns write the conversation, not the client.** `POST /api/libby/turn` stores
+  your message and her replies itself and streams them; the workspace PUT merges by
+  each conversation's `rev`. A client that saves without sending back the `rev` it was
+  last streamed cannot delete her messages, and one that drops `rev`, `images`, `voice`
+  or `scene` on save (Android's `Models.kt`) loses them for everyone.
 - **`mediaColumns` and `briefColumns`** are the two column lists the media queries share.
   Adding a column to one scan means adding it to that constant, not to a single query.
 

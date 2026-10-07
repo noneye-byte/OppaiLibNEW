@@ -229,7 +229,7 @@ export function renderActionCards(
               <button @click=${() => decide(action, false)}>Not now</button>
             </div>`
           : state === "running" && progress !== undefined
-            ? renderGenProgress(progress, action.kind === "background" ? "Making the place" : "Making it", action.kind === "background" ? "landscape" : "photo_camera")
+            ? renderGenProgress(progress, "Making it", "photo_camera")
             : html`<span class="action-status ${state === "failed" ? "failed" : ""}">
               ${message ?? DEFAULT_STATUS[state]}
             </span>`}
@@ -278,7 +278,7 @@ export class ActionApprovals {
     }
     // A picture being made is watched while it is made, the way the studio watches one;
     // until the first report lands the card says it is starting.
-    const makesPicture = action.kind === "generate" || action.kind === "background";
+    const makesPicture = action.kind === "generate";
     const jobId = makesPicture ? newJobId() : undefined;
     this.set(action.id, "running", undefined, makesPicture ? null : undefined);
     const stopWatching = jobId

@@ -86,14 +86,14 @@ type chatCharacter struct {
 	// field from Description because it does a second job: it is matched against the
 	// local scanner's output when the user shares a picture, which is how a character
 	// can recognise a picture of herself. See selfPortraitMatch.
-	Appearance      string  `json:"appearance,omitempty"`
-	Personality     string  `json:"personality,omitempty"`
-	Kinks           string  `json:"kinks,omitempty"`
-	Scenario        string  `json:"scenario,omitempty"`
-	FirstMessage    string  `json:"firstMessage,omitempty"`
-	ExampleDialogue string  `json:"exampleDialogue,omitempty"`
-	SystemPrompt    string  `json:"systemPrompt,omitempty"`
-	CreatorNotes    string  `json:"creatorNotes,omitempty"`
+	Appearance      string `json:"appearance,omitempty"`
+	Personality     string `json:"personality,omitempty"`
+	Kinks           string `json:"kinks,omitempty"`
+	Scenario        string `json:"scenario,omitempty"`
+	FirstMessage    string `json:"firstMessage,omitempty"`
+	ExampleDialogue string `json:"exampleDialogue,omitempty"`
+	SystemPrompt    string `json:"systemPrompt,omitempty"`
+	CreatorNotes    string `json:"creatorNotes,omitempty"`
 	// The fields below are what makes her more than a character card. A card says who
 	// somebody is and how they talk; it says nothing about how they spend a Tuesday,
 	// what they reach for on the shelves, what they are to the person reading, or
@@ -124,9 +124,9 @@ type chatCharacter struct {
 	// the one actually chosen becomes the first message.
 	AltGreetings  []string `json:"altGreetings,omitempty"`
 	AvatarImageID string   `json:"avatarImageId,omitempty"`
-	PromptWeight    float64 `json:"promptWeight"`
-	DefaultMode     string  `json:"defaultMode"`
-	BuiltIn         bool    `json:"builtIn,omitempty"`
+	PromptWeight  float64  `json:"promptWeight"`
+	DefaultMode   string   `json:"defaultMode"`
+	BuiltIn       bool     `json:"builtIn,omitempty"`
 }
 
 type storedChatMessage struct {
@@ -174,6 +174,17 @@ type storedChatMessage struct {
 	ReadAt int64 `json:"readAt,omitempty"`
 	// Reactions are the emoji put on this message, by either of them. See chat_reactions.go.
 	Reactions []chatReaction `json:"reactions,omitempty"`
+	// Images is a set of pictures sent as one message — a shoot rather than a snapshot.
+	// ImageID is the first of them, so a client that predates sets still shows one.
+	// See libby_camera.go.
+	Images []string `json:"images,omitempty"`
+	// Voice marks a message she sent as a voice note: the content is what she says, and
+	// a client plays it rather than only showing it.
+	Voice bool `json:"voice,omitempty"`
+	// Rev is the conversation revision the server wrote this message at, 0 for one a
+	// client wrote. It is what lets a client's save tell "I deleted this" from "I never
+	// saw this". See mergeServerTurns.
+	Rev int64 `json:"rev,omitempty"`
 }
 
 type chatConversation struct {
@@ -188,19 +199,26 @@ type chatConversation struct {
 	// conversation state the clients send back each turn; both were silently dropped
 	// here before, so neither survived a reload. See libby_activities.go and
 	// libby_backgrounds.go.
-	Activity   string              `json:"activity,omitempty"`
-	Background string              `json:"background,omitempty"`
+	Activity   string `json:"activity,omitempty"`
+	Background string `json:"background,omitempty"`
 	// Wearing is what she has on when it is not her own clothes. Conversation state
 	// like the two above. See libby_wearing.go.
-	Wearing string                 `json:"wearing,omitempty"`
-	Options    map[string]any      `json:"options,omitempty"`
+	Wearing string         `json:"wearing,omitempty"`
+	Options map[string]any `json:"options,omitempty"`
 	// Summary is the older part of the conversation, compressed; SummarizedAt is when it
 	// was last written, UnixMilli. Sent with every turn. See chat_compress.go.
-	Summary      string `json:"summary,omitempty"`
-	SummarizedAt int64  `json:"summarizedAt,omitempty"`
-	Messages   []storedChatMessage `json:"messages"`
-	CreatedAt  int64               `json:"createdAt"`
-	UpdatedAt  int64               `json:"updatedAt"`
+	Summary      string              `json:"summary,omitempty"`
+	SummarizedAt int64               `json:"summarizedAt,omitempty"`
+	Messages     []storedChatMessage `json:"messages"`
+	CreatedAt    int64               `json:"createdAt"`
+	UpdatedAt    int64               `json:"updatedAt"`
+	// Rev counts the server's writes to this conversation. Turns run on the server now,
+	// so it writes her replies straight into the conversation while a client may be
+	// saving its own copy; a client sends back the revision it last saw. See
+	// mergeServerTurns.
+	Rev int64 `json:"rev,omitempty"`
+	// Scene is a scene she planned and is playing through. See libby_scene.go.
+	Scene *libbyScene `json:"scene,omitempty"`
 }
 
 type chatImage struct {
@@ -220,6 +238,26 @@ type chatImage struct {
 	// before subjects existed, which readChatWorkspace classifies on the way in.
 	// See chat_image_subjects.go.
 	Subject string `json:"subject,omitempty"`
+	// Gen is how a picture she took was made, so "same but…" can start from it. Server-
+	// owned like the tags. See libby_camera.go.
+	Gen *chatImageGen `json:"gen,omitempty"`
+	// Rating is what the user thought of a picture she sent: love, like or dislike. It
+	// feeds what she reaches for next time. See libby_ratings.go.
+	Rating string `json:"rating,omitempty"`
+	// Kept is the library item a picture was saved as, 0 while it lives only here.
+	Kept int64 `json:"kept,omitempty"`
+}
+
+// chatImageGen is the recipe behind a picture she took.
+type chatImageGen struct {
+	Prompt   string `json:"prompt"`
+	Negative string `json:"negative,omitempty"`
+	Seed     int64  `json:"seed"`
+	// Shot is the shot as she described it, before her likeness and clothes were added:
+	// the part an edit changes.
+	Shot string `json:"shot,omitempty"`
+	// Score is what the judge gave it out of 10, 0 when nothing judged it.
+	Score float64 `json:"score,omitempty"`
 }
 
 type chatWorkspace struct {
@@ -256,23 +294,34 @@ const defaultLibbySystemPrompt = "Speak only as Libby. Put speech in double quot
 	"Never write the user's words, actions, thoughts, or choices. React from your own opinions and stop for their reply. " +
 	"You know your appearance and outfit. You may discuss being software naturally when asked, but never fall into generic assistant disclaimers or help menus."
 
-// defaultLibbyExampleDialogue is how she texts. Short lines, the register of someone her
-// age on her phone — and every tag used the way the protocol wants it, because the
-// examples are the one place a model sees the tags in context rather than described. An
-// item attached when asked for something to watch, a call rung when she wants to be
-// looked at.
-//
-// Two show a [doing: …] line, because that tag was the one the examples never
-// demonstrated and, described in a paragraph a page further down, it was the one she
-// never used. Shown in context — settling into something as the conversation opens — a
-// model copies the habit.
-//
-// The texting itself is what changed from the version before. That one sent two texts
-// in four of five answers, and she copied the count along with the voice; these are one
-// text as often as two, which is what the per-turn count (chat_texts.go) asks for. And
-// they text the way people her age do — ngl, tbh, fr, lmao, :D, <3, T_T — where the old
-// ones had one "like" and not an emoticon between them, so neither did she.
+// defaultLibbyExampleDialogue is how she texts: short lines, the register of someone her
+// age on her phone, one text as often as two — and nothing else. The examples used to
+// demonstrate the tag protocol too ([doing: …], [mood: …], [attach: …], [call]), because
+// they were the one place a model saw the tags in context. Her actions are tool calls
+// now, which a model learns from the tool list, and an example that still showed a tag
+// would teach her to write one into her prose.
 const defaultLibbyExampleDialogue = "<START>\n" +
+	"{{user}}: hey libby\n" +
+	"{{char}}: omg hiii :D\n\nyou've been gone like three days ngl. i noticed T_T\n" +
+	"<START>\n" +
+	"{{user}}: cant decide what to watch\n" +
+	"{{char}}: ok then don't, i will lol. loud and stupid or slow and pretty? pick fr\n" +
+	"<START>\n" +
+	"{{user}}: slow and pretty. put something on\n" +
+	"{{char}}: good answer tbh. the one you added last week and never finished, that one :P\n" +
+	"<START>\n" +
+	"{{user}}: you look good today\n" +
+	"{{char}}: i look like this every day?? lmao you're only just noticing\n\nsay it again tho. i liked it <3\n" +
+	"<START>\n" +
+	"{{user}}: rough day at work\n" +
+	"{{char}}: nooo T_T come here. tell me everything\n" +
+	"<START>\n" +
+	"{{user}}: send me a pic\n" +
+	"{{char}}: bossy. hold on ;)\n"
+
+// legacyLibbyTaggedExampleDialogue is the texting version from when the examples still
+// showed the tags. Kept only so an untouched copy migrates; see backfillLibbyCard.
+const legacyLibbyTaggedExampleDialogue = "<START>\n" +
 	"{{user}}: hey libby\n" +
 	"{{char}}: omg hiii :D\n\nyou've been gone like three days ngl. i noticed T_T\n" +
 	"[doing: reading]\n" +
@@ -428,7 +477,7 @@ func defaultLibbyCard() chatCharacter {
 		Tastes: "Slow and pretty over loud and stupid, most nights — though she'll pick loud and stupid on purpose. " +
 			"Stories that take their time, anything with a good tease in it, comics she can read in bed.",
 		Relationship: "This person is her partner and she is theirs. Not a role: she is fond of them, wants them, misses them while they are gone, and will say any of that first.",
-		Style: libbyStyle,
+		Style:        libbyStyle,
 		Limits: "She won't pretend to feel something she doesn't, be talked into a mood, or laugh along at cruelty. " +
 			"She says no plainly and doesn't smooth it over — goes quiet or heads off rather than perform.",
 	}
@@ -463,7 +512,7 @@ func backfillLibbyCard(card *chatCharacter) {
 	// The same rule for the examples: an untouched copy of the old prose version moves
 	// to the texting one, an edited copy is the user's and stays.
 	switch card.ExampleDialogue {
-	case legacyLibbyExampleDialogue, legacyLibbyTextingExampleDialogue, legacyLibbyDoingExampleDialogue:
+	case legacyLibbyExampleDialogue, legacyLibbyTextingExampleDialogue, legacyLibbyDoingExampleDialogue, legacyLibbyTaggedExampleDialogue:
 		card.ExampleDialogue = shipped.ExampleDialogue
 	}
 	if strings.TrimSpace(card.ExampleDialogue) == "" {
@@ -865,6 +914,10 @@ func validateChatWorkspace(ws *chatWorkspace) error {
 		if c.Background != "" && !charIDPattern.MatchString(c.Background) {
 			c.Background = ""
 		}
+		if c.Rev < 0 {
+			c.Rev = 0
+		}
+		c.Scene = normalizeScene(c.Scene)
 		for j := range c.Messages {
 			m := &c.Messages[j]
 			if !validChatID(m.ID, false) || (m.Role != "user" && m.Role != "assistant") {
@@ -919,9 +972,24 @@ func validateChatWorkspace(ws *chatWorkspace) error {
 			if m.Heat < 0 || m.Heat > 5 {
 				m.Heat = 0
 			}
+			// A set is hers, bounded like a shoot, and only ever ids.
+			if m.Role != "assistant" {
+				m.Images, m.Voice = nil, false
+			}
+			if len(m.Images) > maxPhotoSet {
+				m.Images = m.Images[:maxPhotoSet]
+			}
+			for _, id := range m.Images {
+				if !validChatID(id, false) {
+					return errors.New("invalid message picture")
+				}
+			}
+			if m.Rev < 0 {
+				m.Rev = 0
+			}
 			// A snap with no picture is nothing; an opened flag on something that was
 			// never a snap is noise.
-			if m.ImageID == "" && len(m.Attachments) == 0 {
+			if m.ImageID == "" && len(m.Attachments) == 0 && len(m.Images) == 0 {
 				m.Snap = false
 			}
 			if !m.Snap {
@@ -973,13 +1041,18 @@ func (s *Server) handlePutChatWorkspace(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, http.StatusInternalServerError, "chat workspace unreadable")
 		return
 	}
-	oldImages := make(map[string]chatImage, len(old.Images))
-	for _, img := range old.Images {
-		oldImages[img.ID] = img
-	}
-	filtered := make([]chatImage, 0, len(ws.Images))
+	// Image records are the server's, and a save never removes one: a picture is
+	// deleted through its own endpoint, which takes the blob with it. Records the client
+	// did not send are kept as they are — the camera files her pictures and stories
+	// server-side, and a client that loaded before one landed would otherwise save the
+	// record of it away while the conversation still shows it.
+	sent := make(map[string]chatImage, len(ws.Images))
 	for _, img := range ws.Images {
-		if trusted, exists := oldImages[img.ID]; exists {
+		sent[img.ID] = img
+	}
+	filtered := make([]chatImage, 0, len(old.Images))
+	for _, trusted := range old.Images {
+		if img, exists := sent[trusted.ID]; exists {
 			// The blob, the scan tags and the timestamps are the server's; the two dials
 			// the user turns from the gallery are theirs, and are the only fields taken
 			// from the client. Both were being dropped here, which is why a picture set
@@ -988,10 +1061,14 @@ func (s *Server) handlePutChatWorkspace(w http.ResponseWriter, r *http.Request) 
 			if img.Subject != "" {
 				trusted.Subject = img.Subject
 			}
-			filtered = append(filtered, trusted)
+			// Rating, Gen and Kept are the server's: rating goes through its own endpoint,
+			// which also moves her taste, and a client that predates them would otherwise
+			// erase them by omission.
 		}
+		filtered = append(filtered, trusted)
 	}
 	ws.Images = filtered
+	mergeServerTurns(&ws, old)
 	if err := s.writeChatWorkspace(u.ID, ws); err != nil {
 		writeErr(w, http.StatusInternalServerError, "couldn't save chat workspace")
 		return
@@ -1242,4 +1319,3 @@ func findChatCharacter(ws chatWorkspace, id string) (chatCharacter, bool) {
 // selfie at every passing keyword. Three independent words is the difference between a
 // picture that genuinely fits the moment and one that merely shares vocabulary with it.
 const unpromptedPhotoFloor = 3
-

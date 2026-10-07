@@ -740,6 +740,13 @@ type invokeLoraApply struct {
 // non-intermediate, so intermediates never pile up in InvokeAI's gallery. A non-nil
 // vae swaps in a standalone VAE for the decode; nil uses the checkpoint's own.
 func buildInvokeGraph(main invokeModelRecord, vae *invokeModelRecord, loras []invokeLoraApply, req GenerateRequest, scheduler string) map[string]any {
+	return buildInvokeGraphFrom(main, vae, loras, req, scheduler, "")
+}
+
+// buildInvokeGraphFrom is buildInvokeGraph starting from an uploaded picture rather than
+// from noise when initName is set: the picture is encoded to latents and the denoiser
+// begins part-way through its schedule, which is InvokeAI's own image-to-image graph.
+func buildInvokeGraphFrom(main invokeModelRecord, vae *invokeModelRecord, loras []invokeLoraApply, req GenerateRequest, scheduler, initName string) map[string]any {
 	sdxl := main.Base == "sdxl"
 	nodes := map[string]any{}
 	edges := []map[string]any{}
@@ -863,6 +870,17 @@ func buildInvokeGraph(main invokeModelRecord, vae *invokeModelRecord, loras []in
 		unetNode, vaeNode = "seamless", "seamless"
 	}
 	edge(unetNode, "unet", "denoise", "unet")
+	if initName != "" {
+		nodes["i2l"] = map[string]any{
+			"id": "i2l", "type": "i2l",
+			"image":           map[string]any{"image_name": initName},
+			"fp32":            true,
+			"is_intermediate": true,
+		}
+		edge(vaeNode, "vae", "i2l", "vae")
+		edge("i2l", "latents", "denoise", "latents")
+		nodes["denoise"].(map[string]any)["denoising_start"] = 1 - clampDenoise(req.Denoise)
+	}
 
 	// Always decode in fp32. fp16 VAEs (SDXL's stock one especially, and SD 1.5 on
 	// some cards) can overflow to NaN and InvokeAI then saves a valid but all-black
@@ -882,8 +900,11 @@ func buildInvokeGraph(main invokeModelRecord, vae *invokeModelRecord, loras []in
 	// Besides making generations reproducible, this is what lets gallery saves retain
 	// the prompt as library notes.
 	generationMode := "txt2img"
+	if initName != "" {
+		generationMode = "img2img"
+	}
 	if sdxl {
-		generationMode = "sdxl_txt2img"
+		generationMode = "sdxl_" + generationMode
 	}
 	metadata := map[string]any{
 		"id": "metadata", "type": "core_metadata",
@@ -994,6 +1015,12 @@ func (item *invokeQueueItem) imageName() string {
 }
 
 func (c *Client) invokeGenerate(ctx context.Context, base string, req GenerateRequest) (*GenerateResult, error) {
+	// ControlNet and IP-Adapter nodes name their models by install-specific keys and
+	// their preprocessors changed names between InvokeAI releases; said plainly rather
+	// than half-built.
+	if len(req.Controls) > 0 {
+		return nil, ErrControlUnsupported
+	}
 	records, err := c.invokeModelList(ctx, base)
 	if err != nil {
 		return nil, err
@@ -1069,7 +1096,13 @@ func (c *Client) invokeGenerate(ctx context.Context, base string, req GenerateRe
 		}
 	}
 
-	graph := buildInvokeGraph(main, vae, loras, req, invokeScheduler(req.Sampler))
+	initName := ""
+	if len(req.InitImage) > 0 {
+		if initName, err = c.invokeUploadImage(ctx, base, req.InitImage); err != nil {
+			return nil, err
+		}
+	}
+	graph := buildInvokeGraphFrom(main, vae, loras, req, invokeScheduler(req.Sampler), initName)
 	payload := map[string]any{
 		"prepend": false,
 		"batch": map[string]any{
@@ -1134,6 +1167,47 @@ func (c *Client) invokeGenerate(ctx context.Context, base string, req GenerateRe
 		}
 	}
 	return res, nil
+}
+
+// invokeUploadImage puts a picture into InvokeAI's image store, as an intermediate so
+// it stays out of the user's gallery, and returns the name a graph refers to it by.
+func (c *Client) invokeUploadImage(ctx context.Context, base string, data []byte) (string, error) {
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	h := make(textproto.MIMEHeader)
+	h.Set("Content-Disposition", `form-data; name="file"; filename="init.png"`)
+	h.Set("Content-Type", http.DetectContentType(data))
+	part, err := mw.CreatePart(h)
+	if err != nil {
+		return "", err
+	}
+	if _, err := part.Write(data); err != nil {
+		return "", err
+	}
+	if err := mw.Close(); err != nil {
+		return "", err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		base+"/api/v1/images/upload?image_category=general&is_intermediate=true", &body)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	resp, err := c.hc.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("image generator unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		return "", fmt.Errorf("InvokeAI returned %d while taking the starting picture", resp.StatusCode)
+	}
+	var out struct {
+		ImageName string `json:"image_name"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil || out.ImageName == "" {
+		return "", fmt.Errorf("InvokeAI did not say where it put the starting picture")
+	}
+	return out.ImageName, nil
 }
 
 // invokeFindItems lists the queue and picks out the items belonging to batchID.

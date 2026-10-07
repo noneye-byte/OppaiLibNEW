@@ -17,6 +17,8 @@ import { formatMoment } from "../chat-links.js";
 import { loadSlideshow, nextSlide, saveSlideshow, type SlideshowPrefs } from "../slideshow.js";
 import { iconStyles, motionStyles } from "../theme.js";
 import { profileUpdates } from "../ui-metrics.js";
+import { WATCH_LINE_MS, frameSize, loadWatchPref, saveWatchPref, watchDue } from "../watch-together.js";
+import { LIBBY_MESSAGE_EVENT } from "../libby-turn.js";
 import {
   KIND_META,
   KIND_ORDER,
@@ -86,6 +88,13 @@ export class OppaiViewer extends LitElement {
   @state() private editTags: string[] = [];
   @state() private newTag = "";
   @state() private screenshot = "";
+  /** Watching together: on, what she last said over the video, and the pacing. See
+      watch-together.ts. */
+  @state() private watchWith = loadWatchPref();
+  @state() private watchLine = "";
+  private watchLast = Date.now();
+  private watchInFlight = false;
+  private watchLineTimer = 0;
   @state() private userGallery: Media[] = [];
   @state() private galleryUploading = false;
 
@@ -172,7 +181,13 @@ export class OppaiViewer extends LitElement {
         object-fit: contain;
         background: #000;
       }
-      .video-stage { margin-inline: auto; max-height: 76vh; }
+      .video-stage { margin-inline: auto; max-height: 76vh; position: relative; }
+      /* What she said while watching, over the bottom of the picture like a caption. */
+      .watch-line { position: absolute; left: 50%; bottom: 64px; transform: translateX(-50%); max-width: min(80%, 560px);
+        padding: 8px 14px; border-radius: 16px; background: rgba(0,0,0,.72); color: #fff; font-size: 14px; line-height: 1.35;
+        pointer-events: none; animation: watch-rise .25s ease both; }
+      .watch-line strong { color: var(--md-sys-color-primary); margin-right: 4px; }
+      @keyframes watch-rise { from { opacity: 0; transform: translate(-50%, 8px); } to { opacity: 1; transform: translate(-50%, 0); } }
       /* Photos and GIFs are laid out around the image rather than inside a fixed
          frame: the picture keeps its own aspect ratio and the container shrinks
          to it, so nothing is letterboxed and no filler bars are drawn. */
@@ -905,6 +920,7 @@ export class OppaiViewer extends LitElement {
 
   disconnectedCallback() {
     super.disconnectedCallback();
+    window.clearTimeout(this.watchLineTimer);
     window.removeEventListener("keydown", this.onKey);
     this.clearMediaSession();
     this.stopSlideshow();
@@ -1210,6 +1226,9 @@ export class OppaiViewer extends LitElement {
   private onVideoTime = (e: Event) => {
     const video = e.target as HTMLVideoElement;
     const at = video.currentTime;
+    if (watchDue({ on: this.watchWith, playing: !video.paused, inFlight: this.watchInFlight, now: Date.now(), last: this.watchLast })) {
+      void this.showHerTheScreen(video);
+    }
     if (Math.abs(at - this.lastReported) < OppaiViewer.PROGRESS_INTERVAL) return;
     this.lastReported = at;
     this.saveProgress(at, video.duration);
@@ -1879,6 +1898,45 @@ export class OppaiViewer extends LitElement {
     `;
   }
 
+  /**
+   * Shows her what is on screen and lets her decide whether it is worth a word. The
+   * frame is drawn from the playing video, so nothing is decoded twice; what she says
+   * floats over the video and goes into her conversation, where the open chat picks it
+   * up (LIBBY_MESSAGE_EVENT).
+   */
+  private async showHerTheScreen(video: HTMLVideoElement) {
+    this.watchInFlight = true;
+    this.watchLast = Date.now();
+    const mediaId = this.media.id;
+    try {
+      const size = frameSize(video.videoWidth, video.videoHeight);
+      const canvas = document.createElement("canvas");
+      canvas.width = size.width; canvas.height = size.height;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      ctx.drawImage(video, 0, 0, size.width, size.height);
+      const frame = canvas.toDataURL("image/jpeg", 0.72);
+      const out = await api.libbyWatch({ mediaId, position: video.currentTime, frame });
+      if (!out.message || this.media.id !== mediaId) return;
+      this.watchLine = out.message.content;
+      window.clearTimeout(this.watchLineTimer);
+      this.watchLineTimer = window.setTimeout(() => (this.watchLine = ""), WATCH_LINE_MS);
+      if (out.conversationId) {
+        window.dispatchEvent(new CustomEvent(LIBBY_MESSAGE_EVENT, { detail: { conversationId: out.conversationId, message: out.message, rev: out.rev } }));
+      }
+    } catch { /* A missed moment, not an error worth interrupting the video for. */ }
+    finally { this.watchInFlight = false; }
+  }
+
+  private toggleWatchWith() {
+    this.watchWith = !this.watchWith;
+    saveWatchPref(this.watchWith);
+    this.watchLast = Date.now();
+    this.watchLine = this.watchWith ? "ooh, what are we watching?" : "";
+    window.clearTimeout(this.watchLineTimer);
+    if (this.watchWith) this.watchLineTimer = window.setTimeout(() => (this.watchLine = ""), 3500);
+  }
+
   private jumpTo(id: number) {
     if (id === this.media.id) return;
     this.dispatchEvent(new CustomEvent("jump", { detail: { id }, bubbles: true, composed: true }));
@@ -1904,6 +1962,7 @@ export class OppaiViewer extends LitElement {
             @pause=${this.flushProgress}
             @ended=${this.onVideoEnded}
           ></video>
+          ${this.watchLine ? html`<div class="watch-line" role="status"><strong>Libby</strong> ${this.watchLine}</div>` : nothing}
         </div>`;
       case "gif":
       case "image":
@@ -2291,6 +2350,12 @@ export class OppaiViewer extends LitElement {
         ? html`<button class="icon-round" title="Edit in the studio — regenerate it with its own settings"
             @click=${() => this.dispatchEvent(new CustomEvent("edit-in-studio", { detail: { id: this.media!.id }, bubbles: true, composed: true }))}>
             <span class="material-symbols-rounded" style="font-size:22px; color:var(--oppai-text-dim);">brush</span>
+          </button>`
+        : nothing}
+      ${this.media.kind === "video"
+        ? html`<button class="icon-round ${this.watchWith ? "on" : ""}" title=${this.watchWith ? "Stop watching with Libby" : "Watch with Libby — she sees what's on screen and says something when it gets to her"}
+            aria-pressed=${this.watchWith ? "true" : "false"} @click=${() => this.toggleWatchWith()}>
+            <span class="material-symbols-rounded" style="font-size:22px; color:${this.watchWith ? "var(--md-sys-color-primary)" : "var(--oppai-text-dim)"};">live_tv</span>
           </button>`
         : nothing}
       ${this.media.kind === "video"

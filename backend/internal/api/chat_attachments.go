@@ -89,67 +89,6 @@ func splitAttachMoment(request string) (query string, at float64) {
 	return strings.TrimSpace(request[:match[0]]), seconds
 }
 
-// attachTag captures the request to hand something over. Anchored nowhere in
-// particular, like the link tag and for the same reason: she attaches something while
-// talking about it, so the tag lands wherever the sentence put it.
-//
-// "attach" is this file's alone. It used to be an accepted synonym in sendTag, where
-// it meant a selfie, so a model that wrote [attach: the beach video] had its library
-// request read as a picture request and silently dropped. Both readings still work,
-// because an attach request that matches nothing in the library falls back to the
-// photo path — see the handler.
-//
-// A library kind used as the tag head — "[gif: …]", "[video: …]" — is accepted as an
-// attach too, but only with the delimiter: asked for a gif from the library, a model
-// that had been given no gif to name wrote "[gif: <tags>]", which nothing read and the
-// user then saw. Read as an attach it resolves against the library first, and falls
-// back to a picture of her like any other unresolved attach. Bare "[video]" is left
-// alone; that is a stage direction.
-var attachTag = regexp.MustCompile(`(?i)\[\s*(?:attach(?:es|ing|ment)?\s*[:=-]?|(?:gif|gifs|video|videos|clip|clips)\s*[:=])\s*([^\]\n]{1,120}?)\s*\]`)
-
-// attachDirective tells her she can hand something over, when to, and what it costs.
-//
-// Three things it has to do, and the middle one is the one it was missing. It has to be
-// explicit that this is a different act from naming something, or a model uses whichever
-// tag it saw last and every mention of an item becomes an attachment. It has to say what
-// *triggers* it: a directive that only describes a capability is one a 7B never reaches
-// for, and being asked to show, play or put something on is exactly the request this
-// exists to answer — which is when it was most conspicuously not happening. And it has to
-// say that a description will do, because the library snapshot is the first section the
-// budget sheds, so on a busy turn she does not know what anything is called; the resolver
-// matches loosely and falls back to the user's own words, and a model told to write only
-// exact titles answers "show me the beach one" with an apology instead of the video.
-const attachDirective = "Three different acts, and choosing the right one matters. [send: <tags>] is a selfie: a picture of you, for when they want to see you. " +
-	"[attach: <library title, or how they described it>] puts one of their own library items in front of them, openable and playable — a video, gif, picture, comic or game. " +
-	"That is what \"show me\", \"put on\", \"play\", \"send me the …\" and a recommendation you actually mean call for: agree in your own words and attach it in the same reply, never promise and then not; their description is a good enough query. " +
-	"[link: <real title>] only makes a name tappable mid-sentence, for merely mentioning something. " +
-	"They ask to see you → send. They ask for something to watch, play or read → attach. You are just talking about it → link. " +
-	"At most one send or attach per reply, nothing already shown in this conversation, and never something you have not actually decided to show them."
-
-// findAttachRequests reads every attach request out of a reply, in order, capped.
-//
-// Read before scrubDirectives, which deletes these tags along with the rest of the
-// protocol — the same order the remember and want tags are read in, and for the same
-// reason: the scrubber owns taking them out of the prose, this owns what they meant.
-func findAttachRequests(reply string) []string {
-	matches := attachTag.FindAllStringSubmatch(reply, -1)
-	if len(matches) == 0 {
-		return nil
-	}
-	var out []string
-	for _, match := range matches {
-		query := strings.TrimSpace(match[1])
-		if query == "" {
-			continue
-		}
-		out = append(out, query)
-		if len(out) >= maxAttachmentsPerReply {
-			break
-		}
-	}
-	return out
-}
-
 // resolveLibraryAttachments turns what she asked to attach into real items.
 //
 // Unlike the link resolver this does not touch the prose: an attachment stands beside

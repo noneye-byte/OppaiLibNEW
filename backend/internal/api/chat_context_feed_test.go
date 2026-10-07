@@ -130,7 +130,7 @@ func TestLibraryFeedShelvesTheKindTheyNamed(t *testing.T) {
 	if !strings.Contains(got, `"Bouncing" (gif; loop)`) || strings.Contains(got, "Old Favourite") {
 		t.Fatalf("the gif shelf was not fed, or carried the wrong kind: %q", got)
 	}
-	if !strings.Contains(got, "[attach: <title>]") {
+	if !strings.Contains(got, "send_from_library") {
 		t.Fatalf("the shelf does not say how to hand one over: %q", got)
 	}
 	if got := section("Can you send an older video from the library?", "a shelf of videos"); !strings.Contains(got, "Old Favourite") {

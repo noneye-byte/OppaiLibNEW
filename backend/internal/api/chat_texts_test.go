@@ -1,8 +1,6 @@
 package api
 
 import (
-	"encoding/json"
-	"net/http"
 	"strings"
 	"testing"
 )
@@ -94,32 +92,5 @@ func TestAnUntouchedStyleLineMovesToTheNewOne(t *testing.T) {
 	backfillLibbyCard(&edited)
 	if !strings.HasSuffix(edited.Style, "Mine.") || !strings.HasSuffix(edited.ExampleDialogue, "Mine.") {
 		t.Fatal("an edited style or example set was overwritten")
-	}
-}
-
-// End to end: a model that writes a five-text burst comes back with at most three, and
-// the prompt it was handed said how many to send.
-func TestChatCapsAFiveTextBurst(t *testing.T) {
-	s, token := newTestServer(t)
-	prompt, _ := chatStub(t, s, "hey you\n\nwhat are you up to\n\nnothing much, you?\n\nsame lol\n\nok good\n[mood: happy 2]")
-	rec := do(t, s.Handler(), token, http.MethodPost, "/api/chat",
-		`{"mode":"sweet","characterId":"libby","messages":[{"id":"a","role":"user","content":"hey libby, how has your evening been going so far"}]}`)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("chat: %d %s", rec.Code, rec.Body)
-	}
-	var out struct {
-		Message string `json:"message"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if texts := strings.Count(out.Message, "\n\n") + 1; texts > maxTextsPerReply {
-		t.Fatalf("%d texts came back: %q", texts, out.Message)
-	}
-	if strings.Contains(out.Message, "ok good") {
-		t.Fatalf("the invented tail survived: %q", out.Message)
-	}
-	if !strings.Contains(*prompt, "Send this reply as") {
-		t.Fatalf("the prompt never said how many texts to send")
 	}
 }

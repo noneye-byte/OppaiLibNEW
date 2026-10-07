@@ -65,8 +65,26 @@ func (c *Client) Describe(ctx context.Context, req Request) (string, error) {
 	if len(req.Frames) == 0 {
 		return "", errors.New("nothing to describe")
 	}
-	content := []map[string]any{{"type": "text", "text": Prompt(req.Kind, len(req.Frames), req.Tags)}}
-	for _, img := range req.Frames {
+	text, err := c.Ask(ctx, Prompt(req.Kind, len(req.Frames), req.Tags), req.Frames, 400, 0.3)
+	if err != nil {
+		return "", err
+	}
+	if text = Clean(text); text == "" {
+		return "", errors.New("vision model sent an empty description")
+	}
+	return text, nil
+}
+
+// Ask puts one question about some pictures to the model and returns its answer as
+// written, untrimmed of anything but whitespace. Describe is one question; Libby's
+// camera asks another — which of these candidates is her, in what she was asked to
+// wear — and parses the answer itself.
+func (c *Client) Ask(ctx context.Context, prompt string, frames []image.Image, maxTokens int, temperature float64) (string, error) {
+	if !c.Enabled() {
+		return "", errors.New("no vision model is configured")
+	}
+	content := []map[string]any{{"type": "text", "text": prompt}}
+	for _, img := range frames {
 		part, err := Part(img, maxEdge)
 		if err != nil {
 			return "", err
@@ -75,8 +93,8 @@ func (c *Client) Describe(ctx context.Context, req Request) (string, error) {
 	}
 	body := map[string]any{
 		"messages":    []map[string]any{{"role": "user", "content": content}},
-		"max_tokens":  400,
-		"temperature": 0.3,
+		"max_tokens":  maxTokens,
+		"temperature": temperature,
 		"stream":      false,
 	}
 	if c.Model != "" {
@@ -122,9 +140,9 @@ func (c *Client) Describe(ctx context.Context, req Request) (string, error) {
 	if len(out.Choices) == 0 {
 		return "", errors.New("vision model sent no answer")
 	}
-	text := Clean(contentText(out.Choices[0].Message.Content))
+	text := strings.TrimSpace(contentText(out.Choices[0].Message.Content))
 	if text == "" {
-		return "", errors.New("vision model sent an empty description")
+		return "", errors.New("vision model sent an empty answer")
 	}
 	return text, nil
 }

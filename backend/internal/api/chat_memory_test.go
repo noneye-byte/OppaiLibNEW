@@ -7,25 +7,6 @@ import (
 	"testing"
 )
 
-func TestFindRememberTags(t *testing.T) {
-	facts := findRememberTags("Noted. [remember: their name is Owen] Anything else? [remember: they hate horror]")
-	if len(facts) != 2 || facts[0] != "their name is Owen" || facts[1] != "they hate horror" {
-		t.Fatalf("got %#v, want the two facts in order", facts)
-	}
-	// Capped at two even when a model tries to file the whole conversation.
-	facts = findRememberTags("[remember: a] [remember: b] [remember: c]")
-	if len(facts) != 2 {
-		t.Fatalf("got %d facts, want it capped at %d", len(facts), maxRememberedPerReply)
-	}
-	if got := findRememberTags("Nothing worth keeping here."); got != nil {
-		t.Errorf("found a memory in prose that has none: %#v", got)
-	}
-	// An empty tag is not a fact.
-	if got := findRememberTags("[remember:  ]"); got != nil {
-		t.Errorf("accepted an empty remember tag: %#v", got)
-	}
-}
-
 // The remember tag is machinery the user must never read, so scrubbing takes it out the
 // same way it takes out mood and send tags.
 func TestScrubDirectivesRemovesRememberTag(t *testing.T) {

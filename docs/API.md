@@ -447,10 +447,17 @@ part a client has to send or read to keep up with her.
 
 | Method | Path | Notes |
 |--------|------|-------|
-| POST | `/api/chat` | `viewing` may carry `position`, `duration` (seconds) and `paused` for the open video, so she reacts to this moment of it. `task: "afterglow"` marks the morning-after turn — see below. `summary` is the conversation's compressed older part (see `/api/chat/compress`). `canGenerate: true` says this client makes pictures itself: a turn that asks to see her then answers `generate: {prompt, fallbackImageId?, fallbackAttachment?}` — run `prompt` through `/api/libby/act` (`kind: "generate"`) and post the picture as hers, or send the fallback if that fails. The same flag lets her move somewhere that does not exist yet: the reply's `makeScene: {name, prompt}` asks the client to run `/api/libby/act` with `kind: "background"`, `prompt` and `title: name`, then set the conversation's `background` to the returned id. A subject that names her clothes (a dress, a bikini, naked, the bath) is drawn in only those, never merged with the outfit she has on |
+| POST | `/api/libby/turn` | One of her turns, run on the server and streamed as Server-Sent Events (or, with `Accept: application/json`, every event at the end as `{events:[{event, data}]}`). Body: `{conversationId, conversation?, messages?, redo?, truncateAfter?, nudge?, task?, cue?, call?, outfit?, viewing?, link?, sharedMediaIds?, debug?}`. `messages` are your new texts (ids the server already has are updated in place, not repeated); `conversation: {characterId, title, mode}` creates a conversation the client has not saved yet; `redo` takes her last reply back first and `truncateAfter: <message id>` drops everything after one of yours; `task: "autonomous"` is her speaking first and `"afterglow"` the morning after; `cue` is a one-off instruction that is never stored. Events, in order as they happen: `turn {rev, messages}` (yours, as stored), `status {phase}` (`typing`, `photo`, `clip`, `room`), `camera {jobId, what?, progress: {phase, percent, preview?, of}}`, `message {message, rev, images?}` (one of hers — a text, a picture or set, a thought, a voice note, a card — resent when amended; `images` are the gallery records of its pictures), `react {to, emoji, rev}`, `call {action: ring\|hang_up}`, `room {background}`, `notice {text}` (the context window had to give), `state {emotion, intensity, activity, background, wearing, scene, messageId, rev}`, `done {rev, sampling, context, debug?, calls?}`, and `error {message, status}`. A comment line arrives every 15 s while she works. Her actions are tool calls — see "How a turn works" below |
+| — | `ephemeral` turns | the same endpoint with `{ephemeral: true, characterId, mode, emotion, intensity, history:[{role, content}], cue?, viewing?}`: the browse-together drawer. She answers with her whole self and nothing is filed in a conversation |
+| POST | `/api/libby/photos/{id}/rate` | `{rating: "love"\|"like"\|"dislike"\|""}` on a picture of her → `{image, sendWeights}`. Each of the picture's tags is leaned (×1.18 love, ×1.07 like, ×0.82 dislike, bounded between rarely and often; changing a rating replaces it rather than stacking) |
+| POST | `/api/libby/photos/{id}/keep` | files the picture in the library as a picture of her → `{id}` |
+| GET | `/api/libby/stories` | → `{stories:[{id, imageId, caption, at, seen}], unseen, enabled}` — the last day's |
+| POST | `/api/libby/stories` | has her post one now → the story. One picture and one model call |
+| POST | `/api/libby/stories/{id}/seen` | marks one seen |
+| POST | `/api/libby/watch` | `{conversationId?, mediaId, position, frame}` — `frame` a JPEG data URL of the playing video, drawn by the client. → `{quiet: true}` or `{message, rev, conversationId}`; the line is already in her conversation (the most recent of hers when none is named). At most one every 50 s per user |
 | POST | `/api/chat/compress` | `{characterId, summary?, messages}` → `{summary}`: the model summarises the messages, folding in the previous summary, as her notes. The client keeps it on the conversation (`summary`, `summarizedAt`) and drops the messages it stands for |
 | GET | `/api/chat/libby-default` | her card as it ships, so an edited field can be put back |
-| POST | `/api/libby/act` | an approved offer. Besides the action's own fields, send `outfit`, `activity`, `intensity` and `recentMediaIds` as they stand when Allow is pressed: a picture she makes of herself is drawn in that state, filed in her chat gallery as a picture of her tagged with the subject, and answered `{image, message}` — `image` is the chat image record, which the client adds to its gallery list and posts into the conversation as her message. It goes to the library as well (and `id` is the new item) only when the `libbyGenToLibrary` setting is on; a `background` action makes the place in `prompt` (her checkpoint, none of her LoRAs, no people, landscape) and files it as a background tagged `made by libby` → `{background}`; a `shelf` action rebuilds the collection "Libby's pick" → `{collectionId, name, count}`. The server actions `load` (the model name in `prompt`), `cleanup`, `describe` and `free` are **admin only** (403 otherwise) and answer `{message}`; `load` answers 202 and loads in the background |
+| POST | `/api/libby/act` | an approved offer — what the `offer` tool proposed, or a `generate` card from before her camera took pictures inside the turn. Besides the action's own fields, send `outfit`, `activity`, `intensity` and `recentMediaIds` as they stand when Allow is pressed: a picture she makes of herself is drawn in that state, filed in her chat gallery as a picture of her tagged with the subject, and answered `{image, message}` — `image` is the chat image record, which the client adds to its gallery list and posts into the conversation as her message. It goes to the library as well (and `id` is the new item) only when the `libbyGenToLibrary` setting is on; a `shelf` action rebuilds the collection "Libby's pick" → `{collectionId, name, count}`. The server actions `load` (the model name in `prompt`), `cleanup`, `describe` and `free` are **admin only** (403 otherwise) and answer `{message}`; `load` answers 202 and loads in the background |
 | GET | `/api/libby/references` | → `{clothed, nude}`: which of the two reference pictures of her are set. On a turn about how she looks, the fitting one is shown to her vision model beside the user's pictures (bare at heat 4+ or when the talk is; clothed stands in for a missing bare one). Never sent as a selfie |
 | GET/PUT/DELETE | `/api/libby/references/{slot}` | `slot` is `clothed` or `nude`. GET serves the picture; PUT takes `{imageData}` (a data URL or bare base64, up to 12 MB) and replaces it; DELETE empties the slot |
 | GET | `/api/libby/journal` | → `{entries:[{id, conversationId, text, mood, at}]}`, newest first — what she wrote after conversations went quiet |
@@ -461,8 +468,42 @@ part a client has to send or read to keep up with her.
 | POST | `/api/tts/speak` | `{text, voice?, speed?, heat?}`; `heat` 1–5 slows the reading from 3 up (and on piper makes it breathier). The `tts.engine` setting is `auto`, `kokoro`, `piper`, `openai` or `off`; auto is Kokoro (the default image, `/opt/oppailib/kokoro` + espeak-ng) where it is installed, then piper, then the speech server. `GET /api/tts/status` says `kokoroInstalled` |
 
 A remembered boundary (memory kind `boundary`) rules intimate states out server-side
-the way the heat floor does: "no toys" refuses `[doing: vibrator]` on the turn the
-model forgets it, and the state is left out of her vocabulary for the turn.
+the way the heat floor does: "no toys" refuses `set_state` with `activity: vibrator` on
+the turn the model forgets it, and the state is left out of the tool's vocabulary.
+
+### How a turn works
+
+She is sent the OpenAI `tools` field and acts through tool calls: `set_state` (mood,
+heat, activity, place, wearing, scene beat), `take_photo`, `edit_photo`, `make_clip`,
+`send_saved_photo`, `send_from_library`, `remember`, `recall`, `react`, `think`,
+`reply_to`, `call`, `voice_note`, `plan_scene` and `offer`. Each is offered only when it
+can happen (no camera without a generator, no edit without a picture of hers to start
+from), and a smaller context window is offered fewer (`toolLevelFor`). A backend that
+refuses `tools` is asked again in JSON mode — one object, `{messages, actions}`,
+constrained by `response_format` where the backend takes a schema — and remembered for
+the rest of the process; `chatToolMode` in settings pins either. Calls a model writes
+into its text in Hermes/Qwen (`<tool_call>`) or Mistral (`[TOOL_CALLS]`) markup are read
+as calls.
+
+The camera (`take_photo`, `edit_photo`) runs inside the turn: the shot is checked
+against a fixed list of minor-coded terms and refused outright when it matches; the
+prompt is her likeness, her clothes and the room plus the shot, with an adults-only
+negative always added; `libbyCameraCandidates` pictures are made and a model that can
+see (the vision model, or hers) scores them and clears each as showing only adults —
+nothing it does not clear is sent; below 4.5 of 10 it is retaken once with the judge's
+fix. The picture is filed in her chat gallery with its recipe (`gen: {prompt, negative,
+seed, shot, score}`), and she is told what it actually shows before she says anything
+about it. `edit_photo` is an img2img of her last picture on its seed. Pose copying and
+face lock use the ControlNet extension (`libbyPose*`, `libbyFace*` settings; A1111/Forge
+only), and clips run the operator's ComfyUI workflow (`libbyClipUrl`,
+`libbyClipWorkflow`, with `{{image}}`, `{{prompt}}`, `{{negative}}`, `{{seed}}`).
+
+Turns write into the conversation themselves, and the workspace save merges by
+revision: each conversation has a `rev` the server bumps on every write and stamps on
+the messages it writes, and a `PUT /api/chat/workspace` carrying an older `rev` keeps the
+server's messages it never saw (while one it saw and dropped stays dropped) and the
+state the turn settled. A save never removes an image record; pictures are deleted
+through `DELETE /api/chat/images/{id}`.
 
 ## Text-generation models
 

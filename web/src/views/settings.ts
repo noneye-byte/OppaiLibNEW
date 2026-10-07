@@ -1525,6 +1525,25 @@ export class OppaiSettings extends LitElement {
                 </div>
               </div>
 
+              <div class="field">
+                <div class="field-text">
+                  <div class="field-label">How she acts</div>
+                  <div class="field-help">
+                    Her pictures, moods, rooms and memories are tool calls. <strong>Auto</strong>
+                    sends them as native tools and falls back to a JSON answer for a backend that
+                    refuses tools, remembering which it was. Pin one if your backend fails in a way
+                    that does not look like a refusal.
+                  </div>
+                </div>
+                <div class="field-control">
+                  <select ?disabled=${!this.canEdit}
+                    @change=${(e: Event) => this.edit({ chatToolMode: (e.target as HTMLSelectElement).value })}>
+                    ${[["", "Auto"], ["native", "Native tool calls"], ["json", "JSON answers"]].map(
+                      ([id, label]) => html`<option value=${id} ?selected=${(s.chatToolMode ?? "") === id}>${label}</option>`)}
+                  </select>
+                </div>
+              </div>
+
               <div class="field stack">
                 <div class="field-text">
                   <div class="field-label">Model folder (for deleting models)</div>
@@ -1743,6 +1762,106 @@ export class OppaiSettings extends LitElement {
             aria-label="Also save her pictures to the library"
             ?disabled=${!this.canEdit}
             @click=${() => this.edit({ libbyGenToLibrary: !s.libbyGenToLibrary })}
+          ></button>
+        </div>
+      </div>
+
+      <div class="field">
+        <div class="field-text">
+          <div class="field-label">Candidates per picture</div>
+          <div class="field-help">
+            Her camera takes this many of each shot and a model that can see — the vision
+            model, or hers — picks the one that is most her, in what she was asked to wear,
+            with nothing broken, and clears everyone in it as an adult. One sends the first
+            as it comes; more is slower and better. Without a model that can see, only one
+            is ever taken.
+          </div>
+        </div>
+        <div class="field-control">
+          <select ?disabled=${!this.canEdit}
+            @change=${(e: Event) => this.edit({ libbyCameraCandidates: Number((e.target as HTMLSelectElement).value) })}>
+            ${[1, 2, 3, 4].map((n) => html`<option value=${n} ?selected=${(s.libbyCameraCandidates || 2) === n}>${n}</option>`)}
+          </select>
+        </div>
+      </div>
+
+      <div class="field stack">
+        <div class="field-text">
+          <div class="field-label">Copying your pose</div>
+          <div class="field-help">
+            Send her a photo and ask her to pose like it: Automatic1111 or Forge with the
+            ControlNet extension reads the pose with this preprocessor and model. Leave the
+            model blank to switch it off. InvokeAI cannot do this from here.
+          </div>
+        </div>
+        <div class="field-control" style="display:grid;gap:6px;grid-template-columns:1fr 1fr;">
+          <input placeholder="openpose_full" .value=${s.libbyPoseModule ?? ""} ?disabled=${!this.canEdit}
+            @change=${(e: Event) => this.edit({ libbyPoseModule: (e.target as HTMLInputElement).value })}/>
+          <input placeholder="control_v11p_sd15_openpose" .value=${s.libbyPoseModel ?? ""} ?disabled=${!this.canEdit}
+            @change=${(e: Event) => this.edit({ libbyPoseModel: (e.target as HTMLInputElement).value })}/>
+        </div>
+      </div>
+
+      <div class="field stack">
+        <div class="field-text">
+          <div class="field-label">Keeping her face</div>
+          <div class="field-help">
+            Every picture she takes is steered towards her reference picture (set in her
+            settings) with an IP-Adapter through ControlNet — a face model such as
+            ip-adapter-plus-face keeps her face without copying the reference's clothes.
+            Blank model is off.
+          </div>
+        </div>
+        <div class="field-control" style="display:grid;gap:6px;grid-template-columns:1fr 1fr;">
+          <input placeholder="ip-adapter-auto" .value=${s.libbyFaceModule ?? ""} ?disabled=${!this.canEdit}
+            @change=${(e: Event) => this.edit({ libbyFaceModule: (e.target as HTMLInputElement).value })}/>
+          <input placeholder="ip-adapter-plus-face_sd15" .value=${s.libbyFaceModel ?? ""} ?disabled=${!this.canEdit}
+            @change=${(e: Event) => this.edit({ libbyFaceModel: (e.target as HTMLInputElement).value })}/>
+        </div>
+      </div>
+
+      <div class="field stack">
+        <div class="field-text">
+          <div class="field-label">Clips</div>
+          <div class="field-help">
+            She can turn the last picture she sent into a few seconds of video through
+            ComfyUI. Export the image-to-video workflow you already use (Wan, LTX,
+            AnimateDiff) with <em>Save (API Format)</em> and paste it below, with
+            <code>{{image}}</code> in its Load Image node, <code>{{prompt}}</code> and
+            <code>{{negative}}</code> in its text nodes, and <code>{{seed}}</code> as the seed.
+            Both blank is off.
+          </div>
+        </div>
+        <div class="field-control" style="display:grid;gap:6px;">
+          <input placeholder="http://comfyui:8188" .value=${s.libbyClipUrl ?? ""} ?disabled=${!this.canEdit}
+            @change=${(e: Event) => this.edit({ libbyClipUrl: (e.target as HTMLInputElement).value })}/>
+          <textarea rows="4" style="width:100%;font-family:monospace;font-size:11px;" placeholder='{"3": {"class_type": "KSampler", …}}'
+            .value=${s.libbyClipWorkflow ?? ""} ?disabled=${!this.canEdit}
+            @change=${(e: Event) => this.edit({ libbyClipWorkflow: (e.target as HTMLTextAreaElement).value })}></textarea>
+        </div>
+      </div>
+
+      <div class="field">
+        <div class="field-text">
+          <div class="field-label">Her stories</div>
+          <div class="field-help">
+            While you are away she posts a picture and a line about her day, at most this
+            many a day, never at night or within hours of the last. They wait around her
+            avatar in the chat for a day.
+          </div>
+        </div>
+        <div class="field-control" style="display:flex;gap:8px;align-items:center;">
+          <select ?disabled=${!this.canEdit || !s.libbyStories}
+            @change=${(e: Event) => this.edit({ libbyStoriesPerDay: Number((e.target as HTMLSelectElement).value) })}>
+            ${[1, 2, 3, 4, 6].map((n) => html`<option value=${n} ?selected=${(s.libbyStoriesPerDay || 2) === n}>${n} a day</option>`)}
+          </select>
+          <button
+            class="switch ${s.libbyStories ? "on" : ""}"
+            role="switch"
+            aria-checked=${s.libbyStories ? "true" : "false"}
+            aria-label="Let her post stories"
+            ?disabled=${!this.canEdit}
+            @click=${() => this.edit({ libbyStories: !s.libbyStories })}
           ></button>
         </div>
       </div>

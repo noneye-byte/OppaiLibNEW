@@ -15,20 +15,6 @@ func libbyGallery() chatWorkspace {
 	}}
 }
 
-// Asking for one relaxes the rule — except for the picture already on screen.
-func TestAskingForAPictureIsRecognised(t *testing.T) {
-	for _, asked := range []string{"send me a pic", "show me you", "another one?", "got any photos"} {
-		if !userAskedForPhoto(asked) {
-			t.Fatalf("%q was not read as asking for a picture", asked)
-		}
-	}
-	for _, idle := range []string{"how was your day", "I finished that comic"} {
-		if userAskedForPhoto(idle) {
-			t.Fatalf("%q was read as asking for a picture", idle)
-		}
-	}
-}
-
 // The catalogue keeps spent pictures visible but marked. Hiding them would leave a
 // model that remembers sending one unable to see it, which is how invented pictures
 // get promised.

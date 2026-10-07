@@ -127,6 +127,17 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.border
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.ui.PlayerView
+import androidx.compose.material.icons.filled.BookmarkAdd
+import androidx.compose.material.icons.filled.BookmarkAdded
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.text.LinkAnnotation
@@ -154,8 +165,22 @@ import androidx.compose.animation.core.animateIntAsState
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import net.fourbakers.oppailib.data.ChatReaction
+import net.fourbakers.oppailib.data.ConversationShell
+import net.fourbakers.oppailib.data.LibbyStory
+import net.fourbakers.oppailib.data.RateRequest
+import net.fourbakers.oppailib.data.LibbyTurnRequest
+import net.fourbakers.oppailib.data.TurnState
+import net.fourbakers.oppailib.data.cameraPhaseLabel
+import net.fourbakers.oppailib.data.isStageDirection
+import net.fourbakers.oppailib.data.pictures
+import net.fourbakers.oppailib.data.unsentMessages
+import net.fourbakers.oppailib.data.upsertMessages
 import coil.compose.AsyncImage
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.buffer
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.json.intOrNull
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -171,11 +196,9 @@ import net.fourbakers.oppailib.data.ChatCharacter
 import net.fourbakers.oppailib.data.ChatConversation
 import net.fourbakers.oppailib.data.ChatImage
 import net.fourbakers.oppailib.data.ChatImageUpload
-import net.fourbakers.oppailib.data.ChatMessage
 import net.fourbakers.oppailib.data.ChatReplyRef
 import net.fourbakers.oppailib.data.LibbyBackground
 import net.fourbakers.oppailib.data.ChatModels
-import net.fourbakers.oppailib.data.ChatRequest
 import net.fourbakers.oppailib.data.ChatStatus
 import net.fourbakers.oppailib.data.ChatWorkspace
 import net.fourbakers.oppailib.data.LibbyAction
@@ -388,15 +411,24 @@ fun ChatScreen(
     var holdMessage by remember { mutableStateOf<StoredChatMessage?>(null) }
     /** The snap being looked at full-screen. Closing it marks it opened. */
     var snapOpen by remember { mutableStateOf<StoredChatMessage?>(null) }
+    /** Her stories — a picture and a line she posted while you were away — and the one
+        open, with what you are typing back to it. */
+    var stories by remember { mutableStateOf<List<LibbyStory>>(emptyList()) }
+    var storyOpen by remember { mutableStateOf<LibbyStory?>(null) }
+    var storyReply by remember { mutableStateOf("") }
+    LaunchedEffect(conversationId) {
+        stories = runCatching { repo.api.libbyStories().stories }.getOrDefault(stories)
+    }
     /** Her reading time: the wait between your text landing and her picking it up.
         Sending again restarts it, so a burst is read together. */
     var readJob by remember { mutableStateOf<Job?>(null) }
     /** Set when you sent something while she was still typing: another turn is owed. */
     var pendingReply by remember { mutableStateOf(false) }
-    /** What the pending turn carries: the last photo, and every attached item, from
-        the burst it answers. */
-    var turnPhoto by remember { mutableStateOf<ChatImage?>(null) }
+    /** What the pending turn carries: every item attached in the burst it answers. The
+        photo is read by the server from the message that carried it. */
     var turnItems by remember { mutableStateOf<List<Long>>(emptyList()) }
+    /** What her camera is doing while she takes a picture, "" when it is not. */
+    var making by remember { mutableStateOf("") }
     var retryNoteOpen by remember { mutableStateOf(false) }
     var retryNote by remember { mutableStateOf("") }
     val clipboard = LocalClipboardManager.current
@@ -626,7 +658,10 @@ fun ChatScreen(
      * offline voice writes from; [nudge] is a one-off steer for this attempt, sent on
      * the history and never stored.
      */
-    fun generate(pending: ChatConversation, char: ChatCharacter, seed: String, photo: ChatImage?, sharedIds: List<Long>, nudge: String) {
+    fun generate(
+        pending: ChatConversation, char: ChatCharacter, seed: String, sharedIds: List<Long>, nudge: String,
+        redo: Boolean = false, truncateAfter: String = "", task: String = "",
+    ) {
         val ws = workspace ?: return
         busy = true; message = ""
         scope.launch {
@@ -642,146 +677,103 @@ fun ChatScreen(
                 val done = pending.copy(emotion = line.emotion, intensity = progression.second, progress = progression.first, messages = pending.messages + StoredChatMessage(chatID(), "assistant", line.message, System.currentTimeMillis()), updatedAt = System.currentTimeMillis())
                 save(workspace!!.copy(conversations = workspace!!.conversations.map { if (it.id == done.id) done else it })); busy = false; return@launch
             }
-            // Thoughts are left out: they were never said, so replaying them as assistant
-            // lines hands the model words she did not speak and teaches it that the format
-            // belongs inline. Continuity is carried by her memory and the bond instead.
-            // Ids and quoted replies ride along so she can point at an earlier message.
-            val history = pending.messages.filter { it.thought.isBlank() }.map {
-                ChatMessage(it.role, it.content, it.id, it.replyTo, imageId = it.imageId, mediaIds = it.attachments.map { a -> a.id }, reactions = it.reactions)
-            } +
-                if (nudge.isBlank()) emptyList() else listOf(ChatMessage("user", "(Try that reply again. $nudge Do not mention this note.)"))
+            // The turn runs on the server: only what you said since her last message goes
+            // up, the server reads the rest of the conversation, writes her replies into it,
+            // and streams each one as it exists. Her texts are drawn one at a time through
+            // the typing indicator; the stream sets what she says, this sets the pace.
             val startedAt = System.currentTimeMillis()
+            var credited = false
+            var failure = ""
             typingPhase = TypingPhase.TYPING
-            // Pictures already seen in this conversation ride along so the server can
-            // hold them back: without this the best-scoring image in a gallery is the
-            // only one that ever gets sent.
-            val seenPictures = pending.messages.mapNotNull { it.imageId.ifBlank { null } }.distinct().takeLast(12)
-            // The same for library items she has handed over, which is the other half of
-            // "you have already shown me this" now that she can attach from the collection.
-            // A wider window than the pictures get, matching the server's
-            // maxRecentMediaMemory: the library is large enough that ruling forty things
-            // out costs nothing, and a shorter one came back round to the same items.
-            val seenItems = pending.messages.flatMap { entry -> entry.attachments.map { it.id } }.distinct().takeLast(40)
-            val generation = runCatching {
-                repo.api.chat(
-                    ChatRequest(
-                        mode = pending.mode,
-                        messages = history,
-                        summary = pending.summary,
-                        emotion = pending.emotion,
-                        intensity = pending.intensity,
-                        options = pending.options,
-                        characterId = char.id,
-                        // So her recall of the other conversations leaves this one out.
-                        conversationId = pending.id,
-                        photoTags = photo?.tags.orEmpty(),
-                        photoImageId = photo?.id.orEmpty(),
-                        recentImageIds = seenPictures,
-                        recentMediaIds = seenItems,
-                        // How long she has looked the same. One entry per reply, since
-                        // only a spoken message records a mood.
-                        recentMoods = pending.messages.mapNotNull { it.mood.ifBlank { null } }.takeLast(8),
-                        recentHeat = pending.messages.filter { it.role == "assistant" && it.heat > 0 }.map { it.heat }.takeLast(8),
-                        // That they have her full-screen and are watching her answer.
-                        call = callOpen,
-                        // What she is already doing, and where. States, not per-message values.
-                        activity = pending.activity,
-                        background = pending.background,
-                        wearing = pending.wearing,
-                        // What she has on: the worn outfit is a per-device pref, so the
-                        // server cannot know it unless this says so.
-                        outfit = if (char.id == "libby") repo.prefs.libbyOutfit else "",
-                        // Library items attached to this message, by id.
-                        sharedMediaIds = sharedIds,
-                    ),
-                )
+            fun live(): ChatConversation? = workspace?.conversations?.firstOrNull { it.id == pending.id }
+            fun commit(convo: ChatConversation, images: List<ChatImage> = emptyList()) {
+                val latest = workspace ?: return
+                save(latest.copy(
+                    images = if (images.isEmpty()) latest.images else (latest.images + images).distinctBy { it.id },
+                    conversations = latest.conversations.map { if (it.id == convo.id) convo else it },
+                ))
             }
-            generation
-                .onSuccess { reply ->
-                    // She rang, or hung up. A ring is a popup and only answering opens the
-                    // call; a hang-up ends one that is open, with a line saying so.
-                    if (reply.callRequest && !callOpen && !repo.prefs.hideLibby) incomingCall = true
-                    if (reply.callEnd && callOpen) { callOpen = false; message = "${char.name} ended the call." }
-                    // A mood the character named is a decision, not drift, so it lands
-                    // where it asked. Running it through the progression multiplier is what
-                    // used to halve every deliberate swing: a jump from 1 to 5 arrived as a
-                    // 3, and the scene never caught up.
-                    val (progress, level) = if (reply.declared) {
-                        val stated = reply.intensity.coerceIn(1, LibbyMeter.MAX)
-                        stated.toDouble() to stated
-                    } else {
-                        LibbyMeter.applyProgression(pending.progress, reply.intensity - pending.intensity)
-                    }
-                    LibbyMeter.set(level)
-                    // Everything lands on the conversation as it is *now*, not the snapshot
-                    // this turn started from: you may have sent more while she typed, and
-                    // those texts must not be lost under her reply.
-                    fun live(): ChatConversation = (workspace ?: ws).conversations.firstOrNull { it.id == pending.id } ?: pending
-                    fun commit(convo: ChatConversation) {
-                        val latest = workspace ?: ws
-                        save(latest.copy(conversations = latest.conversations.map { if (it.id == convo.id) convo else it }))
-                    }
-                    // Her emoji on your message goes on first — a reaction is the quick
-                    // thing, the words come after.
-                    reply.reaction?.takeIf { it.emoji.isNotBlank() }?.let { reaction ->
-                        val convo = live()
-                        val target = convo.messages.firstOrNull { it.id == reaction.to && reaction.to.isNotBlank() }
-                            ?: convo.messages.lastOrNull { it.role == "user" }
-                        if (target != null) commit(convo.copy(messages = convo.messages.map {
-                            if (it.id == target.id) it.copy(reactions = it.reactions.filter { r -> r.by != "assistant" } + ChatReaction(reaction.emoji, "assistant")) else it
-                        }))
-                    }
-                    // Anything she thought rather than said lands first and on its own,
-                    // because that is the order it happened in: she looked, reacted, and
-                    // then decided what to say. No typing for a thought.
-                    val thoughtLines = reply.thoughts.filter { it.text.isNotBlank() }.map {
-                        StoredChatMessage(chatID(), "assistant", it.text, System.currentTimeMillis(), thought = it.kind)
-                    }
-                    if (thoughtLines.isNotEmpty()) commit(live().let { it.copy(messages = it.messages + thoughtLines, updatedAt = System.currentTimeMillis()) })
-                    val picture = reply.imageId.isNotBlank() || reply.attachments.isNotEmpty()
-                    // A picture with no words still needs a line — the store refuses an
-                    // empty message — so it gets the stage direction your own share does.
-                    val said = reply.message.trim().ifBlank { if (picture) (if (reply.snap) "*sends a snap*" else "*sends a picture*") else "" }
-                    if (said.isNotBlank()) {
-                        // A long reply lands as the few short texts a person would send back
-                        // to back, each taking its own turn through the typing indicator.
-                        // The picture, chips and cards ride the last bubble. Whatever the
-                        // model already spent counts as writing time on the first one.
-                        val bubbles = splitIntoBubbles(said)
-                        bubbles.forEachIndexed { i, text ->
-                            typeLikeAPerson(text, if (i == 0) System.currentTimeMillis() - startedAt else 0L) { typingPhase = it }
-                            val last = i == bubbles.lastIndex
-                            val line = StoredChatMessage(
-                                chatID(), "assistant", text, System.currentTimeMillis(),
-                                imageId = if (last) reply.imageId else "",
-                                snap = last && reply.snap && picture,
-                                links = if (last) reply.links else emptyList(),
-                                attachments = if (last) reply.attachments else emptyList(),
-                                actions = if (last) reply.actions else emptyList(),
-                                // What she looked like saying it, for the run the next turn reports.
-                                mood = if (last) reply.emotion else "", heat = if (last) level else 0,
-                                // The quote rides the first bubble: it is what the reply starts by answering.
-                                replyTo = if (i == 0) reply.replyTo else null,
-                            )
-                            val convo = live()
-                            commit(convo.copy(
-                                emotion = reply.emotion, intensity = level, progress = progress,
-                                // Blank is a real answer here — it means she is doing nothing in
-                                // particular, or is nowhere in particular — so these are assigned.
-                                activity = reply.activity, background = reply.background, wearing = reply.wearing,
-                                messages = convo.messages + line, updatedAt = System.currentTimeMillis(),
-                            ))
-                            // Read aloud as it lands; the queue keeps bubbles in order.
-                            if (speakOn) repo.speech.speak(text, level)
+            val request = LibbyTurnRequest(
+                conversationId = pending.id,
+                conversation = ConversationShell(pending.characterId, pending.title, pending.mode),
+                messages = if (task.isNotBlank()) emptyList() else unsentMessages(pending.messages),
+                redo = redo, truncateAfter = truncateAfter, nudge = nudge, task = task,
+                call = callOpen,
+                // What she has on: the worn outfit is a per-device pref.
+                outfit = if (char.id == "libby") repo.prefs.libbyOutfit else "",
+                sharedMediaIds = sharedIds,
+            )
+            runCatching {
+                // Buffered so a long typing pause never holds the stream up behind it.
+                repo.libbyTurn(request).buffer(Channel.UNLIMITED).collect { ev ->
+                    when (ev.event) {
+                        "turn" -> live()?.let { c ->
+                            val mine = ev.data["messages"]?.let { repo.fromJson(ListSerializer(StoredChatMessage.serializer()), it) }.orEmpty()
+                            commit(c.copy(messages = upsertMessages(c.messages, mine), rev = maxOf(c.rev, ev.long("rev"))))
                         }
-                    } else {
-                        val convo = live()
-                        commit(convo.copy(emotion = reply.emotion, intensity = level, progress = progress, activity = reply.activity, background = reply.background, wearing = reply.wearing, updatedAt = System.currentTimeMillis()))
+                        "status" -> typingPhase = if (ev.string("phase") == "typing") TypingPhase.TYPING else TypingPhase.IDLE
+                        "camera" -> {
+                            val progress = ev.data["progress"]?.let { runCatching { it.jsonObject }.getOrNull() }
+                            val phase = progress?.get("phase")?.jsonPrimitive?.content.orEmpty()
+                            val shots = progress?.get("of")?.jsonPrimitive?.intOrNull ?: 1
+                            val percent = progress?.get("percent")?.jsonPrimitive?.doubleOrNull ?: 0.0
+                            val what = when (ev.string("what")) {
+                                "clip" -> "Making a clip…"
+                                "room" -> "Going somewhere new…"
+                                else -> cameraPhaseLabel(phase, shots)
+                            }
+                            making = if (percent > 0 && percent < 1) "$what ${(percent * 100).toInt()}%" else what
+                        }
+                        "message" -> {
+                            val m = ev.data["message"]?.let { repo.fromJson(StoredChatMessage.serializer(), it) } ?: return@collect
+                            val images = ev.data["images"]?.let { repo.fromJson(ListSerializer(ChatImage.serializer()), it) }.orEmpty()
+                            val fresh = live()?.messages?.none { it.id == m.id } ?: return@collect
+                            val pictures = m.pictures()
+                            if (fresh && m.role == "assistant" && m.thought.isBlank() && pictures.isEmpty() && !m.voice && !isStageDirection(m.content)) {
+                                typeLikeAPerson(m.content, if (credited) 0L else System.currentTimeMillis() - startedAt) { typingPhase = it }
+                                credited = true
+                                typingPhase = TypingPhase.TYPING
+                            }
+                            val c = live() ?: return@collect
+                            commit(c.copy(messages = upsertMessages(c.messages, listOf(m)), rev = maxOf(c.rev, ev.long("rev")), updatedAt = System.currentTimeMillis()), images)
+                            if (pictures.isNotEmpty()) making = ""
+                            if (fresh && m.role == "assistant" && m.thought.isBlank() && (m.voice || (speakOn && !isStageDirection(m.content)))) {
+                                repo.speech.speak(m.content, c.intensity)
+                            }
+                        }
+                        "react" -> live()?.let { c ->
+                            val to = ev.string("to"); val emoji = ev.string("emoji")
+                            commit(c.copy(rev = maxOf(c.rev, ev.long("rev")), messages = c.messages.map {
+                                if (it.id == to) it.copy(reactions = it.reactions.filter { r -> r.by != "assistant" } + ChatReaction(emoji, "assistant")) else it
+                            }))
+                        }
+                        "state" -> live()?.let { c ->
+                            val st = repo.fromJson(TurnState.serializer(), ev.data)
+                            val level = if (st.intensity > 0) st.intensity.coerceIn(1, LibbyMeter.MAX) else c.intensity
+                            LibbyMeter.set(level)
+                            commit(c.copy(
+                                emotion = st.emotion.ifBlank { c.emotion }, intensity = level, progress = level.toDouble(),
+                                activity = st.activity, background = st.background, wearing = st.wearing, scene = st.scene,
+                                rev = maxOf(c.rev, st.rev), updatedAt = System.currentTimeMillis(),
+                                messages = c.messages.map { if (it.id == st.messageId) it.copy(mood = st.emotion, heat = level) else it },
+                            ))
+                        }
+                        "call" -> when (ev.string("action")) {
+                            "ring" -> if (!callOpen && !repo.prefs.hideLibby) incomingCall = true
+                            "hang_up" -> if (callOpen) { callOpen = false; message = "${char.name} ended the call." }
+                        }
+                        "room" -> making = ""
+                        "notice" -> message = ev.string("text")
+                        "done" -> live()?.let { c -> if (ev.long("rev") > c.rev) commit(c.copy(rev = ev.long("rev"))) }
+                        "error" -> failure = ev.string("message").ifBlank { "Her reply failed." }
                     }
-                }.onFailure { error ->
-                    status = runCatching { repo.api.chatStatus() }.getOrNull() ?: status
-                    message = status?.takeIf { !it.enabled }?.message?.ifBlank { null } ?: error.message ?: "Chat failed"
                 }
+            }.onFailure { failure = it.message ?: "Chat failed" }
+            making = ""
+            if (failure.isNotBlank()) {
+                status = runCatching { repo.api.chatStatus() }.getOrNull() ?: status
+                message = status?.takeIf { !it.enabled }?.message?.ifBlank { null } ?: failure
+            }
             typingPhase = TypingPhase.IDLE
             busy = false
         }
@@ -813,9 +805,9 @@ fun ChatScreen(
             workspace = ws.copy(conversations = ws.conversations.map { if (it.id == convoId) read else it })
             // Read, then a beat before the dots: the gap between reading and starting to type.
             delay(250 + (Math.random() * 500).toLong())
-            val photo = turnPhoto; val items = turnItems
-            turnPhoto = null; turnItems = emptyList()
-            generate(read, char, seed, photo, items, "")
+            val items = turnItems
+            turnItems = emptyList()
+            generate(read, char, seed, items, "")
         }
     }
 
@@ -860,9 +852,7 @@ fun ChatScreen(
         val pending = convo.copy(title = if (convo.title == "New conversation") text.take(42) else convo.title, messages = convo.messages + userLine, updatedAt = now)
         workspace = ws.copy(conversations = ws.conversations.map { if (it.id == convo.id) pending else it })
         draft = ""; pendingPhoto = null; pendingItems = emptyList(); replyTarget = null
-        // Everything the burst carries rides the one turn that answers it: the last
-        // photo wins, the attached items accumulate.
-        if (photo != null) turnPhoto = photo
+        // The items the burst attaches accumulate and ride the one turn that answers it.
         turnItems = turnItems + items.map { it.id }
         readThenReply(convo.id, text.length)
     }
@@ -904,7 +894,9 @@ fun ChatScreen(
         // The items they attached to the message being answered go again, or a retry
         // would answer a message she can no longer see the attachments of.
         val answered = msgs.getOrNull(cut - 1)?.takeIf { it.role == "user" }
-        generate(pending, char, answered?.content ?: "", null, answered?.attachments?.map { it.id }.orEmpty(), nudge)
+        // The server takes her reply back too, in the same request: the cut above reaches
+        // it only with the next save, which would land after the turn read the old tail.
+        generate(pending, char, answered?.content ?: "", answered?.attachments?.map { it.id }.orEmpty(), nudge, redo = true)
     }
 
     /** Retries from one of your messages: everything after it is dropped and she
@@ -916,7 +908,7 @@ fun ChatScreen(
         if (at < 0) return
         val pending = convo.copy(messages = convo.messages.take(at + 1), updatedAt = System.currentTimeMillis())
         workspace = ws.copy(conversations = ws.conversations.map { if (it.id == convo.id) pending else it })
-        generate(pending, char, entry.content, null, entry.attachments.map { it.id }, "")
+        generate(pending, char, entry.content, entry.attachments.map { it.id }, "", truncateAfter = entry.id)
     }
 
     fun deleteMessage(entry: StoredChatMessage) {
@@ -1146,6 +1138,28 @@ fun ChatScreen(
                     modifier = Modifier.fillMaxWidth().background(ChatColors.side).clickable { settingsTab = "generation"; settingsOpen = true }.padding(horizontal = 16.dp, vertical = 9.dp),
                 )
             }
+            if (char.id == "libby" && stories.isNotEmpty()) {
+                Row(
+                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("Her stories", color = ChatColors.muted, fontSize = 12.sp)
+                    stories.forEach { story ->
+                        AsyncImage(
+                            repo.chatImageUrl(story.imageId), story.caption, imageLoader = repo.imageLoader, contentScale = ContentScale.Crop,
+                            modifier = Modifier.size(48.dp).clip(CircleShape)
+                                .border(2.dp, if (story.seen) ChatColors.muted.copy(alpha = .4f) else ChatColors.accent, CircleShape)
+                                .clickable {
+                                    storyOpen = story
+                                    if (!story.seen) {
+                                        stories = stories.map { if (it.id == story.id) it.copy(seen = true) else it }
+                                        scope.launch { runCatching { repo.api.seenLibbyStory(story.id) } }
+                                    }
+                                },
+                        )
+                    }
+                }
+            }
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 LazyColumn(state = list, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(top = 4.dp, bottom = 14.dp)) {
                     // The intro card is a placeholder for an empty log, not a permanent
@@ -1165,6 +1179,27 @@ fun ChatScreen(
                                 repo, ws, char, item, previous, convo.messages.getOrNull(index + 1), onOpenMedia,
                                 onHold = { holdMessage = it }, onReply = { replyTarget = it },
                                 onReact = { m, emoji -> react(m, emoji) }, onOpenSnap = { snapOpen = it },
+                                onRate = { image, rating ->
+                                    scope.launch {
+                                        runCatching { repo.api.rateLibbyPhoto(image.id, RateRequest(rating)) }
+                                            .onSuccess { out ->
+                                                val latest = workspace ?: return@onSuccess
+                                                workspace = latest.copy(images = latest.images.map { if (it.id == out.image.id) it.copy(rating = out.image.rating) else it })
+                                            }
+                                            .onFailure { message = it.message ?: "Couldn't rate that" }
+                                    }
+                                },
+                                onKeep = { image ->
+                                    scope.launch {
+                                        runCatching { repo.api.keepLibbyPhoto(image.id) }
+                                            .onSuccess { out ->
+                                                val latest = workspace ?: return@onSuccess
+                                                workspace = latest.copy(images = latest.images.map { if (it.id == image.id) it.copy(kept = out.id) else it })
+                                                message = "Kept — it's in your library now."
+                                            }
+                                            .onFailure { message = it.message ?: "Couldn't keep that" }
+                                    }
+                                },
                                 receipt = receiptFor(item, convo),
                                 // Her state at the moment Allow is pressed, read then rather
                                 // than when the card was drawn. See LibbyActRequest.
@@ -1198,6 +1233,7 @@ fun ChatScreen(
                             )
                         }
                     }
+                    if (making.isNotBlank()) item { ChatMakingRow(repo, char, making) }
                     if (busy && typingPhase == TypingPhase.TYPING) item { ChatTypingBubble(repo, char) }
                 }
                 // Reading back through a long night and then wanting to be at the bottom
@@ -1335,6 +1371,38 @@ fun ChatScreen(
                     "Tap anywhere to close — it won't open again", color = Color.White.copy(alpha = .7f), fontSize = 12.sp,
                     modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 28.dp),
                 )
+            }
+        }
+    }
+
+    // A story, full-screen, with a box to answer it. The answer is a message of yours
+    // quoting the story, the way a reply to anyone's story is.
+    storyOpen?.let { story ->
+        Dialog(onDismissRequest = { storyOpen = null }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+            Column(Modifier.fillMaxSize().background(Color.Black.copy(alpha = .95f))) {
+                Box(Modifier.weight(1f).fillMaxWidth().clickable { storyOpen = null }, contentAlignment = Alignment.Center) {
+                    AsyncImage(repo.chatImageUrl(story.imageId), story.caption, imageLoader = repo.imageLoader, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
+                    if (story.caption.isNotBlank()) Text(
+                        story.caption, color = Color.White, fontSize = 16.sp,
+                        modifier = Modifier.align(Alignment.BottomCenter).padding(horizontal = 20.dp, vertical = 18.dp),
+                    )
+                }
+                Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    TextField(
+                        storyReply, { storyReply = it }, Modifier.weight(1f),
+                        placeholder = { Text("Reply to ${char?.name ?: "her"}…") }, singleLine = true,
+                    )
+                    IconButton(onClick = {
+                        val text = storyReply.trim()
+                        if (text.isNotBlank()) {
+                            replyTarget = StoredChatMessage(story.id, "assistant", "Your story: ${story.caption}", story.at)
+                            draft = text
+                            storyReply = ""
+                            storyOpen = null
+                            sendMessage()
+                        }
+                    }) { Icon(Icons.AutoMirrored.Filled.Send, "Send reply", tint = Color.White) }
+                }
             }
         }
     }
@@ -2330,6 +2398,8 @@ private fun ChatMessageRow(
     receipt: String = "",
     actContext: () -> LibbyActRequest = { LibbyActRequest(kind = "") },
     onPicture: (ChatImage, String?) -> Unit = { _, _ -> },
+    onRate: (ChatImage, String) -> Unit = { _, _ -> },
+    onKeep: (ChatImage) -> Unit = {},
 ) {
     if (entry.thought.isNotBlank()) { ChatThoughtRow(char, entry); return }
     val friend = entry.role == "assistant"
@@ -2414,7 +2484,11 @@ private fun ChatMessageRow(
                     }
                 }
             }
-            Text(richChatText(entry.content, entry.links, onOpenMedia, if (friend) ChatColors.accent else ink), color = ink, fontSize = 15.sp)
+            if (entry.voice) {
+                ChatVoiceNote(entry, ink) { repo.speech.speak(entry.content, 3) }
+            } else if (!(isStageDirection(entry.content) && (entry.pictures().isNotEmpty() || entry.attachments.isNotEmpty() || entry.actions.isNotEmpty()))) {
+                Text(richChatText(entry.content, entry.links, onOpenMedia, if (friend) ChatColors.accent else ink), color = ink, fontSize = 15.sp)
+            }
             if (entry.snap) {
                 // A snap is a tile, never the picture: tap to open while unopened, and
                 // "Opened" after. That is the whole difference from a photo.
@@ -2435,15 +2509,7 @@ private fun ChatMessageRow(
                     }
                 }
             } else {
-            if (entry.imageId.isNotBlank()) {
-                AsyncImage(
-                    repo.chatImageUrl(entry.imageId),
-                    "Image sent by ${if (friend) char.name else ws.profile.displayName.ifBlank { "you" }}",
-                    imageLoader = repo.imageLoader,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.padding(top = 7.dp).width(260.dp).height(260.dp).clip(RoundedCornerShape(12.dp)),
-                )
-            }
+            ChatPictures(repo, ws, entry, friend, if (friend) char.name else ws.profile.displayName.ifBlank { "you" }, onRate, onKeep)
             ChatAttachments(repo, char, entry.attachments, onOpenMedia)
             }
             ChatLinkChips(repo, entry.links, onOpenMedia)
@@ -2835,5 +2901,134 @@ private fun importedChatCharacter(bytes: ByteArray): ChatCharacter {
         id = chatID(), name = value("name", "Imported friend"), description = value("description"), personality = value("personality"),
         scenario = value("scenario"), firstMessage = value("first_mes", value("firstMessage")), exampleDialogue = value("mes_example"),
         systemPrompt = value("system_prompt"), creatorNotes = value("creator_notes"), defaultMode = "roleplay",
+    )
+}
+
+/** Her camera at work: the picture she is taking, before it arrives. */
+@Composable
+private fun ChatMakingRow(repo: Repository, char: ChatCharacter, label: String) {
+    Row(
+        Modifier.fillMaxWidth().padding(start = 10.dp, end = 10.dp, top = 8.dp),
+        verticalAlignment = Alignment.Bottom,
+    ) {
+        Box(Modifier.width(44.dp), contentAlignment = Alignment.BottomCenter) {
+            ChatAvatar(repo, char, Modifier.size(30.dp).clip(CircleShape))
+        }
+        Row(
+            Modifier.clip(RoundedCornerShape(18.dp, 18.dp, 18.dp, 4.dp)).background(ChatColors.side)
+                .padding(horizontal = 14.dp, vertical = 11.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Filled.PhotoCamera, null, tint = ChatColors.accent, modifier = Modifier.size(20.dp))
+            Text(label, color = ChatColors.text, fontSize = 13.sp)
+        }
+    }
+}
+
+/**
+ * The pictures a message carries: one, a set from one shoot (two to a row, cropped
+ * square so a set reads as a set), or a clip. Under each of hers, what you thought of
+ * it — which leans what she sends next.
+ */
+@Composable
+private fun ChatPictures(
+    repo: Repository, ws: ChatWorkspace, entry: StoredChatMessage, friend: Boolean, name: String,
+    onRate: (ChatImage, String) -> Unit, onKeep: (ChatImage) -> Unit,
+) {
+    val ids = entry.pictures()
+    if (ids.isEmpty()) return
+    val set = ids.size > 1
+    Column(Modifier.padding(top = 7.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        ids.chunked(if (set) 2 else 1).forEach { row ->
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                row.forEach { id ->
+                    val record = ws.images.firstOrNull { it.id == id }
+                    val side = if (set) 128.dp else 260.dp
+                    Column {
+                        if (record?.mime?.startsWith("video/") == true) {
+                            ChatClip(repo, id, Modifier.width(side).height(side).clip(RoundedCornerShape(12.dp)))
+                        } else {
+                            AsyncImage(
+                                repo.chatImageUrl(id), "Picture sent by $name",
+                                imageLoader = repo.imageLoader, contentScale = ContentScale.Crop,
+                                modifier = Modifier.width(side).height(side).clip(RoundedCornerShape(12.dp)),
+                            )
+                        }
+                        if (friend && record != null) ChatRating(record, onRate, onKeep)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChatRating(record: ChatImage, onRate: (ChatImage, String) -> Unit, onKeep: (ChatImage) -> Unit) {
+    Row(Modifier.padding(top = 3.dp), horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
+        listOf("love" to "❤️", "like" to "👍", "dislike" to "👎").forEach { (value, emoji) ->
+            val on = record.rating == value
+            Text(
+                emoji, fontSize = 15.sp,
+                modifier = Modifier.clip(CircleShape).clickable { onRate(record, if (on) "" else value) }
+                    .alpha(if (on) 1f else .5f).padding(horizontal = 6.dp, vertical = 3.dp),
+            )
+        }
+        if (!record.mime.startsWith("video/")) {
+            Icon(
+                if (record.kept > 0) Icons.Filled.BookmarkAdded else Icons.Filled.BookmarkAdd,
+                if (record.kept > 0) "In your library" else "Keep it in your library",
+                tint = ChatColors.muted,
+                modifier = Modifier.size(28.dp).clip(CircleShape).clickable(enabled = record.kept == 0L) { onKeep(record) }.padding(4.dp),
+            )
+        }
+    }
+}
+
+/** A voice note: a play pill that says it in her voice, and the words beneath. The
+    bars are decoration, sized from the words so two notes do not look the same. */
+@Composable
+private fun ChatVoiceNote(entry: StoredChatMessage, ink: Color, onPlay: () -> Unit) {
+    Column {
+        Row(
+            Modifier.clip(RoundedCornerShape(50)).background(ChatColors.accent.copy(alpha = .16f)).clickable(onClick = onPlay)
+                .padding(start = 8.dp, end = 14.dp, top = 6.dp, bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Icon(Icons.Filled.PlayArrow, "Play her voice note", tint = ChatColors.accent, modifier = Modifier.size(22.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
+                repeat(18) { i ->
+                    val code = entry.content.getOrNull(i % maxOf(1, entry.content.length))?.code ?: 7
+                    val h = 4 + (code * (i + 3)) % 12
+                    Box(Modifier.width(3.dp).height(h.dp).clip(RoundedCornerShape(2.dp)).background(ink.copy(alpha = .55f)))
+                }
+            }
+        }
+        Text(entry.content, color = ink.copy(alpha = .7f), fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
+    }
+}
+
+/** A clip she made: looping, muted, tap to pause. Played through the session's token,
+    the way the viewer plays the library. */
+@androidx.annotation.OptIn(UnstableApi::class)
+@Composable
+private fun ChatClip(repo: Repository, id: String, modifier: Modifier) {
+    val context = LocalContext.current
+    val player = remember(id) {
+        val http = DefaultHttpDataSource.Factory().apply {
+            repo.prefs.token?.let { setDefaultRequestProperties(mapOf("Authorization" to "Bearer $it")) }
+        }
+        ExoPlayer.Builder(context).setMediaSourceFactory(DefaultMediaSourceFactory(http)).build().apply {
+            setMediaItem(MediaItem.fromUri(repo.chatImageUrl(id)))
+            repeatMode = Player.REPEAT_MODE_ONE
+            volume = 0f
+            prepare()
+            playWhenReady = true
+        }
+    }
+    DisposableEffect(player) { onDispose { player.run { stop(); release() } } }
+    AndroidView(
+        factory = { PlayerView(it).apply { this.player = player; useController = false } },
+        modifier = modifier.clickable { player.playWhenReady = !player.playWhenReady },
     )
 }

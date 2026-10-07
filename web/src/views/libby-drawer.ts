@@ -1,7 +1,7 @@
 import { LitElement, css, html, nothing } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import {
-  api, type ChatCharacter, type ChatMessage, type ChatProfile, type ChatStatus, type ChatViewingItem,
+  api, type ChatCharacter, type ChatMessage, type StoredChatMessage, type ChatProfile, type ChatStatus, type ChatViewingItem,
   type LibbyAction, type LibbyAttachment, type LibbyLink, type Media, type SourceItem,
 } from "../api.js";
 import { iconStyles, motionStyles } from "../theme.js";
@@ -17,6 +17,7 @@ import {
 } from "../chat-links.js";
 import { libbyMotion } from "../libby-motion.js";
 import { KIND_META, type Kind } from "../media-meta.js";
+import { isStageDirection, picturesOf } from "../libby-turn.js";
 
 /**
  * Browsing together, from wherever you already are.
@@ -51,6 +52,8 @@ interface Remark {
   links?: LibbyLink[];
   attachments?: LibbyAttachment[];
   actions?: LibbyAction[];
+  /** Pictures she took while you browsed, by chat image id. */
+  images?: string[];
   /** Libby's pose when she sent this line, so each message owns its expressive
       sprite instead of borrowing a static character pfp. */
   emotion?: LibbyEmotion;
@@ -205,6 +208,7 @@ export class OppaiLibbyDrawer extends LitElement {
     .remark.from-user .remark-author { color: inherit; }
     .remark-time { opacity: .45; font-size: 10px; white-space: nowrap; }
     .remark .said { display: block; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .remark-picture { display: block; max-width: 100%; max-height: 280px; border-radius: 10px; margin-top: 6px; object-fit: contain; }
     .thinking { margin: 5px 14px 5px 58px; opacity: .6; font-size: 13px; font-style: italic; }
     .notice { margin: 4px 12px; font-size: 12px; opacity: .75; }
     .notice.error { color: var(--oppai-danger, #ff6b6b); opacity: 1; }
@@ -363,26 +367,33 @@ export class OppaiLibbyDrawer extends LitElement {
         this.push({ role: "assistant", content: line.message });
         return;
       }
+      // An ephemeral turn: her whole self, her tools and what is on screen, with the
+      // drawer's recent lines as the conversation — and nothing filed, since a running
+      // commentary is not correspondence. The open-item prompt is a cue, not something
+      // put in your mouth. See libby_turn.go.
       const history: ChatMessage[] = this.remarks.map(({ role, content }) => ({ role, content }));
-      if (prompt) history.push({ role: "user", content: prompt });
-      const result = await api.chat({
-        mode: this.mode, messages: history, emotion: this.emotion, intensity: this.intensity,
-        characterId: character.id, viewing: this.viewing(),
-        outfit: character.id === "libby" ? loadLibbyOutfit() : "",
-        // Each remark already remembers the pose she wore for it, so the run of
-        // identical expressions the server looks for is free to read off. Browsing
-        // together is where a stuck face is most obvious — item after item, the same
-        // small reaction.
-        recentMoods: this.remarks.filter((remark) => remark.role === "assistant" && remark.emotion)
-          .slice(-8).map((remark) => remark.emotion as string),
+      let failure = "";
+      await api.libbyTurn({
+        conversationId: "", ephemeral: true, characterId: character.id, mode: this.mode,
+        emotion: this.emotion, intensity: this.intensity, history, cue: prompt || undefined,
+        viewing: this.viewing(), outfit: character.id === "libby" ? (loadLibbyOutfit() || undefined) : undefined,
+      }, (event) => {
+        const data = event.data ?? {};
+        if (event.event === "message") {
+          const said = data.message as StoredChatMessage | undefined;
+          if (!said || said.role !== "assistant" || said.thought) return;
+          this.push({
+            role: "assistant", content: isStageDirection(said.content) ? "" : said.content,
+            links: said.links, attachments: said.attachments, actions: said.actions, images: picturesOf(said),
+          });
+        } else if (event.event === "state") {
+          const heat = normalizeIntensity(Number(data.intensity) || this.intensity);
+          this.applyMood(normalizeEmotion(String(data.emotion ?? this.emotion)), heat, heat);
+        } else if (event.event === "error") {
+          failure = String(data.message ?? "She didn't answer.");
+        }
       });
-      const requested = normalizeIntensity(result.intensity ?? this.intensity);
-      if (result.declared) this.applyMood(normalizeEmotion(result.emotion), requested, requested);
-      else {
-        const drift = applyProgression(this.progress, requested - this.intensity);
-        this.applyMood(normalizeEmotion(result.emotion), drift.progress, drift.intensity);
-      }
-      this.push({ role: "assistant", content: result.message, links: result.links, attachments: result.attachments, actions: result.actions });
+      if (failure) this.say(failure, true);
     } catch (error) {
       this.say((error as Error).message || "She didn't answer.", true);
     } finally {
@@ -492,7 +503,8 @@ export class OppaiLibbyDrawer extends LitElement {
       ${this.renderRemarkAvatar(remark, character, author)}
       <div class="remark-body">
         <div class="remark-meta"><span class="remark-author">${author}</span><span class="remark-time">${time}</span></div>
-        <span class="said">${remark.content}</span>
+        ${remark.content ? html`<span class="said">${remark.content}</span>` : nothing}
+        ${remark.images?.map((id) => html`<img class="remark-picture" src=${api.chatImageURL(id)} alt=${`Picture from ${author}`} loading="lazy"/>`)}
         ${renderAttachments(remark.attachments, (id) => requestOpenMedia(this, id), author)}
         ${renderLinkChips(remark.links, (id) => requestOpenMedia(this, id))}
         ${renderActionCards(remark.actions, this.approvals.stateOf, this.approvals.decide)}

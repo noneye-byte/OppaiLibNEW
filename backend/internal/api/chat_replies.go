@@ -1,7 +1,6 @@
 package api
 
 import (
-	"regexp"
 	"strings"
 )
 
@@ -36,15 +35,6 @@ type chatReplyRef struct {
 // that a quoted essay does not push the actual reply off the screen.
 const maxReplyExcerpt = 140
 
-// replyTag captures her replying to an earlier message. Loose, like the attach tag: it
-// lands wherever the sentence put it. Read before scrubbing; deleted by strayTag.
-var replyTag = regexp.MustCompile(`(?i)\[\s*(?:replying|reply|quoting|quote|answering|re)\b(?:\s+to\b\s*[:=]?|\s*[:=])\s*([^\]\n]{1,160}?)\s*\]`)
-
-// replyDirective teaches the tag. Kept to one sentence with the reason inside it,
-// because the failure mode of a bare syntax rule is a model that quotes every message
-// it answers.
-const replyDirective = "To answer one of their recent messages instead of the latest — a question of theirs you skipped a moment ago — write [reply: <a few exact words from it>]; it shows as a quoted reply. Rare, only ever their words, never your own, and only when it is genuinely about that message."
-
 // replyWindow is how far back a quoted reply may reach, in messages. A person quotes
 // the question from a minute ago, not the one from an hour ago; left unbounded, word
 // overlap found *something* far up the log that shared three words with her quote,
@@ -55,18 +45,6 @@ const replyWindow = 12
 // are in half the messages of an evening, and the newest one of them is not the one
 // she meant.
 const minVerbatimQuote = 8
-
-// findReplyTag reads the earlier message she is replying to, as she quoted it. The
-// first one wins: a second is the model repeating itself, and a message replies to
-// one thing.
-func findReplyTag(reply string) (quote string, ok bool) {
-	match := replyTag.FindStringSubmatch(reply)
-	if match == nil {
-		return "", false
-	}
-	quote = strings.Trim(strings.TrimSpace(match[1]), `"'“”‘’`)
-	return quote, quote != ""
-}
 
 // excerptOf cuts a message down to what a quote bubble shows: the first line that
 // says anything, trimmed, and cut at a word.

@@ -265,70 +265,7 @@ func (s *Server) handleImageGenGenerate(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, http.StatusBadRequest, "a prompt is required")
 		return
 	}
-	clampGenerate(&req)
-	// Wildcards and {a|b} choices are rolled here, once per request, so every client
-	// and Libby's own pictures get them. The lists are only read when the text has
-	// something to expand. See handlers_wildcards.go.
-	rolled := s.expandGenerateWildcards(&req)
-	// Sanitize the LoRA picks once here; each backend applies them its own way
-	// (A1111 as prompt tokens, InvokeAI as graph nodes). promptRecord is the
-	// human-readable account of the whole request, kept for the save notes.
-	var loras []imagegen.LoraWeight
-	promptRecord := req.Prompt
-	for _, lora := range req.Loras {
-		name := strings.TrimSpace(strings.NewReplacer("<", "", ">", "", ":", "").Replace(lora.Name))
-		if name == "" {
-			continue
-		}
-		weight := lora.Weight
-		if weight < -2 {
-			weight = -2
-		} else if weight > 2 {
-			weight = 2
-		}
-		loras = append(loras, imagegen.LoraWeight{Name: name, Weight: weight})
-		promptRecord += fmt.Sprintf(" <lora:%s:%.2g>", name, weight)
-	}
-
-	cpuNoise := true // preserve Invoke's safe existing default for older clients
-	if req.CPUNoise != nil {
-		cpuNoise = *req.CPUNoise
-	}
-	detailPrompt := strings.TrimSpace(req.Detailer.Prompt)
-	if detailPrompt == "" {
-		detailPrompt = req.Prompt
-	}
-	detailNegative := strings.TrimSpace(req.Detailer.NegativePrompt)
-	if detailNegative == "" {
-		detailNegative = req.NegativePrompt
-	}
-	gen := imagegen.GenerateRequest{
-		Prompt:         req.Prompt,
-		NegativePrompt: req.NegativePrompt,
-		Checkpoint:     req.Checkpoint,
-		VAE:            req.VAE,
-		Sampler:        req.Sampler,
-		Steps:          req.Steps,
-		Width:          req.Width,
-		Height:         req.Height,
-		CfgScale:       req.CfgScale,
-		CfgRescale:     req.CfgRescale,
-		ClipSkip:       req.ClipSkip,
-		SeamlessX:      req.SeamlessX,
-		SeamlessY:      req.SeamlessY,
-		VAEPrecision:   req.VAEPrecision,
-		CPUNoise:       cpuNoise,
-		Board:          req.Board,
-		Seed:           req.Seed,
-		Count:          req.Count,
-		Loras:          loras,
-		Detailer: imagegen.Detailer{
-			Enabled: req.Detailer.Enabled, Model: req.Detailer.Model,
-			Prompt: detailPrompt, NegativePrompt: detailNegative,
-			Confidence: req.Detailer.Confidence, Denoise: req.Detailer.Denoise,
-			MaskBlur: req.Detailer.MaskBlur,
-		},
-	}
+	gen, promptRecord, rolled := s.prepareGenerate(&req)
 	ctx := r.Context()
 	if genJobIDPattern.MatchString(req.JobID) {
 		var job *genJob
@@ -381,6 +318,78 @@ func (s *Server) handleImageGenGenerate(w http.ResponseWriter, r *http.Request) 
 		"negative": req.NegativePrompt,
 		"rolled":   rolled,
 	})
+}
+
+// prepareGenerate turns a studio-shaped request into the generator's, filling defaults,
+// rolling wildcards and sanitising LoRA picks. Shared by the studio's endpoint and
+// Libby's camera, so a picture she takes is made exactly the way one made by hand is.
+// promptRecord is the human-readable account of the whole request, kept for save notes.
+func (s *Server) prepareGenerate(req *generateReq) (gen imagegen.GenerateRequest, promptRecord string, rolled bool) {
+	clampGenerate(req)
+	// Wildcards and {a|b} choices are rolled here, once per request, so every client
+	// and Libby's own pictures get them. The lists are only read when the text has
+	// something to expand. See handlers_wildcards.go.
+	rolled = s.expandGenerateWildcards(req)
+	// Sanitize the LoRA picks once here; each backend applies them its own way
+	// (A1111 as prompt tokens, InvokeAI as graph nodes). promptRecord is the
+	// human-readable account of the whole request, kept for the save notes.
+	var loras []imagegen.LoraWeight
+	promptRecord = req.Prompt
+	for _, lora := range req.Loras {
+		name := strings.TrimSpace(strings.NewReplacer("<", "", ">", "", ":", "").Replace(lora.Name))
+		if name == "" {
+			continue
+		}
+		weight := lora.Weight
+		if weight < -2 {
+			weight = -2
+		} else if weight > 2 {
+			weight = 2
+		}
+		loras = append(loras, imagegen.LoraWeight{Name: name, Weight: weight})
+		promptRecord += fmt.Sprintf(" <lora:%s:%.2g>", name, weight)
+	}
+
+	cpuNoise := true // preserve Invoke's safe existing default for older clients
+	if req.CPUNoise != nil {
+		cpuNoise = *req.CPUNoise
+	}
+	detailPrompt := strings.TrimSpace(req.Detailer.Prompt)
+	if detailPrompt == "" {
+		detailPrompt = req.Prompt
+	}
+	detailNegative := strings.TrimSpace(req.Detailer.NegativePrompt)
+	if detailNegative == "" {
+		detailNegative = req.NegativePrompt
+	}
+	gen = imagegen.GenerateRequest{
+		Prompt:         req.Prompt,
+		NegativePrompt: req.NegativePrompt,
+		Checkpoint:     req.Checkpoint,
+		VAE:            req.VAE,
+		Sampler:        req.Sampler,
+		Steps:          req.Steps,
+		Width:          req.Width,
+		Height:         req.Height,
+		CfgScale:       req.CfgScale,
+		CfgRescale:     req.CfgRescale,
+		ClipSkip:       req.ClipSkip,
+		SeamlessX:      req.SeamlessX,
+		SeamlessY:      req.SeamlessY,
+		VAEPrecision:   req.VAEPrecision,
+		CPUNoise:       cpuNoise,
+		Board:          req.Board,
+		Seed:           req.Seed,
+		Count:          req.Count,
+		Loras:          loras,
+		Detailer: imagegen.Detailer{
+			Enabled: req.Detailer.Enabled, Model: req.Detailer.Model,
+			Prompt: detailPrompt, NegativePrompt: detailNegative,
+			Confidence: req.Detailer.Confidence, Denoise: req.Detailer.Denoise,
+			MaskBlur: req.Detailer.MaskBlur,
+		},
+	}
+	return gen, promptRecord, rolled
 }
 
 // expandGenerateWildcards rolls the wildcards in every prompt field of a request and

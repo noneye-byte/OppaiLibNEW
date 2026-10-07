@@ -8,75 +8,6 @@ import (
 	"testing"
 )
 
-func TestChatProxiesLocalOpenAIEndpoint(t *testing.T) {
-	var gotAuth string
-	var got struct {
-		Model            string        `json:"model"`
-		Messages         []chatMessage `json:"messages"`
-		TopK             int           `json:"top_k"`
-		Preset           string        `json:"preset"`
-		TruncationLength int           `json:"truncation_length"`
-	}
-	llm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet && r.URL.Path == "/v1/internal/model/info" {
-			_, _ = w.Write([]byte(`{"model_name":"test-local"}`))
-			return
-		}
-		gotAuth = r.Header.Get("Authorization")
-		if r.URL.Path != "/v1/chat/completions" {
-			t.Fatalf("path = %q", r.URL.Path)
-		}
-		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
-			t.Fatal(err)
-		}
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"Hi from Libby"}}]}`))
-	}))
-	defer llm.Close()
-
-	s, token := newTestServer(t)
-	cur := s.settings.Get()
-	cur.ChatURL = llm.URL
-	cur.ChatModel = "stale-configured-name"
-	cur.ChatAPIKey = "local-secret"
-	s.settings.Set(cur)
-
-	rec := do(t, s.Handler(), token, http.MethodPost, "/api/chat",
-		`{"mode":"playful","messages":[{"role":"user","content":"hello"}],"options":{"top_k":37,"preset":"Libby","truncation_length":2048}}`)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("chat: %d %s", rec.Code, rec.Body.String())
-	}
-	if got.Model != "test-local" || len(got.Messages) != 2 || got.Messages[0].Role != "system" {
-		t.Fatalf("forwarded request = %+v", got)
-	}
-	if got.TopK != 37 || got.Preset != "Libby" {
-		t.Fatalf("advanced options not forwarded: %+v", got)
-	}
-	if got.TruncationLength != targetContextLimit {
-		t.Fatalf("truncation_length = %d, want OppaiLib's fitted %d", got.TruncationLength, targetContextLimit)
-	}
-	if gotAuth != "Bearer local-secret" {
-		t.Fatalf("Authorization = %q", gotAuth)
-	}
-	var out map[string]string
-	_ = json.Unmarshal(rec.Body.Bytes(), &out)
-	if out["message"] != "Hi from Libby" {
-		t.Fatalf("response = %q", out["message"])
-	}
-}
-
-func TestChatRejectsUnknownMode(t *testing.T) {
-	s, token := newTestServer(t)
-	cur := s.settings.Get()
-	cur.ChatURL = "http://127.0.0.1:1"
-	cur.ChatModel = "local"
-	s.settings.Set(cur)
-	rec := do(t, s.Handler(), token, http.MethodPost, "/api/chat",
-		`{"mode":"anything","messages":[{"role":"user","content":"hello"}]}`)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", rec.Code)
-	}
-}
-
 func TestChatModelLifecycle(t *testing.T) {
 	loaded := "old.gguf"
 	mutations := 0
@@ -175,126 +106,6 @@ func TestChatModelControlUnsupportedBackend(t *testing.T) {
 	}
 }
 
-func TestChatStatusReportsReachableBackendWithNoLoadedModel(t *testing.T) {
-	generationCalls := 0
-	llm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/v1/internal/model/info":
-			_, _ = w.Write([]byte(`{"model_name":"None","lora_names":[],"loader":null}`))
-		case "/v1/models":
-			_, _ = w.Write([]byte(`{"object":"list","data":[]}`))
-		case "/v1/chat/completions":
-			generationCalls++
-			http.Error(w, "must not generate without a model", http.StatusInternalServerError)
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer llm.Close()
-
-	s, token := newTestServer(t)
-	cur := s.settings.Get()
-	cur.ChatURL = llm.URL + "/v1"
-	cur.ChatModel = "stale-configured-name"
-	s.settings.Set(cur)
-	rec := do(t, s.Handler(), token, http.MethodGet, "/api/chat/status", "")
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"configured":true`) || !strings.Contains(rec.Body.String(), `"enabled":false`) {
-		t.Fatalf("status: %d %s", rec.Code, rec.Body)
-	}
-	if !strings.Contains(rec.Body.String(), "No model is loaded") {
-		t.Fatalf("status is not actionable: %s", rec.Body)
-	}
-	rec = do(t, s.Handler(), token, http.MethodPost, "/api/chat", `{"mode":"sweet","messages":[{"role":"user","content":"hello"}]}`)
-	if rec.Code != http.StatusServiceUnavailable || generationCalls != 0 {
-		t.Fatalf("generation without a model: %d %s calls=%d", rec.Code, rec.Body, generationCalls)
-	}
-}
-
-// Models drift from the mood-tag spelling they are given: the directive asks for
-// "[mood: happy 3]" and a capable model answers "[Mood: Happy & Excited 9]". The
-// original pattern accepted only a single lowercase word and a literal 1-5, so those
-// replies kept their tag as visible prose and never moved the face — which is exactly
-// how the feature was reported broken. Each case here is a real observed shape.
-func TestSplitMoodAcceptsModelDrift(t *testing.T) {
-	cases := []struct {
-		name      string
-		reply     string
-		emotion   string
-		intensity int
-	}{
-		{"as specified", "Hey you.\n[mood: happy 3]", "happy", 3},
-		{"reported shape", "Hey you.\n[ Mood : Happy & Excited 9 ]", "happy", 5},
-		{"title case", "Hey you.\n[Mood: Mischievous 4]", "mischievous", 4},
-		{"synonym", "Hey you.\n[mood: flirty 5]", "mischievous", 5},
-		{"first word wins", "Hey you.\n[mood: happy and teasing 2]", "happy", 2},
-		{"markdown wrapped", "Hey you.\n**[mood: surprised 4]**", "surprised", 4},
-		{"no intensity", "Hey you.\n[mood: thinking]", "thinking", 0},
-		{"legacy alias", "Hey you.\n[mood: worried 2]", "thinking", 2},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			text, emotion, intensity, ok := splitMood(tc.reply)
-			if !ok || emotion != tc.emotion || intensity != tc.intensity {
-				t.Fatalf("got (%q,%d,%v), want (%q,%d,true)", emotion, intensity, ok, tc.emotion, tc.intensity)
-			}
-			if text != "Hey you." {
-				t.Fatalf("tag left in prose: %q", text)
-			}
-		})
-	}
-}
-
-// A tag whose label means nothing to us still must not reach the user, and a tag the
-// character wrote mid-scene as dialogue still must not move the face.
-func TestSplitMoodStripsUnreadableTagAndIgnoresMidScene(t *testing.T) {
-	text, emotion, _, ok := splitMood("Hey you.\n[mood: peckish 2]")
-	if ok || emotion != "" {
-		t.Fatalf("unknown label was accepted as %q", emotion)
-	}
-	if text != "Hey you." {
-		t.Fatalf("unreadable tag left in prose: %q", text)
-	}
-
-	midScene := "She read the sign: [mood: happy 3], it said, and laughed."
-	if got, _, _, ok := splitMood(midScene); ok || got != midScene {
-		t.Fatalf("mid-scene tag was consumed: %q ok=%v", got, ok)
-	}
-}
-
-// The character picks a picture by naming tags, which is the only handle a text-only
-// model can use sensibly. As with the mood tag, the directive must never survive into
-// the prose the user reads — and it arrives on either side of the mood tag, because
-// models order trailing directives however they like.
-func TestSplitPhotoRequestAndResolution(t *testing.T) {
-	ws := chatWorkspace{Images: []chatImage{
-		{ID: "a", CharacterID: "libby", Tags: []string{"beach", "bikini", "smiling"}},
-		{ID: "b", CharacterID: "libby", Tags: []string{"bedroom", "lingerie", "lying down"}},
-		{ID: "c", CharacterID: "other", Tags: []string{"bedroom", "lingerie"}},
-	}}
-
-	for _, order := range []string{
-		"Here, look.\n[send: bedroom lingerie]\n[mood: mischievous 4]",
-		"Here, look.\n[mood: mischievous 4]\n[send: bedroom lingerie]",
-	} {
-		text, request, asked := splitPhotoRequest(order)
-		if !asked {
-			text, _, _, _ = splitMood(text)
-			text, request, asked = splitPhotoRequest(text)
-		} else {
-			text, _, _, _ = splitMood(text)
-		}
-		if !asked {
-			t.Fatalf("no photo request found in %q", order)
-		}
-		if text != "Here, look." {
-			t.Fatalf("directive left in prose: %q", text)
-		}
-		if got := drawGallery(ws, "libby", request, "", nil, nil, 1); got != "b" {
-			t.Fatalf("resolved to %q, want b", got)
-		}
-	}
-}
-
 // The catalogue is what makes the pictures callable: without tags in the prompt the
 // model has nothing to name. Untagged pictures are omitted precisely because a
 // request naming them could never resolve.
@@ -311,7 +122,7 @@ func TestPhotoCatalogueListsOnlyCallablePictures(t *testing.T) {
 	if strings.Contains(catalogue, "kitchen") {
 		t.Fatalf("another character's picture leaked into the catalogue: %q", catalogue)
 	}
-	if !strings.Contains(catalogue, "[send:") {
+	if !strings.Contains(catalogue, "send_saved_photo") {
 		t.Fatalf("catalogue never says how to send: %q", catalogue)
 	}
 	if photoCatalogue(chatWorkspace{}, "libby", nil, nil, nil, "", "") != "" {

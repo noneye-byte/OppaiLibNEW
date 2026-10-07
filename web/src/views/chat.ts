@@ -14,12 +14,12 @@ import {
   timeAgo,
 } from "../chat-text.js";
 import {
-  api, PROFILE_IMAGE_OWNER, type ChatCharacter, type ChatConversation, type ChatImage, type ChatMessage,
-  type ChatBackendInfo, type ChatDebug, type ChatModelInspection, type ChatModels, type ChatOptions, type ChatPhotoReport, type ChatProfile, type ChatSampling, type ChatStatus, type ChatWorkspace,
+  api, PROFILE_IMAGE_OWNER, type ChatCharacter, type ChatConversation, type ChatImage,
+  type ChatBackendInfo, type ChatDebug, type ChatModelInspection, type ChatModels, type ChatOptions, type ChatProfile, type ChatSampling, type ChatStatus, type ChatWorkspace,
   type LibbyAutoDecision, type LibbyAutoSettings, type LibbyAutoState, type LibbyBond, type LibbyContext,
-  type DiscordPlace, type DiscordState, type LibbyIdentity, type LibbyJournalEntry, type LibbyMemory, type LibbyThought, type LibbyWant, type SharedLink,
+  type DiscordPlace, type DiscordState, type LibbyIdentity, type LibbyJournalEntry, type LibbyMemory, type LibbyWant, type SharedLink,
   type StoredChatMessage, type User, type ChatReplyRef, type LibbyAttachment, type LibbyBackground, type LibbyLink, type Media,
-  type LibbyActivityDef, type LibbyOutfit, type LibbyActContext, type GenProgress,
+  type LibbyActivityDef, type LibbyOutfit, type LibbyActContext, type GenProgress, type LibbyStory,
   SEND_WEIGHTS,
 } from "../api.js";
 import { iconStyles, motionStyles } from "../theme.js";
@@ -46,10 +46,14 @@ import { libbyMotion } from "../libby-motion.js";
 import { profileUpdates } from "../ui-metrics.js";
 import { characterToCard, readCardFile } from "../character-card.js";
 import {
-  ActionApprovals, actionCardStyles, attachmentStyles, KIND_ICONS, linkChipStyles, recentlyAttached, recentHeat, recentMoods, recentlySent,
+  ActionApprovals, actionCardStyles, attachmentStyles, KIND_ICONS, linkChipStyles, recentlyAttached,
   renderActionCards, renderAttachments, renderGenProgress, renderLinkChips, requestOpenMedia,
 } from "../chat-links.js";
-import { newJobId, watchGeneration } from "../gen-watch.js";
+import {
+  LIBBY_MESSAGE_EVENT, type LibbyMessageDetail,
+  applyHerReaction, applyTurnState, cameraPhaseLabel, isStageDirection, picturesOf, unsentMessages, upsertMessage,
+  type TurnEvent, type TurnState,
+} from "../libby-turn.js";
 
 const MODES = [
   { id: "sweet", label: "sweet", emotion: "happy", topic: "Soft, warm, and unhurried." },
@@ -130,6 +134,8 @@ interface CapturedTurn {
   at: number;
   request: { photoTags: string[]; photoImageId: string; task: string };
   debug: ChatDebug;
+  /** The tools she called, in order, with their arguments. */
+  calls?: unknown;
 }
 
 /** How many captured turns a conversation keeps. An evening is hundreds of turns and
@@ -608,9 +614,6 @@ export class OppaiChat extends LitElement {
       advanced panel renders it: with no override set the sliders show these rather than a
       made-up default, so what is on screen is what was actually used. */
   @state() private lastSampling?: ChatSampling;
-  /** Why the last reply carried the picture it did. Shown beside the sampling line
-      so a wrong picture is a thing that can be read rather than guessed at. */
-  @state() private lastPhoto?: ChatPhotoReport;
   /** Who the next gallery upload is of: "self", "other", or "" to let the scanner
       decide. Defaults to her — the panel is her gallery, and someone uploading here
       is adding pictures of her; photos shared in chat are scanned instead. */
@@ -867,6 +870,58 @@ export class OppaiChat extends LitElement {
     .snap-viewer img { max-width:100vw; max-height:100vh; object-fit:contain; }
     .snap-viewer p { color:#fff; }
     .snap-close { position:absolute; bottom:24px; left:0; right:0; text-align:center; color:rgba(255,255,255,.7); font-size:12px; }
+    /* Her pictures. A set from one shoot is a grid of two columns, each tile cropped
+       square so a set of three reads as a set and not a staircase; tap one to see it
+       whole. Under each, what you thought of it — which leans what she sends next. */
+    .pictures { display:grid; gap:4px; margin-top:6px; max-width:min(420px,100%); }
+    .pictures.set { grid-template-columns:1fr 1fr; }
+    .pictures figure { margin:0; position:relative; }
+    .pictures .sent-image { margin-top:0; cursor:zoom-in; }
+    .pictures.set .sent-image { width:100%; aspect-ratio:1; object-fit:cover; max-height:none; }
+    .pictures video.sent-image { cursor:default; width:100%; }
+    .rate { display:flex; gap:2px; margin-top:4px; }
+    .rate button { border:0; background:transparent; color:inherit; padding:3px 5px; border-radius:999px; font-size:14px; line-height:1; cursor:pointer; opacity:.55; transition:opacity .12s, transform .12s; }
+    .rate button:hover { opacity:.9; background:var(--hover); }
+    .rate button.on { opacity:1; transform:scale(1.12); }
+    .rate button:disabled { cursor:default; }
+    .rate .material-symbols-rounded { font-size:17px; }
+    .picture-viewer { position:fixed; inset:0; z-index:40; display:grid; place-items:center; background:rgba(0,0,0,.92); cursor:zoom-out; animation:chat-fade .2s ease both; }
+    .picture-viewer img { max-width:100vw; max-height:100vh; object-fit:contain; }
+    /* A voice note: a play pill with the words she said beneath it, smaller. */
+    .voice-note { display:flex; align-items:center; gap:8px; border:0; background:color-mix(in srgb,var(--accent) 16%,transparent); color:inherit; border-radius:999px; padding:6px 14px 6px 8px; font:inherit; cursor:pointer; }
+    .voice-note .material-symbols-rounded { color:var(--accent); font-size:22px; }
+    .voice-note .wave { display:flex; gap:2px; align-items:center; height:16px; }
+    .voice-note .wave i { width:3px; border-radius:2px; background:currentColor; opacity:.55; }
+    .voice-words { font-size:12px; opacity:.7; margin-top:4px; }
+    /* The scene she planned, as a strip above the log while it lasts. */
+    .scene-chip { display:flex; align-items:center; gap:8px; margin:8px 16px 0; padding:6px 12px; border-radius:12px; font-size:12px;
+      background:color-mix(in srgb,var(--accent) 10%,transparent); border:1px solid color-mix(in srgb,var(--accent) 30%,transparent); }
+    .scene-chip strong { font-weight:650; }
+    .scene-beats { display:flex; gap:3px; margin-left:auto; }
+    .scene-beats i { width:14px; height:4px; border-radius:2px; background:var(--line); }
+    .scene-beats i.done { background:var(--accent); }
+    .scene-beats i.now { background:color-mix(in srgb,var(--accent) 55%,transparent); }
+    /* Her stories: a ring around her avatar in the header while there are any. */
+    .story-ring { border:0; padding:2px; border-radius:50%; cursor:pointer; background:var(--line); display:grid; position:relative; }
+    .story-ring.unseen { background:conic-gradient(var(--accent),var(--md-sys-color-tertiary,var(--accent)),var(--accent)); }
+    .story-ring .top-avatar { border:2px solid var(--main); }
+    .story-viewer { position:fixed; inset:0; z-index:40; display:grid; grid-template-rows:auto auto 1fr auto; background:rgba(0,0,0,.94); color:#fff; animation:chat-fade .2s ease both; }
+    .story-bars { display:flex; gap:4px; padding:12px 14px 6px; }
+    .story-bars i { flex:1; height:3px; border-radius:2px; background:rgba(255,255,255,.3); }
+    .story-bars i.seen { background:#fff; }
+    .story-head { display:flex; align-items:center; gap:8px; padding:0 14px 8px; font-size:13px; }
+    .story-head .avatar { display:inline-block; width:32px; height:32px; flex:none; border-radius:50%; overflow:hidden; object-fit:cover; }
+    .story-head .avatar img { width:100%; height:100%; object-fit:cover; }
+    .story-head .when { opacity:.7; }
+    .story-head button { margin-left:auto; border:0; background:transparent; color:#fff; cursor:pointer; }
+    .story-body { position:relative; display:grid; place-items:center; min-height:0; }
+    .story-body > img { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; image-rendering:auto; }
+    .story-caption { position:absolute; bottom:18px; left:16px; right:16px; text-align:center; font-size:16px; text-shadow:0 1px 4px rgba(0,0,0,.8); }
+    .story-tap { position:absolute; top:0; bottom:0; width:35%; border:0; background:transparent; cursor:pointer; }
+    .story-tap.prev { left:0; } .story-tap.next { right:0; }
+    .story-reply { display:flex; gap:8px; padding:12px 14px 18px; }
+    .story-reply input { flex:1; border:1px solid rgba(255,255,255,.4); background:transparent; color:#fff; border-radius:999px; padding:10px 14px; font:inherit; }
+    .story-reply button { border:0; background:var(--accent); color:var(--on-accent); border-radius:999px; padding:0 14px; cursor:pointer; display:grid; place-items:center; }
     /* Send weights. */
     .image-card .weight { display:flex; align-items:center; gap:5px; font-size:11px; color:var(--muted); }
     .shelf { margin:14px 0 8px; font-size:13px; font-weight:650; display:grid; gap:2px; }
@@ -1410,6 +1465,7 @@ export class OppaiChat extends LitElement {
     void this.load().then(() => void this.claimShare());
     window.addEventListener("keydown", this.onGlobalKey);
     window.addEventListener(SHARE_EVENT, this.onShared);
+    window.addEventListener(LIBBY_MESSAGE_EVENT, this.onLibbyMessage);
   }
 
   disconnectedCallback() {
@@ -1419,10 +1475,25 @@ export class OppaiChat extends LitElement {
     window.clearTimeout(this.autoTimer); window.clearInterval(this.callTimer); window.clearTimeout(this.readTimer);
     window.removeEventListener("keydown", this.onGlobalKey);
     window.removeEventListener(SHARE_EVENT, this.onShared);
+    window.removeEventListener(LIBBY_MESSAGE_EVENT, this.onLibbyMessage);
     this.resize?.disconnect();
   }
 
   private onShared = () => { void this.claimShare(); };
+
+  /** Something she said somewhere other than this screen — watching a video with you —
+      that the server has already written into her conversation. It joins the copy here
+      so the next save carries it rather than leaning on the server's merge. */
+  private onLibbyMessage = (event: Event) => {
+    const { conversationId, message, rev } = (event as CustomEvent<LibbyMessageDetail>).detail;
+    const live = this.liveConversation(conversationId);
+    if (!live || !message?.id) return;
+    upsertMessage(live.messages, message);
+    this.bumpRev(live, rev);
+    live.updatedAt = Date.now();
+    this.touchWorkspace();
+    if (conversationId === this.conversationID) void this.scrollToEnd();
+  };
 
   /**
    * Takes a picture handed over from Library and attaches it to the composer for
@@ -1570,7 +1641,7 @@ export class OppaiChat extends LitElement {
     // the conversation draws the default room too, and fetching the list only when
     // the call opened meant every fresh mount of this view — each switch back to the
     // Chat tab — drew her on the plain stage until something else asked for it.
-    const [status, workspace, bond] = await Promise.allSettled([api.chatStatus(), api.chatWorkspace(), api.libbyBond(), this.loadBackgrounds()]);
+    const [status, workspace, bond] = await Promise.allSettled([api.chatStatus(), api.chatWorkspace(), api.libbyBond(), this.loadBackgrounds(), this.loadStories()]);
     try {
       if (status.status === "fulfilled") this.status = status.value;
       if (workspace.status === "fulfilled") {
@@ -1871,6 +1942,10 @@ export class OppaiChat extends LitElement {
    * turn then delivers as the reply — so this is "that's enough", not "throw it away".
    */
   private async stopGeneration() {
+    // Closing the stream stops the turn on the server; the backend stop also cuts the
+    // generation already running, where the loader allows it.
+    this.turnAbort?.abort();
+    if (!this.status?.modelManagement) return;
     try { await api.stopChat(); this.say("Stopping…"); }
     catch (error) { this.say((error as Error).message, true); }
   }
@@ -2039,6 +2114,7 @@ export class OppaiChat extends LitElement {
     this.autoTurns = AUTO_MAX_TURNS;
     setIntensity(conversation.intensity); this.armIdle(); this.scheduleAuto(); void this.scrollToEnd(false);
     void this.sayWhatIsPending();
+    if (conversation.characterId === "libby") void this.loadStories();
     // A conversation that went quiet a while ago is tidied as it is picked back up.
     if (Date.now() - conversation.updatedAt > COMPRESS_IDLE_MS && conversation.messages.length > COMPRESS_IDLE_AT) void this.compressConversation(id, true);
   }
@@ -2280,15 +2356,6 @@ export class OppaiChat extends LitElement {
     this.reactionPicker = null;
     conversation.updatedAt = Date.now();
     this.touchWorkspace();
-  }
-
-  /** Lands her reaction on the message it was for — by id, or your latest. */
-  private applyReaction(conversation: ChatConversation, emoji: string, to?: string) {
-    const target = (to && conversation.messages.find((m) => m.id === to))
-      || [...conversation.messages].reverse().find((m) => m.role === "user");
-    if (!target) return;
-    const others = (target.reactions ?? []).filter((r) => r.by !== "assistant");
-    target.reactions = [...others, { emoji, by: "assistant" }];
   }
 
   // --- Snaps ----------------------------------------------------------------
@@ -2542,28 +2609,6 @@ export class OppaiChat extends LitElement {
   }
 
   /**
-   * Appends what she thought or muttered, as entries of their own.
-   *
-   * No typing indicator and no pause: thinking is not typing, and putting one in front
-   * of a thought would be the interface claiming she was composing it for you. They
-   * land immediately, before whatever she goes on to say.
-   *
-   * Returns false only when the conversation went away mid-turn, matching
-   * typeAndPushBubbles so the caller can abandon the turn the same way.
-   */
-  private pushThoughts(conversationID: string, thoughts?: LibbyThought[]): boolean {
-    if (!thoughts?.length) return true;
-    const live = this.liveConversation(conversationID);
-    if (!live) return false;
-    for (const { kind, text } of thoughts) {
-      if (!text.trim()) continue;
-      live.messages.push({ id:newID(), role:"assistant", content:text, at:Date.now(), thought:kind });
-    }
-    live.updatedAt = Date.now(); this.touchWorkspace(); void this.scrollToEnd();
-    return true;
-  }
-
-  /**
    * Produces one assistant turn from the conversation's own history and appends it.
    *
    * Sending, re-responding, and the autopilot all end here; they differ only in what
@@ -2579,8 +2624,12 @@ export class OppaiChat extends LitElement {
     /** What this turn is for, when the client knows more than "she speaks first":
         the morning-after message is one. Overrides the continuation's "autonomous". */
     task?: string;
+    /** Take her last reply back first; see regenerate. */
+    redo?: boolean;
+    /** Drop everything after this message of yours first; see retryFrom. */
+    truncateAfter?: string;
   } = {}): Promise<boolean> {
-    const { continuation = false, photoTags = [], photoImageID = "", link = "", sharedMediaIds = [], nudge = "", task = "" } = options;
+    const { continuation = false, link = "", sharedMediaIds = [], nudge = "", task = "", redo = false, truncateAfter = "" } = options;
     const conversation = this.liveConversation(conversationID);
     const character = conversation && this.liveCharacter(conversation.characterId);
     if (!conversation || !character || this.busy) return false;
@@ -2615,160 +2664,204 @@ export class OppaiChat extends LitElement {
       this.busy = false; this.typingPhase = "idle"; return ok;
     }
     try {
-      // Thoughts are left out: they were never said, so replaying them as assistant
-      // lines both hands the model words she did not speak and teaches it that the
-      // format belongs inline. Her emotional continuity is carried by the bond and
-      // her memory, which is the right place for it.
-      // Each message travels with the ids of what it carried — the photo, the library
-      // items — so the server can say what they were on every turn, not just the one
-      // they were sent on. Ids only; the server owns the descriptions.
-      const history: ChatMessage[] = conversation.messages
-        .filter((message) => !message.thought)
-        .map(({ id, role, content:text, replyTo, imageId, attachments, reactions }) => ({
-          id, role, content:text, replyTo,
-          imageId: imageId || undefined,
-          mediaIds: attachments?.length ? attachments.map((item) => item.id) : undefined,
-          reactions: reactions?.length ? reactions : undefined,
-        }));
-      // A nudge, not a message: it steers this one request and is never stored, so
-      // the log stays a record of what was actually said.
-      if (continuation) history.push({ role:"user", content:"(Continue the scene on your own. Speak or act again without waiting for a reply, and do not answer for me.)" });
-      else if (nudge) history.push({ role:"user", content:`(Try that reply again. ${nudge} Do not mention this note.)` });
-      const startedAt = Date.now();
-      this.typingPhase = "typing";
-      const result = await api.chat({
-        mode: conversation.mode, messages: history, emotion: conversation.emotion,
-        intensity: conversation.intensity, options: conversation.options, characterId: character.id,
-        // So her recall of the *other* conversations leaves this one out of it.
-        conversationId: conversation.id,
-        photoTags, photoImageId: photoImageID, recentImageIds: recentlySent(conversation.messages),
-        recentMediaIds: recentlyAttached(conversation.messages),
-        // How long she has been wearing one expression. The server has no memory
-        // between turns, so a mood stuck for a dozen replies is indistinguishable
-        // from a fresh one unless the log says otherwise.
-        recentMoods: recentMoods(conversation.messages),
-        recentHeat: recentHeat(conversation.messages),
-        // What she is already doing, and where. The server keeps nothing between
-        // turns, so a state set three replies ago only survives because this says so.
-        activity: conversation.activity || undefined,
-        background: conversation.background || undefined,
-        // And what she has on, when she changed out of her own clothes.
-        wearing: conversation.wearing || undefined,
-        // Library items attached to this message, by id.
-        sharedMediaIds: sharedMediaIds.length ? sharedMediaIds : undefined,
-        // That they have her on screen rather than in a transcript. Opening a call is
-        // a thing that happens on this device and the server never hears about it.
-        call: this.callOpen || undefined,
-        outfit: character.id === "libby" ? loadLibbyOutfit() : "",
-        // The address only. What she is told about the page is the server's own
-        // summary of what it already fetched for the preview — a turn never causes a
-        // fetch, and the client cannot describe a page on the server's behalf.
-        link: link || undefined,
-        // The server cannot see that this turn is her speaking first — a continuation
-        // reads as an ordinary message — and an unprompted line wants very different
-        // sampling from a reply. Everything else it classifies itself.
-        task: task || (continuation ? "autonomous" : undefined),
-        // Only while the user has capture switched on. See exportConversation.
-        debug: this.captureTurns || undefined,
-        // Asked to see her, she takes a new picture rather than sending a saved one; this
-        // client runs the generation and falls back to the saved one. See takePicture.
-        canGenerate: character.id === "libby" || undefined,
-        // What the older part of this conversation was compressed into.
-        summary: conversation.summary || undefined,
-      });
-      // The turn's working, kept against the conversation rather than the message: it
-      // describes how a reply was *built*, which is a fact about the request, and a
-      // reply that was regenerated should not carry the receipts of the one before it.
-      if (result.debug) {
-        const log = this.turnLog.get(conversationID) ?? [];
-        log.push({ at: startedAt, request: { photoTags, photoImageId: photoImageID, task: continuation ? "autonomous" : "" }, debug: result.debug });
-        // Bounded: this is several kilobytes a turn and an evening is hundreds.
-        this.turnLog.set(conversationID, log.slice(-MAX_CAPTURED_TURNS));
-      }
-      // What the server chose, kept for the advanced panel, and the diagnostic when
-      // something had to be cut to fit the model's window. Shown rather than swallowed:
-      // silent truncation of her memory or her card is the failure this reports.
-      this.lastSampling = result.sampling;
-      this.lastPhoto = result.photo;
-      // Context fitting is a diagnostic, not a failed reply. Keep it visible without the
-      // red error treatment that made routine summarisation look like a crash.
-      if (result.context?.note) this.say(result.context.note);
-      // Deleting the conversation mid-generation is the one case with nowhere to
-      // put the reply; dropping it is correct, and the user asked for that.
-      const live = this.liveConversation(conversationID);
-      if (!live) return false;
-      live.emotion = normalizeEmotion(result.emotion ?? live.emotion);
-      // An older server sends no activity field at all, which has to read as "leave it
-      // alone" rather than "she stopped" — the empty string is a real answer here, and
-      // means she is doing nothing in particular.
-      if (result.activity !== undefined) live.activity = result.activity;
-      if (result.background !== undefined) live.background = result.background;
-      if (result.wearing !== undefined) live.wearing = result.wearing;
-      const requested = normalizeIntensity(result.intensity ?? live.intensity);
-      if (result.declared) {
-        // The character named this mood, so it lands where it asked. Running it
-        // through the drift multiplier is what used to halve every deliberate swing:
-        // a jump from 1 to 5 arrived as a 3, and the scene never caught up.
-        live.progress = requested; live.intensity = setIntensity(requested);
-      } else {
-        const progression = applyProgression(live.progress ?? live.intensity, requested - live.intensity);
-        live.progress = progression.progress; live.intensity = setIntensity(progression.intensity);
-      }
-      live.updatedAt = Date.now(); this.touchWorkspace();
-      // She rang, or hung up. The ring is a popup and only answering opens the call;
-      // the hang-up ends one that is open, with a line saying so.
-      if (result.callRequest && !this.callOpen) this.ring();
-      if (result.callEnd && this.callOpen) { this.endCall(); this.say(`${character.name} ended the call.`); }
-      // Anything she thought rather than said lands first and on its own, because that
-      // is the order it happened in: she looked, reacted, and then decided what to say.
-      if (!this.pushThoughts(conversationID, result.thoughts)) return false;
-      // Her emoji on your message goes on before she says anything — a reaction is the
-      // quick thing, the words come after.
-      if (result.reaction?.emoji) { this.applyReaction(live, result.reaction.emoji, result.reaction.to); this.touchWorkspace(); }
-      const picture = !!(result.imageId || result.attachments?.length);
-      // An empty message with a thought attached is her deciding to say nothing at all.
-      // That is a turn, not a failure — the thought above is what she did with it. A
-      // reaction alone is the same. A picture alone still lands, as a bubble of its own.
-      // A picture she is taking with nothing said first is still a turn: it arrives.
-      // The room she is moving to is made whatever else the turn did; she is in it once
-      // it lands.
-      if (result.makeScene) void this.makeScene(conversationID, result.makeScene);
-      if (!result.message.trim() && !picture && result.generate) { void this.takePicture(conversationID, result.generate); return true; }
-      if (!result.message.trim() && !picture) return (result.thoughts?.length ?? 0) > 0 || !!result.reaction;
-      // A long reply lands as the few short texts a person would send back to back,
-      // each taking its own turn through the typing indicator. The picture, link chips,
-      // and action cards ride the last bubble. Whatever the model already spent counts
-      // as time she was "writing" on that first bubble, so a slow model never pays twice.
-      // A picture with no words still needs a line in the log — the store refuses an
-      // empty message — so it gets the same stage direction your own photo share does.
-      const said = result.message.trim() || (result.snap ? "*sends a snap*" : "*sends a picture*");
-      const landed = await this.typeAndPushBubbles(conversationID, splitIntoBubbles(said), Date.now() - startedAt, {
-        // On the last bubble, so one reply contributes one mood to the run the next
-        // turn reports. See recentMoods.
-        mood: live.emotion,
-        heat: live.intensity,
-        imageId: result.imageId || undefined,
-        snap: result.snap && picture ? true : undefined,
-        links: result.links?.length ? result.links : undefined,
-        attachments: result.attachments?.length ? result.attachments : undefined,
-        actions: result.actions?.length ? result.actions : undefined,
-      }, {
-        // The quote rides the first bubble: it is what the reply *starts* by answering.
-        replyTo: result.replyTo ?? undefined,
-      });
-      // The picture she is taking lands after her words, the way it would from a phone.
-      if (landed && result.generate) void this.takePicture(conversationID, result.generate);
-      if (landed && (this.liveConversation(conversationID)?.messages.length ?? 0) > COMPRESS_AT) void this.compressConversation(conversationID, true);
-      return landed;
-    } catch (error) {
-      if (this.status?.configured || this.status?.modelBackend) {
-        try { this.status = await api.chatStatus(); } catch { /* Keep the generation error when the readiness check also fails. */ }
-      }
-      this.typingPhase = "idle";
-      this.say(!this.status?.enabled && this.status?.message ? this.status.message : (error as Error).message, true);
-      return false;
+      return await this.streamTurn(conversationID, { continuation, nudge, task, link, sharedMediaIds, redo, truncateAfter });
     }
     finally { this.busy = false; this.typingPhase = "idle"; }
+  }
+
+  /** Cancels the turn being streamed, which stops her on the server too. */
+  private turnAbort: AbortController | null = null;
+
+  /**
+   * One of her turns, run on the server and drawn as it streams in.
+   *
+   * Only what you said since her last message goes up: the server reads the rest of the
+   * conversation from the workspace, writes her replies into it, and streams each one
+   * the moment it exists — her texts, the camera's progress, the state she settles in.
+   * Her texts are queued and drawn one at a time through the typing indicator, so the
+   * stream sets what she says and this sets the pace it reads at. See libby-turn.ts.
+   *
+   * Everything this used to do itself — split the reply into bubbles, take the picture,
+   * make the room she moved to, keep her mood run and her list of sent pictures and send
+   * them all back next turn — happens on the server now, once, for every client.
+   */
+  private async streamTurn(conversationID: string, options: {
+    continuation?: boolean; nudge?: string; task?: string; link?: string; sharedMediaIds?: number[];
+    redo?: boolean; truncateAfter?: string;
+  }): Promise<boolean> {
+    const conversation = this.liveConversation(conversationID);
+    const character = conversation && this.liveCharacter(conversation.characterId);
+    if (!conversation || !character) return false;
+    const startedAt = Date.now();
+    let credited = false;
+    // Only the first text is credited the time the model already spent writing, so a
+    // slow model never pays twice; the rest are typed fresh.
+    const credit = () => { if (credited) return 0; credited = true; return Date.now() - startedAt; };
+    const queue: TurnEvent[] = [];
+    const signal: { wake?: () => void; streaming: boolean } = { streaming: true };
+    let landed = false;
+    let failure = "";
+    const draw = (async () => {
+      for (;;) {
+        const event = queue.shift();
+        if (!event) {
+          if (!signal.streaming) return;
+          await new Promise<void>((resolve) => { signal.wake = resolve; });
+          continue;
+        }
+        if (event.event === "error") { failure = String(event.data?.message || "Her reply failed."); continue; }
+        if (await this.drawTurnEvent(conversationID, event, credit)) landed = true;
+      }
+    })();
+    const nudgeDraw = () => { const wake = signal.wake; signal.wake = undefined; wake?.(); };
+    this.typingPhase = "typing";
+    this.turnAbort = new AbortController();
+    try {
+      await api.libbyTurn({
+        conversationId: conversationID,
+        conversation: { characterId: conversation.characterId, title: conversation.title, mode: conversation.mode },
+        messages: options.continuation ? [] : unsentMessages(conversation.messages),
+        redo: options.redo || undefined,
+        truncateAfter: options.truncateAfter || undefined,
+        nudge: options.nudge || undefined,
+        task: options.task || (options.continuation ? "autonomous" : undefined),
+        call: this.callOpen || undefined,
+        outfit: character.id === "libby" ? (loadLibbyOutfit() || undefined) : undefined,
+        link: options.link || undefined,
+        sharedMediaIds: options.sharedMediaIds?.length ? options.sharedMediaIds : undefined,
+        debug: this.captureTurns || undefined,
+      }, (event) => { queue.push(event); nudgeDraw(); }, this.turnAbort.signal);
+    } catch (error) {
+      if ((error as Error).name !== "AbortError") failure = (error as Error).message || "Her reply failed.";
+    } finally {
+      signal.streaming = false;
+      nudgeDraw();
+      this.turnAbort = null;
+    }
+    await draw;
+    this.making = this.making.filter((entry) => entry.conversationID !== conversationID);
+    this.typingPhase = "idle";
+    if (failure) {
+      if (this.status?.configured || this.status?.modelBackend) {
+        try { this.status = await api.chatStatus(); } catch { /* Keep the turn's own error when the readiness check also fails. */ }
+      }
+      this.say(!this.status?.enabled && this.status?.message ? this.status.message : failure, true);
+    }
+    if (landed && (this.liveConversation(conversationID)?.messages.length ?? 0) > COMPRESS_AT) void this.compressConversation(conversationID, true);
+    return landed;
+  }
+
+  /**
+   * Draws one event of a turn. Returns true when it was something of hers they can see
+   * — a message, a reaction, a call — which is what makes the turn count as answered.
+   */
+  private async drawTurnEvent(conversationID: string, event: TurnEvent, credit: () => number): Promise<boolean> {
+    const live = this.liveConversation(conversationID);
+    if (!live) return false;
+    const data = event.data ?? {};
+    switch (event.event) {
+      case "turn": {
+        // Your messages as the server stored them: read, and stamped.
+        for (const message of (data.messages ?? []) as StoredChatMessage[]) upsertMessage(live.messages, message);
+        this.bumpRev(live, data.rev);
+        this.touchWorkspace();
+        return false;
+      }
+      case "status":
+        this.typingPhase = data.phase === "typing" ? "typing" : "idle";
+        return false;
+      case "camera": {
+        const progress = data.progress ?? {};
+        const jobId = String(data.jobId || data.what || "camera");
+        const what = data.what === "clip" ? "Making a clip" : data.what === "room" ? "Going somewhere new" : cameraPhaseLabel(String(progress.phase ?? ""), Number(progress.of) || 1);
+        const icon = data.what === "room" ? "landscape" : data.what === "clip" ? "movie" : "photo_camera";
+        const shown: GenProgress = {
+          index: 0, step: 0, total: 0, percent: Math.min(1, Number(progress.percent) || 0),
+          image: progress.preview || undefined, seq: 0, done: false, cancelled: false,
+        };
+        const entry = { jobId, conversationID, what, icon, progress: shown };
+        this.making = this.making.some((m) => m.jobId === jobId)
+          ? this.making.map((m) => (m.jobId === jobId ? { ...entry, progress: { ...shown, image: shown.image ?? m.progress?.image } } : m))
+          : [...this.making, entry];
+        void this.scrollToEnd();
+        return false;
+      }
+      case "message": {
+        const message = data.message as StoredChatMessage | undefined;
+        if (!message?.id) return false;
+        // The records of the pictures it carries, so the gallery knows them and a clip
+        // is drawn as a clip.
+        for (const image of (data.images ?? []) as ChatImage[]) {
+          if (!this.workspace.images.some((known) => known.id === image.id)) this.workspace.images.push({ ...image, tags: image.tags ?? [] });
+        }
+        const fresh = !live.messages.some((m) => m.id === message.id);
+        const pictures = picturesOf(message);
+        const typed = fresh && message.role === "assistant" && !message.thought && !pictures.length && !message.voice && !isStageDirection(message.content);
+        if (typed) {
+          await this.typeLikeAPerson(message.content, credit());
+          this.typingPhase = "typing";
+        }
+        const after = this.liveConversation(conversationID);
+        if (!after) return false;
+        upsertMessage(after.messages, message);
+        this.bumpRev(after, data.rev);
+        if (pictures.length) this.making = this.making.filter((m) => m.conversationID !== conversationID || m.icon === "landscape");
+        after.updatedAt = Date.now();
+        this.touchWorkspace(); void this.scrollToEnd();
+        if (fresh && message.role === "assistant" && !message.thought && conversationID === this.conversationID) {
+          // A voice note is meant to be heard; anything else is read aloud only with voice on.
+          if (message.voice) void speak(message.content, after.intensity);
+          else if (this.speakOn && !isStageDirection(message.content)) void speak(message.content, after.intensity);
+        }
+        return fresh && message.role === "assistant";
+      }
+      case "react":
+        applyHerReaction(live.messages, String(data.to ?? ""), String(data.emoji ?? ""));
+        this.bumpRev(live, data.rev);
+        this.touchWorkspace();
+        return true;
+      case "state":
+        applyTurnState(live, data as TurnState);
+        live.updatedAt = Date.now();
+        setIntensity(live.intensity);
+        this.touchWorkspace();
+        return false;
+      case "call":
+        if (data.action === "ring" && !this.callOpen) this.ring();
+        if (data.action === "hang_up" && this.callOpen) {
+          this.endCall();
+          this.say(`${this.liveCharacter(live.characterId)?.name ?? "She"} ended the call.`);
+        }
+        return true;
+      case "room": {
+        const place = data.background as LibbyBackground | undefined;
+        if (place?.id) this.backgrounds = [...this.backgrounds.filter((bg) => bg.id !== place.id), place];
+        this.making = this.making.filter((m) => !(m.conversationID === conversationID && m.icon === "landscape"));
+        return false;
+      }
+      case "notice":
+        // Context fitting is a diagnostic, not a failed reply.
+        if (data.text) this.say(String(data.text));
+        return false;
+      case "done": {
+        this.bumpRev(live, data.rev);
+        if (data.sampling) this.lastSampling = data.sampling as ChatSampling;
+        if (data.debug) {
+          const log = this.turnLog.get(conversationID) ?? [];
+          log.push({ at: Date.now(), request: { photoTags: [], photoImageId: "", task: "" }, debug: data.debug as ChatDebug, calls: data.calls });
+          this.turnLog.set(conversationID, log.slice(-MAX_CAPTURED_TURNS));
+        }
+        this.touchWorkspace();
+        return false;
+      }
+    }
+    return false;
+  }
+
+  /** Keeps the conversation's revision at the newest the server has written, so a
+      save says it has seen everything this client was sent. */
+  private bumpRev(conversation: ChatConversation, rev: unknown) {
+    if (typeof rev === "number" && rev > (conversation.rev ?? 0)) conversation.rev = rev;
   }
 
   /**
@@ -2795,8 +2888,10 @@ export class OppaiChat extends LitElement {
     // The items they attached to the message being answered go again, or a retry
     // would answer a message she can no longer see the attachments of.
     const answered = cut > 0 ? messages[cut - 1] : undefined;
+    // The server takes her reply back too, in the same request: the cut above reaches
+    // it only with the next save, which would land after the turn had read the old tail.
     await this.generateReply(conversationID, seed, {
-      continuation: cut === 0, nudge,
+      continuation: cut === 0, nudge, redo: true,
       sharedMediaIds: answered?.role === "user" ? (answered.attachments ?? []).map((item) => item.id) : [],
     });
   }
@@ -2824,6 +2919,7 @@ export class OppaiChat extends LitElement {
     conversation.updatedAt = Date.now();
     this.touchWorkspace(); void this.scrollToEnd();
     await this.generateReply(conversationID, message.content, {
+      truncateAfter: message.id,
       sharedMediaIds: (message.attachments ?? []).map((item) => item.id),
     });
   }
@@ -3749,53 +3845,6 @@ export class OppaiChat extends LitElement {
     return keyed(section, html`<div class="panel libby-section"><oppai-settings .user=${this.user} .only=${section}></oppai-settings></div>`);
   }
 
-  /**
-   * The picture she said she was taking. Made through the same approved path an
-   * offer's Allow runs, and posted as hers when it lands; if the generator fails, the
-   * saved picture the server chose instead is sent in its place, so a switched-off
-   * generator costs a fresh picture and never the picture itself.
-   */
-  private async takePicture(conversationID: string, request: { prompt: string; fallbackImageId?: string; fallbackAttachment?: LibbyAttachment }) {
-    const stop = this.watchMaking(conversationID, "Taking a picture", "photo_camera");
-    try {
-      const made = await api.libbyAct({ id: newID(), kind: "generate", label: "", detail: "", prompt: request.prompt }, { ...this.actContext(), jobId: stop.jobId });
-      const image = made.image as ChatImage | undefined;
-      if (!image?.id) throw new Error("the generator sent nothing back");
-      this.keepWearing(made, conversationID);
-      this.receiveMadePicture(image, conversationID);
-    } catch {
-      const live = this.liveConversation(conversationID);
-      if (!live || (!request.fallbackImageId && !request.fallbackAttachment)) return;
-      live.messages.push({
-        id:newID(), role:"assistant", content:"*sends a picture*", at:Date.now(),
-        imageId: request.fallbackImageId || undefined,
-        attachments: request.fallbackAttachment ? [request.fallbackAttachment] : undefined,
-        mood:live.emotion, heat:live.intensity,
-      });
-      live.updatedAt = Date.now(); this.touchWorkspace(); void this.scrollToEnd();
-    } finally {
-      stop();
-    }
-  }
-
-  /**
-   * Shows a picture being made at the foot of its conversation until the returned stop
-   * is called, polling its progress under a fresh job id (`stop.jobId`, to send with
-   * the act).
-   */
-  private watchMaking(conversationID: string, what: string, icon: string): (() => void) & { jobId: string } {
-    const jobId = newJobId();
-    this.making = [...this.making, { jobId, conversationID, what, icon, progress: null }];
-    void this.scrollToEnd();
-    const stopWatching = watchGeneration(jobId, (progress) => {
-      this.making = this.making.map((entry) => (entry.jobId === jobId ? { ...entry, progress } : entry));
-    }, api.genProgress);
-    return Object.assign(() => {
-      stopWatching();
-      this.making = this.making.filter((entry) => entry.jobId !== jobId);
-    }, { jobId });
-  }
-
   /** A picture of her in something leaves her in it: an act's result says what she has
       on now, and the conversation keeps it. See libby_wearing.go. */
   private keepWearing(result: Record<string, unknown>, conversationID = "") {
@@ -3805,27 +3854,6 @@ export class OppaiChat extends LitElement {
     live.wearing = result.wearing;
     live.updatedAt = Date.now();
     this.touchWorkspace();
-  }
-
-  /**
-   * Makes the place she moved to that she did not have, then puts her there. Until it
-   * lands she is where she was, and a failure leaves her there: the move is lost, not
-   * the conversation, and she can be moved by hand as ever.
-   */
-  private async makeScene(conversationID: string, scene: { name: string; prompt: string }) {
-    const stop = this.watchMaking(conversationID, `Making ${scene.name || "the place"}`, "landscape");
-    try {
-      const made = await api.libbyAct({ id: newID(), kind: "background", label: "", detail: "", prompt: scene.prompt, title: scene.name }, { jobId: stop.jobId });
-      const place = made.background as LibbyBackground | undefined;
-      if (!place?.id) return;
-      this.backgrounds = [...this.backgrounds.filter((bg) => bg.id !== place.id), place];
-      const live = this.liveConversation(conversationID);
-      if (!live) return;
-      live.background = place.id; live.updatedAt = Date.now();
-      this.touchWorkspace();
-    } catch { /* She stays where she was. */ } finally {
-      stop();
-    }
   }
 
   /** Her card as it ships, for putting a field back; null until fetched. */
@@ -4203,8 +4231,8 @@ export class OppaiChat extends LitElement {
           <span>Last reply sampled as <strong>${this.lastSampling.task}</strong>${this.lastSampling.overridden?.length ? html` — you overrode ${this.lastSampling.overridden.join(", ")}` : nothing}</span>
           <button class="secondary" @click=${() => void this.copySampling()}>Copy settings</button>
         </div>` : nothing}
-        ${this.lastPhoto?.source ? html`<div class="sampling">
-          <span>Last picture chosen <strong>${describePhotoSource(this.lastPhoto.source)}</strong> — fit ${this.lastPhoto.fit} of ${this.lastPhoto.candidates} candidate${this.lastPhoto.candidates === 1 ? "" : "s"}${this.lastPhoto.tags?.length ? html`; it shows ${this.lastPhoto.tags.slice(0, 6).join(", ")}` : nothing}</span>
+        ${this.lastSampling?.toolMode ? html`<div class="sampling">
+          <span>Her actions went out as <strong>${this.lastSampling.toolMode === "json" ? "JSON answers" : "native tool calls"}</strong>${this.lastSampling.toolMode === "json" ? " — this backend refused tools" : ""}</span>
         </div>` : nothing}
         <details>
           <summary>Advanced API options</summary>
@@ -5039,6 +5067,7 @@ export class OppaiChat extends LitElement {
           { label:"Compress older messages", icon:"history", disabled:!conversation, run:() => conversation && void this.compressConversation(conversation.id) },
           { label:"Chat settings", icon:"tune", run:() => { this.settingsOpen = true; this.editorTab = "character"; } },
           { label:"Refresh model status", icon:"sync", run:() => void this.refreshModels() },
+          ...(character?.id === "libby" ? [{ label:"Have her post a story", icon:"auto_stories", run:() => void this.postStoryNow() }] : []),
           menuDivider,
           // The debugging pair. Capture has to be switched on *before* the turn you
           // want to look at, so it sits directly above the export that reads it.
@@ -5132,9 +5161,11 @@ export class OppaiChat extends LitElement {
           ${message.replyTo ? html`<button type="button" class="quote" title="Go to that message" @click=${() => this.jumpTo(message.replyTo)}>
             <strong>${message.replyTo.role === "assistant" ? character.name : (this.workspace.profile.displayName || this.user?.username || "You")}</strong>
             <span>${message.replyTo.excerpt}</span></button>` : nothing}
-          ${message.content.trim() ? html`<div class="text">${formatted(message.content, message.links, (id) => requestOpenMedia(this, id))}</div>` : nothing}
+          ${message.voice ? this.renderVoiceNote(message)
+            : message.content.trim() && !(isStageDirection(message.content) && (picturesOf(message).length || message.attachments?.length || message.actions?.length))
+              ? html`<div class="text">${formatted(message.content, message.links, (id) => requestOpenMedia(this, id))}</div>` : nothing}
           ${message.snap ? this.renderSnapTile(message, name) : html`
-            ${message.imageId ? html`<img class="sent-image" src=${api.chatImageURL(message.imageId)} alt="Image sent by ${name}"/>` : nothing}
+            ${this.renderPictures(message, name, friend)}
             ${renderAttachments(message.attachments, (id, at) => requestOpenMedia(this, id, at), name)}`}
           ${renderLinkChips(message.links, (id) => requestOpenMedia(this, id))}
           ${renderActionCards(message.actions, this.approvals.stateOf, this.approvals.decide)}
@@ -5167,6 +5198,172 @@ export class OppaiChat extends LitElement {
     return html`<div class="snap-viewer" role="dialog" aria-modal="true" aria-label="Snap" @click=${() => this.closeSnap()}>
       ${src ? html`<img src=${src} alt="Snap"/>` : html`<p>This snap is gone.</p>`}
       <span class="snap-close">Tap anywhere to close — it won't open again</span>
+    </div>`;
+  }
+
+  // --- Her pictures, and what you think of them ---------------------------------
+
+  /** A picture open full-screen, by chat image id; "" when none is. */
+  @state() private pictureOpen = "";
+
+  /**
+   * The pictures a message carries: one, a set from one shoot, or a clip. A clip is
+   * known by its record's type, which the turn sent along with it. Under each of hers,
+   * what you thought of it — see ratePicture.
+   */
+  private renderPictures(message: StoredChatMessage, name: string, hers: boolean) {
+    const ids = picturesOf(message);
+    if (!ids.length) return nothing;
+    return html`<div class="pictures ${ids.length > 1 ? "set" : ""}">${ids.map((id) => {
+      const record = this.workspace.images.find((image) => image.id === id);
+      const media = record?.mime?.startsWith("video/")
+        ? html`<video class="sent-image" src=${api.chatImageURL(id)} controls loop playsinline preload="metadata" aria-label="Clip sent by ${name}"></video>`
+        : html`<img class="sent-image" src=${api.chatImageURL(id)} alt="Picture sent by ${name}" loading="lazy" @click=${() => (this.pictureOpen = id)}/>`;
+      return html`<figure>${media}${hers && record && message.role === "assistant" ? this.renderRating(record) : nothing}</figure>`;
+    })}</div>`;
+  }
+
+  private renderRating(record: ChatImage) {
+    const rating = record.rating ?? "";
+    const choices: { value: "love" | "like" | "dislike"; emoji: string; label: string }[] = [
+      { value: "love", emoji: "❤️", label: "Love it — more like this" },
+      { value: "like", emoji: "👍", label: "Like it" },
+      { value: "dislike", emoji: "👎", label: "Not this — less like it" },
+    ];
+    return html`<div class="rate" role="group" aria-label="What you think of this picture">
+      ${choices.map((c) => html`<button type="button" class=${rating === c.value ? "on" : ""} title=${c.label} aria-label=${c.label}
+        aria-pressed=${rating === c.value ? "true" : "false"} @click=${() => void this.ratePicture(record, rating === c.value ? "" : c.value)}>${c.emoji}</button>`)}
+      ${record.mime?.startsWith("video/") ? nothing : html`<button type="button" class=${record.kept ? "on" : ""} ?disabled=${!!record.kept}
+        title=${record.kept ? "In your library" : "Keep it in your library"} aria-label=${record.kept ? "In your library" : "Keep it in your library"}
+        @click=${() => void this.keepPicture(record)}><span class="material-symbols-rounded">${record.kept ? "bookmark_added" : "bookmark_add"}</span></button>`}
+    </div>`;
+  }
+
+  /** Rates one of her pictures. The server leans the picture's tags with it, which is
+      what she reaches for and what her camera prefers next time; the weights come back
+      so the gallery's weight panel agrees without a reload. */
+  private async ratePicture(record: ChatImage, rating: "love" | "like" | "dislike" | "") {
+    try {
+      const out = await api.rateLibbyPhoto(record.id, rating);
+      record.rating = out.image.rating;
+      this.workspace.sendWeights = out.sendWeights;
+      this.requestUpdate();
+    } catch (error) { this.say((error as Error).message, true); }
+  }
+
+  private async keepPicture(record: ChatImage) {
+    try {
+      const out = await api.keepLibbyPhoto(record.id);
+      record.kept = out.id;
+      this.requestUpdate();
+      this.say("Kept — it's in your library now.");
+    } catch (error) { this.say((error as Error).message, true); }
+  }
+
+  private renderPictureViewer() {
+    if (!this.pictureOpen) return nothing;
+    return html`<div class="picture-viewer" role="dialog" aria-modal="true" aria-label="Picture" @click=${() => (this.pictureOpen = "")}>
+      <img src=${api.chatImageURL(this.pictureOpen)} alt="Picture"/>
+    </div>`;
+  }
+
+  /** A voice note: a play button that says it in her voice, and the words beneath. The
+      bars are decoration, sized from the words so two notes do not look identical. */
+  private renderVoiceNote(message: StoredChatMessage) {
+    const bars = Array.from({ length: 18 }, (_, i) => 4 + ((message.content.charCodeAt(i % Math.max(1, message.content.length)) * (i + 3)) % 12));
+    return html`<button type="button" class="voice-note" title="Play" aria-label="Play her voice note"
+      @click=${() => { stopSpeaking(); void speak(message.content, this.activeConversation?.intensity); }}>
+      <span class="material-symbols-rounded">play_arrow</span>
+      <span class="wave" aria-hidden="true">${bars.map((h) => html`<i style=${`height:${h}px`}></i>`)}</span>
+    </button><div class="voice-words">${message.content}</div>`;
+  }
+
+  /** The scene she planned, while it is under way: what it is, and how far in. */
+  private renderSceneChip(conversation: ChatConversation) {
+    const scene = conversation.scene;
+    if (!scene || !scene.beats?.length) return nothing;
+    return html`<div class="scene-chip" role="status" aria-label=${`Scene: ${scene.title}`}>
+      <span class="material-symbols-rounded" aria-hidden="true">theaters</span>
+      <span><strong>${scene.title}</strong> · ${scene.beats[scene.beat] ?? ""}</span>
+      <span class="scene-beats" aria-hidden="true">${scene.beats.map((_, i) => html`<i class=${i < scene.beat ? "done" : i === scene.beat ? "now" : ""}></i>`)}</span>
+    </div>`;
+  }
+
+  // --- Her stories --------------------------------------------------------------
+  // While you were away she posted a picture and a line, now and then. They sit as a
+  // ring around her avatar for a day; replying to one is a message quoting it.
+
+  @state() private stories: LibbyStory[] = [];
+  /** The story open in the viewer, by index; -1 when none is. */
+  @state() private storyAt = -1;
+  @state() private storyReply = "";
+
+  private async loadStories() {
+    try { this.stories = (await api.libbyStories()).stories; } catch { /* An older server has none. */ }
+  }
+
+  /** Asks her for a story now. It is one picture and one line, so it takes as long as a picture. */
+  private async postStoryNow() {
+    this.say("She's taking one…");
+    try {
+      const story = await api.postLibbyStory();
+      this.stories = [...this.stories, story];
+      this.say("She posted a story — tap her picture up top.");
+    } catch (error) { this.say((error as Error).message, true); }
+  }
+
+  private openStories() {
+    if (!this.stories.length) return;
+    const unseen = this.stories.findIndex((story) => !story.seen);
+    this.showStory(unseen >= 0 ? unseen : 0);
+  }
+
+  private showStory(at: number) {
+    if (at < 0 || at >= this.stories.length) { this.storyAt = -1; return; }
+    this.storyAt = at;
+    const story = this.stories[at];
+    if (!story.seen) {
+      story.seen = true;
+      this.stories = [...this.stories];
+      void api.seenLibbyStory(story.id).catch(() => { /* Seen locally either way. */ });
+    }
+  }
+
+  /** Replies to a story the way a messenger does: a message of yours quoting it. */
+  private replyToStory(story: LibbyStory) {
+    const text = this.storyReply.trim();
+    if (!text) return;
+    this.storyReply = "";
+    this.storyAt = -1;
+    this.replyTarget = { id: story.id, role: "assistant", at: story.at, content: `Your story: ${story.caption}` };
+    this.draft = text;
+    void this.send();
+  }
+
+  private renderStoryRing(character: ChatCharacter) {
+    if (character.id !== "libby" || !this.stories.length) return this.avatar(character, "top-avatar");
+    const unseen = this.stories.some((story) => !story.seen);
+    return html`<button type="button" class="story-ring ${unseen ? "unseen" : ""}" title="Her stories" aria-label=${unseen ? "New stories from her" : "Her stories"}
+      @click=${() => this.openStories()}>${this.avatar(character, "top-avatar")}</button>`;
+  }
+
+  private renderStoryViewer(character: ChatCharacter) {
+    const story = this.stories[this.storyAt];
+    if (!story) return nothing;
+    return html`<div class="story-viewer" role="dialog" aria-modal="true" aria-label="Her story">
+      <div class="story-bars" aria-hidden="true">${this.stories.map((_, i) => html`<i class=${i <= this.storyAt ? "seen" : ""}></i>`)}</div>
+      <div class="story-head">${this.avatar(character, "avatar")}<strong>${character.name}</strong><span class="when">${timeAgo(story.at)}</span>
+        <button type="button" title="Close" aria-label="Close" @click=${() => (this.storyAt = -1)}><span class="material-symbols-rounded">close</span></button></div>
+      <div class="story-body">
+        <img src=${api.chatImageURL(story.imageId)} alt=${story.caption}/>
+        <div class="story-caption">${story.caption}</div>
+        <button type="button" class="story-tap prev" aria-label="Previous story" @click=${() => this.showStory(this.storyAt - 1)}></button>
+        <button type="button" class="story-tap next" aria-label="Next story" @click=${() => this.showStory(this.storyAt + 1)}></button>
+      </div>
+      <form class="story-reply" @submit=${(event: Event) => { event.preventDefault(); this.replyToStory(story); }}>
+        <input placeholder=${`Reply to ${character.name}…`} .value=${this.storyReply} @input=${(event: Event) => (this.storyReply = (event.target as HTMLInputElement).value)}/>
+        <button type="submit" title="Send" aria-label="Send reply"><span class="material-symbols-rounded">send</span></button>
+      </form>
     </div>`;
   }
 
@@ -5208,7 +5405,7 @@ export class OppaiChat extends LitElement {
     return html`<div class="client ${this.mobileNavOpen ? "nav-open" : ""} ${stage!==nothing ? "with-stage" : ""} ${this.callOpen ? "in-call" : ""}" style=${this.stageWidth ? `--stage-w:${this.stageWidth}px` : ""} @pointerdown=${this.armIdle} @contextmenu=${this.chatMenu}>${this.renderSidebar()}
       <main class="main"><header class="top">
         <button class="icon-btn mobile-nav" title="Chats" aria-label="Back to chats" @click=${() => (this.mobileNavOpen=true)}><span class="material-symbols-rounded">arrow_back</span></button>
-        ${this.avatar(character,"top-avatar")}
+        ${this.renderStoryRing(character)}
         <span class="top-title"><span class="name">${character.name}</span><span class="presence"><span class="status-dot ${online ? "online" : ""}"></span>${presence}${character.id === "libby" ? ` · ${conversation.emotion}${conversation.activity ? `, ${conversation.activity}` : ""}` : ` · ${channel.topic}`}</span></span>
         ${character.id === "libby" ? nothing : html`<select class="quick-mode" aria-label="Conversation mode" title="Conversation mode" .value=${conversation.mode} @change=${(event:Event) => this.updateConversation({mode:(event.target as HTMLSelectElement).value})}>${MODES.map((mode)=>html`<option value=${mode.id}>${mode.label}</option>`)}</select>`}
         <span class="top-actions"><button class="icon-btn ${this.callOpen?"on":""}" title=${this.callOpen?"End call":"Video call"} aria-label=${this.callOpen?"End call":"Video call"} @click=${()=>this.callOpen?this.endCall():this.startCall()}><span class="material-symbols-rounded">${this.callOpen?"call_end":"videocam"}</span></button><button class="icon-btn ${this.autopilot?"on":""}" title=${this.autopilot?"Turn off autopilot":"Let the AI continue on its own"} aria-label="Autopilot" aria-pressed=${this.autopilot?"true":"false"} @click=${()=>this.toggleAutopilot()}><span class="material-symbols-rounded">smart_toy</span></button><button class="icon-btn stage-toggle ${this.stageOpen?"on":""}" title=${this.stageOpen?"Hide portrait":"Show portrait"} aria-label="Portrait" aria-pressed=${this.stageOpen?"true":"false"} @click=${()=>(this.stageOpen=!this.stageOpen)}><span class="material-symbols-rounded">wallpaper</span></button><button class="icon-btn ${this.speakOn?"on":""}" title=${this.speakOn?"Stop reading replies aloud":"Read replies aloud"} aria-label="Voice" aria-pressed=${this.speakOn?"true":"false"} @click=${()=>this.toggleSpeak()}><span class="material-symbols-rounded">${this.speakOn?"volume_up":"volume_off"}</span></button><button class="icon-btn destructive-action" title="Clear messages" aria-label="Clear messages" @click=${this.clearConversation}><span class="material-symbols-rounded">delete_sweep</span></button><button class="icon-btn ${this.settingsOpen?"on":""}" title="Chat settings" aria-label="Chat settings" @click=${()=>(this.settingsOpen=!this.settingsOpen)}><span class="material-symbols-rounded">tune</span></button></span>
@@ -5220,6 +5417,7 @@ export class OppaiChat extends LitElement {
         ${this.status?.modelBackend && !this.status.enabled ? html`<div class="backend-state" role="status"><strong>Text generation offline.</strong> ${this.status.message || "Load a model in text-generation-webui, then refresh status."}</div>` : nothing}
         ${hero}
         ${this.renderAutopilotBar(character)}
+        ${this.renderSceneChip(conversation)}
         <section class="log">${messages.length ? nothing : html`<div class="intro">${this.avatar(character,"intro-avatar")}<h2>${character.name}</h2><p>${character.description || `This is the beginning of your conversation with ${character.name}.`}</p><p>${online?`Running on ${this.status!.model}.`:character.id === "libby" ? "Libby is using built-in local replies." : "Connect a local model to start chatting."}</p></div>`}
           ${conversation.summary ? html`<details class="summary-note"><summary>Earlier messages were compressed into ${character.name}'s notes${conversation.summarizedAt ? ` · ${listTimeOf(conversation.summarizedAt)}` : ""}</summary><p>${conversation.summary}</p></details>` : nothing}
           ${messages.map((message,index)=>this.renderEntry(message,messages[index-1],messages[index+1]))}${this.making.filter((entry)=>entry.conversationID===conversation.id).map((entry)=>html`<div class="msg theirs last making-row">${this.avatar(character,"avatar")}<div class="bubble-wrap"><div class="bubble">${renderGenProgress(entry.progress,entry.what,entry.icon)}</div></div></div>`)}${this.busy&&this.typingPhase==="typing"?html`<div class="msg theirs last typing-row">${this.avatar(character,"avatar")}<div class="bubble-wrap"><div class="bubble" aria-label="${character.name} is typing"><span class="dots"><i></i><i></i><i></i></span></div></div></div>`:nothing}
@@ -5244,10 +5442,10 @@ export class OppaiChat extends LitElement {
               <button type="button" class="attach-btn" style="border:0;background:transparent" title="Attach from the library" aria-label="Attach from the library" @click=${()=>this.openPicker()}><span class="material-symbols-rounded">collections_bookmark</span></button>
               <textarea rows="1" aria-label=${`Message ${character.name}`} placeholder=${this.busy?`${character.name} is replying — you can keep going…`:`Message ${character.name}…`} .value=${this.draft} @input=${(event:Event)=>{this.draft=(event.target as HTMLTextAreaElement).value;this.noticeLink();}} @keydown=${this.onKey}></textarea>
             </div>
-            ${this.busy && this.status?.modelManagement ? html`<button class="send stop" type="button" title="Stop the reply" aria-label="Stop the reply" @click=${() => void this.stopGeneration()}><span class="material-symbols-rounded">stop</span></button>` : nothing}
+            ${this.busy ? html`<button class="send stop" type="button" title="Stop the reply" aria-label="Stop the reply" @click=${() => void this.stopGeneration()}><span class="material-symbols-rounded">stop</span></button>` : nothing}
             <button class="send" type="submit" title="Send message" aria-label="Send message" ?disabled=${!this.draft.trim()&&!this.pendingPhoto&&!this.pendingItems.length}><span class="material-symbols-rounded">send</span></button>
           </div><div class="format-help"><span>"speech" · **action** · *emphasis* · ~~strike~~ · &#96;code&#96;</span><span class="send-help"></span></div></form>
-      </main>${stage}${this.renderPicker2()}${this.renderIncomingCall(character)}${this.renderCall(character,conversation)}${this.renderSnapViewer()}
+      </main>${stage}${this.renderPicker2()}${this.renderIncomingCall(character)}${this.renderCall(character,conversation)}${this.renderSnapViewer()}${this.renderPictureViewer()}${this.renderStoryViewer(character)}
     </div>`;
   }
 
@@ -5292,17 +5490,6 @@ export class OppaiChat extends LitElement {
       <button type="button" class="incoming-btn no" title="Decline" aria-label="Decline" @click=${() => this.declineCall()}><span class="material-symbols-rounded">call_end</span></button>
       <button type="button" class="incoming-btn yes" title="Answer" aria-label="Answer" @click=${() => this.acceptCall()}><span class="material-symbols-rounded">videocam</span></button>
     </div>`;
-  }
-}
-
-/** The photo report's source, in words. */
-function describePhotoSource(source: string): string {
-  switch (source) {
-    case "ready": return "from your words, before she wrote";
-    case "model": return "from the tags she wrote";
-    case "rescue": return "as a rescue: she said she was sending one and nothing fitted";
-    case "inferred": return "unprompted, because her words matched it";
-    default: return source;
   }
 }
 

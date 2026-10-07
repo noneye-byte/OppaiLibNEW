@@ -1,6 +1,8 @@
 // Typed client for the OppaiLib API. The session token is stored in
 // localStorage and sent as a Bearer header (the backend also accepts a cookie).
 
+import { EventStreamParser, type TurnEvent } from "./libby-turn";
+
 export interface MediaTag {
   id: number;
   name: string;
@@ -496,6 +498,22 @@ export interface Settings {
   /** Also file every picture she makes in the library. Off: it is sent in the chat and
       kept with her chat photos. */
   libbyGenToLibrary: boolean;
+  /** Her camera: how many candidates a shot is taken as, for the judge to choose from. */
+  libbyCameraCandidates: number;
+  /** ControlNet names for copying a pose from your photo and keeping her face. A blank
+      model is that feature off. */
+  libbyPoseModule: string;
+  libbyPoseModel: string;
+  libbyFaceModule: string;
+  libbyFaceModel: string;
+  /** A ComfyUI server and an API-format workflow that turns a still into a clip. */
+  libbyClipUrl: string;
+  libbyClipWorkflow: string;
+  /** Whether she posts stories while you are away, and at most how many a day. */
+  libbyStories: boolean;
+  libbyStoriesPerDay: number;
+  /** How her actions reach the server: "" auto, "native" tool calls, "json". */
+  chatToolMode: string;
   /** Dresses the whole install as a Nextcloud instance: the sign-in page, the tab's
       identity, the response headers and the endpoints a scanner probes. Server-side
       rather than per-device, because half of the disguise is the server. */
@@ -671,83 +689,6 @@ export interface ChatViewingItem {
 }
 
 /**
- * One turn asked of a character.
- *
- * An object rather than a positional argument list: this grew a photo, then the
- * photo's tags, then what has already been sent, then what is on screen, and every
- * caller passing `"", [], ""` to reach the parameter it cared about was a bug
- * waiting to happen.
- */
-export interface ChatTurn {
-  mode: string;
-  messages: ChatMessage[];
-  emotion?: string;
-  intensity?: number;
-  options?: ChatOptions;
-  characterId?: string;
-  /** Which conversation this turn belongs to. The server holds every conversation
-      (the log round-trips through the workspace) and recalls the other ones into the
-      prompt, so it needs to know which one not to recap back at her. */
-  conversationId?: string;
-  /** Content tags of a photo the user attached, from the local scanner. */
-  photoTags?: string[];
-  /** That photo's id, so it is never handed straight back as the reply's picture. */
-  photoImageId?: string;
-  /** The name of the outfit Libby is wearing on this device, "" for her default
-      artwork. Which outfit is worn is a per-device choice the server never sees,
-      so it has to be told, or she describes clothes the user is not looking at. */
-  outfit?: string;
-  /** Pictures this character has already sent in this conversation, oldest first.
-      The server holds them back so the same one does not come round again. */
-  recentImageIds?: string[];
-  /** Library items this character has already attached in this conversation, oldest
-      first. The same bookkeeping as recentImageIds, for the items she hands over. */
-  recentMediaIds?: number[];
-  /** What the two of them are looking at, in a browse-together session. */
-  viewing?: ChatViewing;
-  /** A web address the user is showing her with this message. The URL only — what
-      she is told about the page is the server's summary of what it fetched for the
-      preview. A link that was never previewed is ignored rather than fetched. */
-  link?: string;
-  /** What this turn is for, when the caller knows something the text cannot show:
-      an idle nudge is an autonomous message however it is worded. Drives the
-      server's sampler choice; omit it and the server classifies the turn itself. */
-  task?: string;
-  /** The emotions her recent replies displayed, oldest first. The same bookkeeping
-      as recentImageIds: the server keeps no per-conversation state, so how long she
-      has been wearing one expression has to arrive with the turn. */
-  recentMoods?: string[];
-  /** The heat her last replies sat at, oldest first, for the same reason. */
-  recentHeat?: number[];
-  /** Asks this turn to return its working — the assembled prompt, the sections it was
-      built from, and the reply before any tag was parsed out of it. Opt-in because the
-      payload dwarfs the reply; the conversation export is what reads it back. */
-  debug?: boolean;
-  /** This client makes the picture itself when a reply asks it to (`generate`), and
-      falls back to a saved one if that fails. */
-  canGenerate?: boolean;
-  /** The conversation's compressed older part. */
-  summary?: string;
-  /** Whether the user has her on the call screen rather than in the message log.
-      A call changes what they are doing — watching her rather than reading her — and
-      the server has no other way to know it was opened. */
-  call?: boolean;
-  /** The MISC state she is currently in. Sent back each turn because the server keeps
-      nothing between them: without it a state she set three replies ago would have
-      lasted exactly one message. */
-  activity?: string;
-  /** Where she is — the background id the call screen shows. Sent back each turn for
-      the same reason as activity. */
-  background?: string;
-  /** What she has on when it is not her own clothes: "nothing", or what she changed
-      into. Sent back each turn for the same reason as activity. */
-  wearing?: string;
-  /** Library items attached to the latest message, by id. The server describes them
-      to her from its own rows. */
-  sharedMediaIds?: number[];
-}
-
-/**
  * Something Libby wrote that was not addressed to you.
  *
  * `thought` is private — she thought it and did not say it. `aside` is her talking
@@ -781,91 +722,6 @@ export interface ChatDebug {
   signals: Record<string, boolean>;
 }
 
-export interface ChatResponse {
-  /** What she actually said. Empty is legal and means she had a thought and decided
-      not to speak — check `thoughts` before treating it as a failed turn. */
-  message: string;
-  emotion?: string;
-  intensity?: number;
-  imageId?: string;
-  /** A picture she is taking now: generate it and post it as hers, or send the
-      fallback if the generator fails. Only on a turn that sent `canGenerate`. */
-  generate?: { prompt: string; fallbackImageId?: string; fallbackAttachment?: LibbyAttachment } | null;
-  /** A place she moved to that she does not have yet: make it (a `background` act),
-      then put her there. Only on a turn that sent `canGenerate`. */
-  makeScene?: { name: string; prompt: string } | null;
-  /** Library items this reply points at. Absent from older servers. */
-  links?: LibbyLink[];
-  /** Library items this reply hands over: something she chose to show, or a picture
-      of her kept in the library rather than her chat gallery. Absent from older
-      servers. */
-  attachments?: LibbyAttachment[];
-  /** Things Libby has asked to do. Proposals only — the server performs none of
-      them; a card with an Allow button is what turns one into an action. */
-  actions?: LibbyAction[];
-  /** What she thought or muttered rather than said. Absent from older servers. */
-  thoughts?: LibbyThought[];
-  /** True when the character stated its own mood rather than one being inferred.
-      A stated mood is applied as-is; an inferred one drifts by the session
-      multiplier. Absent from older servers, which is treated as inferred. */
-  declared?: boolean;
-  /** The MISC state she is in leaving this turn — reading, lounging, or something a
-      good deal less idle. It persists until she changes it, so the client stores it
-      on the conversation and sends it back with the next turn. Empty means nothing in
-      particular. Absent from older servers, which is treated as unchanged. */
-  activity?: string;
-  /** Where she is leaving this turn: a background id, or empty for nowhere in
-      particular. Persists like activity. Absent from older servers. */
-  background?: string;
-  /** What she has on leaving this turn: empty for her own clothes, "nothing", or what
-      she changed into. Persists like activity. Absent from older servers. */
-  wearing?: string;
-  /** She rang them. The client shows an incoming-call popup; only answering opens
-      the call. */
-  callRequest?: boolean;
-  /** She hung up an open call. */
-  callEnd?: boolean;
-  /** The earlier message this reply answers, drawn as a quote above it. Null when it
-      answers the latest one, which is the ordinary case. */
-  replyTo?: ChatReplyRef | null;
-  /** That the picture on this reply is a snap: tap to open, seen once, then gone.
-      Absent from older servers. */
-  snap?: boolean;
-  /** The emoji she put on one of your messages, if she did. Null otherwise. Absent
-      from older servers. */
-  reaction?: LibbyReaction | null;
-  /** How this turn was sampled. The server classifies what the turn is for and
-      picks bounded settings to match, so the client no longer ships a fixed set;
-      these come back so the advanced panel can show what was actually used and
-      offer it as one copyable line. Absent from older servers. */
-  sampling?: ChatSampling;
-  /** How the turn fitted the model's context window. A non-empty `note` means
-      something was cut — older messages, or part of what Libby knows — and is
-      meant to be shown, because the alternative is it happening invisibly.
-      Absent from older servers. */
-  context?: ChatContextReport;
-  /** Why the reply carries the picture it does, or none: which path chose it, what
-      it was matched against, how well it fitted. Diagnostics for the advanced
-      panel. Absent from older servers. */
-  photo?: ChatPhotoReport;
-  /** How this turn was built, when the request asked for it: the assembled prompt,
-      the sections behind it, and the raw reply. Null on an ordinary turn, absent
-      from older servers. */
-  debug?: ChatDebug | null;
-}
-
-/** How the reply's picture was chosen. */
-export interface ChatPhotoReport {
-  /** "ready" — chosen from your words before she wrote; "model" — from the tags she
-      wrote; "rescue" — she said she was sending one and nothing fitted; "inferred" —
-      unprompted, her words matched a picture; "" — nothing was sent. */
-  source: string;
-  request?: string;
-  fit: number;
-  tags?: string[];
-  candidates: number;
-}
-
 /** What the server chose for this generation, and what the caller overrode. */
 export interface ChatSampling {
   /** casual | emotional | factual | creative | reaction | autonomous | observation | planning */
@@ -875,6 +731,9 @@ export interface ChatSampling {
   values: ChatOptions;
   /** Keys the caller's own options replaced. */
   overridden?: string[];
+  /** How her actions travelled: "native" tool calls, or "json" for a backend that
+      refuses tools. */
+  toolMode?: string;
 }
 
 /** Token accounting for one turn. Every figure is an estimate and says so. */
@@ -1110,6 +969,60 @@ export interface StoredChatMessage extends ChatMessage {
   readAt?: number;
   /** The emoji on this message, from either side. */
   reactions?: ChatReaction[];
+  /** A set of pictures sent as one message — a shoot rather than a snapshot. imageId
+      is the first of them, for anything that only knows about one. */
+  images?: string[];
+  /** A voice note: the content is what she says, and it is played rather than read. */
+  voice?: boolean;
+  /** The conversation revision the server wrote this message at; absent on yours.
+      Sent back with the conversation so a save cannot erase what it never saw. */
+  rev?: number;
+}
+
+/** A scene she planned and is playing through, a beat at a time. */
+export interface LibbyScene {
+  title: string;
+  beats: string[];
+  beat: number;
+}
+
+/** A story she posted while you were away: one picture and a line, for a day. */
+export interface LibbyStory {
+  id: string;
+  imageId: string;
+  caption: string;
+  at: number;
+  seen?: boolean;
+}
+
+/** One turn, run on the server. Only your new messages travel; the server reads the
+    rest of the conversation from the workspace. See libby-turn.ts. */
+export interface LibbyTurnRequest {
+  conversationId: string;
+  /** A conversation this client created and has not saved yet. */
+  conversation?: { characterId: string; title: string; mode: string };
+  messages?: StoredChatMessage[];
+  redo?: boolean;
+  /** Drop everything after this message of yours before answering it. */
+  truncateAfter?: string;
+  nudge?: string;
+  task?: string;
+  call?: boolean;
+  outfit?: string;
+  viewing?: unknown;
+  link?: string;
+  sharedMediaIds?: number[];
+  debug?: boolean;
+  /** A one-off instruction for this turn, never stored: "they have just opened this". */
+  cue?: string;
+  /** A turn whose lines are not filed anywhere — the browse-together drawer. It carries
+      its own recent lines, and the character and state that stand in for a conversation. */
+  ephemeral?: boolean;
+  history?: ChatMessage[];
+  characterId?: string;
+  mode?: string;
+  emotion?: string;
+  intensity?: number;
 }
 
 export interface ChatConversation {
@@ -1138,6 +1051,11 @@ export interface ChatConversation {
   messages: StoredChatMessage[];
   createdAt: number;
   updatedAt: number;
+  /** How many times the server has written to this conversation. Kept current from
+      the turn stream and sent back on save. */
+  rev?: number;
+  /** The scene she planned, while it is under way. */
+  scene?: LibbyScene;
 }
 
 /** Which reference picture of her: in her usual clothes, or in nothing. */
@@ -1158,6 +1076,12 @@ export interface ChatImage {
       she was shown. Decided by the scanner at upload, overridable here. Absent from
       older servers, which treated everything as her. */
   subject?: "self" | "other" | string;
+  /** How a picture she took was made; present on her camera's pictures. */
+  gen?: { prompt: string; negative?: string; seed: number; shot?: string; score?: number };
+  /** What you thought of it, which leans what she sends next. */
+  rating?: "love" | "like" | "dislike" | "";
+  /** The library item it was kept as, when it was. */
+  kept?: number;
 }
 
 /** The send-weight scale, as the server understands it. Zero is unset and means
@@ -2243,6 +2167,44 @@ async function requestOnce<T>(path: string, opts: RequestInit = {}, timeoutMs = 
   }
 }
 
+/**
+ * Runs one of her turns on the server and hands each event to onEvent as it arrives.
+ *
+ * Not `request`: the answer is a stream, read as it is written, so her texts land and
+ * the camera's progress moves while the turn is still running. The same rules as
+ * every other call otherwise — the session token, a 401 signs out, an error body is
+ * the message thrown. Resolves when the stream ends; an `error` event inside it is
+ * delivered like any other, and the caller decides what it means.
+ */
+async function streamLibbyTurn(body: LibbyTurnRequest, onEvent: (event: TurnEvent) => void, signal?: AbortSignal): Promise<void> {
+  const headers = new Headers({ "Content-Type": "application/json", Accept: "text/event-stream" });
+  const token = getToken();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  const res = await fetch("/api/libby/turn", { method: "POST", headers, body: JSON.stringify(body), signal });
+  if (res.status === 401) {
+    setToken(null);
+    window.dispatchEvent(new CustomEvent("oppai-logout"));
+    throw new Error("unauthorized");
+  }
+  if (!res.ok || !res.body) {
+    let msg = res.statusText;
+    try {
+      const err = await res.json();
+      if (err?.error) msg = err.error;
+    } catch { /* ignore */ }
+    throw new Error(msg);
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  const parser = new EventStreamParser();
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    for (const event of parser.feed(decoder.decode(value, { stream: true }))) onEvent(event);
+  }
+  for (const event of parser.feed(decoder.decode() + "\n\n")) onEvent(event);
+}
+
 export const api = {
   health: () => request<{ status: string; version: string; aiEnabled: boolean; aiTagger: string }>("/api/health"),
 
@@ -2756,11 +2718,6 @@ export const api = {
     }),
 
   chatStatus: () => request<ChatStatus>("/api/chat/status", {}, 12_000),
-  chat: (body: ChatTurn) =>
-    request<ChatResponse>("/api/chat", {
-      method: "POST",
-      body: JSON.stringify({ emotion: "neutral", intensity: 1, characterId: "libby", ...body }),
-    }, 125_000),
   // Bounded, like every other chat call. This one is what the Chat screen blocks its
   // spinner on, so an unbounded fetch here is the difference between "an error you can
   // act on" and a view that spins forever with nothing on screen to explain it.
@@ -3174,6 +3131,26 @@ export const api = {
 
   /** Performs one action the user has approved. The only call in the app that acts
       on something Libby said, and it exists solely to be made by an Allow button. */
+  /** One of her turns, streamed. See libby-turn.ts for the events. */
+  libbyTurn: (body: LibbyTurnRequest, onEvent: (event: TurnEvent) => void, signal?: AbortSignal) =>
+    streamLibbyTurn(body, onEvent, signal),
+  /** Rates a picture she sent, which leans what she sends next. */
+  rateLibbyPhoto: (id: string, rating: "love" | "like" | "dislike" | "") =>
+    request<{ image: ChatImage; sendWeights: Record<string, number> }>(`/api/libby/photos/${encodeURIComponent(id)}/rate`, {
+      method: "POST", body: JSON.stringify({ rating }),
+    }),
+  /** Keeps a picture she sent in the library too. */
+  keepLibbyPhoto: (id: string) =>
+    request<{ id: number }>(`/api/libby/photos/${encodeURIComponent(id)}/keep`, { method: "POST" }, 60_000),
+  libbyStories: () => request<{ stories: LibbyStory[]; unseen: number; enabled: boolean }>("/api/libby/stories"),
+  seenLibbyStory: (id: string) => request<LibbyStory>(`/api/libby/stories/${encodeURIComponent(id)}/seen`, { method: "POST" }),
+  /** Has her post a story now, rather than waiting for a quiet afternoon. */
+  postLibbyStory: () => request<LibbyStory>("/api/libby/stories", { method: "POST" }, 6 * 60_000),
+  /** One tick of watching together: the frame on screen, and she decides whether to say anything. */
+  libbyWatch: (body: { conversationId?: string; mediaId: number; position: number; frame: string }) =>
+    request<{ quiet?: boolean; message?: StoredChatMessage; rev?: number; conversationId?: string }>("/api/libby/watch", {
+      method: "POST", body: JSON.stringify(body),
+    }, 100_000),
   libbyAct: (action: LibbyAction, context: LibbyActContext = {}) =>
     request<Record<string, unknown>>("/api/libby/act", {
       method: "POST",

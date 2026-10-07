@@ -84,11 +84,11 @@ var (
 	// you move to the kitchen" is her leaving the room, which placeCue owns. Left bare it
 	// made a room change an action, and the short message after it — "Can you
 	// masturbate?" — the answer to an offer she had never made. See actFollowUp.
-	actionCue    = regexp.MustCompile(`(?i)\b(tag|tags|retag|rename|delete|remove|favou?rite|collection|add (?:it|this|that|them|these)|save (?:it|this|that)|organi[sz]e|clean up|sort|rate|rating|move (?:it|this|that|them|these)|hide|scan|fix|tidy)\b`)
+	actionCue = regexp.MustCompile(`(?i)\b(tag|tags|retag|rename|delete|remove|favou?rite|collection|add (?:it|this|that|them|these)|save (?:it|this|that)|organi[sz]e|clean up|sort|rate|rating|move (?:it|this|that|them|these)|hide|scan|fix|tidy)\b`)
 	// "What was our last chat about, I forgot" matched none of the first list, so the
 	// turn that most needed what she had of it got the least, and she made one up.
-	pastCue      = regexp.MustCompile(`(?i)\b(last time|other day|yesterday|earlier|before|remember|recall|we talked|did we (?:talk|chat)|we (?:did|said|were doing)|you said|you told|last night|that time|previous|previously|again|still|forgot|forget|last (?:chat|conversation|convo|talk|session)|our (?:chat|conversation|convo|talk)|catch me up|where were we|where did we leave)\b`)
-	placeCue     = regexp.MustCompile(`(?i)\b(bed|bedroom|sofa|couch|kitchen|outside|balcony|bath|shower|room|where are you|go to|come to|let'?s go|move to|somewhere|scene|background|place)\b`)
+	pastCue  = regexp.MustCompile(`(?i)\b(last time|other day|yesterday|earlier|before|remember|recall|we talked|did we (?:talk|chat)|we (?:did|said|were doing)|you said|you told|last night|that time|previous|previously|again|still|forgot|forget|last (?:chat|conversation|convo|talk|session)|our (?:chat|conversation|convo|talk)|catch me up|where were we|where did we leave)\b`)
+	placeCue = regexp.MustCompile(`(?i)\b(bed|bedroom|sofa|couch|kitchen|outside|balcony|bath|shower|room|where are you|go to|come to|let'?s go|move to|somewhere|scene|background|place)\b`)
 	// actionFollowUpCue is a message that comes back to something she offered to do:
 	// "did you rename it?", "is it done", "did that work". Read against the latest
 	// message when the previous one asked for the action.
@@ -111,8 +111,8 @@ const maxActionFollowUpWords = 6
 // name, said yes. Without it she offered two names, was told which, and replied
 // "done" with no tag: the offer happened in prose and the action never existed.
 const actionFollowUpDirective = "They have just answered your offer from the last exchange — picked one, agreed, or asked whether it happened. " +
-	"This is the reply that carries the [do: …] tag with their choice in it: write it now, in this reply, and still say only that you are asking, never that it is done. " +
-	"If they are asking whether it happened, it has not until they press Allow; say so and offer it again with the tag."
+	"This is the reply that makes the offer with their choice in it: call offer now, in this reply, and still say only that you are asking, never that it is done. " +
+	"If they are asking whether it happened, it has not until they press Allow; say so and offer it again."
 
 // libraryKindAsked is the kind of thing the message names, in the library's own
 // vocabulary, or "" when it names none.
@@ -271,7 +271,7 @@ func (s *Server) libraryKindBlock(ctx context.Context, kind string, choice feedC
 	}
 	return "\n\nSome of the " + kind + "s on these shelves — real titles, a fresh handful, none of them shown this conversation: " +
 		strings.Join(parts, "; ") + ". " +
-		"When they ask for a " + kind + ", hand one of these over with [attach: <title>] in the same reply; if none of them is what they meant, say so rather than inventing one."
+		"When they ask for a " + kind + ", hand one of these over with send_from_library in the same reply; if none of them is what they meant, say so rather than inventing one."
 }
 
 // libraryWatchingBlock is the item they most recently left part-way through, when
@@ -362,7 +362,7 @@ func (s *Server) bookmarkNotes(ctx context.Context, userID int64, ids []int64) m
 			parts = append(parts, part)
 		}
 		out[id] = "They have bookmarked moments in it at " + strings.Join(parts, ", ") +
-			" — to hand them one of those rather than the whole thing, write [attach: <title> @ <time>]. "
+			" — to hand them one of those rather than the whole thing, send it from the library with the moment as at. "
 	}
 	return out
 }
@@ -479,7 +479,7 @@ func (s *Server) libraryMatchesBlock(ctx context.Context, words []string, choice
 	if len(lines) > 0 {
 		b.WriteString("\n\nItems on these shelves that their message might be about — real titles, found by matching their words: " +
 			strings.Join(lines, "; ") + ". " +
-			"If they mean one of these, talk about it by name and [link: <title>] it — or [attach: <title>] it when they asked to watch, play or read it; " +
+			"If they mean one of these, talk about it by name and [link: <title>] it — or hand it over with send_from_library when they asked to watch, play or read it; " +
 			"if none fits what they meant, say you don't have it rather than inventing one.")
 	}
 	if len(shown) > 0 {
@@ -535,7 +535,7 @@ func (s *Server) librarySuggestBlock(ctx context.Context, choice feedChoice) str
 	if b.Len() == 0 {
 		return ""
 	}
-	return "\n\nWhen they ask what to play, watch or read, recommend one of these by name — really here, a fresh handful off the shelves, so name a real one and [link: <title>] it, or [attach: <title>] it to put it in front of them. " +
+	return "\n\nWhen they ask what to play, watch or read, recommend one of these by name — really here, a fresh handful off the shelves, so name a real one and [link: <title>] it, or hand it over with send_from_library to put it in front of them. " +
 		"Suggest, don't list: pick what fits their mood and say why. Nothing already shown this conversation is on this list.\n" + b.String()
 }
 

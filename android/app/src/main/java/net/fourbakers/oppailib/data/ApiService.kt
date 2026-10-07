@@ -8,6 +8,7 @@ import retrofit2.http.Body
 import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.Header
+import retrofit2.http.Headers
 import retrofit2.http.Multipart
 import retrofit2.http.PATCH
 import retrofit2.http.POST
@@ -24,8 +25,23 @@ interface ApiService {
     @GET("api/chat/status")
     suspend fun chatStatus(): ChatStatus
 
-    @POST("api/chat")
-    suspend fun chat(@Body body: ChatRequest): ChatResponse
+    /** One of her turns, as a stream of events. See LibbyTurn.kt. */
+    @Streaming
+    @Headers("Accept: text/event-stream")
+    @POST("api/libby/turn")
+    suspend fun libbyTurn(@Body body: LibbyTurnRequest): ResponseBody
+
+    @POST("api/libby/photos/{id}/rate")
+    suspend fun rateLibbyPhoto(@Path("id") id: String, @Body body: RateRequest): RateResponse
+
+    @POST("api/libby/photos/{id}/keep")
+    suspend fun keepLibbyPhoto(@Path("id") id: String): KeepResponse
+
+    @GET("api/libby/stories")
+    suspend fun libbyStories(): LibbyStories
+
+    @POST("api/libby/stories/{id}/seen")
+    suspend fun seenLibbyStory(@Path("id") id: String): LibbyStory
 
     @GET("api/chat/models")
     suspend fun chatModels(): ChatModels

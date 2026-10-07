@@ -3,8 +3,6 @@ package api
 import (
 	"strings"
 	"testing"
-
-	"github.com/youruser/oppailib/internal/settings"
 )
 
 // words builds filler costing about n estimated tokens, so a budget test can say "a
@@ -74,28 +72,6 @@ func TestAPinnedWindowBeatsTheDefaultButNotTheLoader(t *testing.T) {
 	}
 }
 
-func TestLibbyFixedPromptLeavesRoomAtFourK(t *testing.T) {
-	card := defaultLibbyCard()
-	parts := []string{
-		libbyAutonomousStyle, card.Description, card.Appearance, card.Personality, card.Kinks,
-		card.Routine, card.Tastes, card.Limits,
-		card.Scenario, card.ExampleDialogue, card.SystemPrompt,
-		(&Server{}).libbySelfDirective(settings.Settings{}, card), linkDirective, memoryDirective,
-		wantsDirective, bondDirective, feelingsPromptBlock("hello"), moodDirective, heatScaleDirective, silenceDirective,
-	}
-	tokens := estimateTokens(strings.Join(parts, "\n"))
-	t.Logf("Libby's fixed prompt estimate: %d tokens", tokens)
-	// Leave over half a 4096-token window for dynamic memory/library sections, recent
-	// conversation, and the reply. This is the regression behind the red budget banner.
-	// The ceiling moved from 1800 to 2000 when her life fields (routine, tastes,
-	// limits; relationship and style ride in the self-directive) joined the card —
-	// under two hundred tokens for the part of her that was missing, and 2096 of
-	// the window still left for everything else.
-	if tokens > 2000 {
-		t.Fatalf("Libby's fixed prompt costs %d estimated tokens; want at most 2000", tokens)
-	}
-}
-
 func TestBackfillCompactsUntouchedLibbyPrompt(t *testing.T) {
 	card := chatCharacter{ID: "libby", SystemPrompt: legacyLibbySystemPrompt}
 	backfillLibbyCard(&card)
@@ -109,16 +85,20 @@ func TestBackfillCompactsUntouchedLibbyPrompt(t *testing.T) {
 	}
 }
 
-// The examples are where a model sees the [doing:] tag in context, so an untouched
-// copy of the version without it moves to the one with it — and her life fields, new
-// on any older install, fill in the way Appearance and Kinks do. An edited copy of
-// either is the user's and stays.
+// An untouched copy of any earlier shipped examples moves to the current ones — which
+// show no tags, since a tag in an example teaches her to write it into her prose — and
+// her life fields, new on any older install, fill in the way Appearance and Kinks do.
+// An edited copy of either is the user's and stays.
 func TestBackfillGivesLibbyHerStatesAndHerLife(t *testing.T) {
+	for _, legacy := range []string{legacyLibbyTextingExampleDialogue, legacyLibbyTaggedExampleDialogue} {
+		card := chatCharacter{ID: "libby", ExampleDialogue: legacy}
+		backfillLibbyCard(&card)
+		if card.ExampleDialogue != defaultLibbyExampleDialogue || strings.Contains(card.ExampleDialogue, "[") {
+			t.Fatalf("untouched examples were not migrated to the tag-free ones: %q", card.ExampleDialogue)
+		}
+	}
 	card := chatCharacter{ID: "libby", ExampleDialogue: legacyLibbyTextingExampleDialogue}
 	backfillLibbyCard(&card)
-	if !strings.Contains(card.ExampleDialogue, "[doing: reading]") {
-		t.Fatal("the untouched texting examples were not migrated to the ones that show her states")
-	}
 	for name, value := range map[string]string{"routine": card.Routine, "tastes": card.Tastes, "relationship": card.Relationship, "style": card.Style, "limits": card.Limits} {
 		if strings.TrimSpace(value) == "" {
 			t.Fatalf("%s was left empty on an install that predates it", name)
