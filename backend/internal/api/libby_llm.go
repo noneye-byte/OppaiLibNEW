@@ -184,17 +184,25 @@ func (s *Server) completeTurn(ctx context.Context, payload map[string]any, messa
 	out := cloneMap(payload)
 	out["messages"] = withJSONMode(messages, tools)
 	if len(tools) > 0 {
+		// Both, because each backend reads one: llama.cpp and vLLM take the schema,
+		// text-generation-webui ignores it and takes the grammar (jsonModeGrammar). A
+		// key a backend does not know is ignored, as the samplers' two dialects are.
 		out["response_format"] = map[string]any{
 			"type":        "json_schema",
 			"json_schema": map[string]any{"name": "turn", "schema": jsonModeSchema(tools)},
 		}
+		out["grammar_string"] = jsonModeGrammar(tools)
 	}
 	reply, err := s.postTurn(ctx, out, nil)
 	if err != nil && len(tools) > 0 {
-		// A backend that also refuses the schema still gets the instruction in the prompt.
+		// A backend that also refuses the constraint still gets the instruction in the
+		// prompt. 500 is included: text-generation-webui reports a grammar llama.cpp
+		// could not parse as one.
 		var status *chatBackendStatusError
-		if errors.As(err, &status) && status.Status >= 400 && status.Status < 500 {
+		if errors.As(err, &status) && status.Status >= 400 && status.Status <= 500 {
+			s.log.Info("libby: backend refused the JSON constraint; asking unconstrained", "model", model, "err", err)
 			delete(out, "response_format")
+			delete(out, "grammar_string")
 			reply, err = s.postTurn(ctx, out, nil)
 		}
 	}

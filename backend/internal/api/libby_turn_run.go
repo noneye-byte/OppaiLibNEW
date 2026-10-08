@@ -218,6 +218,7 @@ func (t *turnRun) speak(text string, texts int, detailed bool) bool {
 	// Deletion only: bracket narration a model wrote out of habit — a card's examples
 	// still teach it — is not dialogue, and nothing reads it as an action any more.
 	text = scrubDirectives(text)
+	text = stripSpeakerHeading(text, t.v.character.Name)
 	text = scrubInventedURLs(text, t.p.caps.KnownURLs)
 	text = fillNamePlaceholders(text, t.v.ws.Profile.DisplayName)
 	if !detailed {

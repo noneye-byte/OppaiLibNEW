@@ -94,3 +94,16 @@ func TestAnUntouchedStyleLineMovesToTheNewOne(t *testing.T) {
 		t.Fatal("an edited style or example set was overwritten")
 	}
 }
+
+func TestAHeadingOfHerOwnNameIsNotAText(t *testing.T) {
+	got := stripSpeakerHeading("# Libby\n\n*brightens immediately*", "Libby")
+	if strings.TrimSpace(got) != "*brightens immediately*" {
+		t.Fatalf("got %q", got)
+	}
+	if got := stripSpeakerHeading("## **libby:**\nhi", "Libby"); strings.TrimSpace(got) != "hi" {
+		t.Fatalf("a dressed-up heading of her name survived: %q", got)
+	}
+	if got := stripSpeakerHeading("# chapter one\nit was late", "Libby"); got != "# chapter one\nit was late" {
+		t.Fatalf("a heading she meant was taken: %q", got)
+	}
+}

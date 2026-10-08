@@ -120,3 +120,23 @@ func capTexts(reply string, asked int) string {
 	}
 	return strings.Join(kept, "\n\n")
 }
+
+// speakerHeading is a line that is only a markdown heading of her own name. Held to a
+// JSON format she would not write, Cydonia opened every reply with "# Libby" instead, and
+// each one landed as a bubble of its own and then sat in the history teaching the next.
+var speakerHeading = regexp.MustCompile(`(?m)^[ \t]*#{1,6}[ \t]*(.+?)[ \t]*:?[ \t]*$\n?`)
+
+// stripSpeakerHeading deletes headings that name the speaker and leaves every other
+// heading alone, since a heading she writes on purpose is hers to write.
+func stripSpeakerHeading(text, name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return text
+	}
+	return speakerHeading.ReplaceAllStringFunc(text, func(line string) string {
+		if m := speakerHeading.FindStringSubmatch(line); m != nil && strings.EqualFold(strings.Trim(m[1], "*_: "), name) {
+			return ""
+		}
+		return line
+	})
+}

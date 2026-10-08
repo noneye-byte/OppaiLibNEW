@@ -191,6 +191,10 @@ type jsonTurn struct {
 // jsonFence strips a code fence a model wraps a JSON answer in despite being told not to.
 var jsonFence = regexp.MustCompile("(?s)^\\s*```(?:json)?\\s*(.*?)\\s*```\\s*$")
 
+// envelopeStart finds the envelope where a model wrote it after prose. Unconstrained,
+// Cydonia wrote the scene out first and the envelope last, in bold.
+var envelopeStart = regexp.MustCompile(`\{\s*"messages"\s*:`)
+
 // parseJSONTurn reads a JSON-mode reply. A reply that is not the envelope is prose —
 // a model that ignored the format still said something, and losing it would be worse
 // than losing the actions it might have taken.
@@ -199,8 +203,23 @@ func parseJSONTurn(content string, known map[string]bool) llmReply {
 	if m := jsonFence.FindStringSubmatch(raw); m != nil {
 		raw = m[1]
 	}
+	if loc := envelopeStart.FindStringIndex(raw); loc != nil && loc[0] > 0 {
+		// The envelope repeats what the prose before it said, and it is the half that
+		// carries her actions; the prose is the half that was not asked for.
+		raw = raw[loc[0]:]
+	}
+	if !strings.HasPrefix(raw, "{") {
+		return llmReply{Text: strings.TrimSpace(content)}
+	}
 	var turn jsonTurn
-	if !strings.HasPrefix(raw, "{") || json.Unmarshal([]byte(raw), &turn) != nil {
+	// Decode rather than Unmarshal: what trails a complete envelope ("**", a stray
+	// bracket) is not a reason to throw the envelope away.
+	if json.NewDecoder(strings.NewReader(raw)).Decode(&turn) != nil {
+		// Cut off by the token limit or malformed past its texts: keep the texts, which
+		// is what she said, rather than reading the JSON out to them as her words.
+		if texts := salvageTexts(raw); len(texts) > 0 {
+			return llmReply{Text: strings.Join(texts, "\n\n")}
+		}
 		return llmReply{Text: strings.TrimSpace(content)}
 	}
 	var out llmReply
@@ -218,6 +237,60 @@ func parseJSONTurn(content string, known map[string]bool) llmReply {
 		}
 	}
 	return out
+}
+
+// salvageTexts reads the complete strings at the head of an envelope's messages array
+// and stops at the first thing that is not one. The grammar puts messages first, so a
+// reply cut off anywhere after them has lost only its actions.
+func salvageTexts(raw string) []string {
+	dec := json.NewDecoder(strings.NewReader(raw))
+	for _, want := range []any{json.Delim('{'), "messages", json.Delim('[')} {
+		if tok, err := dec.Token(); err != nil || tok != want {
+			return nil
+		}
+	}
+	var texts []string
+	for {
+		tok, err := dec.Token()
+		s, ok := tok.(string)
+		if err != nil || !ok {
+			return texts
+		}
+		if s = strings.TrimSpace(s); s != "" {
+			texts = append(texts, s)
+		}
+	}
+}
+
+// jsonModeGrammar is the envelope as GBNF, for text-generation-webui, which ignores
+// response_format and passes grammar_string to llama.cpp instead. It is the only thing
+// that holds a roleplay model to the format: told in words, Cydonia wrote prose with
+// the envelope tacked on the end, in bold, with its brackets unbalanced — then stopped
+// writing it at all. Under a grammar the first token she can write is "{", the tool
+// can only be one she has, and messages come first, so a reply cut off by the token
+// limit has still said its texts (salvageTexts).
+//
+// Whitespace is capped at four characters a seam: unbounded, a sampler can wander into
+// a run of newlines that never ends. Strings exclude raw control characters, which Go's
+// decoder would refuse and lose the whole turn over.
+func jsonModeGrammar(tools []llmTool) string {
+	names := make([]string, 0, len(tools))
+	for _, t := range tools {
+		names = append(names, `"\"`+t.Function.Name+`\""`)
+	}
+	return `root ::= "{" ws "\"messages\"" ws ":" ws "[" ws texts ws "]" ws "," ws "\"actions\"" ws ":" ws "[" ws actions ws "]" ws "}"
+texts ::= (string (ws "," ws string)*)?
+actions ::= (action (ws "," ws action)*)?
+action ::= "{" ws "\"tool\"" ws ":" ws tool ws "," ws "\"args\"" ws ":" ws object ws "}"
+tool ::= ` + strings.Join(names, " | ") + `
+object ::= "{" ws (string ws ":" ws value (ws "," ws string ws ":" ws value)*)? ws "}"
+array ::= "[" ws (value (ws "," ws value)*)? ws "]"
+value ::= object | array | string | number | "true" | "false" | "null"
+string ::= "\"" char* "\""
+char ::= [^"\\\x7F\x00-\x1F] | "\\" (["\\/bfnrt] | "u" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F])
+number ::= "-"? [0-9]+ ("." [0-9]+)? ([eE] [-+]? [0-9]+)?
+ws ::= ([ \t\n] ([ \t\n] ([ \t\n] [ \t\n]?)?)?)?
+`
 }
 
 // jsonModeSchema is the envelope as a JSON schema, for backends that constrain output

@@ -253,6 +253,11 @@ func TestABackendThatSilentlyDropsToolsGetsHerActionsAsJSON(t *testing.T) {
 	if !strings.Contains(systemPrompt(body), "Answer with one JSON object") {
 		t.Fatal("she was not told how to act without tools")
 	}
+	// Told in words is not enough for a roleplay model; text-generation-webui holds her
+	// to the envelope only through a grammar.
+	if g, _ := body["grammar_string"].(string); !strings.Contains(g, `"\"`+toolTakePhoto+`\""`) {
+		t.Fatalf("no grammar held her to the envelope: %q", g)
+	}
 	if c := storedConversation(t, s); c.Emotion != "happy" || c.Intensity != 2 {
 		t.Fatalf("the action in the envelope did not run: %s/%d", c.Emotion, c.Intensity)
 	}

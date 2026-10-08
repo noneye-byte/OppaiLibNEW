@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -105,5 +106,42 @@ func TestAPinnedModeWinsAndAToollessBackendIsRemembered(t *testing.T) {
 	rememberToolless("u-remember", "m")
 	if m, ok := resolveToolMode("auto", "u-remember", "m"); !ok || m != toolsJSON {
 		t.Fatal("a backend that refused tools was asked again")
+	}
+}
+
+// Her first turn on 0.54.1, verbatim in shape: the scene in prose, then the envelope in
+// bold, its action's brackets unbalanced.
+func TestAnEnvelopeWrittenAfterProseIsReadForItsTexts(t *testing.T) {
+	raw := "# Libby\n\n*brightens immediately*\n\nohhh tbh\n\n---\n**{\"messages\": [\"ohhh i've been meaning to wear something like that\", \"how's this?\"], \"actions\": [{\"tool\": \"take_photo\", \"args\": {\"framing\": \"upper body\"}]}]**"
+	reply := parseJSONTurn(raw, testTools)
+	if reply.Text != "ohhh i've been meaning to wear something like that\n\nhow's this?" {
+		t.Fatalf("text = %q", reply.Text)
+	}
+}
+
+func TestWhatTrailsACompleteEnvelopeDoesNotCostItsActions(t *testing.T) {
+	reply := parseJSONTurn(`{"messages": ["one sec"], "actions": [{"tool": "take_photo", "args": {"shot": "x"}}]}**`, testTools)
+	if reply.Text != "one sec" || len(reply.Calls) != 1 {
+		t.Fatalf("%+v", reply)
+	}
+}
+
+func TestAnEnvelopeCutOffByTheTokenLimitKeepsWhatSheSaid(t *testing.T) {
+	reply := parseJSONTurn(`{"messages": ["hold on", "almost`, testTools)
+	if reply.Text != "hold on" {
+		t.Fatalf("text = %q", reply.Text)
+	}
+}
+
+func TestTheGrammarAllowsOnlyHerTools(t *testing.T) {
+	g := jsonModeGrammar([]llmTool{
+		{Type: "function", Function: llmToolFunction{Name: "take_photo"}},
+		{Type: "function", Function: llmToolFunction{Name: "set_state"}},
+	})
+	if !strings.Contains(g, `tool ::= "\"take_photo\"" | "\"set_state\""`) {
+		t.Fatalf("tool rule = %s", g)
+	}
+	if !strings.HasPrefix(g, `root ::= "{" ws "\"messages\""`) {
+		t.Fatal("the envelope does not open on its texts")
 	}
 }
