@@ -188,3 +188,55 @@ func TestAnEditRetakesHerLastPictureFromItself(t *testing.T) {
 		t.Fatalf("prompt = %s", edit["prompt"])
 	}
 }
+
+func TestTheJudgeIsHeldToOneVerdictPerCandidate(t *testing.T) {
+	g := judgeGrammar(3)
+	root := strings.SplitN(g, "\n", 2)[0]
+	if strings.Count(root, " score ") != 3 || strings.Count(root, " verdict ") != 3 || !strings.Contains(root, `("1" | "2" | "3")`) {
+		t.Fatalf("root = %s", root)
+	}
+}
+
+// Her saved pictures are the camera's fallback. Asked for a purple dress, she reached for
+// the saved one and sent last month's red dress; the server takes the shot instead.
+func TestAskedForANewPictureASavedOneIsTakenAsAShot(t *testing.T) {
+	var judged map[string]any
+	s, token, f := turnServer(t, func(n int, body map[string]any) (int, map[string]any) {
+		msgs := body["messages"].([]any)
+		if content, ok := msgs[0].(map[string]any)["content"].([]any); ok && len(content) > 1 {
+			judged = body
+			return http.StatusOK, say(`{"scores":[8],"adult":[true],"best":1,"description":"she is in a purple sundress on the bed","fix":""}`)
+		}
+		if n == 0 {
+			return http.StatusOK, say("oh i've got one of those", callTool("s", toolSendSaved, map[string]any{"query": "me in purple dress"}))
+		}
+		return http.StatusOK, say("there")
+	})
+	cur := s.settings.Get()
+	cur.ChatVision = "on"
+	s.settings.Set(cur)
+	done := eventsNamed(runTurn(t, s, token, turnFor("Hey babe can I get a photo of you in a purple dress?", `,"debug":true`)), "done")
+	if len(f.gens) != 1 || !strings.Contains(f.gens[0]["prompt"].(string), "purple dress") {
+		t.Fatalf("no new picture was taken of what she described: %v", f.gens)
+	}
+	if g, _ := judged["grammar_string"].(string); !strings.Contains(g, "verdict") {
+		t.Fatal("the judge was not held to its answer's shape")
+	}
+	// The capture says what came of the call, not only that it was made.
+	if !strings.Contains(string(done[0].Data), "purple sundress on the bed") {
+		t.Fatalf("the call's result is not in the capture: %s", done[0].Data)
+	}
+}
+
+func TestAskedForOneSheAlreadyHasNoShotIsTaken(t *testing.T) {
+	s, token, f := turnServer(t, func(n int, body map[string]any) (int, map[string]any) {
+		if n == 0 {
+			return http.StatusOK, say("this one?", callTool("s", toolSendSaved, map[string]any{"query": "red dress"}))
+		}
+		return http.StatusOK, say("there")
+	})
+	runTurn(t, s, token, turnFor("send that red dress pic again", ""))
+	if len(f.gens) != 0 {
+		t.Fatalf("a saved picture they asked for again was retaken: %v", f.gens)
+	}
+}

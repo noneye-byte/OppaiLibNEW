@@ -160,6 +160,30 @@ func judgePrompt(candidates int, wanted, likeness string) string {
 	return b.String()
 }
 
+// judgeGrammar holds the judge to its answer's exact shape on text-generation-webui,
+// which ignores every format but a GBNF grammar_string: one score and one adult verdict
+// per candidate, no more and no fewer. Unheld, the same roleplay model that would not
+// keep to her reply's format can leave out the adult list — and a missing verdict is
+// read as not cleared, so every picture is withheld and the camera fails with nothing
+// wrong in any of them.
+func judgeGrammar(candidates int) string {
+	candidates = max(candidates, 1)
+	scores := strings.TrimSuffix(strings.Repeat(`score ws "," ws `, candidates), ` ws "," ws `)
+	adults := strings.TrimSuffix(strings.Repeat(`verdict ws "," ws `, candidates), ` ws "," ws `)
+	// best is one of the candidates, by number: unheld, a sampler writes 33.
+	best := make([]string, candidates)
+	for i := range best {
+		best[i] = fmt.Sprintf(`"%d"`, i+1)
+	}
+	return `root ::= "{" ws "\"scores\"" ws ":" ws "[" ws ` + scores + ` ws "]" ws "," ws "\"adult\"" ws ":" ws "[" ws ` + adults + ` ws "]" ws "," ws "\"best\"" ws ":" ws (` + strings.Join(best, " | ") + `) ws "," ws "\"description\"" ws ":" ws string ws "," ws "\"fix\"" ws ":" ws string ws "}"
+score ::= "10" | [0-9] ("." [0-9])?
+verdict ::= "true" | "false"
+string ::= "\"" char* "\""
+char ::= [^"\\\x7F\x00-\x1F] | "\\" (["\\/bfnrt] | "u" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F])
+ws ::= ([ \t\n] ([ \t\n] ([ \t\n] [ \t\n]?)?)?)?
+`
+}
+
 var judgeJSON = regexp.MustCompile(`(?s)\{.*\}`)
 
 // parseJudgement reads the judge's answer. ok is false when there is nothing usable in

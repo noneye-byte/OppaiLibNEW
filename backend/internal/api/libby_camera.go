@@ -112,6 +112,7 @@ func (s *Server) cameraJudge(cur settings.Settings) cameraJudgeFunc {
 			payload := map[string]any{
 				"messages":    []map[string]any{{"role": "user", "content": content}},
 				"temperature": 0.2, "max_tokens": 360, "stream": false,
+				"grammar_string": judgeGrammar(len(frames)),
 			}
 			if cur.ChatModel != "" {
 				payload["model"] = cur.ChatModel
@@ -408,6 +409,10 @@ func (s *Server) judgeCandidates(ctx context.Context, judge cameraJudgeFunc, poo
 	}
 	for _, i := range order {
 		full.Adult[i] = true
+	}
+	if len(order) == 0 {
+		// The camera then fails with "none came out right"; this is the only record of why.
+		s.log.Info("libby camera: the judge cleared none of the pictures", "candidates", len(frames), "answer", truncateRunes(answer, 600))
 	}
 	return full, order, true
 }

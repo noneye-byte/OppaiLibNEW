@@ -23,8 +23,17 @@ import (
 
 func (t *turnRun) exec(call llmToolCall) (result string, follow bool) {
 	args := call.argsMap()
-	t.calls = append(t.calls, map[string]any{"name": call.Function.Name, "args": args})
-	switch call.Function.Name {
+	// The result is kept beside the call for the debug capture: a call without it says
+	// she asked for a picture, not that the camera failed and why.
+	record := map[string]any{"name": call.Function.Name, "args": args}
+	t.calls = append(t.calls, record)
+	result, follow = t.runTool(call.Function.Name, args)
+	record["result"] = result
+	return result, follow
+}
+
+func (t *turnRun) runTool(name string, args map[string]any) (result string, follow bool) {
+	switch name {
 	case toolSetState:
 		return t.execSetState(args), false
 	case toolTakePhoto:
@@ -183,7 +192,10 @@ func (t *turnRun) sendCameraResult(res cameraResult, err error, snap bool, direc
 		if fallback := t.pickSaved(t.v.latestUser); fallback != nil {
 			t.post(*fallback)
 			t.visible = true
-			return "The camera failed (" + err.Error() + "), so you sent one you already had instead. Say so lightly.", true
+			// Told what it shows and that it is old, in so many words: told only to "say so
+			// lightly", she called last month's red dress a perfect new shot of the purple one.
+			return "The camera failed (" + err.Error() + "). Instead an older picture you already had went out, and it shows: " + t.savedShows(fallback) +
+				". It is not a new picture and may not be what they asked for — say the camera didn't work and this is an old one.", true
 		}
 		return "The camera failed: " + err.Error() + ". Nothing was sent; tell them it didn't work.", true
 	}
@@ -261,21 +273,31 @@ func (t *turnRun) pickSaved(query string) *storedChatMessage {
 
 func (t *turnRun) execSendSaved(args map[string]any) (string, bool) {
 	query := argString(args, "query")
+	// A saved picture is the camera's fallback (chat_saved_ask.go): with a camera to hand
+	// and no ask for an old one, what she described is the shot to take.
+	if t.p.tools.camera && query != "" && !asksForSavedPicture(t.v.latestUser) {
+		t.s.log.Info("libby: asked for a picture; taking one rather than sending a saved one", "query", query)
+		return t.execTakePhoto(map[string]any{"shot": query})
+	}
 	msg := t.pickSaved(query + " " + t.v.latestUser)
 	if msg == nil {
 		return "You have no saved picture of yourself to send.", true
 	}
 	t.post(*msg)
 	t.visible = true
-	tags := ""
+	return "Sent one you already had; it shows: " + t.savedShows(msg) + ".", true
+}
+
+// savedShows is what a saved picture shows, in her gallery's words.
+func (t *turnRun) savedShows(msg *storedChatMessage) string {
 	if msg.ImageID != "" {
 		if meta, ok := imageMeta(t.v.ws, msg.ImageID); ok {
-			tags = strings.Join(firstN(meta.Tags, 12), ", ")
+			return strings.Join(firstN(meta.Tags, 12), ", ")
 		}
 	} else if len(msg.Attachments) > 0 {
-		tags = msg.Attachments[0].Title
+		return msg.Attachments[0].Title
 	}
-	return "Sent one you already had; it shows: " + tags + ".", true
+	return "a picture of you"
 }
 
 func (t *turnRun) execSendLibrary(args map[string]any) (string, bool) {
