@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 )
 
 // What the history actually said.
@@ -256,4 +257,17 @@ func truncateRunes(text string, n int) string {
 		cut = cut[:i]
 	}
 	return strings.TrimSpace(cut) + "…"
+}
+
+// truncateUTF8 cuts text to at most n bytes without splitting a character, for a limit
+// that is a storage size rather than a length anyone reads.
+func truncateUTF8(text string, n int) string {
+	if len(text) <= n {
+		return text
+	}
+	cut := n
+	for cut > 0 && !utf8.RuneStart(text[cut]) {
+		cut--
+	}
+	return text[:cut]
 }

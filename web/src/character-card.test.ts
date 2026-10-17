@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { deflateSync } from "node:zlib";
 
-import { parseCharacterCard, readCardFromPNG, characterToCard } from "./character-card.ts";
+import { parseCharacterCard, readCardFromPNG, characterToCard, CARD_FIELD_BYTES, fitBytes, expandCardMacros } from "./character-card.ts";
 import type { ChatCharacter } from "./api.ts";
 
 test("a flat V1 card reads its fields from the top level", () => {
@@ -57,6 +57,37 @@ test("a nameless card falls back to the filename, and a lorebook is reported", (
   );
   assert.equal(parsed.character.name, "from-file");
   assert.equal(parsed.leftovers.characterBook, true);
+});
+
+test("a field past the server's cap is cut to it on import, and the cut is reported", () => {
+  const notes = "<p>Thanks for downloading!</p>".repeat(2000); // ~58 KB of creator page
+  const parsed = parseCharacterCard({ spec: "chara_card_v2", data: { name: "Dee", creator_notes: notes, description: "Short." } }, "fallback");
+  assert.ok(new TextEncoder().encode(parsed.character.creatorNotes ?? "").length <= CARD_FIELD_BYTES);
+  assert.equal(parsed.character.description, "Short.");
+  assert.deepEqual(parsed.leftovers.trimmed, ["creator_notes"]);
+});
+
+test("the cap is in bytes, and a cut never splits a character", () => {
+  // Three bytes each: counted as characters this would pass, and the server would refuse it.
+  const greeting = "こんにちは".repeat(3000);
+  const parsed = parseCharacterCard({ name: "Eri", first_mes: greeting }, "fallback");
+  const bytes = new TextEncoder().encode(parsed.character.firstMessage ?? "");
+  assert.ok(bytes.length <= CARD_FIELD_BYTES);
+  assert.ok(!(parsed.character.firstMessage ?? "").includes("�"));
+  assert.deepEqual(parsed.leftovers.trimmed, ["first_mes"]);
+});
+
+test("a card within the cap is imported untouched", () => {
+  const parsed = parseCharacterCard({ name: "Fay", description: "A witch.", alternate_greetings: ["Hello."] }, "fallback");
+  assert.deepEqual(parsed.leftovers.trimmed, []);
+  assert.equal(fitBytes("abc", 3), "abc");
+});
+
+test("a greeting's placeholders are written as the names in play", () => {
+  assert.equal(expandCardMacros("*{{char}} looks up.* Oh, {{user}}! <BOT> missed you, <USER>.", "Gwen", "Sam"),
+    "*Gwen looks up.* Oh, Sam! Gwen missed you, Sam.");
+  // With no name of their own, the greeting is addressed to them rather than to a slot.
+  assert.equal(expandCardMacros("Welcome back, {{ User }}.", "Gwen", ""), "Welcome back, you.");
 });
 
 test("a non-object is refused with a readable reason", () => {

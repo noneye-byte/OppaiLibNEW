@@ -145,7 +145,7 @@ func (t *turnRun) cameraReq() cameraRequest {
 	return cameraRequest{
 		userID: t.userID, r: t.r, jobID: jobID,
 		outfitID: t.req.Outfit, wearing: t.wearing, activity: t.activity, place: place,
-		intensity: t.intensity, weights: t.v.ws.SendWeights,
+		intensity: t.intensity, weights: t.v.ws.SendWeights, at: t.v.now,
 		progress: func(p cameraProgress) {
 			t.stream.send("camera", map[string]any{"jobId": jobID, "progress": p})
 		},

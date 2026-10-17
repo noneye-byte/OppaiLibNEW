@@ -52,6 +52,9 @@ type libbyTurnRequest struct {
 	// shows her in.
 	Call   bool   `json:"call,omitempty"`
 	Outfit string `json:"outfit,omitempty"`
+	// TimeZone is the device's IANA zone, so the hour she lives in is theirs. See
+	// libby_clock.go.
+	TimeZone string `json:"timeZone,omitempty"`
 	// What they are looking at together, a link they are showing her, and library items
 	// attached by reference.
 	Viewing        *chatViewing `json:"viewing,omitempty"`
@@ -439,7 +442,7 @@ func newTurnView(ws chatWorkspace, conv chatConversation, userID int64, isAdmin 
 	if !ok {
 		character = defaultLibbyCard()
 	}
-	v := &turnView{ws: ws, conv: conv, character: character, userID: userID, isAdmin: isAdmin}
+	v := &turnView{ws: ws, conv: conv, character: character, userID: userID, isAdmin: isAdmin, now: turnClock(req.TimeZone, time.Now())}
 	v.books = readBookkeeping(conv.Messages)
 	messages := asChatMessages(conv.Messages)
 	if len(messages) > maxChatMessages {

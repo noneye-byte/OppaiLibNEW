@@ -32,6 +32,10 @@ const (
 	// wild carry a handful; a dozen is past what anybody picks between, and each one
 	// is stored at a first message's full size.
 	maxAltGreetings = 12
+	// maxCardField bounds one field of a character card, in bytes. It was 12,000, which
+	// a card's creator notes alone pass on the sites cards come from, and a card that
+	// crossed it could not be saved at all. See validateChatWorkspace.
+	maxCardField = maxChatText
 )
 
 // chatProfile is what the user has said about themselves.
@@ -830,13 +834,28 @@ func validateChatWorkspace(ws *chatWorkspace) error {
 		if c.Name, ok = cleanLimited(c.Name, 120); !ok || c.Name == "" {
 			return errors.New("every character needs a name")
 		}
-		fields := []*string{&c.Description, &c.Appearance, &c.Personality, &c.Kinks, &c.Scenario, &c.FirstMessage, &c.ExampleDialogue, &c.SystemPrompt, &c.CreatorNotes,
-			&c.Routine, &c.Tastes, &c.Relationship, &c.Style, &c.Limits}
-		for _, field := range fields {
-			if *field, ok = cleanLimited(*field, 12000); !ok {
-				return errors.New("character card is too large")
+		// One field over its cap fails the whole save, every conversation in it included,
+		// and a turn with that card then finds no conversation to answer. So the cap is a
+		// message's: the first message becomes one, and a card field the model reads is no
+		// more trouble than a long text. The error names the card, since the user has to
+		// find which of forty it was.
+		for _, f := range []struct {
+			field *string
+			label string
+		}{
+			{&c.Description, "description"}, {&c.Appearance, "appearance"}, {&c.Personality, "personality"}, {&c.Kinks, "kinks"},
+			{&c.Scenario, "scenario"}, {&c.FirstMessage, "first message"}, {&c.ExampleDialogue, "example dialogue"},
+			{&c.SystemPrompt, "system prompt"}, {&c.Routine, "routine"}, {&c.Tastes, "tastes"}, {&c.Relationship, "relationship"},
+			{&c.Style, "style"}, {&c.Limits, "limits"},
+		} {
+			if *f.field, ok = cleanLimited(*f.field, maxCardField); !ok {
+				return fmt.Errorf("%s's %s is too long (%d KB; the limit is %d KB)", c.Name, f.label, len(*f.field)>>10, maxCardField>>10)
 			}
 		}
+		// Creator notes are the card author's page — markdown, HTML, embedded pictures —
+		// and on cards from the big sites routinely run past any cap meant for prose. The
+		// model never reads them, so a long one is cut rather than refused.
+		c.CreatorNotes = truncateUTF8(strings.TrimSpace(c.CreatorNotes), maxCardField)
 		// Alternate greetings are bounded on both axes. A card with two hundred of
 		// them is a card built to fill a workspace file, and each one is a first
 		// message, so it gets a first message's ceiling.
@@ -845,9 +864,9 @@ func validateChatWorkspace(ws *chatWorkspace) error {
 		}
 		kept := c.AltGreetings[:0]
 		for _, greeting := range c.AltGreetings {
-			cleaned, fine := cleanLimited(greeting, 12000)
+			cleaned, fine := cleanLimited(greeting, maxCardField)
 			if !fine {
-				return errors.New("character card is too large")
+				return fmt.Errorf("one of %s's alternate greetings is too long (the limit is %d KB)", c.Name, maxCardField>>10)
 			}
 			if cleaned != "" {
 				kept = append(kept, cleaned)

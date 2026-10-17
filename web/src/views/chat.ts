@@ -44,7 +44,7 @@ import { SHARE_EVENT, takePendingShare } from "../chat-share.js";
 import { excerptOf } from "../chat-replies.js";
 import { libbyMotion } from "../libby-motion.js";
 import { profileUpdates } from "../ui-metrics.js";
-import { characterToCard, readCardFile } from "../character-card.js";
+import { CARD_FIELD_BYTES, characterToCard, expandCardMacros, readCardFile } from "../character-card.js";
 import {
   ActionApprovals, actionCardStyles, attachmentStyles, KIND_ICONS, linkChipStyles, recentlyAttached,
   renderActionCards, renderAttachments, renderGenProgress, renderLinkChips, requestOpenMedia,
@@ -2149,7 +2149,7 @@ export class OppaiChat extends LitElement {
   private newConversation(save = true) {
     const character = this.activeCharacter; if (!character) return;
     const now = Date.now();
-    let opener = character.firstMessage?.trim() ?? "";
+    let opener = expandCardMacros(character.firstMessage?.trim() ?? "", character.name, this.workspace.profile.displayName || this.user?.username || "");
     let emotion: LibbyEmotion = normalizeEmotion(MODES.find((mode) => mode.id === character.defaultMode)?.emotion);
     if (character.id === "libby") {
       // Open in the mood she last left off in, so a fresh chat picks up her disposition
@@ -3041,6 +3041,9 @@ export class OppaiChat extends LitElement {
         added.push(character.name);
         if (parsed.leftovers.alternateGreetings > 0) {
           notes.push(`${character.name}: kept ${parsed.leftovers.alternateGreetings} alternate greeting${parsed.leftovers.alternateGreetings === 1 ? "" : "s"}`);
+        }
+        if (parsed.leftovers.trimmed.length) {
+          notes.push(`${character.name}: ${parsed.leftovers.trimmed.join(", ")} cut to ${CARD_FIELD_BYTES >> 10} KB, the most one field can hold`);
         }
         if (parsed.leftovers.characterBook) {
           notes.push(`${character.name}: the card's lorebook was dropped — this app has nowhere to put one`);

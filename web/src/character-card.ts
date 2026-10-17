@@ -45,6 +45,41 @@ export interface CardLeftovers {
   tags: string[];
   creator: string;
   characterVersion: string;
+  /** Fields cut to CARD_FIELD_BYTES, by the card's own name for them. */
+  trimmed: string[];
+}
+
+/**
+ * The most one field of a card may hold, in UTF-8 bytes — the server's maxCardField.
+ *
+ * Measured in bytes because that is what the server measures: a card written in
+ * Japanese is three bytes a character, and counting characters here would import a
+ * card the server then refuses. And refused means the whole workspace stops saving,
+ * so the card is cut on the way in and the cut is reported instead.
+ */
+export const CARD_FIELD_BYTES = 32 * 1024;
+
+/** Cuts text to at most `bytes` of UTF-8 without splitting a character. */
+export function fitBytes(text: string, bytes: number): string {
+  const encoded = new TextEncoder().encode(text);
+  if (encoded.length <= bytes) return text;
+  let cut = bytes;
+  // A continuation byte is 10xxxxxx; back up to the start of the character it belongs to.
+  while (cut > 0 && (encoded[cut] & 0xc0) === 0x80) cut--;
+  return new TextDecoder().decode(encoded.subarray(0, cut)).trimEnd();
+}
+
+/**
+ * Writes the names in play into a card's placeholders — the server's expandCardMacros.
+ *
+ * A greeting is stored as the first message of a conversation, so it is expanded when
+ * the conversation starts: shown raw it reads "Welcome back, {{user}}", and a model
+ * that sees its own first line with a slot in it fills slots the same way afterwards.
+ */
+export function expandCardMacros(text: string, charName: string, userName: string): string {
+  const char = charName.trim() || "the character";
+  const user = userName.trim() || "you";
+  return text.replace(/\{\{\s*(char|user)\s*\}\}|<\s*(bot|user)\s*>/gi, (match) => (/char|bot/i.test(match) ? char : user));
 }
 
 export interface ParsedCard {
@@ -141,7 +176,21 @@ export function parseCharacterCard(parsed: unknown, fallbackName: string): Parse
     promptWeight: typeof ours.promptWeight === "number" && Number.isFinite(ours.promptWeight) ? ours.promptWeight : 1,
     defaultMode: pick(ours, "defaultMode") || "roleplay",
   };
-  if (alternateGreetings.length) character.altGreetings = alternateGreetings;
+  const trimmed: string[] = [];
+  const fields: [keyof typeof character, string][] = [
+    ["description", "description"], ["personality", "personality"], ["scenario", "scenario"], ["firstMessage", "first_mes"],
+    ["exampleDialogue", "mes_example"], ["systemPrompt", "system_prompt"], ["creatorNotes", "creator_notes"],
+  ];
+  for (const [key, label] of fields) {
+    const value = character[key];
+    if (typeof value !== "string") continue;
+    const fitted = fitBytes(value, CARD_FIELD_BYTES);
+    if (fitted !== value) { (character as Record<string, unknown>)[key] = fitted; trimmed.push(label); }
+  }
+  if (alternateGreetings.length) {
+    character.altGreetings = alternateGreetings.map((greeting) => fitBytes(greeting, CARD_FIELD_BYTES));
+    if (character.altGreetings.some((greeting, i) => greeting !== alternateGreetings[i])) trimmed.push("alternate_greetings");
+  }
 
   return {
     character,
@@ -152,6 +201,7 @@ export function parseCharacterCard(parsed: unknown, fallbackName: string): Parse
       tags,
       creator: pick(data, "creator"),
       characterVersion: pick(data, "character_version", "characterVersion"),
+      trimmed,
     },
   };
 }

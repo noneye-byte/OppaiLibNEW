@@ -60,7 +60,10 @@ type cameraRequest struct {
 	outfitID, wearing, activity, place string
 	intensity                          int
 	weights                            map[string]float64
-	progress                           func(cameraProgress)
+	// at is when she takes it, on their clock, for the light; zero leaves the light to
+	// the shot.
+	at       time.Time
+	progress func(cameraProgress)
 }
 
 // cameraProgress is what the conversation is shown while she takes it.
@@ -199,6 +202,10 @@ func (s *Server) takePictures(ctx context.Context, req cameraRequest) (cameraRes
 		activity = ""
 	}
 	prompt, stateTags := s.libbySelfiePrompt(cur.LibbyGenPrompt, subject, req.outfitID, wearing, activity, req.intensity)
+	// An edit keeps the light of the picture it starts from.
+	if light := shotLight(shot, req.place, req.at); light != "" && init == nil {
+		prompt += ", " + light
+	}
 	gr := generateReq{
 		Prompt:         prompt,
 		NegativePrompt: withAdultNegative(cur.LibbyGenNegativePrompt),

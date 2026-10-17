@@ -1023,6 +1023,8 @@ export interface LibbyTurnRequest {
   mode?: string;
   emotion?: string;
   intensity?: number;
+  /** This device's IANA zone, so the hour she lives in is yours. Filled in by libbyTurn. */
+  timeZone?: string;
 }
 
 export interface ChatConversation {
@@ -2180,7 +2182,12 @@ async function streamLibbyTurn(body: LibbyTurnRequest, onEvent: (event: TurnEven
   const headers = new Headers({ "Content-Type": "application/json", Accept: "text/event-stream" });
   const token = getToken();
   if (token) headers.set("Authorization", `Bearer ${token}`);
-  const res = await fetch("/api/libby/turn", { method: "POST", headers, body: JSON.stringify(body), signal });
+  // Every turn says what time it is here, whoever builds the request: the server is often
+  // on another clock, and she should be on yours.
+  let timeZone = "";
+  try { timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone ?? ""; } catch { /* left to the server's clock */ }
+  const sent = timeZone && !body.timeZone ? { ...body, timeZone } : body;
+  const res = await fetch("/api/libby/turn", { method: "POST", headers, body: JSON.stringify(sent), signal });
   if (res.status === 401) {
     setToken(null);
     window.dispatchEvent(new CustomEvent("oppai-logout"));

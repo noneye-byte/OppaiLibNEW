@@ -13,6 +13,9 @@ import (
 	"path/filepath"
 	"syscall"
 	"time"
+	// The zone database, for the hour she lives in (api/libby_clock.go): a slim image may
+	// have none of its own, and a zone name that does not load falls back to the server's.
+	_ "time/tzdata"
 
 	"github.com/youruser/oppailib/internal/ai"
 	"github.com/youruser/oppailib/internal/api"

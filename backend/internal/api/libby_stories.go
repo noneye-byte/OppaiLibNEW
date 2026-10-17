@@ -216,7 +216,7 @@ func (s *Server) postStory(ctx context.Context, userID int64) (libbyStory, error
 	res, err := s.takePictures(ctx, cameraRequest{
 		userID: userID, shot: idea.Shot, framing: idea.Framing,
 		wearing: latest.Wearing, activity: activity, place: place, intensity: 1,
-		weights: ws.SendWeights,
+		weights: ws.SendWeights, at: time.Now(),
 	})
 	if err != nil {
 		return libbyStory{}, err

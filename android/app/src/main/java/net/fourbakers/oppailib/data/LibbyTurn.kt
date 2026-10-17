@@ -33,6 +33,8 @@ data class LibbyTurnRequest(
     val call: Boolean = false,
     val outfit: String = "",
     val sharedMediaIds: List<Long> = emptyList(),
+    /** This phone's zone, so the hour she lives in is yours. Pass it explicitly: defaults are not encoded. */
+    val timeZone: String = "",
 )
 
 @Serializable

@@ -470,7 +470,10 @@ fun ChatScreen(
 
     fun newConversation(ws: ChatWorkspace, char: ChatCharacter): ChatWorkspace {
         val now = System.currentTimeMillis()
-        val opener = if (char.firstMessage.isNotBlank()) char.firstMessage else if (char.id == "libby") LibbyVoice.opener(char.defaultMode).message else ""
+        // A card's greeting is written with {{char}} and {{user}} in it; shown raw, and sent
+        // back raw as her first line, it teaches the model to write slots.
+        val opener = if (char.firstMessage.isNotBlank()) expandCardMacros(char.firstMessage, char.name, ws.profile.displayName)
+            else if (char.id == "libby") LibbyVoice.opener(char.defaultMode).message else ""
         val convo = ChatConversation(
             id = chatID(), characterId = char.id, mode = char.defaultMode, emotion = chatModes.firstOrNull { it.id == char.defaultMode }?.emotion ?: "neutral",
             intensity = if (char.id == "libby") intensity else 1, progress = if (char.id == "libby") intensity.toDouble() else 1.0, options = baseOptions(),
@@ -705,6 +708,7 @@ fun ChatScreen(
                 // What she has on: the worn outfit is a per-device pref.
                 outfit = if (char.id == "libby") repo.prefs.libbyOutfit else "",
                 sharedMediaIds = sharedIds,
+                timeZone = java.util.TimeZone.getDefault().id,
             )
             runCatching {
                 // Buffered so a long typing pause never holds the stream up behind it.
@@ -2875,6 +2879,29 @@ private fun LibbyChatBanner(
     }
 }
 
+/** The most one card field may hold, in UTF-8 bytes: the server's maxCardField. Past it the
+ *  server refuses the whole workspace, so a card is cut to it on the way in instead. */
+private const val CARD_FIELD_BYTES = 32 * 1024
+
+/** Cuts text to at most [bytes] of UTF-8 without splitting a character. */
+private fun fitBytes(text: String, bytes: Int): String {
+    val encoded = text.toByteArray(Charsets.UTF_8)
+    if (encoded.size <= bytes) return text
+    var cut = bytes
+    // A continuation byte is 10xxxxxx; back up to the start of the character it belongs to.
+    while (cut > 0 && (encoded[cut].toInt() and 0xC0) == 0x80) cut--
+    return encoded.copyOfRange(0, cut).toString(Charsets.UTF_8).trimEnd()
+}
+
+private val cardMacro = Regex("""\{\{\s*(char|user)\s*\}\}|<\s*(bot|user)\s*>""", RegexOption.IGNORE_CASE)
+
+/** Writes the names in play into a card's placeholders, as the server and the web do. */
+private fun expandCardMacros(text: String, charName: String, userName: String): String {
+    val char = charName.trim().ifBlank { "the character" }
+    val user = userName.trim().ifBlank { "you" }
+    return cardMacro.replace(text) { m -> if (m.value.contains("char", true) || m.value.contains("bot", true)) char else user }
+}
+
 /** Reads either Character Card V2 JSON or SillyTavern's PNG `chara` tEXt chunk. */
 private fun importedChatCharacter(bytes: ByteArray): ChatCharacter {
     var jsonText = bytes.toString(Charsets.UTF_8)
@@ -2898,7 +2925,7 @@ private fun importedChatCharacter(bytes: ByteArray): ChatCharacter {
     }
     val root = Json.parseToJsonElement(jsonText).jsonObject
     val data = root["data"]?.jsonObject ?: root
-    fun value(name: String, fallback: String = "") = data[name]?.jsonPrimitive?.content ?: fallback
+    fun value(name: String, fallback: String = "") = fitBytes(data[name]?.jsonPrimitive?.content ?: fallback, CARD_FIELD_BYTES)
     return ChatCharacter(
         id = chatID(), name = value("name", "Imported friend"), description = value("description"), personality = value("personality"),
         scenario = value("scenario"), firstMessage = value("first_mes", value("firstMessage")), exampleDialogue = value("mes_example"),

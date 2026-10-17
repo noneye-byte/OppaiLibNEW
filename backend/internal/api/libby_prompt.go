@@ -31,6 +31,8 @@ type turnView struct {
 	latestUser string
 	prevUser   string
 	books      conversationBookkeeping
+	// now is the moment of the turn on their clock.
+	now time.Time
 }
 
 // turnPrompt is the assembled prompt, before fitting, and what the rest of the turn
@@ -230,6 +232,9 @@ func (s *Server) buildTurnPrompt(ctx context.Context, cur settings.Settings, v *
 		}
 		tail.WriteString(feelingsPromptBlock(v.latestUser))
 		tail.WriteString(activityStateDirective(v.conv.Activity))
+		// Hers only: a card's scenario has its own clock, and a tavern keeper told it is
+		// Friday night in October has been pulled out of her world.
+		tail.WriteString(clockDirective(v.now))
 	}
 	tail.WriteString(moodPromptBlock(v.books.moods, v.conv.Emotion))
 	tail.WriteString(heatPromptBlock(v.books.heat, v.conv.Intensity))
@@ -241,7 +246,9 @@ func (s *Server) buildTurnPrompt(ctx context.Context, cur settings.Settings, v *
 		if describer.carried(m) != "" {
 			annotated = true
 		}
-		history = append(history, chatMessage{Role: m.Role, Content: historyContent(m, describer)})
+		// A card's greeting is stored as the card wrote it, {{user}} and all, and a model
+		// shown its own first line with a slot in it fills the slot the same way next time.
+		history = append(history, chatMessage{Role: m.Role, Content: expand(historyContent(m, describer))})
 	}
 	if annotated {
 		tail.WriteString("\n\n" + historyNotesDirective)

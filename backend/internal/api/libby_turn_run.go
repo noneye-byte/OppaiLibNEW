@@ -84,7 +84,11 @@ func (t *turnRun) run() error {
 	t.background = v.conv.Background
 	tier := resolveModelTier(cur.ChatModelTier, t.model)
 	task, preset := tuneSampling(v.in, v.latestUser, tier)
-	detailed := detailAsked(v.latestUser) && task == taskCreative
+	// A card in roleplay mode writes a scene, the way the card was written and the way
+	// it reads in SillyTavern: one message, paragraphs and all. Held to Libby's texting
+	// — "one text, no blank lines", the rest cut — a roleplay reply lost everything past
+	// its second paragraph, mid-scene.
+	detailed := (detailAsked(v.latestUser) && task == taskCreative) || (!t.isLibby && v.in.Mode == "roleplay")
 	texts := textsForTurn(task, v.latestUser, rollTexts())
 	if !detailed {
 		t.p.tail += "\n\n" + textCountDirective(texts)
@@ -221,6 +225,9 @@ func (t *turnRun) speak(text string, texts int, detailed bool) bool {
 	text = stripSpeakerHeading(text, t.v.character.Name)
 	text = scrubInventedURLs(text, t.p.caps.KnownURLs)
 	text = fillNamePlaceholders(text, t.v.ws.Profile.DisplayName)
+	// What fillNamePlaceholders leaves is a card's own syntax — {{char}}, <BOT> — which a
+	// model reading a macro-dense card writes back as often as {{user}}.
+	text = expandCardMacros(text, t.v.character.Name, t.v.ws.Profile.DisplayName)
 	if !detailed {
 		text = capTexts(text, texts)
 	}
