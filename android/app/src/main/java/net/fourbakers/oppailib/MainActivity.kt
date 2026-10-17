@@ -54,7 +54,7 @@ import net.fourbakers.oppailib.data.Repository
 import net.fourbakers.oppailib.data.ScrapeImportRequest
 import net.fourbakers.oppailib.data.UrlRequest
 import net.fourbakers.oppailib.ui.LibbyPortrait
-import net.fourbakers.oppailib.ui.LibraryScreen
+import net.fourbakers.oppailib.ui.AppShell
 import net.fourbakers.oppailib.ui.LoginScreen
 import net.fourbakers.oppailib.ui.mascotAsset
 import net.fourbakers.oppailib.ui.theme.OppaiTheme
@@ -382,7 +382,7 @@ private fun AppRoot(
                     lockError = null
                 },
             )
-            else -> LibraryScreen(
+            else -> AppShell(
                 repo = repo,
                 onLogout = { repo.clearSession(); authed = false },
             )

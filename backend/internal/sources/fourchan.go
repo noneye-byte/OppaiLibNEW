@@ -91,6 +91,13 @@ func (f *FourChan) Decorate(req *http.Request) {
 	}
 }
 
+// CacheMediaUpTo opts 4chan into the proxy's whole-file cache. Its CDN rate-limits
+// video files per address (a 429 with a Retry-After of up to an hour), and the board
+// limits keep every upload to a few megabytes — 4 MB for most, 6 MB on /wsg/ — so
+// holding a file whole is cheap and turns a player's many range requests into one.
+// The headroom is for a board whose limit moves.
+func (f *FourChan) CacheMediaUpTo() int64 { return 16 << 20 }
+
 // fourChanIndex is the shape of /{board}/{page}.json, narrowed to what we read. The
 // first post of each thread is its OP.
 type fourChanIndex struct {

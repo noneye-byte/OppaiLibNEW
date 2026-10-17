@@ -163,14 +163,21 @@ fun ViewerScreen(
     onChanged: (Media) -> Unit,
     onSearchTag: (String) -> Unit,
     onDelete: (Media) -> Unit,
+    // The library hands over the page it has loaded, not the whole collection; this is
+    // how the feed asks for the next page as you swipe towards the end of it.
+    onNearEnd: () -> Unit = {},
 ) {
     if (items.isEmpty()) { onClose(); return }
+    HideNavigationBar()
 
     // The Android back button/gesture leaves the viewer, the same as the chrome's X —
     // without this it would pop the activity and drop the user out of the app instead.
     BackHandler { onClose() }
 
     val feed = rememberPagerState(initialPage = startIndex.coerceIn(0, items.lastIndex)) { items.size }
+    LaunchedEffect(feed.currentPage, items.size) {
+        if (feed.currentPage >= items.size - 6) onNearEnd()
+    }
     var chrome by remember { mutableStateOf(true) }
     val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     // A zoomed page owns the drag gesture; the feed must not steal it out from under.

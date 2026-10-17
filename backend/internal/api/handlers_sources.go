@@ -1,13 +1,17 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
+	"path"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/youruser/oppailib/internal/models"
 	"github.com/youruser/oppailib/internal/scraper"
@@ -205,20 +209,35 @@ func (s *Server) handleSourceStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// An origin that has told us to back off is answered for until the time it named.
+	backoff := backoffKey(u)
+	if wait := s.upstreamBackoff.remaining(backoff); wait > 0 {
+		s.writeRateLimited(w, u, wait)
+		return
+	}
+
+	prepare := func(req *http.Request) {
+		req.Header.Set("User-Agent", s.settings.Get().ScrapeUserAgent)
+		// Let the source that owns this host add its own headers — 4chan's CDN refuses
+		// a media request without a boards.4chan.org Referer, and only the source knows.
+		s.sources.Decorate(req)
+	}
+
+	if limit := s.sources.WholeMediaLimit(u.Hostname()); limit > 0 && s.serveWholeMedia(w, r, u, limit, backoff, prepare) {
+		return
+	}
+
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, u.String(), nil)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "bad url")
 		return
 	}
-	req.Header.Set("User-Agent", s.settings.Get().ScrapeUserAgent)
+	prepare(req)
 	// Range is what makes seeking work: without forwarding it the client can only
 	// ever stream a video from byte zero.
 	if rng := r.Header.Get("Range"); rng != "" {
 		req.Header.Set("Range", rng)
 	}
-	// Let the source that owns this host add its own headers — 4chan's CDN refuses a
-	// media request without a boards.4chan.org Referer, and only the source knows that.
-	s.sources.Decorate(req)
 
 	resp, err := s.scraper.MediaHTTPClient().Do(req)
 	if err != nil {
@@ -227,7 +246,7 @@ func (s *Server) handleSourceStream(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
-		writeErr(w, http.StatusBadGateway, fmt.Sprintf("upstream returned %d", resp.StatusCode))
+		s.writeUpstreamError(w, u, backoff, &upstreamRefusal{status: resp.StatusCode, retryAfter: resp.Header.Get("Retry-After")})
 		return
 	}
 
@@ -243,6 +262,61 @@ func (s *Server) handleSourceStream(w http.ResponseWriter, r *http.Request) {
 	if _, err := io.Copy(w, resp.Body); err != nil {
 		s.log.Debug("source stream interrupted", "url", u.Redacted(), "err", err)
 	}
+}
+
+// serveWholeMedia answers a stream request from the whole-file cache, fetching the
+// file into it first if need be. It reports false only when the file turned out
+// bigger than limit, which leaves the request to be streamed through as usual.
+func (s *Server) serveWholeMedia(w http.ResponseWriter, r *http.Request, u *url.URL, limit int64, backoff string, prepare func(*http.Request)) bool {
+	media, err := s.sourceMedia.get(r.Context(), u.String(), func() (*cachedMedia, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), wholeMediaFetchTimeout)
+		defer cancel()
+		return fetchWholeMedia(ctx, s.scraper.MediaHTTPClient(), u, limit, prepare)
+	})
+	switch {
+	case err == nil:
+		w.Header().Set("Content-Type", media.contentType)
+		w.Header().Set("Cache-Control", "private, max-age=3600")
+		// ServeContent answers Range (and If-Range, and HEAD) from the bytes we hold,
+		// which is the whole point: the seeks and the loops never leave the server.
+		http.ServeContent(w, r, "", media.modified, bytes.NewReader(media.data))
+	case errors.Is(err, errMediaTooLarge):
+		return false
+	case r.Context().Err() != nil:
+		// The viewer moved on while the file was arriving; it lands in the cache anyway.
+	default:
+		s.writeUpstreamError(w, u, backoff, err)
+	}
+	return true
+}
+
+// writeUpstreamError reports an origin's failure to the viewer. A 429 starts the
+// back-off for this kind of file on this host and says how long it will last; the
+// rest say what the origin said. Always 502 — a 401 here would sign the client out.
+func (s *Server) writeUpstreamError(w http.ResponseWriter, u *url.URL, backoff string, err error) {
+	var refusal *upstreamRefusal
+	if errors.As(err, &refusal) && refusal.status == http.StatusTooManyRequests {
+		wait := s.upstreamBackoff.hold(backoff, refusal.retryAfter)
+		s.log.Warn("source rate-limited us", "host", u.Hostname(), "kind", path.Ext(u.Path), "wait", wait)
+		s.writeRateLimited(w, u, wait)
+		return
+	}
+	if errors.As(err, &refusal) {
+		writeErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	s.log.Debug("source stream fetch failed", "url", u.Redacted(), "err", err)
+	writeErr(w, http.StatusBadGateway, "upstream fetch failed")
+}
+
+// writeRateLimited answers for an origin that is making us wait.
+func (s *Server) writeRateLimited(w http.ResponseWriter, u *url.URL, wait time.Duration) {
+	site := u.Hostname()
+	if src, ok := s.sources.ForHost(site); ok {
+		site = src.Name()
+	}
+	w.Header().Set("Retry-After", strconv.Itoa(int(wait.Round(time.Second)/time.Second)))
+	writeErr(w, http.StatusBadGateway, rateLimitedMessage(site, wait))
 }
 
 type sourceSaveReq struct {

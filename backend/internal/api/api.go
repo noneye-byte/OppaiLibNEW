@@ -104,6 +104,11 @@ type Server struct {
 	// moves on the order of minutes, so a short TTL costs nothing in freshness and
 	// turns a revisit into an instant paint. See handleBrowseSource.
 	listCache *resolveCache[*sources.Listing]
+	// Small remote files held whole, so a player's many range requests for one clip
+	// reach the origin once; and the origins that have told us to back off, and until
+	// when. See source_media.go.
+	sourceMedia     *sourceMediaCache
+	upstreamBackoff *upstreamBackoff
 	// An itch.io project page resolved to its browser build's iframe URL. Pressing
 	// Play on a browser-only itch game costs a throttled fetch of the project page,
 	// and the viewer asks on every open, so the answer is kept for a while. Short
@@ -175,6 +180,12 @@ const (
 	// cover the back-and-forth of actually browsing — open an item, return to the
 	// grid, scroll, open another — without ever showing a listing that feels stale.
 	sourceListingTTL = 2 * time.Minute
+	// sourceMediaBudget is the memory the whole-file media cache may hold: on the order
+	// of fifty 4chan clips, which is a long evening's browsing of one board.
+	sourceMediaBudget = 192 << 20
+	// wholeMediaFetchTimeout bounds one whole-file fetch. It runs detached from the
+	// request that started it (see sourceMediaCache.get), so it needs its own limit.
+	wholeMediaFetchTimeout = 90 * time.Second
 	// An itch project's embed URL changes only when the author uploads a new build.
 	// Ten minutes absorbs the open-close-open of actually playing something without
 	// pinning a URL that has since been replaced.
@@ -228,12 +239,14 @@ func NewServer(cfg *config.Config, database *db.DB, store *storage.Store, sc *sc
 		chatDir:      dirOr(cfg.ChatDir, filepath.Join(cfg.ConfigDir, "chat")),
 		uploadDir:    filepath.Join(dirOr(cfg.CacheDir, filepath.Join(cfg.ConfigDir, "cache")), "uploads"),
 
-		pageCache:    newResolveCache[[]string](sourcePagesTTL),
-		commentCache: newResolveCache[[]sources.Comment](sourceCommentsTTL),
-		listCache:    newResolveCache[*sources.Listing](sourceListingTTL),
-		embedCache:   newResolveCache[string](itchEmbedTTL),
-		linkCache:    newResolveCache[sharedLink](sharedLinkTTL),
-		iconCache:    newResolveCache[favicon](faviconTTL),
+		pageCache:       newResolveCache[[]string](sourcePagesTTL),
+		commentCache:    newResolveCache[[]sources.Comment](sourceCommentsTTL),
+		listCache:       newResolveCache[*sources.Listing](sourceListingTTL),
+		sourceMedia:     newSourceMediaCache(sourceMediaBudget),
+		upstreamBackoff: newUpstreamBackoff(),
+		embedCache:      newResolveCache[string](itchEmbedTTL),
+		linkCache:       newResolveCache[sharedLink](sharedLinkTTL),
+		iconCache:       newResolveCache[favicon](faviconTTL),
 
 		library: newLibraryIndex(),
 

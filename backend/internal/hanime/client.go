@@ -12,6 +12,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -31,7 +32,12 @@ const (
 	defaultAuthURL   = "https://auth.hanime.tv/api/v11/handshake"
 	guestCacheTTL    = 15 * time.Minute
 	downloadCacheTTL = 10 * time.Minute
-	maxIndexBytes    = 32 << 20
+	// membersOnlyTTL is how long a video found to have no guest copy is remembered
+	// as such. Hanime opens a new upload to guests some while after members get it,
+	// so this is not forever — but it is long enough that a listing stops offering it
+	// and a retry does not repeat the handshake.
+	membersOnlyTTL = time.Hour
+	maxIndexBytes  = 32 << 20
 )
 
 var (
@@ -79,6 +85,24 @@ type Client struct {
 	index       []Video
 	indexAt     time.Time
 	downloadURL map[string]cachedDownload
+	membersOnly map[string]time.Time
+}
+
+// MembersOnlyError says Hanime has the video but hands its download links only to
+// signed-in members. They are new uploads, mostly — a few hundred views where the rest
+// of the catalogue has hundreds of thousands — and they sit at the top of Recent, so
+// they were the "some videos refuse to play" of the guest catalogue. The player's own
+// handshake has no source for them either; there is nothing a guest can play.
+type MembersOnlyError struct{ Name string }
+
+func (e *MembersOnlyError) Error() string {
+	return fmt.Sprintf("Hanime only offers %q to signed-in members, so there's no copy here to play or save", e.Name)
+}
+
+// IsMembersOnly reports whether err is, or wraps, a MembersOnlyError.
+func IsMembersOnly(err error) bool {
+	var m *MembersOnlyError
+	return errors.As(err, &m)
 }
 
 type cachedDownload struct {
@@ -112,6 +136,7 @@ func New(base *http.Client, opts Options) *Client {
 	return &Client{
 		http: &hc, origin: origin, searchURL: searchURL, csrfURL: csrfURL, authURL: authURL,
 		downloadURL: make(map[string]cachedDownload),
+		membersOnly: make(map[string]time.Time),
 	}
 }
 
@@ -196,26 +221,56 @@ func (c *Client) Find(ctx context.Context, userAgent, slug string) (*Video, erro
 	return nil, fmt.Errorf("hanime video %q was not found", slug)
 }
 
-// DownloadURL returns the best guest-accessible MP4 (normally 720p).
+// MembersOnly reports whether slug was found, within the last hour, to have no guest
+// copy. It never asks Hanime; it is what a listing can afford to check for every card.
+func (c *Client) MembersOnly(slug string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	at, ok := c.membersOnly[slug]
+	return ok && time.Since(at) < membersOnlyTTL
+}
+
+// DownloadURL returns the best guest-accessible MP4 (normally 720p), or a
+// *MembersOnlyError when Hanime offers the video to members only.
 func (c *Client) DownloadURL(ctx context.Context, userAgent string, video Video) (string, error) {
 	c.mu.Lock()
 	if cached := c.downloadURL[video.Slug]; cached.url != "" && time.Since(cached.at) < downloadCacheTTL {
 		c.mu.Unlock()
 		return cached.url, nil
 	}
+	if at, ok := c.membersOnly[video.Slug]; ok && time.Since(at) < membersOnlyTTL {
+		c.mu.Unlock()
+		return "", &MembersOnlyError{Name: video.Name}
+	}
 	c.mu.Unlock()
 
 	var response struct {
 		Token string `json:"token"`
 	}
-	now := time.Now().Unix()
-	payload := map[string]any{
-		"timestamp_unix":  now,
-		"directive":       "get_download_links",
-		"slug":            video.Slug,
-		"hentai_video_id": video.ID,
+	// One retry. The handshake is three requests to two hosts (the CSRF token, then
+	// the handshake itself), and one of them failing on a phone's first tap used to
+	// be the whole answer: the video "wouldn't play" and the next tap worked.
+	var err error
+	for attempt := 0; attempt < 2; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-time.After(400 * time.Millisecond):
+			}
+		}
+		now := time.Now().Unix()
+		payload := map[string]any{
+			"timestamp_unix":  now,
+			"directive":       "get_download_links",
+			"slug":            video.Slug,
+			"hentai_video_id": video.ID,
+		}
+		if err = c.handshake(ctx, userAgent, now, payload, &response, nil); err == nil || ctx.Err() != nil {
+			break
+		}
 	}
-	if err := c.handshake(ctx, userAgent, now, payload, &response, nil); err != nil {
+	if err != nil {
 		return "", err
 	}
 	plain, err := decryptEnvelope(response.Token)
@@ -246,7 +301,10 @@ func (c *Client) DownloadURL(ctx context.Context, userAgent string, video Video)
 		}
 	}
 	if bestURL == "" {
-		return "", fmt.Errorf("hanime: no guest download is available for %q", video.Name)
+		c.mu.Lock()
+		c.membersOnly[video.Slug] = time.Now()
+		c.mu.Unlock()
+		return "", &MembersOnlyError{Name: video.Name}
 	}
 	bestURL = directPixeldrainURL(bestURL)
 	c.mu.Lock()

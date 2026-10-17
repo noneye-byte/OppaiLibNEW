@@ -376,6 +376,9 @@ fun ChatScreen(
     onOpenMedia: OpenMedia = {},
     sharedMedia: Media? = null,
     onSharedMediaConsumed: () -> Unit = {},
+    // As a tab along the bottom, the inbox has no "back to the library" arrow; the bar
+    // is the way there. System back still leaves through [onBack].
+    topLevel: Boolean = false,
 ) {
     var status by remember { mutableStateOf<ChatStatus?>(null) }
     var models by remember { mutableStateOf<ChatModels?>(null) }
@@ -1016,7 +1019,7 @@ fun ChatScreen(
             openId = conversationId,
             query = inboxQuery,
             onQuery = { inboxQuery = it },
-            onBack = onBack,
+            onBack = onBack.takeUnless { topLevel },
             onOpen = { id ->
                 ws.conversations.firstOrNull { it.id == id }?.let { picked ->
                     characterId = picked.characterId
@@ -1054,6 +1057,7 @@ fun ChatScreen(
         else -> Column(
             Modifier.fillMaxSize().background(ChatColors.main).windowInsetsPadding(WindowInsets.safeDrawing),
         ) {
+            HideNavigationBar()
             // The header of a conversation, not of an app: who you are talking to and
             // whether they are there. Everything that is not about this person has moved
             // to the inbox or into the overflow.
@@ -1797,13 +1801,14 @@ private fun IncomingCallCard(repo: Repository, char: ChatCharacter, onAnswer: ()
 private fun LibraryPickerSheet(repo: Repository, chosen: List<LibbyAttachment>, onToggle: (Media) -> Unit, onDismiss: () -> Unit) {
     var query by remember { mutableStateOf("") }
     var items by remember { mutableStateOf<List<Media>?>(null) }
-    LaunchedEffect(Unit) { items = runCatching { repo.listAll(null) }.getOrDefault(emptyList()) }
-    val words = remember(query) { query.trim().lowercase().split(' ').filter { it.isNotEmpty() } }
-    val shown = remember(items, words) {
-        (items ?: emptyList()).filter { m ->
-            words.all { w -> m.title.lowercase().contains(w) || m.kind.contains(w) || m.tags.any { t -> t.name.lowercase().contains(w) } }
-        }.take(200)
+    // The server's search, newest first, a couple of hundred at a time. This sheet used
+    // to download the whole library to filter it here, so opening it cost the collection.
+    LaunchedEffect(query) {
+        if (items != null) delay(300) // typing; let it settle
+        items = runCatching { repo.api.listMedia(limit = 200, query = query.trim().ifBlank { null }).items }
+            .getOrDefault(emptyList())
     }
+    val shown = items ?: emptyList()
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp).heightIn(max = 560.dp)) {
             TextField(
@@ -1880,7 +1885,7 @@ private fun ChatInbox(
     openId: String,
     query: String,
     onQuery: (String) -> Unit,
-    onBack: () -> Unit,
+    onBack: (() -> Unit)?,
     onOpen: (String) -> Unit,
     onFriend: (String) -> Unit,
     onNewConversation: (String) -> Unit,
@@ -1908,10 +1913,13 @@ private fun ChatInbox(
             Modifier.fillMaxWidth().height(58.dp).padding(start = 2.dp, end = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconButton(onClick = onBack) {
+            if (onBack != null) IconButton(onClick = onBack) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back to the library", tint = ChatColors.text)
             }
-            Text("Chats", color = ChatColors.text, fontWeight = FontWeight.Bold, fontSize = 22.sp, modifier = Modifier.weight(1f))
+            Text(
+                "Chats", color = ChatColors.text, fontWeight = FontWeight.Bold, fontSize = 22.sp,
+                modifier = Modifier.weight(1f).padding(start = if (onBack == null) 14.dp else 0.dp),
+            )
             IconButton(onClick = onSettings) { Icon(Icons.Filled.Settings, "Chat settings", tint = ChatColors.muted) }
             Box {
                 IconButton(onClick = { menuOpen = true }) { Icon(Icons.Filled.MoreVert, "More", tint = ChatColors.muted) }
@@ -2220,13 +2228,7 @@ private fun ChatSettings(
                 OutlinedButton(onClick = onImport) { Text("Import SillyTavern JSON") }
             }
             "generation" -> Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
-                Text("Text-generation backend", color = ChatColors.muted)
-                Text(models?.loaded?.ifBlank { null } ?: "No model loaded", color = ChatColors.text, fontWeight = FontWeight.SemiBold)
-                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                    models?.models?.forEach { model -> FilterChip(selected = model == models.loaded, enabled = false, onClick = {}, label = { Text(model) }) }
-                }
-                OutlinedButton(onClick = onRefreshModels) { Text("Refresh status") }
-                Text("Load or unload models in text-generation-webui's own WebUI. OppaiLib keeps model management read-only so it cannot destabilize the Docker container.", color = ChatColors.muted, fontSize = 11.sp)
+                ChatModelSection(repo, models, onChanged = onRefreshModels)
                 if (char.id == "libby") {
                     Text("Libby chooses her own tone, emotion, and intensity from the conversation.", color = ChatColors.muted, fontSize = 12.sp)
                 } else {

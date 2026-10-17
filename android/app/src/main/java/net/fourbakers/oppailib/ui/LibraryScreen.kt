@@ -8,9 +8,11 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -19,8 +21,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -28,29 +33,26 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.Android
-import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.automirrored.filled.Sort
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Android
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.ChatBubble
 import androidx.compose.material.icons.filled.Clear
-import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.Collections
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
-import androidx.compose.material.icons.filled.Explore
+import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Gif
 import androidx.compose.material.icons.filled.HeartBroken
-import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Link
-import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.Settings
@@ -61,32 +63,32 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ListItem
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.ModalDrawerSheet
-import androidx.compose.material3.ModalNavigationDrawer
-import androidx.compose.material3.NavigationDrawerItem
-import androidx.compose.material3.NavigationDrawerItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.rememberDrawerState
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -103,52 +105,29 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.work.WorkInfo
-import androidx.work.WorkManager
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import net.fourbakers.oppailib.data.BulkRequest
 import net.fourbakers.oppailib.data.LibbyIdentityMark
 import net.fourbakers.oppailib.data.LibbyVoice
 import net.fourbakers.oppailib.data.Media
 import net.fourbakers.oppailib.data.MediaPatch
-import net.fourbakers.oppailib.data.PinnedFeed
+import net.fourbakers.oppailib.data.Prefs
 import net.fourbakers.oppailib.data.Repository
 import net.fourbakers.oppailib.data.SortMode
-import net.fourbakers.oppailib.work.ImportWorker
+import net.fourbakers.oppailib.data.serverMessage
 import net.fourbakers.oppailib.work.DownloadQueue
 import net.fourbakers.oppailib.work.DownloadWorker
 import net.fourbakers.oppailib.work.UploadQueue
 import net.fourbakers.oppailib.work.UploadWorker
 
-/**
- * Screen ids for [net.fourbakers.oppailib.data.Prefs.lastScreen].
- *
- * Strings rather than an enum because they are written to storage: a reordered enum
- * would change what an ordinal means, and a renamed constant would silently stop
- * matching what previous versions of the app wrote. An id nothing recognises simply
- * falls through to the library grid, which is the right answer for an unknown screen.
- *
- * Settings and the viewer are deliberately absent. Settings is somewhere you visit and
- * leave, not somewhere you were; the viewer is restored by the id of what was open in
- * it instead, since an index into a grid rebuilt from the server points at the wrong
- * thing by the time the app is reopened.
- */
-private const val SCREEN_LIBRARY = ""
-private const val SCREEN_BROWSE = "browse"
-private const val SCREEN_GAMES = "games"
-private const val SCREEN_CHAT = "chat"
-private const val SCREEN_DOWNLOADS = "downloads"
-private const val SCREEN_STUDIO = "studio"
-
-/** Sidebar sections. The empty kind is the unfiltered "everything" view. */
+/** The kind filters along the top of the grid. The empty kind is everything. */
 private data class Section(val kind: String, val label: String, val icon: ImageVector)
 
 private val SECTIONS = listOf(
-    Section("", "All media", Icons.Filled.Collections),
+    Section("", "All", Icons.Filled.Collections),
     Section("video", "Videos", Icons.Filled.Movie),
     Section("gif", "GIFs", Icons.Filled.Gif),
     Section("image", "Images", Icons.Filled.Image),
@@ -160,98 +139,171 @@ private fun iconFor(kind: String): ImageVector =
     SECTIONS.firstOrNull { it.kind == kind }?.icon ?: Icons.Filled.Collections
 
 /**
- * Everything a query can match: the title, the notes, and each tag's name *and* its
- * category — so "character" or "explicit" surfaces everything filed that way, not
- * just items that happen to have those words in the title.
+ * A page of the library at a time. Big enough that a fling rarely outruns it, small
+ * enough that the first screen arrives at once even on a phone on mobile data.
  */
-private fun haystack(m: Media): String = buildString {
-    append(m.title).append('\n')
-    m.notes?.let { append(it).append('\n') }
-    m.tags.forEach { append(it.name).append('\n').append(it.category).append('\n') }
-}.lowercase()
+private const val PAGE = 90
+
+/** How long typing has to pause before the search goes to the server. */
+private const val SEARCH_SETTLE_MS = 300L
 
 /**
- * Terms are ANDed, so "blue_hair explicit" narrows across fields — one term matching
- * a tag and another matching the rating — rather than requiring one field to hold
- * them both. There's no search endpoint; the list response carries tags precisely so
- * this can run client-side.
+ * The viewer, open on [start]. [only] is set when it was opened on one item from
+ * elsewhere — a link in chat, a game's page — that isn't in the loaded page, so the
+ * feed is just that item rather than an index into a list that doesn't hold it.
  */
-private fun matches(m: Media, terms: List<String>): Boolean {
-    if (terms.isEmpty()) return true
-    val hay = haystack(m)
-    return terms.all { hay.contains(it) }
+private data class ViewerOpen(val start: Int, val only: List<Media>? = null)
+
+/**
+ * What the library tab keeps while another tab is on screen: the filters, the pages
+ * loaded so far, and where the grid was scrolled to. The shell holds it, because the
+ * tab itself leaves composition when you switch away — and coming back from Browse to
+ * a grid reloaded from the top would make the bottom bar a step backwards from the
+ * drawer it replaced, under which the grid simply stayed put.
+ */
+@Stable
+class LibraryState(prefs: Prefs) {
+    var kind by mutableStateOf(prefs.lastKind)
+    var favoritesOnly by mutableStateOf(prefs.lastFavoritesOnly)
+    var sort by mutableStateOf(prefs.sortMode)
+    var query by mutableStateOf("")
+    // What was actually asked of the server: the search box once typing settles.
+    var asked by mutableStateOf("")
+    var searching by mutableStateOf(false)
+    var items by mutableStateOf<List<Media>>(emptyList())
+    var total by mutableIntStateOf(0)
+    val grid = LazyGridState()
+    // The filters [items] answer, so returning to the tab knows they are still current.
+    internal var loadedFor: List<Any>? = null
+    // Something landed in the library while the tab was away (or while it was up).
+    var stale by mutableStateOf(false)
+    // The item the viewer was on when the app was last closed, opened once on launch.
+    internal var resumeViewer: Long? = prefs.lastViewerMedia.takeIf { it != 0L }
+
+    internal val filters: List<Any> get() = listOf(kind, favoritesOnly, sort, asked)
 }
 
 /**
- * Orders the grid. Client-side, because the app already holds the whole library (so
- * search can run locally) and the server only ever returns newest-first — there's
- * nothing a round trip would buy.
+ * The library tab: a paged grid of the collection, filtered by the chips under the bar.
+ *
+ * The phone used to download the entire library before drawing a tile, and then search,
+ * sort and filter it in memory — every open of the app paid for the whole collection,
+ * and the grid sat on a spinner while it did. The server has answered paged queries
+ * (kind, favourites, search, order, with a total) since the web client stopped doing
+ * the same thing, so the grid now asks for a page, draws it, and asks for the next as
+ * you scroll. Search has to be the server's anyway: titles are encrypted at rest, and
+ * only the process holding the key can match them.
  */
-private fun sorted(items: List<Media>, mode: SortMode): List<Media> = when (mode) {
-    SortMode.NEWEST -> items.sortedByDescending { it.createdAt }
-    SortMode.OLDEST -> items.sortedBy { it.createdAt }
-    // Untitled items sort last rather than clumping at the top under the empty string.
-    SortMode.TITLE -> items.sortedWith(
-        compareBy(String.CASE_INSENSITIVE_ORDER) { it.title.ifEmpty { "￿" } },
-    )
-    SortMode.LARGEST -> items.sortedByDescending { it.size }
-    SortMode.SMALLEST -> items.sortedBy { it.size }
-}
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun LibraryScreen(repo: Repository, onLogout: () -> Unit) {
-    var items by remember { mutableStateOf<List<Media>>(emptyList()) }
-    // Seeded from where the app was last used rather than from the defaults. Android
-    // kills a backgrounded app whenever it likes, and coming back to the unfiltered
-    // grid every time is how that killing becomes the user's problem. See Prefs.
-    var kind by remember { mutableStateOf(repo.prefs.lastKind) }
-    var loading by remember { mutableStateOf(false) }
-    var viewerAt by remember { mutableStateOf<Int?>(null) }
+fun LibraryScreen(
+    repo: Repository,
+    state: LibraryState,
+    onLogout: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onOpenDownloads: () -> Unit,
+    onShareToChat: (Media) -> Unit,
+    openRequest: Long?,
+    onOpenRequestTaken: () -> Unit,
+    onViewerClosed: () -> Unit,
+) {
+    // The filters are seeded from where the app was last used (see LibraryState):
+    // Android kills a backgrounded app whenever it likes, and coming back to the
+    // unfiltered grid every time is how that killing becomes the user's problem.
+    var kind by state::kind
+    var favoritesOnly by state::favoritesOnly
+    var sort by state::sort
+    var query by state::query
+    var asked by state::asked
+    var searching by state::searching
+    var items by state::items
+    var total by state::total
+
+    // Loading until the grid holds an answer to the filters as they stand — not merely
+    // until it holds tiles, or an empty filter would spin for ever on every return.
+    var loading by remember { mutableStateOf(state.loadedFor != state.filters) }
+    var loadingMore by remember { mutableStateOf(false) }
+    var refreshing by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    // Bumped by every fresh query, so a page that lands after the filters changed is
+    // recognised as an answer to a question nobody is asking any more and dropped.
+    var generation by remember { mutableIntStateOf(0) }
+
+    var viewer by remember { mutableStateOf<ViewerOpen?>(null) }
     var showScrape by remember { mutableStateOf(false) }
+    var showAdd by remember { mutableStateOf(false) }
+    var showUploads by remember { mutableStateOf(false) }
+    var sortMenu by remember { mutableStateOf(false) }
+    var overflow by remember { mutableStateOf(false) }
     var aiTagger by remember { mutableStateOf("") }
-    var query by remember { mutableStateOf("") }
-    var searching by remember { mutableStateOf(false) }
-    var showSettings by remember { mutableStateOf(false) }
-    val resumeTo = remember { repo.prefs.lastScreen }
-    var showBrowse by remember { mutableStateOf(resumeTo == SCREEN_BROWSE) }
-    var showGames by remember { mutableStateOf(resumeTo == SCREEN_GAMES) }
-    var showChat by remember { mutableStateOf(resumeTo == SCREEN_CHAT) }
-    // A hold-menu handoff is deliberately in-memory: it is an attachment for this
-    // visit to Chat, not a preference that should reappear after relaunching the app.
-    var chatShare by remember { mutableStateOf<Media?>(null) }
     var holdMedia by remember { mutableStateOf<Media?>(null) }
     var confirmExport by remember { mutableStateOf<Media?>(null) }
-    var showDownloads by remember { mutableStateOf(resumeTo == SCREEN_DOWNLOADS) }
-    var showImageGen by remember { mutableStateOf(resumeTo == SCREEN_STUDIO) }
-    var showUploads by remember { mutableStateOf(false) }
-    // Which pinned feed to open the browser on; null means the browser's own default.
-    var browsePin by remember { mutableStateOf<PinnedFeed?>(null) }
-    var pins by remember { mutableStateOf(repo.prefs.pinnedFeeds) }
-    var sort by remember { mutableStateOf(repo.prefs.sortMode) }
-    var sortMenu by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf<Media?>(null) }
-    // Favorites is a filter, not a kind: it cuts across all of them, and the server
-    // has no endpoint for it — the list already carries the flag.
-    var favoritesOnly by remember { mutableStateOf(repo.prefs.lastFavoritesOnly) }
     // Non-empty means the grid is in selection mode: tiles toggle instead of opening.
     var selected by remember { mutableStateOf(emptySet<Long>()) }
     var confirmBulkDelete by remember { mutableStateOf(false) }
-    // A library item some other screen asked us to open, held until the grid contains
-    // it. See openLinked.
-    var pendingOpenId by remember { mutableStateOf(repo.prefs.lastViewerMedia.takeIf { it != 0L }) }
-    // Whether the viewer was opened from a conversation, so closing it lands back there.
-    var returnToChat by remember { mutableStateOf(false) }
-    val drawer = rememberDrawerState(DrawerValue.Closed)
+    // An item to open once the first page is in: the one the viewer was on when the
+    // app was last closed, or one another tab asked for.
+    var pendingOpen by remember { mutableStateOf(state.resumeViewer.also { state.resumeViewer = null }) }
+
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    val grid = state.grid
 
-    fun refresh() {
-        loading = true
+    suspend fun fetch(offset: Int) = repo.api.listMedia(
+        kind = kind.ifEmpty { null },
+        limit = PAGE,
+        offset = offset,
+        query = asked.ifBlank { null },
+        favorite = if (favoritesOnly) 1 else null,
+        sort = sort.id,
+    )
+
+    /** Starts the grid over from the first page of the current query. */
+    fun reload(pull: Boolean = false) {
+        val ask = ++generation
+        val filters = state.filters
+        if (pull) refreshing = true else loading = true
+        error = null
         scope.launch {
-            try { items = repo.listAll(kind.ifEmpty { null }) }
-            catch (_: Exception) { }
-            finally { loading = false }
+            runCatching { fetch(0) }
+                .onSuccess { page ->
+                    if (ask != generation) return@onSuccess
+                    items = page.items
+                    total = page.total
+                    state.loadedFor = filters
+                    if (!pull) grid.scrollToItem(0)
+                }
+                .onFailure { if (ask == generation) error = it.serverMessage("Couldn't load the library.") }
+            if (ask == generation) { loading = false; refreshing = false }
+        }
+    }
+
+    /** Appends the next page, if there is one and nothing is already fetching. */
+    fun loadMore() {
+        if (loading || loadingMore || items.size >= total) return
+        val ask = generation
+        loadingMore = true
+        scope.launch {
+            runCatching { fetch(items.size) }.onSuccess { page ->
+                if (ask != generation) return@onSuccess
+                // An upload landing between pages shifts every offset by one; the id
+                // check keeps that from showing a tile twice.
+                val have = items.mapTo(HashSet()) { it.id }
+                items = items + page.items.filter { it.id !in have }
+                total = page.total
+            }
+            loadingMore = false
+        }
+    }
+
+    fun openById(id: Long) {
+        val at = items.indexOfFirst { it.id == id }
+        if (at >= 0) { viewer = ViewerOpen(at); return }
+        scope.launch {
+            runCatching { repo.api.getMedia(id) }
+                .onSuccess { viewer = ViewerOpen(0, listOf(it)) }
+                .onFailure { repo.report(it.serverMessage("That item isn't in the library any more.")) }
         }
     }
 
@@ -260,17 +312,17 @@ fun LibraryScreen(repo: Repository, onLogout: () -> Unit) {
             runCatching { repo.api.deleteMedia(m.id) }
                 .onSuccess {
                     items = items.filterNot { it.id == m.id }
+                    total = (total - 1).coerceAtLeast(0)
                     LibbyVoice.react(LibbyVoice.Event.LIBRARY_DELETE).let { repo.report(it.message, it.emotion) }
                 }
         }
     }
 
     /**
-     * The selection, favorited or unfavorited in one request.
-     *
-     * The grid is updated from the ids the server says it applied, not from the ids we
-     * sent: a bulk action can partly fail, and a tile that claims to be favorited when
-     * the server disagrees is worse than one that never changed.
+     * The selection, favorited or unfavorited in one request. The grid is updated from
+     * the ids the server says it applied, not the ids we sent: a bulk action can partly
+     * fail, and a tile claiming a favorite the server disagrees with is worse than one
+     * that never changed.
      */
     fun favoriteSelection(favorite: Boolean) {
         val ids = selected.toList()
@@ -291,6 +343,7 @@ fun LibraryScreen(repo: Repository, onLogout: () -> Unit) {
                 .onSuccess { result ->
                     val gone = result.ok.toSet()
                     items = items.filterNot { it.id in gone }
+                    total = (total - gone.size).coerceAtLeast(0)
                     if (gone.isNotEmpty()) {
                         LibbyVoice.react(LibbyVoice.Event.LIBRARY_DELETE, count = gone.size)
                             .let { repo.report(it.message, it.emotion) }
@@ -300,135 +353,70 @@ fun LibraryScreen(repo: Repository, onLogout: () -> Unit) {
         }
     }
 
-    /**
-     * Opens one library item by id, on behalf of a screen that has no viewer of its own
-     * — a link chip in chat, so far.
-     *
-     * The viewer pages through exactly what the grid shows, so a target sitting behind
-     * a kind filter, a search, or the favorites toggle would be unreachable. Dropping
-     * the filters is what makes it findable, and it also leaves the user somewhere
-     * coherent when they close the viewer rather than back inside a filter they never
-     * set from here. A kind filter is fetched server-side, so changing it needs a
-     * reload; the id is parked until the item actually turns up (see below).
-     */
-    fun openLinked(id: Long) {
-        // Opened from chat, the viewer goes back to chat: a link in a conversation is a
-        // detour, not a move to the library. See the viewer's onClose.
-        returnToChat = showChat
-        showChat = false
-        query = ""
-        searching = false
-        favoritesOnly = false
-        selected = emptySet()
-        pendingOpenId = id
-        if (kind.isNotEmpty()) {
-            kind = ""
-            refresh()
-        }
-    }
-
-    // The upload queue, read straight from the worker's own state so the badge and
-    // the sheet cannot drift from what is actually being sent.
+    // The upload queue, read straight from the worker's own state so the badge and the
+    // sheet cannot drift from what is actually being sent.
     val uploadItems by UploadQueue.items.collectAsState()
+    val activeDownloads = DownloadQueue.items.collectAsState().value.count { it.live }
 
-    val terms = remember(query) { query.trim().lowercase().split(' ').filter { it.isNotEmpty() } }
-    val shown = remember(items, terms, sort, favoritesOnly) {
-        var filtered = if (terms.isEmpty()) items else items.filter { matches(it, terms) }
-        if (favoritesOnly) filtered = filtered.filter { it.favorite }
-        sorted(filtered, sort)
+    LaunchedEffect(query) {
+        delay(SEARCH_SETTLE_MS)
+        asked = query.trim()
     }
-
-    LaunchedEffect(Unit) {
-        refresh()
-        runCatching { repo.api.health() }.getOrNull()?.let { aiTagger = if (it.aiEnabled) it.aiTagger else "off" }
-    }
-
-    // Where the user is, written as they move rather than on the way out.
-    //
-    // There is no "on the way out" to hook: Android can kill this process without
-    // running anything, and a force-stop certainly does. So each of these lands the
-    // moment it changes, and reopening the app reads them back above. They are cheap —
-    // a handful of short values into the same encrypted preferences the session already
-    // lives in — and they are cleared on sign-out, because where you were is part of
-    // the session and not of the phone.
-    LaunchedEffect(showBrowse, showGames, showChat, showDownloads, showImageGen) {
-        repo.prefs.lastScreen = when {
-            showBrowse -> SCREEN_BROWSE
-            showGames -> SCREEN_GAMES
-            showChat -> SCREEN_CHAT
-            showDownloads -> SCREEN_DOWNLOADS
-            showImageGen -> SCREEN_STUDIO
-            else -> SCREEN_LIBRARY
-        }
-    }
-    LaunchedEffect(kind, favoritesOnly) {
+    LaunchedEffect(kind, favoritesOnly, sort, asked) {
         repo.prefs.lastKind = kind
         repo.prefs.lastFavoritesOnly = favoritesOnly
+        // Back on the tab with the same filters: the grid is as it was left, scroll and
+        // all. Only a change of question goes back to the server.
+        if (state.loadedFor != state.filters) reload()
     }
-    // By id, not by index: see the note on the screen ids above.
-    LaunchedEffect(viewerAt, shown) {
-        repo.prefs.lastViewerMedia = viewerAt?.let { shown.getOrNull(it)?.id } ?: 0L
+    LaunchedEffect(state.stale) {
+        if (state.stale) { state.stale = false; reload(pull = true) }
     }
-
-    // A parked open request lands as soon as the grid holds its item. Keyed on `shown`
-    // as well as the id because openLinked may have just triggered a reload, and the
-    // index only exists once that has come back. An item that is genuinely gone —
-    // deleted since the reply named it — simply never resolves and is dropped on the
-    // next request rather than leaving the screen stuck.
-    LaunchedEffect(pendingOpenId, shown) {
-        val id = pendingOpenId ?: return@LaunchedEffect
-        if (loading) return@LaunchedEffect
-        val index = shown.indexOfFirst { it.id == id }
-        pendingOpenId = null
-        if (index >= 0) viewerAt = index
-    }
-
-    // Imports received through Android's share sheet happen outside this composable.
-    // Reload when the repository announces one so the shared item appears immediately.
-    LaunchedEffect(repo) {
-        repo.libraryChanges.collect { refresh() }
-    }
-
-    // An import that finished while we were sitting here has put something in the
-    // library that the grid doesn't know about. Watching the worker is how the grid
-    // finds out — the alternative is a user staring at a stale screen after a
-    // notification told them their thread had landed.
     LaunchedEffect(Unit) {
-        var known: Set<java.util.UUID>? = null
-        WorkManager.getInstance(context).getWorkInfosByTagFlow(ImportWorker.TAG).collect { infos ->
-            val done = infos.filter { it.state == WorkInfo.State.SUCCEEDED }.map { it.id }.toSet()
-            // The first emission is history — imports from previous runs of the app.
-            // Only a *newly* finished one is worth a reload.
-            if (known != null && (done - known!!).isNotEmpty()) refresh()
-            known = done
+        runCatching { repo.api.health() }.getOrNull()?.let { aiTagger = if (it.aiEnabled) it.aiTagger else "off" }
+    }
+    // Scrolling near the end of what's loaded asks for the next page.
+    val nearEnd by remember {
+        derivedStateOf {
+            val last = grid.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+            last >= items.size - 30
         }
+    }
+    LaunchedEffect(nearEnd, items.size, total) { if (nearEnd) loadMore() }
+
+    // An open asked for — at launch, or by another tab — lands once the first page is in,
+    // so an item that's on it opens in place with its neighbours to swipe to.
+    LaunchedEffect(openRequest) {
+        openRequest?.let {
+            pendingOpen = it
+            selected = emptySet()
+            onOpenRequestTaken()
+        }
+    }
+    LaunchedEffect(pendingOpen, loading) {
+        val id = pendingOpen ?: return@LaunchedEffect
+        if (loading) return@LaunchedEffect
+        pendingOpen = null
+        openById(id)
+    }
+    // By id, not by index: an index into a grid rebuilt from the server points at the
+    // wrong thing by the time the app is reopened.
+    LaunchedEffect(viewer) {
+        repo.prefs.lastViewerMedia = viewer?.let { v -> (v.only ?: items).getOrNull(v.start)?.id } ?: 0L
     }
 
     /**
-     * Picked files go to the upload queue, not straight onto the wire.
-     *
-     * This used to copy each file into the cache directory in full and then send it
-     * as one request from this composable's scope — so a long video needed twice its
-     * own size in free space, died when the screen did, and started again from zero
-     * if anything went wrong. The queue streams from the content URI in chunks, in a
-     * foreground worker, and resumes from what the server already has.
-     *
-     * The persistable read permission is what makes recovery after a restart real:
-     * without it the URI is a handle to nothing the next time the app runs, and the
-     * queue would come back holding rows it could not upload.
+     * Picked files go to the upload queue, not straight onto the wire: the queue streams
+     * from the content URI in chunks, in a foreground worker, and resumes from what the
+     * server already has. The persistable read permission is what lets it recover after
+     * a restart.
      */
-    val uploadLauncher = rememberSystemPickerLauncher(
-        ActivityResultContracts.OpenMultipleDocuments(),
-    ) { uris ->
+    val uploadLauncher = rememberSystemPickerLauncher(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         if (uris.isNullOrEmpty()) return@rememberSystemPickerLauncher
         for (uri in uris) {
-            runCatching {
-                context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }
+            runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
         }
         val added = UploadWorker.enqueue(context, uris)
-        // Nothing added means every one of them was already queued and unfinished —
-        // the duplicate guard doing its job. Saying so beats a silent no-op.
         if (added == 0) repo.report("Those are already in the upload queue.")
         showUploads = true
     }
@@ -437,97 +425,55 @@ fun LibraryScreen(repo: Repository, onLogout: () -> Unit) {
         UploadsSheet(
             repo = repo,
             onDismiss = { showUploads = false },
-            onOpenMedia = { id ->
-                showUploads = false
-                openLinked(id)
+            onOpenMedia = { id -> showUploads = false; openById(id) },
+        )
+    }
+
+    // The viewer owns the whole screen (immersive), so it replaces the grid rather than
+    // layering over it, and pages through exactly what the grid holds.
+    viewer?.let { open ->
+        val feed = open.only ?: items
+        ViewerScreen(
+            repo = repo,
+            items = feed,
+            startIndex = open.start,
+            onClose = { viewer = null; onViewerClosed() },
+            onChanged = { updated ->
+                items = items.map { if (it.id == updated.id) updated else it }
+                if (open.only != null) viewer = open.copy(only = open.only.map { if (it.id == updated.id) updated else it })
             },
-        )
-    }
-
-    if (showSettings) {
-        SettingsScreen(repo = repo, onBack = { showSettings = false }, onLogout = onLogout)
-        return
-    }
-
-    if (showDownloads) {
-        DownloadsScreen(onBack = { showDownloads = false })
-        return
-    }
-
-    if (showBrowse) {
-        // Coming back from a browse may have saved new items, so reload rather than
-        // showing a library that's silently missing what was just added. Pins may have
-        // changed while browsing too, so the drawer is re-read on the way back.
-        BrowseScreen(
-            repo = repo,
-            openAt = browsePin,
-            onBack = {
-                showBrowse = false
-                browsePin = null
-                pins = repo.prefs.pinnedFeeds
-                refresh()
+            onSearchTag = { tag ->
+                viewer = null // the grid is about to change out from under it
+                query = tag
+                asked = tag
+                searching = true
             },
+            onDelete = { m ->
+                // Close first: the viewer indexes into the list about to lose an entry.
+                viewer = null
+                confirmDelete = m
+            },
+            onNearEnd = { if (open.only == null) loadMore() },
         )
         return
     }
 
-    if (showGames) {
-        // Adding a game from a catalogue lands it in the library, so the grid is
-        // refreshed on the way back for the same reason Browse refreshes: a shelf that
-        // is silently missing what was just added reads as the add having failed.
-        GameBrowseScreen(
-            repo = repo,
-            onBack = { showGames = false; refresh() },
-            onOpenMedia = { id -> showGames = false; openLinked(id) },
-        )
-        return
-    }
-
-    if (showChat) {
-        ChatScreen(
-            repo = repo,
-            onBack = { showChat = false },
-            onOpenMedia = { id -> openLinked(id) },
-            sharedMedia = chatShare,
-            onSharedMediaConsumed = { chatShare = null },
-        )
-        return
-    }
-
-    if (showImageGen) {
-        // A save inside the studio lands in the library; nudge the grid so it's there
-        // the moment the user comes back.
-        ImageGenScreen(
-            repo = repo,
-            onBack = { showImageGen = false; refresh() },
-            onSaved = { repo.notifyLibraryChanged() },
-        )
-        return
-    }
-
-    // Selection is a mode, and back is how you leave a mode — otherwise the only way
-    // out is the X, and back would drop you out of the library entirely.
+    // Selection is a mode, and back is how you leave a mode.
     BackHandler(enabled = selected.isNotEmpty()) { selected = emptySet() }
+    BackHandler(enabled = selected.isEmpty() && searching) { query = ""; searching = false }
 
     if (confirmBulkDelete) {
         val n = selected.size
         AlertDialog(
             onDismissRequest = { confirmBulkDelete = false },
             title = { Text(if (n == 1) "Delete this?" else "Delete $n items?") },
-            text = {
-                Text(
-                    "They'll be removed from the library and their files deleted. " +
-                        "This can't be undone.",
-                )
-            },
+            text = { Text("They'll be removed from the library and their files deleted. This can't be undone.") },
             confirmButton = {
                 TextButton(onClick = { confirmBulkDelete = false; deleteSelection() }) {
                     Text("Delete", color = MaterialTheme.colorScheme.error)
                 }
             },
-            dismissButton = {
-                TextButton(onClick = { confirmBulkDelete = false }) { Text("Cancel") }
-            },
+            dismissButton = { TextButton(onClick = { confirmBulkDelete = false }) { Text("Cancel") } },
         )
     }
 
@@ -536,19 +482,14 @@ fun LibraryScreen(repo: Repository, onLogout: () -> Unit) {
             onDismissRequest = { confirmDelete = null },
             title = { Text("Delete this?") },
             text = {
-                Text(
-                    "“${target.title.ifEmpty { target.kind }}” will be removed from the library " +
-                        "and its file deleted. This can't be undone.",
-                )
+                Text("“${target.title.ifEmpty { target.kind }}” will be removed from the library and its file deleted. This can't be undone.")
             },
             confirmButton = {
                 TextButton(onClick = { delete(target); confirmDelete = null }) {
                     Text("Delete", color = MaterialTheme.colorScheme.error)
                 }
             },
-            dismissButton = {
-                TextButton(onClick = { confirmDelete = null }) { Text("Cancel") }
-            },
+            dismissButton = { TextButton(onClick = { confirmDelete = null }) { Text("Cancel") } },
         )
     }
 
@@ -567,7 +508,7 @@ fun LibraryScreen(repo: Repository, onLogout: () -> Unit) {
                     confirmExport = null
                     if (DownloadQueue.enqueue(target)) {
                         DownloadWorker.start(context)
-                        showDownloads = true
+                        onOpenDownloads()
                     } else {
                         Toast.makeText(context, "Already in Downloads", Toast.LENGTH_SHORT).show()
                     }
@@ -596,8 +537,7 @@ fun LibraryScreen(repo: Repository, onLogout: () -> Unit) {
                 leadingContent = { Icon(Icons.AutoMirrored.Filled.Send, contentDescription = null) },
                 modifier = Modifier.clickable(enabled = canShareWithChat(target)) {
                     holdMedia = null
-                    chatShare = target
-                    showChat = true
+                    onShareToChat(target)
                 },
             )
             ListItem(
@@ -614,13 +554,10 @@ fun LibraryScreen(repo: Repository, onLogout: () -> Unit) {
                     }
                 },
             )
-            // Saying who a picture is of, from the phone.
-            //
-            // This is a different thing from the gallery entry above, which takes a copy
-            // for her to send. This labels the item itself: the tag lives in the library,
-            // so the picture stays one of yours and she can hand it back to you without a
-            // second copy of it existing. Recognition does this on its own for imports it
-            // is sure about; this is how you say so about the rest, and how you say no.
+            // Labels the item itself as a picture of her, so it stays one of yours and
+            // she can hand it back without a second copy existing. Recognition does this
+            // on its own for imports it is sure about; this is how you say so about the
+            // rest.
             if (target.kind == "image" || target.kind == "gif") ListItem(
                 headlineContent = { Text("This is a picture of Libby") },
                 supportingContent = { Text("Tags it as her, so she can send it to you in chat") },
@@ -644,211 +581,58 @@ fun LibraryScreen(repo: Repository, onLogout: () -> Unit) {
         }
     }
 
-    // The viewer owns the whole screen (immersive), so it replaces the library
-    // rather than layering over it. It pages through exactly what the grid showed —
-    // the filtered list, not the whole library — so the index lines up either way.
-    viewerAt?.let { start ->
-        ViewerScreen(
-            repo = repo,
-            items = shown,
-            startIndex = start,
-            onClose = {
-                viewerAt = null
-                if (returnToChat) { returnToChat = false; showChat = true }
-            },
-            onChanged = { updated ->
-                items = items.map { if (it.id == updated.id) updated else it }
-            },
-            onSearchTag = { tag ->
-                query = tag
-                searching = true
-                viewerAt = null // the filtered list is about to change out from under it
-            },
-            onDelete = { m ->
-                // Close first: the viewer indexes into `shown`, and that list is about to
-                // lose an entry underneath it.
-                viewerAt = null
-                confirmDelete = m
-            },
-        )
-        return
+    // Adding is one button with two answers rather than two unlabelled buttons side by
+    // side, which is what the grid had: a link and an arrow, guess which is which.
+    if (showAdd) {
+        ModalBottomSheet(onDismissRequest = { showAdd = false }) {
+            Text(
+                "Add to the library",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
+            )
+            ListItem(
+                headlineContent = { Text("Upload from this phone") },
+                supportingContent = { Text("Videos, pictures, comics — sent in the background") },
+                leadingContent = { Icon(Icons.Filled.Upload, contentDescription = null) },
+                modifier = Modifier.clickable { showAdd = false; uploadLauncher.launch(arrayOf("*/*")) },
+            )
+            ListItem(
+                headlineContent = { Text("Import from a link") },
+                supportingContent = { Text("A page, a post, or a gallery") },
+                leadingContent = { Icon(Icons.Filled.Link, contentDescription = null) },
+                modifier = Modifier.clickable { showAdd = false; showScrape = true },
+            )
+            Spacer(Modifier.size(16.dp))
+        }
     }
 
     if (showScrape) {
-        ScrapeDialog(repo = repo, onDismiss = { showScrape = false }, onImported = { showScrape = false; refresh() })
+        ScrapeDialog(repo = repo, onDismiss = { showScrape = false }, onImported = { showScrape = false; reload(pull = true) })
     }
 
-    ModalNavigationDrawer(
-        drawerState = drawer,
-        drawerContent = {
-            ModalDrawerSheet {
-                Text(
-                    "OppaiLib",
-                    style = MaterialTheme.typography.headlineSmall,
-                    modifier = Modifier.padding(horizontal = 28.dp, vertical = 20.dp),
-                )
-                HorizontalDivider()
-                SECTIONS.forEach { section ->
-                    NavigationDrawerItem(
-                        icon = { Icon(section.icon, contentDescription = null) },
-                        label = { Text(section.label) },
-                        selected = kind == section.kind && !favoritesOnly,
-                        onClick = {
-                            scope.launch { drawer.close() }
-                            val wasFiltered = favoritesOnly
-                            favoritesOnly = false
-                            if (kind != section.kind) {
-                                kind = section.kind
-                                query = ""
-                                searching = false
-                                refresh()
-                            } else if (wasFiltered) {
-                                query = ""
-                                searching = false
-                            }
-                        },
-                        modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding),
-                    )
-                }
-                // A filter rather than a kind — but it reads as a place you go, so it goes
-                // to the whole library and filters that. "Favorites" showing only favorite
-                // *videos*, because that's what you happened to be looking at, would be a
-                // section that means something different every time you open it.
-                NavigationDrawerItem(
-                    icon = { Icon(Icons.Filled.Favorite, contentDescription = null) },
-                    label = { Text("Favorites") },
-                    selected = favoritesOnly,
-                    onClick = {
-                        scope.launch { drawer.close() }
-                        favoritesOnly = true
-                        query = ""
-                        searching = false
-                        if (kind.isNotEmpty()) {
-                            kind = ""
-                            refresh()
-                        }
-                    },
-                    modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding),
-                )
-                HorizontalDivider(Modifier.padding(vertical = 8.dp))
-                NavigationDrawerItem(
-                    icon = { Icon(Icons.Filled.Explore, contentDescription = null) },
-                    label = { Text("Browse sources") },
-                    selected = false,
-                    onClick = {
-                        scope.launch { drawer.close() }
-                        browsePin = null
-                        showBrowse = true
-                    },
-                    modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding),
-                )
-                NavigationDrawerItem(
-                    icon = { Icon(Icons.Filled.SportsEsports, contentDescription = null) },
-                    label = { Text("Browse games") },
-                    selected = false,
-                    onClick = { scope.launch { drawer.close() }; showGames = true },
-                    modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding),
-                )
-                NavigationDrawerItem(
-                    icon = { Icon(Icons.Filled.Download, contentDescription = null) },
-                    label = { Text("Downloads") },
-                    selected = false,
-                    onClick = { scope.launch { drawer.close() }; showDownloads = true },
-                    badge = {
-                        val active = DownloadQueue.items.collectAsState().value.count { it.live }
-                        if (active > 0) Badge { Text("$active") }
-                    },
-                    modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding),
-                )
-                NavigationDrawerItem(
-                    icon = { Icon(Icons.Filled.ChatBubble, contentDescription = null) },
-                    label = { Text("Chat with Libby") },
-                    selected = false,
-                    onClick = { scope.launch { drawer.close() }; showChat = true },
-                    modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding),
-                )
-                NavigationDrawerItem(
-                    icon = { Icon(Icons.Filled.AutoAwesome, contentDescription = null) },
-                    label = { Text("Image studio") },
-                    selected = false,
-                    onClick = { scope.launch { drawer.close() }; showImageGen = true },
-                    modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding),
-                )
-                // Pinned remote feeds sit under Browse, as shortcuts into it. A long
-                // press unpins, so a pin can be undone without going back to the feed
-                // it was made from.
-                pins.forEach { p ->
-                    NavigationDrawerItem(
-                        icon = { Icon(Icons.Filled.PushPin, contentDescription = null) },
-                        label = { Text(p.label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                        selected = false,
-                        onClick = {
-                            scope.launch { drawer.close() }
-                            browsePin = p
-                            showBrowse = true
-                        },
-                        badge = {
-                            IconButton(onClick = {
-                                repo.prefs.togglePin(p)
-                                pins = repo.prefs.pinnedFeeds
-                            }) {
-                                Icon(
-                                    Icons.Filled.Close,
-                                    contentDescription = "Unpin ${p.label}",
-                                    modifier = Modifier.size(16.dp),
-                                )
-                            }
-                        },
-                        modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding),
-                    )
-                }
-                NavigationDrawerItem(
-                    icon = { Icon(Icons.Filled.Settings, contentDescription = null) },
-                    label = { Text("Settings") },
-                    selected = false,
-                    onClick = { scope.launch { drawer.close() }; showSettings = true },
-                    modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding),
-                )
-                NavigationDrawerItem(
-                    icon = { Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = null) },
-                    label = { Text("Sign out") },
-                    selected = false,
-                    onClick = onLogout,
-                    modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding),
-                )
-                Text(
-                    "AI tagger: ${aiTagger.ifEmpty { "…" }}",
-                    style = MaterialTheme.typography.labelSmall,
-                    modifier = Modifier.padding(horizontal = 28.dp, vertical = 12.dp),
-                )
-            }
-        },
-    ) {
-        val focus = remember { FocusRequester() }
-        LaunchedEffect(searching) { if (searching) runCatching { focus.requestFocus() } }
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(searching) { if (searching) runCatching { focus.requestFocus() } }
 
-        Scaffold(
-            topBar = {
-                if (selected.isNotEmpty()) {
-                    SelectionBar(
-                        count = selected.size,
-                        // Everything selected is already favorited → the heart's job is to
-                        // take it away. Anything else and it adds. One button, and it always
-                        // does the thing the selection isn't already.
-                        allFavorite = shown.filter { it.id in selected }.all { it.favorite },
-                        onClear = { selected = emptySet() },
-                        onSelectAll = { selected = shown.map { it.id }.toSet() },
-                        onFavorite = { favoriteSelection(it) },
-                        onDelete = { confirmBulkDelete = true },
-                    )
-                } else {
+    Scaffold(
+        topBar = {
+            if (selected.isNotEmpty()) {
+                SelectionBar(
+                    count = selected.size,
+                    // Everything selected already favorited → the heart takes it away.
+                    allFavorite = items.filter { it.id in selected }.all { it.favorite },
+                    onClear = { selected = emptySet() },
+                    onSelectAll = { selected = items.map { it.id }.toSet() },
+                    onFavorite = { favoriteSelection(it) },
+                    onDelete = { confirmBulkDelete = true },
+                )
+            } else {
                 TopAppBar(
                     title = {
                         if (searching) {
                             TextField(
                                 value = query,
                                 onValueChange = { query = it },
-                                placeholder = { Text("Search titles and tags") },
+                                placeholder = { Text("Search titles, notes and tags") },
                                 singleLine = true,
                                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                                 colors = TextFieldDefaults.colors(
@@ -860,20 +644,12 @@ fun LibraryScreen(repo: Repository, onLogout: () -> Unit) {
                                 modifier = Modifier.fillMaxWidth().focusRequester(focus),
                             )
                         } else {
-                            Text(
-                                if (favoritesOnly) "Favorites" else SECTIONS.first { it.kind == kind }.label,
-                            )
-                        }
-                    },
-                    navigationIcon = {
-                        IconButton(onClick = { scope.launch { drawer.open() } }) {
-                            Icon(Icons.Filled.Menu, contentDescription = "Open menu")
+                            Text("Library")
                         }
                     },
                     actions = {
-                        // The way back into the upload manager once the sheet has been
-                        // dismissed. Shown only when there is something to see: a badge
-                        // that is always there is a badge nobody reads.
+                        // The way back into the upload manager once its sheet is closed.
+                        // Shown only while there is something in it.
                         if (uploadItems.isNotEmpty()) {
                             val live = uploadItems.count { it.live }
                             IconButton(onClick = { showUploads = true }) {
@@ -899,11 +675,7 @@ fun LibraryScreen(repo: Repository, onLogout: () -> Unit) {
                                 SortMode.entries.forEach { mode ->
                                     DropdownMenuItem(
                                         text = { Text(mode.label) },
-                                        leadingIcon = {
-                                            if (mode == sort) {
-                                                Icon(Icons.Filled.Check, contentDescription = null)
-                                            }
-                                        },
+                                        leadingIcon = { if (mode == sort) Icon(Icons.Filled.Check, contentDescription = null) },
                                         onClick = {
                                             sort = mode
                                             repo.prefs.sortMode = mode
@@ -913,61 +685,189 @@ fun LibraryScreen(repo: Repository, onLogout: () -> Unit) {
                                 }
                             }
                         }
+                        Box {
+                            IconButton(onClick = { overflow = true }) {
+                                BadgedBox(badge = { if (activeDownloads > 0) Badge { Text("$activeDownloads") } }) {
+                                    Icon(Icons.Filled.MoreVert, contentDescription = "More")
+                                }
+                            }
+                            DropdownMenu(expanded = overflow, onDismissRequest = { overflow = false }) {
+                                DropdownMenuItem(
+                                    text = { Text(if (activeDownloads > 0) "Downloads ($activeDownloads)" else "Downloads") },
+                                    leadingIcon = { Icon(Icons.Filled.Download, contentDescription = null) },
+                                    onClick = { overflow = false; onOpenDownloads() },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Settings") },
+                                    leadingIcon = { Icon(Icons.Filled.Settings, contentDescription = null) },
+                                    onClick = { overflow = false; onOpenSettings() },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Sign out") },
+                                    leadingIcon = { Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = null) },
+                                    onClick = { overflow = false; onLogout() },
+                                )
+                                HorizontalDivider()
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            "AI tagger: ${aiTagger.ifEmpty { "…" }}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                        )
+                                    },
+                                    enabled = false,
+                                    onClick = {},
+                                )
+                            }
+                        }
                     },
                 )
-                }
-            },
-            floatingActionButton = {
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    FloatingActionButton(onClick = { showScrape = true }) { Icon(Icons.Filled.Link, "Scrape") }
-                    FloatingActionButton(onClick = { uploadLauncher.launch(arrayOf("*/*")) }) { Icon(Icons.Filled.Upload, "Upload") }
-                }
-            },
-        ) { padding ->
-            Column(Modifier.padding(padding).fillMaxSize()) {
+            }
+        },
+        floatingActionButton = {
+            if (selected.isEmpty()) {
+                // Labelled at the top of the grid, a plain round button once you scroll:
+                // the label is for knowing what it does, not for reading every time.
+                val atTop by remember { derivedStateOf { grid.firstVisibleItemIndex == 0 } }
+                ExtendedFloatingActionButton(
+                    onClick = { showAdd = true },
+                    expanded = atTop,
+                    icon = { Icon(Icons.Filled.Add, contentDescription = null) },
+                    text = { Text("Add") },
+                )
+            }
+        },
+    ) { padding ->
+        Column(Modifier.padding(padding).fillMaxSize()) {
+            FilterRow(
+                kind = kind,
+                favoritesOnly = favoritesOnly,
+                onKind = { picked -> if (picked != kind) { kind = picked; selected = emptySet() } },
+                onFavorites = { favoritesOnly = !favoritesOnly; selected = emptySet() },
+            )
+            // A new question with the old answer still on screen: say it's coming rather
+            // than leave the previous filter's tiles looking like the result.
+            if (loading && items.isNotEmpty()) {
+                LinearProgressIndicator(Modifier.fillMaxWidth())
+            }
+            PullToRefreshBox(
+                isRefreshing = refreshing,
+                onRefresh = { reload(pull = true) },
+                modifier = Modifier.fillMaxSize(),
+            ) {
                 when {
-                    loading -> Box(Modifier.fillMaxSize(), Alignment.Center) { CircularProgressIndicator() }
-                    shown.isEmpty() -> Box(Modifier.fillMaxSize(), Alignment.Center) {
+                    loading && items.isEmpty() -> Box(Modifier.fillMaxSize(), Alignment.Center) { CircularProgressIndicator() }
+                    error != null && items.isEmpty() -> Box(Modifier.fillMaxSize(), Alignment.Center) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(error ?: "", modifier = Modifier.padding(horizontal = 32.dp))
+                            TextButton(onClick = { reload() }) { Text("Try again") }
+                        }
+                    }
+                    items.isEmpty() -> Box(Modifier.fillMaxSize(), Alignment.Center) {
                         Text(
                             when {
-                                terms.isNotEmpty() -> "No matches for “$query”."
-                                favoritesOnly -> "No favorites yet. Tap the heart on anything worth keeping."
-                                else -> "Nothing here yet."
+                                asked.isNotEmpty() -> "No matches for “$asked”."
+                                favoritesOnly -> "No favorites here yet. Tap the heart on anything worth keeping."
+                                else -> "Nothing here yet. Add something with the button below."
                             },
+                            modifier = Modifier.padding(horizontal = 32.dp),
                         )
                     }
                     else -> LazyVerticalGrid(
+                        state = grid,
                         columns = GridCells.Adaptive(minSize = 150.dp),
-                        modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp),
+                        modifier = Modifier.fillMaxSize(),
+                        // Room under the last row for the Add button, so it never sits
+                        // on the one tile you were reaching for.
+                        contentPadding = PaddingValues(start = 8.dp, end = 8.dp, bottom = 88.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        itemsIndexed(shown, key = { _, m -> m.id }) { index, m ->
+                        item(span = { GridItemSpan(maxLineSpan) }) {
+                            Text(
+                                countLine(total, kind, favoritesOnly, asked),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+                            )
+                        }
+                        itemsIndexed(items, key = { _, m -> m.id }) { index, m ->
                             MediaTile(
                                 repo = repo,
                                 m = m,
                                 selected = m.id in selected,
                                 selecting = selected.isNotEmpty(),
-                                // In selection mode a tap picks rather than opens: once
-                                // you're choosing several, opening one is not what a tap
-                                // on a tile can plausibly mean.
+                                // In selection mode a tap picks rather than opens.
                                 onClick = {
-                                    if (selected.isEmpty()) {
-                                        viewerAt = index
-                                    } else {
-                                        selected = if (m.id in selected) selected - m.id else selected + m.id
-                                    }
+                                    if (selected.isEmpty()) viewer = ViewerOpen(index)
+                                    else selected = if (m.id in selected) selected - m.id else selected + m.id
                                 },
-                                // Hold opens the mobile counterpart to the web context menu.
-                                // Multi-select remains available inside it alongside export
-                                // and Libby handoff actions.
+                                // Hold opens the phone's counterpart to the web's context menu.
                                 onLongClick = { holdMedia = m },
                             )
+                        }
+                        if (loadingMore) {
+                            item(span = { GridItemSpan(maxLineSpan) }) {
+                                Box(Modifier.fillMaxWidth().padding(16.dp), Alignment.Center) {
+                                    CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
+                                }
+                            }
                         }
                     }
                 }
             }
         }
+    }
+}
+
+/**
+ * The kind chips and the favorites toggle, one row under the bar. These were the
+ * drawer's sections; switching kind is the commonest thing done here, and it deserves
+ * better than a trip through a menu. Favorites combines with a kind — favorite videos
+ * are a thing worth asking for — rather than replacing it.
+ */
+@Composable
+private fun FilterRow(kind: String, favoritesOnly: Boolean, onKind: (String) -> Unit, onFavorites: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        FilterChip(
+            selected = favoritesOnly,
+            onClick = onFavorites,
+            leadingIcon = {
+                Icon(
+                    Icons.Filled.Favorite, contentDescription = null, modifier = Modifier.size(16.dp),
+                    tint = if (favoritesOnly) Color(0xFFE91E63) else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            },
+            label = { Text("Favorites") },
+        )
+        SECTIONS.forEach { section ->
+            FilterChip(
+                selected = kind == section.kind,
+                onClick = { onKind(section.kind) },
+                label = { Text(section.label) },
+            )
+        }
+    }
+}
+
+/** "312 videos", "4 favorite GIFs", "18 matches for “beach”". */
+private fun countLine(total: Int, kind: String, favoritesOnly: Boolean, asked: String): String {
+    val noun = when (kind) {
+        "video" -> if (total == 1) "video" else "videos"
+        "gif" -> if (total == 1) "GIF" else "GIFs"
+        "image" -> if (total == 1) "image" else "images"
+        "comic" -> if (total == 1) "comic" else "comics"
+        "game" -> if (total == 1) "game" else "games"
+        else -> if (total == 1) "item" else "items"
+    }
+    val count = "%,d".format(total)
+    return when {
+        asked.isNotEmpty() -> "$count ${if (total == 1) "match" else "matches"} for “$asked”"
+        favoritesOnly -> "$count favorite $noun"
+        else -> "$count $noun"
     }
 }
 
@@ -991,7 +891,7 @@ private fun SelectionBar(
         },
         actions = {
             IconButton(onClick = onSelectAll) {
-                Icon(Icons.Filled.SelectAll, contentDescription = "Select everything shown")
+                Icon(Icons.Filled.SelectAll, contentDescription = "Select everything loaded")
             }
             IconButton(onClick = { onFavorite(!allFavorite) }) {
                 Icon(
@@ -1026,9 +926,8 @@ private fun MediaTile(
             .background(MaterialTheme.colorScheme.surfaceVariant)
             .combinedClickable(onClick = onClick, onLongClick = onLongClick),
     ) {
-        // The kind glyph sits underneath as the placeholder: it shows through while
-        // the poster loads, and stays visible if the server has no thumb for this
-        // item (e.g. a game, or a video ffmpeg couldn't decode).
+        // The kind glyph sits underneath as the placeholder: it shows through while the
+        // poster loads, and stays visible if the server has no thumb for this item.
         Box(Modifier.fillMaxSize(), Alignment.Center) {
             Icon(
                 iconFor(m.kind),
@@ -1060,12 +959,7 @@ private fun MediaTile(
                     .clip(RoundedCornerShape(6.dp)).background(Color(0xCC2E7D32)).padding(horizontal = 6.dp, vertical = 3.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Icon(
-                    Icons.Filled.Android,
-                    contentDescription = null,
-                    tint = Color.White,
-                    modifier = Modifier.size(12.dp),
-                )
+                Icon(Icons.Filled.Android, contentDescription = null, tint = Color.White, modifier = Modifier.size(12.dp))
                 Text(
                     "Android",
                     style = MaterialTheme.typography.labelSmall,
@@ -1094,8 +988,7 @@ private fun MediaTile(
             )
         }
         if (selecting) {
-            // A scrim, so a picked tile reads as picked at a glance across a full grid
-            // rather than by hunting for a small tick.
+            // A scrim, so a picked tile reads as picked at a glance across a full grid.
             if (selected) {
                 Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)))
             }

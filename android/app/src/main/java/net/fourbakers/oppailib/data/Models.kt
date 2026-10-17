@@ -171,7 +171,11 @@ data class LoginRequest(
 data class LoginResponse(val token: String, val user: User)
 
 @Serializable
-data class MediaListResponse(val items: List<Media> = emptyList())
+data class MediaListResponse(
+    val items: List<Media> = emptyList(),
+    /** How many match the query in all, so the grid knows whether to ask for more. */
+    val total: Int = 0,
+)
 
 /**
  * One backed-up save file for a game.
@@ -629,10 +633,69 @@ data class ChatModels(
 data class LoadChatModelRequest(
     val modelName: String,
     val args: JsonObject = JsonObject(emptyMap()),
+    val settings: JsonObject = JsonObject(emptyMap()),
+    // No default, on purpose: the client's Json leaves default values out of what it
+    // writes, so `= true` here would never reach the server.
+    val remember: Boolean,
 )
 
 @Serializable
 data class LoadChatModelResponse(val status: String = "", val loaded: String = "")
+
+/** What one model was last loaded with, remembered by the server for every client. */
+@Serializable
+data class TextgenLoad(
+    val args: JsonObject = JsonObject(emptyMap()),
+    val settings: JsonObject = JsonObject(emptyMap()),
+    val at: Long = 0,
+)
+
+@Serializable
+data class ChatLoras(val available: List<String> = emptyList(), val loaded: List<String> = emptyList())
+
+/**
+ * The rest of text-generation-webui: its loaders, each model's remembered arguments,
+ * and the LoRAs installed and applied. [supported] is false against a generic
+ * OpenAI-compatible server, which has none of this.
+ */
+@Serializable
+data class ChatBackendInfo(
+    val supported: Boolean = false,
+    val loaders: List<String> = emptyList(),
+    val loads: Map<String, TextgenLoad> = emptyMap(),
+    val loras: ChatLoras? = null,
+    val lorasError: String = "",
+)
+
+@Serializable
+data class ChatLoraRequest(val names: List<String>)
+
+/** What deleting one model would remove — read before asking, so the question is concrete. */
+@Serializable
+data class ChatModelInspection(
+    val name: String,
+    val path: String = "",
+    val files: List<String> = emptyList(),
+    val bytes: Long = 0,
+    val directory: Boolean = false,
+    val split: Boolean = false,
+    val loaded: Boolean = false,
+    val freeBytes: Long = 0,
+    val trashPath: String = "",
+)
+
+/** [confirm] must repeat the model's name: proof of which model was on screen. */
+@Serializable
+data class DeleteChatModelRequest(val model: String, val confirm: String, val permanent: Boolean = false)
+
+@Serializable
+data class ChatModelDeletion(
+    val name: String = "",
+    val movedTo: String = "",
+    val bytes: Long = 0,
+    val files: Int = 0,
+    val models: List<String> = emptyList(),
+)
 
 @Serializable
 data class ChatProfile(

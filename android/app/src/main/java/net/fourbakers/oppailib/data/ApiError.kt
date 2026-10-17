@@ -19,14 +19,43 @@ import retrofit2.HttpException
 fun Throwable.serverMessage(fallback: String): String {
     if (this !is HttpException) return message?.takeIf { it.isNotBlank() } ?: fallback
     val body = runCatching { response()?.errorBody()?.string() }.getOrNull().orEmpty()
+    return errorSentence(body) ?: "The server said ${code()}."
+}
+
+/**
+ * The sentence in a server refusal's `{"error": "…"}`, or null when the body isn't one.
+ *
+ * Escapes are read rather than stopped at. A message that quotes a title — "Hanime only
+ * offers "Shoujo Ramune 8" to signed-in members" — used to end at its first quote mark,
+ * and Go writes `&`, `<` and `>` as \u escapes, which came through as six characters.
+ */
+fun errorSentence(body: String): String? {
     val marker = "\"error\":\""
     val at = body.indexOf(marker)
-    if (at >= 0) {
-        val start = at + marker.length
-        val end = body.indexOf('"', start)
-        if (end > start) return body.substring(start, end)
+    if (at < 0) return null
+    val out = StringBuilder()
+    var i = at + marker.length
+    while (i < body.length) {
+        val c = body[i]
+        if (c == '"') return out.toString().takeIf { it.isNotBlank() }
+        if (c != '\\' || i + 1 >= body.length) {
+            out.append(c)
+            i++
+            continue
+        }
+        when (val e = body[i + 1]) {
+            'u' -> {
+                body.substring(i + 2, minOf(i + 6, body.length)).toIntOrNull(16)?.let { out.append(it.toChar()) }
+                i += 6
+                continue
+            }
+            'n' -> out.append('\n')
+            't' -> out.append('\t')
+            else -> out.append(e) // \" \\ \/
+        }
+        i += 2
     }
-    return "The server said ${code()}."
+    return null
 }
 
 /**

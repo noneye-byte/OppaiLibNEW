@@ -198,24 +198,6 @@ class Repository(private val appContext: Context, val prefs: Prefs) {
         return if (v > 0) "$base?v=$v" else base
     }
 
-    /**
-     * The whole library (or one kind of it), walked a page at a time.
-     *
-     * There is no search endpoint: the list response carries each item's tags, and
-     * clients filter over them locally. That only works if the client actually holds
-     * the library, so search can't run against a single truncated first page — hence
-     * walking to the end rather than taking [PAGE_SIZE] and stopping.
-     */
-    suspend fun listAll(kind: String?): List<Media> {
-        val out = mutableListOf<Media>()
-        while (out.size < MAX_ITEMS) {
-            val batch = api.listMedia(kind, PAGE_SIZE, out.size).items
-            out += batch
-            if (batch.size < PAGE_SIZE) break
-        }
-        return out
-    }
-
     fun saveSession(token: String) { prefs.token = token }
     /**
      * Ends the session and forgets everything about it, stored or in memory.
@@ -371,9 +353,6 @@ class Repository(private val appContext: Context, val prefs: Prefs) {
         title?.toRequestBody("text/plain".toMediaTypeOrNull())
 
     companion object {
-        /** The server's own ceiling: it quietly falls back to 50 for anything larger. */
-        private const val PAGE_SIZE = 200
-        private const val MAX_ITEMS = 2000
         private const val PAGE_PREFETCH = 4
 
         /** Requests whose failure is represented by the content that asked for them.

@@ -151,6 +151,22 @@ type MediaResolver interface {
 	ResolveMedia(ctx context.Context, raw string) (resolved string, recognized bool, err error)
 }
 
+// WholeMediaCacher is an optional source capability: the source's media files are
+// small, and its CDN counts every request, so the streaming proxy should fetch each
+// file once, whole, and serve every later range of it from memory.
+//
+// It exists because of how a player reads a video. ExoPlayer opens the file, jumps to
+// the end for a WebM's cue index, comes back to the start, and with looping on asks
+// for the start again every time the clip ends — so one "play" of a four-second 4chan
+// clip was a dozen requests to i.4cdn.org. 4chan rate-limits video files per address
+// with a block that runs to an hour, and on the phone that read as playback dying
+// after the fourth or fifth video.
+type WholeMediaCacher interface {
+	// CacheMediaUpTo is the largest file worth holding whole, in bytes. A larger one
+	// is streamed through as before.
+	CacheMediaUpTo() int64
+}
+
 // Commenter is an optional interface: a source that has discussions implements it.
 // Sources without a comment section (a gallery site) simply don't, and the API
 // answers "this source has no comments" rather than inventing an empty thread.
@@ -413,6 +429,35 @@ func (r *Registry) Decorate(req *http.Request) {
 			}
 		}
 	}
+}
+
+// WholeMediaLimit is how large a file on host may be and still be cached whole by the
+// streaming proxy (see WholeMediaCacher), or 0 when the source serving host doesn't
+// ask for that.
+func (r *Registry) WholeMediaLimit(host string) int64 {
+	if src, ok := r.ForHost(host); ok {
+		if c, ok := src.(WholeMediaCacher); ok {
+			return c.CacheMediaUpTo()
+		}
+	}
+	return 0
+}
+
+// ForHost returns the source that serves host, so a message about a host can name
+// the site a person would recognise.
+func (r *Registry) ForHost(host string) (Source, bool) {
+	host = strings.ToLower(strings.TrimSpace(host))
+	if host == "" {
+		return nil, false
+	}
+	for _, s := range r.All() {
+		for _, pat := range s.Hosts() {
+			if hostMatches(strings.ToLower(pat), host) {
+				return s, true
+			}
+		}
+	}
+	return nil, false
 }
 
 // ResolveMedia lets a source turn a stable catalogue/page URL into the concrete

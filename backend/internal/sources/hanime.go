@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/youruser/oppailib/internal/hanime"
 )
@@ -131,7 +133,7 @@ func (s *Hanime) Browse(ctx context.Context, p BrowseParams) (*Listing, error) {
 		end = len(filtered)
 	}
 	out := &Listing{Items: make([]Item, 0, end-offset)}
-	for _, video := range filtered[offset:end] {
+	for _, video := range s.withGuestCopies(ctx, filtered[offset:end]) {
 		thumb := video.PosterURL
 		if thumb == "" {
 			thumb = video.CoverURL
@@ -149,6 +151,62 @@ func (s *Hanime) Browse(ctx context.Context, p BrowseParams) (*Listing, error) {
 }
 
 func (*Hanime) Pages(context.Context, string) ([]string, error) { return nil, nil }
+
+// hanimeCheckBelowViews is the view count under which a card is asked about before it
+// is listed. Every video found with no guest copy had a few hundred views; a new video
+// that guests can watch has tens of thousands within a day. So the check costs a
+// handshake for the handful of cards that look like a members' early release, and none
+// for the rest of the page.
+const hanimeCheckBelowViews = 5000
+
+// hanimeCheckBudget bounds how long a listing waits on those checks. A card whose
+// check hasn't come back by then is listed anyway — showing one that won't play is a
+// better failure than a Browse tab that won't open.
+const hanimeCheckBudget = 5 * time.Second
+
+// withGuestCopies drops the videos Hanime offers to members only. Cards already known
+// to be members-only go without a request; low-view cards are checked, a few at a
+// time; the rest are trusted. A card that turns out members-only when opened is
+// remembered by the client, so it leaves the listing on the next refresh.
+func (s *Hanime) withGuestCopies(ctx context.Context, videos []hanime.Video) []hanime.Video {
+	known, _ := s.api.(interface{ MembersOnly(string) bool })
+	ctx, cancel := context.WithTimeout(ctx, hanimeCheckBudget)
+	defer cancel()
+
+	drop := make([]bool, len(videos))
+	var wg sync.WaitGroup
+	slots := make(chan struct{}, 4)
+	for i, video := range videos {
+		if known != nil && known.MembersOnly(video.Slug) {
+			drop[i] = true
+			continue
+		}
+		if video.Views >= hanimeCheckBelowViews {
+			continue
+		}
+		wg.Add(1)
+		go func(i int, video hanime.Video) {
+			defer wg.Done()
+			select {
+			case slots <- struct{}{}:
+				defer func() { <-slots }()
+			case <-ctx.Done():
+				return
+			}
+			_, err := s.api.DownloadURL(ctx, sourceUserAgent, video)
+			drop[i] = hanime.IsMembersOnly(err)
+		}(i, video)
+	}
+	wg.Wait()
+
+	out := videos[:0:0]
+	for i, video := range videos {
+		if !drop[i] {
+			out = append(out, video)
+		}
+	}
+	return out
+}
 
 // ResolveMedia implements MediaResolver. Hanime's guest token is requested lazily,
 // keeping catalogue browsing fast and making the stable page URL safe to pin/share.

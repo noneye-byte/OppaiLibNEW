@@ -357,16 +357,16 @@ data class PinnedFeed(
 )
 
 /**
- * How the library grid is ordered. Sorting is client-side: the app already holds the
- * whole library so search can run locally, and the server offers no ordering beyond
- * newest-first — so there is nothing to gain by making it a round trip.
+ * How the library grid is ordered — by the server, which pages the library to the
+ * phone instead of sending all of it. [id] is the server's own `sort` value, so these
+ * are exactly the orders it offers. Title and smallest-first went when sorting moved
+ * there; a stored id for either falls back to newest.
  */
 enum class SortMode(val id: String, val label: String) {
     NEWEST("newest", "Newest first"),
     OLDEST("oldest", "Oldest first"),
-    TITLE("title", "Title (A–Z)"),
+    RATING("rating", "Highest rated"),
     LARGEST("largest", "Largest first"),
-    SMALLEST("smallest", "Smallest first"),
     ;
 
     companion object {

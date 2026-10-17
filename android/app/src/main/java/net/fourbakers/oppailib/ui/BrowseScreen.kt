@@ -193,7 +193,14 @@ internal object BrowseMemory {
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun BrowseScreen(repo: Repository, openAt: PinnedFeed? = null, onBack: () -> Unit) {
+fun BrowseScreen(
+    repo: Repository,
+    openAt: PinnedFeed? = null,
+    onBack: () -> Unit,
+    // As a tab along the bottom, the board has no back arrow — only a thread does, to
+    // step back out to its board. System back still leaves through [onBack].
+    topLevel: Boolean = false,
+) {
     var sources by remember { mutableStateOf<List<RemoteSource>>(emptyList()) }
     var source by remember { mutableStateOf<RemoteSource?>(null) }
 
@@ -436,7 +443,10 @@ fun BrowseScreen(repo: Repository, openAt: PinnedFeed? = null, onBack: () -> Uni
             items = viewable,
             startIndex = start,
             onClose = { viewerAt = null },
-            onSaved = { scope.launch { snackbar.showSnackbar("Saved to library") } },
+            onSaved = {
+                repo.notifyLibraryChanged()
+                scope.launch { snackbar.showSnackbar("Saved to library") }
+            },
             onSaveFailed = { msg -> scope.launch { snackbar.showSnackbar(msg) } },
         )
         return
@@ -466,7 +476,7 @@ fun BrowseScreen(repo: Repository, openAt: PinnedFeed? = null, onBack: () -> Uni
             TopAppBar(
                 title = { Text(container?.title ?: source?.name ?: "Browse", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 navigationIcon = {
-                    IconButton(onClick = { if (container != null) container = null else onBack() }) {
+                    if (container != null || !topLevel) IconButton(onClick = { if (container != null) container = null else onBack() }) {
                         Icon(
                             Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = if (container != null) "Back to the board" else "Back",
@@ -519,7 +529,7 @@ fun BrowseScreen(repo: Repository, openAt: PinnedFeed? = null, onBack: () -> Uni
                                 scope.launch {
                                     snackbar.showSnackbar(
                                         if (repo.prefs.isPinned(pin.sourceId, pin.feedId)) {
-                                            "Pinned to the sidebar"
+                                            "Pinned to the top of Browse"
                                         } else {
                                             "Unpinned"
                                         },
@@ -604,6 +614,33 @@ fun BrowseScreen(repo: Repository, openAt: PinnedFeed? = null, onBack: () -> Uni
             // Inside a thread the pickers would be lying about what's on screen, so the
             // thread's own header replaces them.
             if (container == null) {
+                // Pinned feeds, one tap from anywhere in Browse. They lived in the
+                // library's drawer, which the bottom bar replaced; here they sit beside
+                // the pickers they are shortcuts through.
+                if (pinned.isNotEmpty()) {
+                    Row(
+                        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
+                            .padding(start = 12.dp, end = 12.dp, top = 6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        pinned.forEach { p ->
+                            FilterChip(
+                                selected = source?.id == p.sourceId && boardFeed == p.feedId && query == p.query,
+                                onClick = {
+                                    sources.firstOrNull { it.id == p.sourceId }?.let {
+                                        source = it
+                                        boardFeed = p.feedId
+                                        query = p.query
+                                        draft = p.query
+                                        sort = p.sort
+                                    }
+                                },
+                                leadingIcon = { Icon(Icons.Filled.PushPin, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                                label = { Text(p.label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                            )
+                        }
+                    }
+                }
                 if (sources.size > 1) {
                     ChipRow(
                         options = sources.map { it.id to it.name },

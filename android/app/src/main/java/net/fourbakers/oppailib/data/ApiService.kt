@@ -52,6 +52,22 @@ interface ApiService {
     @POST("api/chat/models/unload")
     suspend fun unloadChatModel()
 
+    /** The loader menu, each model's remembered arguments, and the LoRAs. */
+    @GET("api/chat/backend")
+    suspend fun chatBackend(): ChatBackendInfo
+
+    /** Applies exactly these LoRAs to the loaded model; an empty list clears them. */
+    @POST("api/chat/loras")
+    suspend fun setChatLoras(@Body body: ChatLoraRequest): ChatLoras
+
+    /** What deleting [model] would remove. Admin only. */
+    @GET("api/chat/models/inspect")
+    suspend fun inspectChatModel(@Query("model") model: String): ChatModelInspection
+
+    /** Deletes a model, to the trash unless permanent. Admin only. */
+    @POST("api/chat/models/delete")
+    suspend fun deleteChatModel(@Body body: DeleteChatModelRequest): ChatModelDeletion
+
     @GET("api/chat/workspace")
     suspend fun chatWorkspace(): ChatWorkspace
 
@@ -76,11 +92,16 @@ interface ApiService {
     @POST("api/auth/logout")
     suspend fun logout()
 
+    /** One page of the library. Search, favourites and order are the server's to apply:
+        titles are encrypted, so only it can match them. See handleListMedia. */
     @GET("api/media")
     suspend fun listMedia(
         @Query("kind") kind: String? = null,
         @Query("limit") limit: Int = 60,
         @Query("offset") offset: Int = 0,
+        @Query("q") query: String? = null,
+        @Query("favorite") favorite: Int? = null,
+        @Query("sort") sort: String? = null,
     ): MediaListResponse
 
     @GET("api/media/{id}")

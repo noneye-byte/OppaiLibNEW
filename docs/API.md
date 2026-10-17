@@ -420,6 +420,28 @@ nothing generated is compiled or executed. Saving validates the id (it becomes a
 filename), the scheme, and refuses a bare `*` in `hosts`, since that list is the
 streaming proxy's allowlist.
 
+### Streaming remote media
+
+`GET /api/sources/stream?url=…` proxies one file from a source's host, forwarding
+`Range`. The URL must be on a registered source's `hosts`; a source can resolve a
+stable page URL to the real file first (Hanime does this at play time).
+
+- **Small files are fetched once.** A source can ask for its files to be held whole in
+  memory (192 MB budget, least recently played evicted) — 4chan does — and every later
+  range of that file is served from there. A player's open, seek-to-cues, and every
+  loop of a clip used to be separate requests to the CDN.
+- **A 429 is honoured.** The proxy stops asking that host for that file type until the
+  `Retry-After` it was given (capped at two hours) and answers `502` with a message
+  saying how long, e.g. `{"error":"4chan is limiting downloads from this server for
+  now. Try again in about 33 minutes."}`. 4chan limits video files per address, so its
+  thumbnails keep loading meanwhile.
+- **Members-only Hanime uploads** answer `502` with a message naming the title. They
+  are left out of listings: the low-view cards on a page (new uploads Hanime gives
+  members first) are checked before the page is returned.
+
+Upstream refusals are always `502`, never `401` — the client treats a `401` from any
+endpoint as its own session ending.
+
 ### Saved searches
 
 A search on a source, kept and re-run by the server every six hours. Nothing is

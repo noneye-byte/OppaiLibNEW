@@ -58,6 +58,7 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
@@ -67,6 +68,7 @@ import kotlinx.coroutines.launch
 import net.fourbakers.oppailib.data.Repository
 import net.fourbakers.oppailib.data.SourceItem
 import net.fourbakers.oppailib.data.SourceSaveRequest
+import net.fourbakers.oppailib.data.errorSentence
 
 /**
  * The viewer for a *remote* item. Same feed gesture as the library's viewer, but
@@ -92,6 +94,7 @@ fun RemoteViewerScreen(
     onSaveFailed: (String) -> Unit,
 ) {
     if (items.isEmpty()) { onClose(); return }
+    HideNavigationBar()
 
     val feed = rememberPagerState(initialPage = startIndex.coerceIn(0, items.lastIndex)) { items.size }
     var chrome by remember { mutableStateOf(true) }
@@ -489,17 +492,18 @@ private fun RemoteVideo(player: ExoPlayer, onToggleChrome: () -> Unit) {
     var loading by remember(player) {
         mutableStateOf(player.playbackState == Player.STATE_IDLE || player.playbackState == Player.STATE_BUFFERING)
     }
-    var failed by remember(player) { mutableStateOf(false) }
+    // Why it failed, in the server's words when it gave some; null while it's fine.
+    var failure by remember(player) { mutableStateOf<String?>(null) }
     DisposableEffect(player) {
         val listener = object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
                 loading = state == Player.STATE_IDLE || state == Player.STATE_BUFFERING
-                if (state == Player.STATE_READY) failed = false
+                if (state == Player.STATE_READY) failure = null
             }
 
             override fun onPlayerError(error: PlaybackException) {
                 loading = false
-                failed = true
+                failure = playbackFailure(error)
             }
         }
         player.addListener(listener)
@@ -520,11 +524,18 @@ private fun RemoteVideo(player: ExoPlayer, onToggleChrome: () -> Unit) {
             modifier = Modifier.fillMaxSize(),
         )
         when {
-            failed -> Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
-                Text("Couldn't load this video", color = Color.White)
+            failure != null -> Column(
+                Modifier.align(Alignment.Center).padding(horizontal = 32.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(
+                    failure ?: "",
+                    color = Color.White,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                )
                 Button(
                     onClick = {
-                        failed = false
+                        failure = null
                         loading = true
                         player.prepare()
                         player.play()
@@ -535,4 +546,26 @@ private fun RemoteVideo(player: ExoPlayer, onToggleChrome: () -> Unit) {
             loading -> CircularProgressIndicator(color = Color.White, modifier = Modifier.align(Alignment.Center))
         }
     }
+}
+
+/**
+ * What to say when a browsed video won't play.
+ *
+ * The stream comes through our own server, and when the origin refuses it the server
+ * says why in the body of its 502 — "4chan is limiting downloads from this server for
+ * now. Try again in about 30 minutes", "Hanime only offers this to signed-in members".
+ * ExoPlayer keeps that body on the exception, so the sentence can be shown instead of
+ * a bare "couldn't load", which read as the app being broken when it was a site's limit.
+ */
+@androidx.annotation.OptIn(UnstableApi::class)
+private fun playbackFailure(error: PlaybackException): String {
+    var cause: Throwable? = error
+    while (cause != null) {
+        if (cause is HttpDataSource.InvalidResponseCodeException) {
+            return errorSentence(cause.responseBody.decodeToString())
+                ?: "Couldn't load this video (the server said ${cause.responseCode})"
+        }
+        cause = cause.cause
+    }
+    return "Couldn't load this video"
 }

@@ -146,7 +146,7 @@ private typealias ShotState = GenSession.Shot
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit) {
+fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit, topLevel: Boolean = false) {
     var status by remember { mutableStateOf<ImageGenStatus?>(null) }
     var statusError by remember { mutableStateOf("") }
     var characters by remember { mutableStateOf<List<GenCharacter>>(emptyList()) }
@@ -416,7 +416,8 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit) {
     Scaffold(topBar = {
         TopAppBar(
             title = { Text("Image studio") },
-            navigationIcon = { IconButton(onClick = onBack) {
+            // As a tab it has no back arrow; system back still leaves through onBack.
+            navigationIcon = { if (!topLevel) IconButton(onClick = onBack) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
             } },
         )

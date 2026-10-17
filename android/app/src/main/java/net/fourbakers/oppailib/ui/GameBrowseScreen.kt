@@ -128,6 +128,9 @@ fun GameBrowseScreen(
     openAt: String = FACE_F95,
     onBack: () -> Unit,
     onOpenMedia: (Long) -> Unit,
+    // A tab along the bottom has no back arrow: there is nowhere "back" to go that the
+    // bar doesn't already show. System back still leaves, through [onBack].
+    topLevel: Boolean = false,
 ) {
     var face by remember { mutableStateOf(openAt) }
 
@@ -374,7 +377,7 @@ fun GameBrowseScreen(
             TopAppBar(
                 title = { Text("Games") },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
+                    if (!topLevel) IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 },

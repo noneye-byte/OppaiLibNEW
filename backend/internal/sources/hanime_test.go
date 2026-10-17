@@ -2,14 +2,17 @@ package sources
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 
 	"github.com/youruser/oppailib/internal/hanime"
 )
 
 type fakeHanimeCatalogue struct {
-	videos []hanime.Video
-	direct string
+	videos      []hanime.Video
+	direct      string
+	membersOnly map[string]bool // slugs with no guest copy
+	asked       atomic.Int32    // DownloadURL calls
 }
 
 func (f *fakeHanimeCatalogue) Index(context.Context, string) ([]hanime.Video, error) {
@@ -26,7 +29,11 @@ func (f *fakeHanimeCatalogue) Find(_ context.Context, _, slug string) (*hanime.V
 	return nil, context.Canceled
 }
 
-func (f *fakeHanimeCatalogue) DownloadURL(context.Context, string, hanime.Video) (string, error) {
+func (f *fakeHanimeCatalogue) DownloadURL(_ context.Context, _ string, v hanime.Video) (string, error) {
+	f.asked.Add(1)
+	if f.membersOnly[v.Slug] {
+		return "", &hanime.MembersOnlyError{Name: v.Name}
+	}
 	return f.direct, nil
 }
 
@@ -73,3 +80,47 @@ func TestHanimeBrowseSortsAndResolves(t *testing.T) {
 		t.Fatalf("ResolveMedia = %q, %v, %v", got, recognized, err)
 	}
 }
+
+func TestAMembersOnlyUploadIsLeftOutOfTheListing(t *testing.T) {
+	fake := &fakeHanimeCatalogue{
+		videos: []hanime.Video{
+			{ID: 1, Slug: "early", Name: "Early", PosterURL: "https://hanime-cdn.com/e.jpg", Views: 190, ReleasedAtUnix: 30},
+			{ID: 2, Slug: "fresh", Name: "Fresh", PosterURL: "https://hanime-cdn.com/f.jpg", Views: 900, ReleasedAtUnix: 20},
+			{ID: 3, Slug: "loved", Name: "Loved", PosterURL: "https://hanime-cdn.com/l.jpg", Views: 2_000_000, ReleasedAtUnix: 10},
+		},
+		direct:      "https://pixeldrain.com/api/file/x",
+		membersOnly: map[string]bool{"early": true},
+	}
+	listing, err := (&Hanime{api: fake}).Browse(context.Background(), BrowseParams{Feed: "recent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, it := range listing.Items {
+		ids = append(ids, it.ID)
+	}
+	if len(ids) != 2 || ids[0] != "fresh" || ids[1] != "loved" {
+		t.Fatalf("listed %v, want [fresh loved]", ids)
+	}
+	// Only the two low-view cards were worth a handshake.
+	if n := fake.asked.Load(); n != 2 {
+		t.Fatalf("asked for %d download links, want 2", n)
+	}
+}
+
+func TestAVideoTheClientAlreadyKnowsIsMembersOnlyIsDroppedWithoutAsking(t *testing.T) {
+	fake := &knownMembersOnly{fakeHanimeCatalogue: fakeHanimeCatalogue{videos: []hanime.Video{
+		{ID: 1, Slug: "popular-but-locked", Name: "Locked", PosterURL: "https://hanime-cdn.com/p.jpg", Views: 500_000},
+	}}}
+	listing, err := (&Hanime{api: fake}).Browse(context.Background(), BrowseParams{Feed: "recent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listing.Items) != 0 || fake.asked.Load() != 0 {
+		t.Fatalf("listed %d, asked %d times", len(listing.Items), fake.asked.Load())
+	}
+}
+
+type knownMembersOnly struct{ fakeHanimeCatalogue }
+
+func (*knownMembersOnly) MembersOnly(string) bool { return true }
