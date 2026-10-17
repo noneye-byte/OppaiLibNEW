@@ -391,6 +391,24 @@ func TestRedoTakesHerLastReplyBackAndAnswersAgain(t *testing.T) {
 	}
 }
 
+// A turn whose texts the autosave already brought receives nothing new. The phone
+// decodes the list it is told about, and a nil slice sent as `null` failed every such
+// turn there — which, once a card's saves went through, was every turn to a card.
+func TestATurnThatReceivesNothingStillSendsAList(t *testing.T) {
+	s, token, _ := turnServer(t, func(n int, body map[string]any) (int, map[string]any) { return http.StatusOK, say("hi") })
+	runTurn(t, s, token, firstTurn)
+	events := runTurn(t, s, token, `{"conversationId":"0123456789abcdef0123456789abcdef","redo":true}`)
+	turn := eventsNamed(events, "turn")
+	if len(turn) != 1 {
+		t.Fatalf("turn events = %+v", events)
+	}
+	var data map[string]json.RawMessage
+	_ = json.Unmarshal(turn[0].Data, &data)
+	if string(data["messages"]) != "[]" {
+		t.Fatalf("messages = %s, want []", data["messages"])
+	}
+}
+
 func TestAStaleClientSaveKeepsHerRepliesButNotWhatItDeleted(t *testing.T) {
 	old := chatWorkspace{Conversations: []chatConversation{{
 		ID: "c", Rev: 5, Emotion: "happy", Intensity: 3,

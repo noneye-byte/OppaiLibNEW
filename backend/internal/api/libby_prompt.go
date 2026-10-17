@@ -322,6 +322,9 @@ func (s *Server) buildTurnPrompt(ctx context.Context, cur settings.Settings, v *
 		scene:      v.conv.Scene != nil,
 		level:      toolLevelFor(limit),
 	}
+	if canCamera && isLibby {
+		p.tools.loras = cur.LibbyCameraLoras
+	}
 	// Offering is for turns about acting on the library or the server, as the offer
 	// directive always was; on the rest the tool is a couple of hundred tokens of nothing.
 	if signals.act || signals.actFollowUp || p.serverTurn {

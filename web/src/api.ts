@@ -500,6 +500,9 @@ export interface Settings {
   libbyGenToLibrary: boolean;
   /** Her camera: how many candidates a shot is taken as, for the judge to choose from. */
   libbyCameraCandidates: number;
+  /** LoRAs she may add to one picture when its shot needs one, on top of libbyGenLoras.
+      `when` is what she is told it is for; `trigger` is added to the prompt with it. */
+  libbyCameraLoras: { name: string; weight: number; when: string; trigger: string }[];
   /** ControlNet names for copying a pose from your photo and keeping her face. A blank
       model is that feature off. */
   libbyPoseModule: string;

@@ -256,7 +256,14 @@ func (s *Server) handleLibbyTurn(w http.ResponseWriter, r *http.Request) {
 
 	stream := newTurnStream(w, r)
 	defer stream.finish()
-	stream.send("turn", map[string]any{"conversationId": req.ConversationID, "rev": stored.Rev, "messages": stored.received})
+	// Never null: when the autosave already brought every text (the usual case once a
+	// workspace save succeeds) nothing is received, and a nil slice marshals as `null`,
+	// which the phone's decoder refused for a list and failed the turn with.
+	received := stored.received
+	if received == nil {
+		received = []storedChatMessage{}
+	}
+	stream.send("turn", map[string]any{"conversationId": req.ConversationID, "rev": stored.Rev, "messages": received})
 
 	ctx, cancel := context.WithTimeout(r.Context(), 6*time.Minute)
 	defer cancel()

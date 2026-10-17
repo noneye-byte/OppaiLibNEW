@@ -1,6 +1,12 @@
 package net.fourbakers.oppailib.ui
 
 import android.util.Base64
+import android.graphics.BitmapFactory
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -430,8 +436,10 @@ fun ChatScreen(
     /** What the pending turn carries: every item attached in the burst it answers. The
         photo is read by the server from the message that carried it. */
     var turnItems by remember { mutableStateOf<List<Long>>(emptyList()) }
-    /** What her camera is doing while she takes a picture, "" when it is not. */
-    var making by remember { mutableStateOf("") }
+    /** What her camera is doing while she takes a picture, null when it is not. */
+    var making by remember { mutableStateOf<CameraWork?>(null) }
+    /** The picture open full screen, by id. */
+    var pictureOpen by remember { mutableStateOf<String?>(null) }
     var retryNoteOpen by remember { mutableStateOf(false) }
     var retryNote by remember { mutableStateOf("") }
     val clipboard = LocalClipboardManager.current
@@ -715,7 +723,7 @@ fun ChatScreen(
                 repo.libbyTurn(request).buffer(Channel.UNLIMITED).collect { ev ->
                     when (ev.event) {
                         "turn" -> live()?.let { c ->
-                            val mine = ev.data["messages"]?.let { repo.fromJson(ListSerializer(StoredChatMessage.serializer()), it) }.orEmpty()
+                            val mine = ev.field("messages")?.let { repo.fromJson(ListSerializer(StoredChatMessage.serializer()), it) }.orEmpty()
                             commit(c.copy(messages = upsertMessages(c.messages, mine), rev = maxOf(c.rev, ev.long("rev"))))
                         }
                         "status" -> typingPhase = if (ev.string("phase") == "typing") TypingPhase.TYPING else TypingPhase.IDLE
@@ -729,11 +737,15 @@ fun ChatScreen(
                                 "room" -> "Going somewhere new…"
                                 else -> cameraPhaseLabel(phase, shots)
                             }
-                            making = if (percent > 0 && percent < 1) "$what ${(percent * 100).toInt()}%" else what
+                            // The preview is the picture coming into focus; an event without
+                            // one (judging, saving) keeps the last, as the web does.
+                            val preview = progress?.get("preview")?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
+                                ?.let { withContext(Dispatchers.Default) { previewBitmap(it) } }
+                            making = CameraWork(what, percent.toFloat(), preview ?: making?.preview)
                         }
                         "message" -> {
-                            val m = ev.data["message"]?.let { repo.fromJson(StoredChatMessage.serializer(), it) } ?: return@collect
-                            val images = ev.data["images"]?.let { repo.fromJson(ListSerializer(ChatImage.serializer()), it) }.orEmpty()
+                            val m = ev.field("message")?.let { repo.fromJson(StoredChatMessage.serializer(), it) } ?: return@collect
+                            val images = ev.field("images")?.let { repo.fromJson(ListSerializer(ChatImage.serializer()), it) }.orEmpty()
                             val fresh = live()?.messages?.none { it.id == m.id } ?: return@collect
                             val pictures = m.pictures()
                             if (fresh && m.role == "assistant" && m.thought.isBlank() && pictures.isEmpty() && !m.voice && !isStageDirection(m.content)) {
@@ -743,7 +755,7 @@ fun ChatScreen(
                             }
                             val c = live() ?: return@collect
                             commit(c.copy(messages = upsertMessages(c.messages, listOf(m)), rev = maxOf(c.rev, ev.long("rev")), updatedAt = System.currentTimeMillis()), images)
-                            if (pictures.isNotEmpty()) making = ""
+                            if (pictures.isNotEmpty()) making = null
                             if (fresh && m.role == "assistant" && m.thought.isBlank() && (m.voice || (speakOn && !isStageDirection(m.content)))) {
                                 repo.speech.speak(m.content, c.intensity)
                             }
@@ -769,14 +781,14 @@ fun ChatScreen(
                             "ring" -> if (!callOpen && !repo.prefs.hideLibby) incomingCall = true
                             "hang_up" -> if (callOpen) { callOpen = false; message = "${char.name} ended the call." }
                         }
-                        "room" -> making = ""
+                        "room" -> making = null
                         "notice" -> message = ev.string("text")
                         "done" -> live()?.let { c -> if (ev.long("rev") > c.rev) commit(c.copy(rev = ev.long("rev"))) }
                         "error" -> failure = ev.string("message").ifBlank { "Her reply failed." }
                     }
                 }
             }.onFailure { failure = it.message ?: "Chat failed" }
-            making = ""
+            making = null
             if (failure.isNotBlank()) {
                 status = runCatching { repo.api.chatStatus() }.getOrNull() ?: status
                 message = status?.takeIf { !it.enabled }?.message?.ifBlank { null } ?: failure
@@ -1187,6 +1199,7 @@ fun ChatScreen(
                                 repo, ws, char, item, previous, convo.messages.getOrNull(index + 1), onOpenMedia,
                                 onHold = { holdMessage = it }, onReply = { replyTarget = it },
                                 onReact = { m, emoji -> react(m, emoji) }, onOpenSnap = { snapOpen = it },
+                                onOpenPicture = { pictureOpen = it },
                                 onRate = { image, rating ->
                                     scope.launch {
                                         runCatching { repo.api.rateLibbyPhoto(image.id, RateRequest(rating)) }
@@ -1241,7 +1254,7 @@ fun ChatScreen(
                             )
                         }
                     }
-                    if (making.isNotBlank()) item { ChatMakingRow(repo, char, making) }
+                    making?.let { work -> item(key = "making") { ChatMakingRow(repo, char, work) } }
                     if (busy && typingPhase == TypingPhase.TYPING) item { ChatTypingBubble(repo, char) }
                 }
                 // Reading back through a long night and then wanting to be at the bottom
@@ -1365,6 +1378,17 @@ fun ChatScreen(
     }
 
     // A snap, full-screen, until you tap it away. It only opens once: closing marks it.
+    pictureOpen?.let { id ->
+        val convo = currentConversation(workspace)
+        val pictures = remember(convo?.messages, workspace?.images) {
+            conversationPictures(convo?.messages.orEmpty(), workspace?.images.orEmpty())
+        }
+        ChatPictureViewer(
+            repo, pictures, pictures.indexOfFirst { it.id == id }.coerceAtLeast(0),
+            herName = currentCharacter(workspace)?.name ?: "Libby", onDismiss = { pictureOpen = null },
+        )
+    }
+
     snapOpen?.let { snap ->
         Dialog(onDismissRequest = { closeSnap() }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
             val src = when {
@@ -2406,6 +2430,7 @@ private fun ChatMessageRow(
     onPicture: (ChatImage, String?) -> Unit = { _, _ -> },
     onRate: (ChatImage, String) -> Unit = { _, _ -> },
     onKeep: (ChatImage) -> Unit = {},
+    onOpenPicture: (String) -> Unit = {},
 ) {
     if (entry.thought.isNotBlank()) { ChatThoughtRow(char, entry); return }
     val friend = entry.role == "assistant"
@@ -2465,15 +2490,29 @@ private fun ChatMessageRow(
             }
         }
         Column(horizontalAlignment = if (friend) Alignment.Start else Alignment.End) {
+        val ink = if (friend) ChatColors.text else MaterialTheme.colorScheme.onPrimaryContainer
+        // A picture is drawn as itself, the way a phone's messages draw one: no bubble round
+        // it, and whatever came with it in a bubble of its own beneath. Inside a bubble it
+        // read as a picture *of* a message, and a set of them was a grey box of thumbnails.
+        val pictures = !entry.snap && entry.pictures().isNotEmpty()
+        val words = !entry.voice && entry.content.isNotBlank() &&
+            !(isStageDirection(entry.content) && (entry.pictures().isNotEmpty() || entry.attachments.isNotEmpty() || entry.actions.isNotEmpty()))
+        val bubble = !pictures || words || entry.voice || entry.snap || entry.replyTo != null ||
+            entry.attachments.isNotEmpty() || entry.links.isNotEmpty() || entry.actions.isNotEmpty()
         Box {
-        Column(
+        Column(horizontalAlignment = if (friend) Alignment.Start else Alignment.End, verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        if (pictures) ChatPictures(
+            repo, ws, entry, friend, if (friend) char.name else ws.profile.displayName.ifBlank { "you" }, onRate, onKeep,
+            onOpen = onOpenPicture, onHold = { onHold(entry) },
+        )
+        if (!bubble && last) ChatStamp(entry.at, friend, ChatColors.muted, Modifier.padding(horizontal = 4.dp))
+        if (bubble) Column(
             Modifier.widthIn(max = 320.dp).clip(shape)
                 .background(if (friend) ChatColors.side else MaterialTheme.colorScheme.primaryContainer)
                 .combinedClickable(onClick = {}, onLongClick = { onHold(entry) })
                 .padding(horizontal = 13.dp, vertical = 8.dp, )
                 .padding(bottom = if (entry.reactions.isNotEmpty()) 8.dp else 0.dp),
         ) {
-            val ink = if (friend) ChatColors.text else MaterialTheme.colorScheme.onPrimaryContainer
             // A quoted reply: the earlier line above the new one, on a bar.
             entry.replyTo?.let { ref ->
                 Row(
@@ -2492,7 +2531,7 @@ private fun ChatMessageRow(
             }
             if (entry.voice) {
                 ChatVoiceNote(entry, ink) { repo.speech.speak(entry.content, 3) }
-            } else if (!(isStageDirection(entry.content) && (entry.pictures().isNotEmpty() || entry.attachments.isNotEmpty() || entry.actions.isNotEmpty()))) {
+            } else if (words) {
                 Text(richChatText(entry.content, entry.links, onOpenMedia, if (friend) ChatColors.accent else ink), color = ink, fontSize = 15.sp)
             }
             if (entry.snap) {
@@ -2515,24 +2554,14 @@ private fun ChatMessageRow(
                     }
                 }
             } else {
-            ChatPictures(repo, ws, entry, friend, if (friend) char.name else ws.profile.displayName.ifBlank { "you" }, onRate, onKeep)
             ChatAttachments(repo, char, entry.attachments, onOpenMedia)
             }
             ChatLinkChips(repo, entry.links, onOpenMedia)
             ChatActionCards(repo, entry.actions, actContext, onPicture)
             // One stamp per run, at its foot, so a burst of four texts is marked once
-            // instead of four times. The ticks are the same idea as everywhere else: the
-            // message is in the log on the server, which is as delivered as it gets here.
-            if (last) {
-                Row(
-                    Modifier.align(Alignment.End).padding(top = 3.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(3.dp),
-                ) {
-                    Text(timeOf(entry.at), color = ink.copy(alpha = .55f), fontSize = 10.sp)
-                    if (!friend) Icon(Icons.Filled.DoneAll, null, tint = ink.copy(alpha = .55f), modifier = Modifier.size(13.dp))
-                }
-            }
+            // instead of four times.
+            if (last) ChatStamp(entry.at, friend, ink.copy(alpha = .55f), Modifier.align(Alignment.End).padding(top = 3.dp))
+        }
         }
         // Reactions: emoji tucked into the bubble's lower corner, overlapping the edge.
         if (entry.reactions.isNotEmpty()) Row(
@@ -2555,6 +2584,16 @@ private fun ChatMessageRow(
         } // Column
     }
     } // Box
+}
+
+/** The time at the foot of a run, with your ticks: the message is in the log on the
+    server, which is as delivered as it gets here. */
+@Composable
+private fun ChatStamp(at: Long, friend: Boolean, tint: Color, modifier: Modifier = Modifier) {
+    Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+        Text(timeOf(at), color = tint, fontSize = 10.sp)
+        if (!friend) Icon(Icons.Filled.DoneAll, null, tint = tint, modifier = Modifier.size(13.dp))
+    }
 }
 
 /**
@@ -2933,9 +2972,23 @@ private fun importedChatCharacter(bytes: ByteArray): ChatCharacter {
     )
 }
 
-/** Her camera at work: the picture she is taking, before it arrives. */
+/** What her camera is doing: the words for it, how far along (0 to 1), and the
+    generator's preview of the picture so far. */
+private data class CameraWork(val label: String, val percent: Float, val preview: ImageBitmap?)
+
+/** The generator's preview, a data URL, as a picture; null when it is not one. */
+private fun previewBitmap(dataUrl: String): ImageBitmap? = runCatching {
+    val bytes = Base64.decode(dataUrl.substringAfter("base64,", ""), Base64.DEFAULT)
+    BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+}.getOrNull()
+
+/**
+ * Her camera at work: the picture she is taking, coming into focus where it will land,
+ * with a bar for how far along it is. It used to be a line of text with a percentage in
+ * it, which said a picture was coming and nothing about what it was.
+ */
 @Composable
-private fun ChatMakingRow(repo: Repository, char: ChatCharacter, label: String) {
+private fun ChatMakingRow(repo: Repository, char: ChatCharacter, work: CameraWork) {
     Row(
         Modifier.fillMaxWidth().padding(start = 10.dp, end = 10.dp, top = 8.dp),
         verticalAlignment = Alignment.Bottom,
@@ -2943,45 +2996,78 @@ private fun ChatMakingRow(repo: Repository, char: ChatCharacter, label: String) 
         Box(Modifier.width(44.dp), contentAlignment = Alignment.BottomCenter) {
             ChatAvatar(repo, char, Modifier.size(30.dp).clip(CircleShape))
         }
-        Row(
-            Modifier.clip(RoundedCornerShape(18.dp, 18.dp, 18.dp, 4.dp)).background(ChatColors.side)
-                .padding(horizontal = 14.dp, vertical = 11.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(Icons.Filled.PhotoCamera, null, tint = ChatColors.accent, modifier = Modifier.size(20.dp))
-            Text(label, color = ChatColors.text, fontSize = 13.sp)
+        Column(Modifier.width(240.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            work.preview?.let { preview ->
+                Image(
+                    preview, "The picture ${char.name} is taking, so far",
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxWidth().aspectRatio((preview.width.toFloat() / preview.height).coerceIn(0.56f, 1.78f))
+                        .clip(RoundedCornerShape(16.dp)).alpha(.85f),
+                )
+            }
+            Column(
+                Modifier.clip(RoundedCornerShape(18.dp, 18.dp, 18.dp, 4.dp)).background(ChatColors.side)
+                    .padding(horizontal = 14.dp, vertical = 11.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Filled.PhotoCamera, null, tint = ChatColors.accent, modifier = Modifier.size(20.dp))
+                    Text(work.label, color = ChatColors.text, fontSize = 13.sp)
+                }
+                // Determinate while the generator reports steps; between them (judging,
+                // saving) there is nothing to measure, so it only says it is working.
+                if (work.percent > 0f && work.percent < 1f) {
+                    LinearProgressIndicator(progress = { work.percent }, Modifier.fillMaxWidth(), color = ChatColors.accent, trackColor = ChatColors.accent.copy(alpha = .18f))
+                } else {
+                    LinearProgressIndicator(Modifier.fillMaxWidth(), color = ChatColors.accent, trackColor = ChatColors.accent.copy(alpha = .18f))
+                }
+            }
         }
     }
 }
 
 /**
- * The pictures a message carries: one, a set from one shoot (two to a row, cropped
- * square so a set reads as a set), or a clip. Under each of hers, what you thought of
- * it — which leans what she sends next.
+ * The pictures a message carries, drawn bare: one at its own shape, a set (from before
+ * she sent one picture at a time) two to a row and cropped square so it reads as a set,
+ * or a clip. A tap opens it full screen; holding it is holding the message. Under each
+ * of hers, what you thought of it — which leans what she sends next.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ChatPictures(
     repo: Repository, ws: ChatWorkspace, entry: StoredChatMessage, friend: Boolean, name: String,
     onRate: (ChatImage, String) -> Unit, onKeep: (ChatImage) -> Unit,
+    onOpen: (String) -> Unit, onHold: () -> Unit,
 ) {
     val ids = entry.pictures()
     if (ids.isEmpty()) return
     val set = ids.size > 1
-    Column(Modifier.padding(top = 7.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    Column(horizontalAlignment = if (friend) Alignment.Start else Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
         ids.chunked(if (set) 2 else 1).forEach { row ->
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 row.forEach { id ->
                     val record = ws.images.firstOrNull { it.id == id }
-                    val side = if (set) 128.dp else 260.dp
-                    Column {
+                    val side = if (set) 128.dp else 240.dp
+                    // A lone picture takes its own shape once it has loaded — her selfies are
+                    // portrait, and a square crop took her head off. Until then, portrait.
+                    var aspect by remember(id) { mutableStateOf(if (set) 1f else 3f / 4f) }
+                    val shape = RoundedCornerShape(16.dp)
+                    Column(horizontalAlignment = if (friend) Alignment.Start else Alignment.End) {
                         if (record?.mime?.startsWith("video/") == true) {
-                            ChatClip(repo, id, Modifier.width(side).height(side).clip(RoundedCornerShape(12.dp)))
+                            ChatClip(repo, id, Modifier.width(side).height(side).clip(shape))
                         } else {
                             AsyncImage(
                                 repo.chatImageUrl(id), "Picture sent by $name",
                                 imageLoader = repo.imageLoader, contentScale = ContentScale.Crop,
-                                modifier = Modifier.width(side).height(side).clip(RoundedCornerShape(12.dp)),
+                                onSuccess = { state ->
+                                    val d = state.result.drawable
+                                    if (!set && d.intrinsicWidth > 0 && d.intrinsicHeight > 0) {
+                                        aspect = (d.intrinsicWidth.toFloat() / d.intrinsicHeight).coerceIn(0.56f, 1.78f)
+                                    }
+                                },
+                                modifier = Modifier.width(side).aspectRatio(aspect).clip(shape)
+                                    .background(ChatColors.side)
+                                    .combinedClickable(onClick = { onOpen(id) }, onLongClick = onHold),
                             )
                         }
                         if (friend && record != null) ChatRating(record, onRate, onKeep)

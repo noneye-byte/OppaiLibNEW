@@ -111,6 +111,8 @@ export class OppaiSettings extends LitElement {
   // than free text. Empty when it is unreachable; see loadGenLists.
   @state() private genModels: string[] = [];
   @state() private genLoras: string[] = [];
+  /** Each LoRA's trigger words as the generator lists them, to fill in a camera LoRA's. */
+  @state() private genLoraTriggers: Record<string, string> = {};
   @state() private genBoards: string[] = [];
   @state() private genError = "";
 
@@ -766,6 +768,17 @@ export class OppaiSettings extends LitElement {
     if (!list[index]) return;
     list[index] = { ...list[index], ...patch };
     this.edit({ libbyGenLoras: list });
+  }
+
+  /** Changes one of the LoRAs she may choose. Picking a different LoRA brings its
+      trigger words with it, when the generator knows them and none were typed. */
+  private editCameraLora(index: number, patch: Partial<Settings["libbyCameraLoras"][number]>) {
+    const list = [...(this.settings?.libbyCameraLoras ?? [])];
+    if (!list[index]) return;
+    const next = { ...list[index], ...patch };
+    if (patch.name && !list[index].trigger) next.trigger = this.genLoraTriggers[patch.name] ?? "";
+    list[index] = next;
+    this.edit({ libbyCameraLoras: list });
   }
 
   private edit(patch: Partial<Settings>) {
@@ -1785,6 +1798,8 @@ export class OppaiSettings extends LitElement {
         </div>
       </div>
 
+      ${this.renderCameraLoras(s)}
+
       <div class="field stack">
         <div class="field-text">
           <div class="field-label">Copying your pose</div>
@@ -1886,10 +1901,65 @@ export class OppaiSettings extends LitElement {
       // then fail to resolve.
       this.genModels = (status.models ?? []).map((m) => m.title || m.model_name).filter(Boolean);
       this.genLoras = (status.loras ?? []).map((l) => l.name).filter(Boolean);
+      this.genLoraTriggers = Object.fromEntries((status.loras ?? []).map((l) => [l.name, (l.triggerPhrases ?? []).join(", ")]));
       this.genBoards = (status.boards ?? []).map((b) => b.name).filter(Boolean);
     } catch (e) {
       this.genError = (e as Error).message;
     }
+  }
+
+  /** The LoRAs she may reach for on one picture. Each is a line in her camera tool, and
+      the note is all she chooses by, so the note is the field that matters. */
+  private renderCameraLoras(s: Settings) {
+    const loras = this.genLoras;
+    const chosen = s.libbyCameraLoras ?? [];
+    return html`<div class="field stack">
+      <div class="field-text">
+        <div class="field-label">LoRAs she can choose</div>
+        <div class="field-help">
+          Ones she adds to a single picture when the shot calls for it — a pose, an act, a
+          style — on top of the LoRAs above. Say when each one helps; that note is all she
+          has to go on. Trigger words are added to the prompt with it.
+        </div>
+      </div>
+      <div class="field-control" style="display:flex; flex-direction:column; gap:12px; align-items:stretch;">
+        ${chosen.map((lora, i) => html`<div style="display:flex; flex-direction:column; gap:6px;">
+          <div style="display:flex; gap:8px; align-items:center;">
+            ${loras.length
+              ? html`<select style="flex:1; min-width:0;" ?disabled=${!this.canEdit} aria-label="Optional LoRA ${i + 1}"
+                  @change=${(e: Event) => this.editCameraLora(i, { name: (e.target as HTMLSelectElement).value })}>
+                  ${(loras.includes(lora.name) ? loras : [lora.name, ...loras]).map((l) =>
+                    html`<option value=${l} ?selected=${l === lora.name}>${l}</option>`)}
+                </select>`
+              : html`<input type="text" autocomplete="off" placeholder="LoRA name" style="flex:1; min-width:0;"
+                  aria-label="Optional LoRA ${i + 1}" .value=${lora.name} ?disabled=${!this.canEdit}
+                  @change=${(e: Event) => this.editCameraLora(i, { name: (e.target as HTMLInputElement).value })} />`}
+            <input type="number" step="0.05" min="-2" max="2" style="width:90px;"
+              aria-label="Optional LoRA ${i + 1} strength" .value=${String(lora.weight)} ?disabled=${!this.canEdit}
+              @change=${(e: Event) => this.editCameraLora(i, { weight: Number((e.target as HTMLInputElement).value) })} />
+            <button class="btn-inline" title="Remove" aria-label="Remove optional LoRA ${i + 1}" ?disabled=${!this.canEdit}
+              @click=${() => this.edit({ libbyCameraLoras: chosen.filter((_, j) => j !== i) })}>
+              <span class="material-symbols-rounded" style="font-size:18px;">delete</span>
+            </button>
+          </div>
+          <input type="text" autocomplete="off" maxlength="160" placeholder="When it helps — e.g. POV shots from above"
+            aria-label="When optional LoRA ${i + 1} helps" .value=${lora.when} ?disabled=${!this.canEdit}
+            @change=${(e: Event) => this.editCameraLora(i, { when: (e.target as HTMLInputElement).value })} />
+          <input type="text" autocomplete="off" maxlength="200" placeholder="Trigger words (optional)"
+            aria-label="Optional LoRA ${i + 1} trigger words" .value=${lora.trigger} ?disabled=${!this.canEdit}
+            @change=${(e: Event) => this.editCameraLora(i, { trigger: (e.target as HTMLInputElement).value })} />
+        </div>`)}
+        <button class="btn-inline" style="align-self:flex-start; display:inline-flex; align-items:center; gap:6px;"
+          ?disabled=${!this.canEdit || chosen.length >= 12}
+          @click=${() => {
+            const name = loras.find((l) => !chosen.some((c) => c.name === l)) ?? "";
+            this.edit({ libbyCameraLoras: [...chosen, { name, weight: 1, when: "", trigger: this.genLoraTriggers[name] ?? "" }] });
+          }}>
+          <span class="material-symbols-rounded" style="font-size:18px;">add</span>
+          ${chosen.length ? "Add another" : "Add one she can choose"}
+        </button>
+      </div>
+    </div>`;
   }
 
   private renderAI() {

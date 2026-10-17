@@ -31,6 +31,9 @@ import (
 //     (camera_shot.go), then built into a prompt with her likeness, her clothes, what
 //     she is doing and where she is — the same libbySelfiePrompt approved offers use.
 //  2. Several candidates are made in one run, the card lent to the generator for it.
+//     Only one is ever sent: a picture is one picture. She could once ask for a set of
+//     two to four, and every set was two to four times the wait for something they had
+//     asked to see once.
 //  3. A model that can see — the vision model, or hers — scores them: is it her, is it
 //     the shot, is it clean, is everyone in it an adult. The best cleared one goes;
 //     what they have rated well before breaks a tie.
@@ -41,7 +44,7 @@ import (
 // Without a model that can see, only the first candidate is made and it is sent as it
 // came, which is exactly what the old path did.
 
-// cameraRequest is one picture, a set, or an edit.
+// cameraRequest is one picture, or an edit of one.
 type cameraRequest struct {
 	userID int64
 	// r files a library copy when the operator asked for one; nil skips it (a story
@@ -50,9 +53,10 @@ type cameraRequest struct {
 	jobID string
 
 	shot, framing, outfit string
-	count                 int
 	// poseFrom is their photo to copy a pose from.
 	poseFrom string
+	// loras are the names of the optional LoRAs she chose for it.
+	loras []string
 	// editOf, when set, makes this an edit of one of her pictures.
 	editOf, change, strength string
 
@@ -165,7 +169,6 @@ func (s *Server) takePictures(ctx context.Context, req cameraRequest) (cameraRes
 	}
 
 	shot := req.shot
-	count := clampInt(req.count, 1, maxPhotoSet)
 	var init []byte
 	seed := int64(-1)
 	width, height := 0, 0
@@ -178,11 +181,13 @@ func (s *Server) takePictures(ctx context.Context, req cameraRequest) (cameraRes
 		if meta.Gen != nil {
 			original = meta.Gen.Shot
 			seed = meta.Gen.Seed
+			// "Same but…" is the same kind of picture, so it keeps what she chose for it.
+			req.loras = meta.Gen.Loras
 		}
 		if strings.EqualFold(strings.TrimSpace(req.strength), "big") {
 			seed = -1
 		}
-		shot, init, count = editedShot(original, req.change), raw, 1
+		shot, init = editedShot(original, req.change), raw
 		if cfg, _, err := image.DecodeConfig(bytes.NewReader(raw)); err == nil {
 			width, height = roundTo8(clampInt(cfg.Width, 256, 1536)), roundTo8(clampInt(cfg.Height, 256, 1536))
 		}
@@ -190,7 +195,7 @@ func (s *Server) takePictures(ctx context.Context, req cameraRequest) (cameraRes
 
 	judge := s.cameraJudge(cur)
 	candidates := 1
-	if count == 1 && judge != nil && init == nil {
+	if judge != nil && init == nil {
 		candidates = cur.LibbyCameraCandidates
 	}
 	subject := shotSubject(req.framing, shot, req.place)
@@ -206,16 +211,28 @@ func (s *Server) takePictures(ctx context.Context, req cameraRequest) (cameraRes
 	if light := shotLight(shot, req.place, req.at); light != "" && init == nil {
 		prompt += ", " + light
 	}
+	chosen := chosenLoras(cur.LibbyCameraLoras, req.loras)
+	loras := libbyLoras(cur)
+	var chosenNames []string
+	for _, l := range chosen {
+		if !hasLora(loras, l.Name) {
+			loras = append(loras, loraReq{Name: l.Name, Weight: l.Weight})
+		}
+		if l.Trigger != "" {
+			prompt += ", " + l.Trigger
+		}
+		chosenNames = append(chosenNames, l.Name)
+	}
 	gr := generateReq{
 		Prompt:         prompt,
 		NegativePrompt: withAdultNegative(cur.LibbyGenNegativePrompt),
 		Checkpoint:     cur.LibbyGenModel,
 		Board:          cur.LibbyGenBoard,
-		Count:          count * candidates,
+		Count:          candidates,
 		Seed:           seed,
 		Width:          width,
 		Height:         height,
-		Loras:          libbyLoras(cur),
+		Loras:          loras,
 	}
 	gen, record, _ := s.prepareGenerate(&gr)
 	gen.InitImage, gen.Denoise = init, editDenoise(req.strength)
@@ -235,9 +252,9 @@ func (s *Server) takePictures(ctx context.Context, req cameraRequest) (cameraRes
 			if job != nil {
 				job.report(p)
 			}
-			emit(cameraProgress{Phase: phase, Percent: (float64(p.Index) + p.Percent) / float64(total), Preview: p.Image, Of: count})
+			emit(cameraProgress{Phase: phase, Percent: (float64(p.Index) + p.Percent) / float64(total), Preview: p.Image, Of: 1})
 		}
-		emit(cameraProgress{Phase: phase, Of: count})
+		emit(cameraProgress{Phase: phase, Of: 1})
 		release := s.lendCardToImages(ctx)
 		defer release()
 		out, err := s.imagegen.Generate(runCtx, cur.ImageGenURL, g)
@@ -267,7 +284,7 @@ func (s *Server) takePictures(ctx context.Context, req cameraRequest) (cameraRes
 	if judge != nil {
 		emit(cameraProgress{Phase: "judging", Percent: 1, Of: len(pool)})
 		verdict, idx, ok := s.judgeCandidates(ctx, judge, pool, subject, cur.LibbyGenPrompt, req.weights)
-		if ok && count == 1 && len(idx) > 0 && verdict.Scores[idx[0]] < cameraRetakeBelow && verdict.Fix != "" && init == nil {
+		if ok && len(idx) > 0 && verdict.Scores[idx[0]] < cameraRetakeBelow && verdict.Fix != "" && init == nil {
 			// Not good enough: once more with what the judge said was wrong.
 			retake := gen
 			retake.Prompt = gen.Prompt + ", " + verdict.Fix
@@ -284,33 +301,14 @@ func (s *Server) takePictures(ctx context.Context, req cameraRequest) (cameraRes
 			// The judge cleared nothing. Not sent — said to her instead.
 			return res, errors.New("none of the pictures came out right, so nothing was sent")
 		case ok:
-			keep := idx[:1]
-			if count > 1 {
-				// A set keeps every picture that is not broken, in the judge's order.
-				keep = nil
-				for _, i := range idx {
-					if verdict.Scores[i] >= 3 {
-						keep = append(keep, i)
-					}
-				}
-				if len(keep) == 0 {
-					keep = idx[:1]
-				}
-			}
-			for _, i := range keep {
-				picks = append(picks, pick{raw: pool[i].raw, seed: pool[i].seed, prompt: pool[i].prompt, score: verdict.Scores[i], tags: pool[i].tags})
-			}
+			i := idx[0]
+			picks = append(picks, pick{raw: pool[i].raw, seed: pool[i].seed, prompt: pool[i].prompt, score: verdict.Scores[i], tags: pool[i].tags})
 			seen = verdict.Description
-			if len(keep) > 1 {
-				seen = fmt.Sprintf("a set of %d; the best of them shows %s", len(keep), verdict.Description)
-			}
 		}
 	}
-	if len(picks) == 0 {
-		// No judge, or one that said nothing usable: the first of each shot, as before.
-		for i := 0; i < len(pool) && len(picks) < count; i += candidates {
-			picks = append(picks, pick{raw: pool[i].raw, seed: pool[i].seed, prompt: pool[i].prompt})
-		}
+	if len(picks) == 0 && len(pool) > 0 {
+		// No judge, or one that said nothing usable: the first one made, as before.
+		picks = append(picks, pick{raw: pool[0].raw, seed: pool[0].seed, prompt: pool[0].prompt})
 	}
 
 	emit(cameraProgress{Phase: "saving", Percent: 1, Of: len(picks)})
@@ -319,7 +317,7 @@ func (s *Server) takePictures(ctx context.Context, req cameraRequest) (cameraRes
 	baseTags = append(baseTags, selfieSubjectTags(shot)...)
 	for _, p := range picks {
 		meta := s.cameraImageMeta(ctx, p.raw, title, baseTags, p.tags)
-		meta.Gen = &chatImageGen{Prompt: p.prompt, Negative: gen.NegativePrompt, Seed: p.seed, Shot: shot, Score: p.score}
+		meta.Gen = &chatImageGen{Prompt: p.prompt, Negative: gen.NegativePrompt, Seed: p.seed, Shot: shot, Score: p.score, Loras: chosenNames}
 		if cur.LibbyGenToLibrary && req.r != nil {
 			id := s.genCache.put(&genPreview{data: p.raw, prompt: record, negative: gen.NegativePrompt, seed: p.seed, model: cur.LibbyGenModel})
 			meta.Kept = s.saveGeneratedToLibrary(req.r, id, title, meta.Tags)
@@ -335,6 +333,32 @@ func (s *Server) takePictures(ctx context.Context, req cameraRequest) (cameraRes
 	}
 	res.seen = seen
 	return res, nil
+}
+
+// chosenLoras is the optional LoRAs she named that are still on offer, in the order they
+// are configured. A name she invented, or one taken off the list since a picture she is
+// now editing, is dropped rather than sent to a generator that has never heard of it.
+func chosenLoras(offered []settings.CameraLora, names []string) []settings.CameraLora {
+	want := map[string]bool{}
+	for _, n := range names {
+		want[strings.ToLower(strings.TrimSpace(n))] = true
+	}
+	var out []settings.CameraLora
+	for _, l := range offered {
+		if want[strings.ToLower(l.Name)] {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+func hasLora(list []loraReq, name string) bool {
+	for _, l := range list {
+		if l.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // cameraCandidate is one generated picture, before it is chosen or filed.
@@ -363,8 +387,7 @@ func cameraPool(out *imagegen.GenerateResult, prompt string) []cameraCandidate {
 }
 
 // judgeCandidates asks the judge about every candidate in the pool and returns the ones
-// it cleared, best first; the caller sends the first of a single shot and the unbroken
-// ones of a set. The tagger runs here too, so taste can break ties and the tags are not
+// it cleared, best first; the caller sends the first. The tagger runs here too, so taste can break ties and the tags are not
 // computed twice.
 func (s *Server) judgeCandidates(ctx context.Context, judge cameraJudgeFunc, pool []cameraCandidate, wanted, likeness string, weights map[string]float64) (judgement, []int, bool) {
 	var frames []image.Image

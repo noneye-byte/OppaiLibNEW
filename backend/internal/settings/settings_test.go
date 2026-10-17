@@ -1,6 +1,9 @@
 package settings
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
 
 func TestRedactedCatalogueKeys(t *testing.T) {
 	s := Settings{CivitaiAPIKey: "civ", Rule34APIKey: "r34", F95Password: "f95"}.Redacted()
@@ -82,5 +85,30 @@ func TestHerOldSingleLoraBecomesTheFirstOfHerList(t *testing.T) {
 	back := Merge(Settings{}, s.Map())
 	if len(back.LibbyGenLoras) != 2 || back.LibbyGenLoras[1] != want[1] {
 		t.Fatalf("round trip = %+v", back.LibbyGenLoras)
+	}
+}
+
+// Her optional LoRAs are read by her as a list in a tool's description, so a pasted
+// note keeps no line breaks and the list stops at what a turn can afford.
+func TestTheLorasSheChoosesFromAreCleanedAndSurviveARoundTrip(t *testing.T) {
+	s := Settings{LibbyCameraLoras: []CameraLora{
+		{Name: " pov ", Weight: 4, When: "POV shots\nfrom above", Trigger: "pov,  from above"},
+		{Name: "pov", Weight: 0.3},
+		{Name: " "},
+	}}
+	for i := 0; i < 20; i++ {
+		s.LibbyCameraLoras = append(s.LibbyCameraLoras, CameraLora{Name: fmt.Sprintf("extra%d", i), Weight: 1})
+	}
+	s.Clamp()
+	if len(s.LibbyCameraLoras) != maxCameraLoras {
+		t.Fatalf("kept %d, want %d", len(s.LibbyCameraLoras), maxCameraLoras)
+	}
+	want := CameraLora{Name: "pov", Weight: 2, When: "POV shots from above", Trigger: "pov, from above"}
+	if s.LibbyCameraLoras[0] != want || s.LibbyCameraLoras[1].Name != "extra0" {
+		t.Fatalf("cleaned = %+v", s.LibbyCameraLoras[:2])
+	}
+	back := Merge(Settings{}, s.Map())
+	if len(back.LibbyCameraLoras) != maxCameraLoras || back.LibbyCameraLoras[0] != want {
+		t.Fatalf("round trip = %+v", back.LibbyCameraLoras)
 	}
 }

@@ -513,8 +513,12 @@ prompt is her likeness, her clothes and the room plus the shot, with an adults-o
 negative always added; `libbyCameraCandidates` pictures are made and a model that can
 see (the vision model, or hers) scores them and clears each as showing only adults —
 nothing it does not clear is sent; below 4.5 of 10 it is retaken once with the judge's
-fix. The picture is filed in her chat gallery with its recipe (`gen: {prompt, negative,
-seed, shot, score}`), and she is told what it actually shows before she says anything
+fix. One picture is ever sent per shot; there are no sets. `take_photo` takes an optional
+`loras` list naming entries of `libbyCameraLoras` (`{name, weight, when, trigger}`, up to
+12): she is offered each by its `when` note, a chosen one is added with its trigger words
+on top of `libbyGenLoras`, and a name not on the list is ignored. The picture is filed in
+her chat gallery with its recipe (`gen: {prompt, negative, seed, shot, score, loras}`),
+and an `edit_photo` of it keeps its `loras`. She is told what it actually shows before she says anything
 about it. `edit_photo` is an img2img of her last picture on its seed. Pose copying and
 face lock use the ControlNet extension (`libbyPose*`, `libbyFace*` settings; A1111/Forge
 only), and clips run the operator's ComfyUI workflow (`libbyClipUrl`,

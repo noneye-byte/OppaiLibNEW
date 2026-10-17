@@ -813,7 +813,7 @@ private fun Poster(repo: Repository, media: Media, onTap: () -> Unit) {
  * zoomed in — otherwise it falls through and the pager scrolls as normal.
  */
 @Composable
-private fun ZoomableImage(
+internal fun ZoomableImage(
     url: String,
     imageLoader: ImageLoader,
     contentDescription: String?,

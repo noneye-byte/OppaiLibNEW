@@ -136,6 +136,29 @@ func argInt(args map[string]any, key string) (int, bool) {
 	return 0, false
 }
 
+// argList reads a list of strings: an array, or — from a model that flattens one — a
+// comma-separated string.
+func argList(args map[string]any, key string) []string {
+	var raw []string
+	switch v := args[key].(type) {
+	case []any:
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				raw = append(raw, s)
+			}
+		}
+	case string:
+		raw = strings.Split(v, ",")
+	}
+	var out []string
+	for _, s := range raw {
+		if s = strings.TrimSpace(s); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 // argBool reads one boolean argument.
 func argBool(args map[string]any, key string) bool {
 	switch v := args[key].(type) {

@@ -3,6 +3,8 @@ package api
 import (
 	"sort"
 	"strings"
+
+	"github.com/youruser/oppailib/internal/settings"
 )
 
 // What she can do, as tools.
@@ -42,6 +44,8 @@ type toolsetOptions struct {
 	offers []string
 	// scene says a planned scene is under way, which adds its beat to the state tool.
 	scene bool
+	// loras are the LoRAs she may add to a picture, each with its note on when.
+	loras []settings.CameraLora
 	// level is how much of the window the tools may take: toolsFull, toolsLean or
 	// toolsMinimal. See toolLevelFor.
 	level int
@@ -131,6 +135,24 @@ const (
 
 var photoFramings = strings.Split(photoFramingsNote, ", ")
 
+// loraParam offers her LoRAs by name, each with the note that is all she has to choose
+// by. Told to leave it out unless the shot calls for one: a LoRA on a picture it was not
+// made for pulls the whole picture toward what it was made for.
+func loraParam(loras []settings.CameraLora) map[string]any {
+	names := make([]string, 0, len(loras))
+	notes := make([]string, 0, len(loras))
+	for _, l := range loras {
+		names = append(names, l.Name)
+		notes = append(notes, l.Name+": "+firstNonEmpty(l.When, "no note"))
+	}
+	return map[string]any{
+		"type":  "array",
+		"items": map[string]any{"type": "string", "enum": names},
+		"description": "Extra models for this one picture, only when the shot is what one of them is for; leave it out otherwise. " +
+			strings.Join(notes, "; ") + ".",
+	}
+}
+
 // libbyToolset is the turn's tools, in a stable order so the prompt prefix the backend
 // caches on does not change between turns that offer the same set.
 func libbyToolset(o toolsetOptions) []llmTool {
@@ -170,9 +192,10 @@ func libbyToolset(o toolsetOptions) []llmTool {
 			"shot":    str("What the picture shows, as short comma-separated phrases or booru-style tags."),
 			"framing": enum("How it is framed.", photoFramings),
 			"outfit":  str("Only if the picture is in something other than what you have on: what you are wearing in it, or \"nothing\"."),
-			"count": map[string]any{"type": "integer", "minimum": 1, "maximum": 4,
-				"description": "1 for a picture; 2–4 for a set from one shoot, each a little further than the last."},
-			"snap": map[string]any{"type": "boolean", "description": "Send it to be seen once: they tap to open it, then it is gone."},
+			"snap":    map[string]any{"type": "boolean", "description": "Send it to be seen once: they tap to open it, then it is gone."},
+		}
+		if len(o.loras) > 0 {
+			props["loras"] = loraParam(o.loras)
 		}
 		if o.pose {
 			props["copy_their_pose"] = map[string]any{"type": "boolean", "description": "Copy the pose from the photo they just sent you."}

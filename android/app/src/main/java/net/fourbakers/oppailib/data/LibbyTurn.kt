@@ -1,6 +1,8 @@
 package net.fourbakers.oppailib.data
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
@@ -81,6 +83,10 @@ data class KeepResponse(val id: Long = 0)
 
 /** One event off the stream: its name, and its data as a JSON object. */
 data class TurnEvent(val event: String, val data: JsonObject) {
+    /** A field to decode, or null when it is missing *or* JSON `null`. A Go nil slice
+        arrives as `null`, and `data[key]?.let { decode }` only skips the missing case:
+        decoding JsonNull as a list throws ("Expected JsonArray, but had JsonNull"). */
+    fun field(key: String): JsonElement? = data[key]?.takeUnless { it is JsonNull }
     fun string(key: String): String = runCatching { data[key]?.jsonPrimitive?.content }.getOrNull().orEmpty()
     fun long(key: String): Long = runCatching { data[key]?.jsonPrimitive?.longOrNull }.getOrNull() ?: 0L
 }

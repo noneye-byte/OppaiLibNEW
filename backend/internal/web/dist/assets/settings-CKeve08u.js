@@ -1,4 +1,4 @@
-import{z as M,i as B,v as S,u as l,a as T,e as h,b as a,A as c,t as R,an as z,ao as C,ap as O,m as _,aq as E,ar as U,x as F,as as G,at as V,au as W,av as K,aw as H,ax as j,ay as q,az as Y,aA as J,aB as A,q as Q}from"./index-B26-uSqe.js";import{r as X,p as Z}from"./passkeys-ClpvrVc3.js";const ee=160,te=220;function se(e){var u;const t=e.trim();if(t.length<=ee)return t?[t]:[];const s=((u=t.match(/[^.!?…\n]+(?:[.!?…]+["”')]*|\n|$)/g))==null?void 0:u.map(g=>g.trim()).filter(Boolean))??[t],[o,...n]=s,i=[o];let r="";for(const g of n)r&&r.length+g.length+1>te&&(i.push(r),r=""),r=r?`${r} ${g}`:g;return r&&i.push(r),i}const N="oppai_libby_speak";function ye(){try{return localStorage.getItem(N)==="1"}catch{return!1}}function me(e){try{localStorage.setItem(N,e?"1":"0")}catch{}e||I(),window.dispatchEvent(new CustomEvent("oppai-libby-speak",{detail:{on:e}}))}let w=null,L=0;async function D(e=!1){if(!e&&w&&Date.now()-L<6e4)return w;try{const t=await fetch("/api/tts/status",{credentials:"same-origin"});if(!t.ok)throw new Error(String(t.status));w=await t.json(),L=Date.now()}catch{w=null}return w}const $=[];let y=null,x=!1,m=0,k=Promise.resolve();function ae(e,t=0){const s=se(e);if(!s.length)return Promise.resolve();const o=m,n=s.map(i=>new Promise(r=>{const u=k.then(()=>o===m?re(i,t):null);k=u.catch(()=>null),$.push({text:i,heat:t,audio:u,done:r})}));return ie(),Promise.all(n).then(()=>{})}function I(){var e;m++,k=Promise.resolve();for(const t of $.splice(0))t.done();y&&(y.pause(),y.src="",y=null);try{(e=window.speechSynthesis)==null||e.cancel()}catch{}}async function ie(){if(!x){x=!0;try{for(;$.length;){const e=$.shift(),t=m;try{await oe(e,t)}catch{}finally{e.done()}}}finally{x=!1}}}async function oe(e,t){const s=await e.audio.catch(()=>null);if(t===m){if(s){await ne(s,t);return}await le(e.text,t)}}async function re(e,t){const s=await D();if(s&&!s.engine)return null;try{const o=await fetch("/api/tts/speak",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify({text:e,heat:t||void 0})});return o.status===503?(w=null,null):o.ok?await o.blob():null}catch{return null}}function ne(e,t){return new Promise(s=>{const o=URL.createObjectURL(e),n=new Audio(o);y=n;const i=()=>{y===n&&(y=null),URL.revokeObjectURL(o),s()};n.addEventListener("ended",i,{once:!0}),n.addEventListener("error",i,{once:!0}),n.play().catch(()=>{i()}),t!==m&&i()})}function le(e,t){const s=window.speechSynthesis;return!s||typeof SpeechSynthesisUtterance>"u"?Promise.resolve():new Promise(o=>{const n=new SpeechSynthesisUtterance(e),i=de(s.getVoices());if(i&&(n.voice=i),n.rate=1.02,n.pitch=1.05,n.onend=()=>o(),n.onerror=()=>o(),t!==m){o();return}s.speak(n)})}function de(e){const t=e.filter(n=>/^en/i.test(n.lang)),s=t.length?t:e,o=n=>{let i=0;const r=n.name.toLowerCase();return/natural|neural|premium|enhanced/.test(r)&&(i+=4),/female|woman|aria|jenny|samantha|zira|karen|moira|tessa|fiona|libby|sonia|ava|allison|susan|emma/.test(r)&&(i+=3),/google/.test(r)&&(i+=1),n.default&&(i+=1),i};return[...s].sort((n,i)=>o(i)-o(n))[0]}var ce=Object.defineProperty,pe=Object.getOwnPropertyDescriptor,b=(e,t,s,o)=>{for(var n=o>1?void 0:o?pe(t,s):t,i=e.length-1,r;i>=0;i--)(r=e[i])&&(n=(o?r(t,s,n):r(n))||n);return o&&n&&ce(t,s,n),n};let v=class extends T{constructor(){super(...arguments),this.embedded=!1,this.backgrounds=[],this.defaultID="",this.loading=!0,this.busy=!1,this.note="",this.bad=!1,this.editing=null,this.draftName="",this.draftTags="",this.version=Date.now()}connectedCallback(){super.connectedCallback(),this.reload()}async reload(){this.loading=!0;try{const e=await h.libbyBackgrounds();this.backgrounds=e.backgrounds??[],this.defaultID=e.default??""}catch(e){this.say(e.message,!0)}finally{this.loading=!1}}say(e,t=!1){this.note=e,this.bad=t}changed(){this.dispatchEvent(new CustomEvent("changed",{bubbles:!0,composed:!0}))}startNew(){this.editing="new",this.draftName="",this.draftTags=""}startEdit(e){this.editing=e.id,this.draftName=e.name,this.draftTags=e.tags.join(", ")}async save(e){const t=this.draftName.trim();if(!t){this.say("A background needs a name.",!0);return}this.busy=!0;try{await h.saveLibbyBackground({id:e,name:t,tags:this.draftTags.split(",").map(s=>s.trim()).filter(Boolean)}),this.editing=null,await this.reload(),this.changed(),this.say(e?`Saved ${t}.`:`Added ${t}. Give it a picture so she can go there.`)}catch(s){this.say(s.message,!0)}finally{this.busy=!1}}async uploadPicture(e,t){var n;const s=t.target,o=(n=s.files)==null?void 0:n[0];if(s.value="",!!o){this.busy=!0;try{const i=await new Promise((r,u)=>{const g=new FileReader;g.onload=()=>r(String(g.result)),g.onerror=()=>u(g.error),g.readAsDataURL(o)});await h.setLibbyBackgroundImage(e,i),this.version=Date.now(),await this.reload(),this.changed(),this.say("Picture saved.")}catch(i){this.say(i.message,!0)}finally{this.busy=!1}}}async makeDefault(e){this.busy=!0;try{const t=this.defaultID===e?"":e;await h.setLibbyDefaultBackground(t),this.defaultID=t,this.changed(),this.say(t?"She starts here now.":"No default room — she starts nowhere in particular.")}catch(t){this.say(t.message,!0)}finally{this.busy=!1}}async deleteBackground(e){if(confirm(`Delete ${e.name}?`)){this.busy=!0;try{await h.deleteLibbyBackground(e.id),await this.reload(),this.changed(),this.say(`Deleted ${e.name}.`)}catch(t){this.say(t.message,!0)}finally{this.busy=!1}}}renderEditor(e){return a`<div class="edit">
+import{z as R,i as T,v as S,u as l,a as M,e as h,b as a,A as c,t as B,an as D,ao as I,ap as O,m as _,aq as E,ar as U,x as F,as as G,at as W,au as V,av as K,aw as H,ax as j,ay as q,az as Y,aA as J,aB as L,q as Q}from"./index-D62T8aao.js";import{r as X,p as Z}from"./passkeys-G6k8Ug-w.js";const ee=160,te=220;function se(e){var u;const t=e.trim();if(t.length<=ee)return t?[t]:[];const s=((u=t.match(/[^.!?…\n]+(?:[.!?…]+["”')]*|\n|$)/g))==null?void 0:u.map(g=>g.trim()).filter(Boolean))??[t],[o,...r]=s,i=[o];let n="";for(const g of r)n&&n.length+g.length+1>te&&(i.push(n),n=""),n=n?`${n} ${g}`:g;return n&&i.push(n),i}const N="oppai_libby_speak";function ye(){try{return localStorage.getItem(N)==="1"}catch{return!1}}function me(e){try{localStorage.setItem(N,e?"1":"0")}catch{}e||z(),window.dispatchEvent(new CustomEvent("oppai-libby-speak",{detail:{on:e}}))}let w=null,A=0;async function C(e=!1){if(!e&&w&&Date.now()-A<6e4)return w;try{const t=await fetch("/api/tts/status",{credentials:"same-origin"});if(!t.ok)throw new Error(String(t.status));w=await t.json(),A=Date.now()}catch{w=null}return w}const $=[];let y=null,x=!1,m=0,k=Promise.resolve();function ae(e,t=0){const s=se(e);if(!s.length)return Promise.resolve();const o=m,r=s.map(i=>new Promise(n=>{const u=k.then(()=>o===m?re(i,t):null);k=u.catch(()=>null),$.push({text:i,heat:t,audio:u,done:n})}));return ie(),Promise.all(r).then(()=>{})}function z(){var e;m++,k=Promise.resolve();for(const t of $.splice(0))t.done();y&&(y.pause(),y.src="",y=null);try{(e=window.speechSynthesis)==null||e.cancel()}catch{}}async function ie(){if(!x){x=!0;try{for(;$.length;){const e=$.shift(),t=m;try{await oe(e,t)}catch{}finally{e.done()}}}finally{x=!1}}}async function oe(e,t){const s=await e.audio.catch(()=>null);if(t===m){if(s){await ne(s,t);return}await le(e.text,t)}}async function re(e,t){const s=await C();if(s&&!s.engine)return null;try{const o=await fetch("/api/tts/speak",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify({text:e,heat:t||void 0})});return o.status===503?(w=null,null):o.ok?await o.blob():null}catch{return null}}function ne(e,t){return new Promise(s=>{const o=URL.createObjectURL(e),r=new Audio(o);y=r;const i=()=>{y===r&&(y=null),URL.revokeObjectURL(o),s()};r.addEventListener("ended",i,{once:!0}),r.addEventListener("error",i,{once:!0}),r.play().catch(()=>{i()}),t!==m&&i()})}function le(e,t){const s=window.speechSynthesis;return!s||typeof SpeechSynthesisUtterance>"u"?Promise.resolve():new Promise(o=>{const r=new SpeechSynthesisUtterance(e),i=de(s.getVoices());if(i&&(r.voice=i),r.rate=1.02,r.pitch=1.05,r.onend=()=>o(),r.onerror=()=>o(),t!==m){o();return}s.speak(r)})}function de(e){const t=e.filter(r=>/^en/i.test(r.lang)),s=t.length?t:e,o=r=>{let i=0;const n=r.name.toLowerCase();return/natural|neural|premium|enhanced/.test(n)&&(i+=4),/female|woman|aria|jenny|samantha|zira|karen|moira|tessa|fiona|libby|sonia|ava|allison|susan|emma/.test(n)&&(i+=3),/google/.test(n)&&(i+=1),r.default&&(i+=1),i};return[...s].sort((r,i)=>o(i)-o(r))[0]}var ce=Object.defineProperty,pe=Object.getOwnPropertyDescriptor,b=(e,t,s,o)=>{for(var r=o>1?void 0:o?pe(t,s):t,i=e.length-1,n;i>=0;i--)(n=e[i])&&(r=(o?n(t,s,r):n(r))||r);return o&&r&&ce(t,s,r),r};let v=class extends M{constructor(){super(...arguments),this.embedded=!1,this.backgrounds=[],this.defaultID="",this.loading=!0,this.busy=!1,this.note="",this.bad=!1,this.editing=null,this.draftName="",this.draftTags="",this.version=Date.now()}connectedCallback(){super.connectedCallback(),this.reload()}async reload(){this.loading=!0;try{const e=await h.libbyBackgrounds();this.backgrounds=e.backgrounds??[],this.defaultID=e.default??""}catch(e){this.say(e.message,!0)}finally{this.loading=!1}}say(e,t=!1){this.note=e,this.bad=t}changed(){this.dispatchEvent(new CustomEvent("changed",{bubbles:!0,composed:!0}))}startNew(){this.editing="new",this.draftName="",this.draftTags=""}startEdit(e){this.editing=e.id,this.draftName=e.name,this.draftTags=e.tags.join(", ")}async save(e){const t=this.draftName.trim();if(!t){this.say("A background needs a name.",!0);return}this.busy=!0;try{await h.saveLibbyBackground({id:e,name:t,tags:this.draftTags.split(",").map(s=>s.trim()).filter(Boolean)}),this.editing=null,await this.reload(),this.changed(),this.say(e?`Saved ${t}.`:`Added ${t}. Give it a picture so she can go there.`)}catch(s){this.say(s.message,!0)}finally{this.busy=!1}}async uploadPicture(e,t){var r;const s=t.target,o=(r=s.files)==null?void 0:r[0];if(s.value="",!!o){this.busy=!0;try{const i=await new Promise((n,u)=>{const g=new FileReader;g.onload=()=>n(String(g.result)),g.onerror=()=>u(g.error),g.readAsDataURL(o)});await h.setLibbyBackgroundImage(e,i),this.version=Date.now(),await this.reload(),this.changed(),this.say("Picture saved.")}catch(i){this.say(i.message,!0)}finally{this.busy=!1}}}async makeDefault(e){this.busy=!0;try{const t=this.defaultID===e?"":e;await h.setLibbyDefaultBackground(t),this.defaultID=t,this.changed(),this.say(t?"She starts here now.":"No default room — she starts nowhere in particular.")}catch(t){this.say(t.message,!0)}finally{this.busy=!1}}async deleteBackground(e){if(confirm(`Delete ${e.name}?`)){this.busy=!0;try{await h.deleteLibbyBackground(e.id),await this.reload(),this.changed(),this.say(`Deleted ${e.name}.`)}catch(t){this.say(t.message,!0)}finally{this.busy=!1}}}renderEditor(e){return a`<div class="edit">
       <label>Name
         <input type="text" .value=${this.draftName} placeholder="Bedroom" ?disabled=${this.busy}
           @input=${t=>this.draftName=t.target.value} /></label>
@@ -58,7 +58,7 @@ import{z as M,i as B,v as S,u as l,a as T,e as h,b as a,A as c,t as R,an as z,ao
 
       ${!this.loading&&!this.backgrounds.length&&this.editing!=="new"?a`<div class="empty">No rooms yet. Add one, give it a picture, and she can start moving around.</div>`:c}
       ${this.note?a`<p class="note ${this.bad?"bad":""}">${this.note}</p>`:c}
-    `}};v.styles=[M,B`
+    `}};v.styles=[R,T`
     :host { display: block; }
     .head { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 14px; }
     .head h3 { display: flex; align-items: center; gap: 8px; margin: 0 0 4px; font-size: 15px; }
@@ -113,7 +113,7 @@ import{z as M,i as B,v as S,u as l,a as T,e as h,b as a,A as c,t as R,an as z,ao
     .note { margin: 12px 0 0; padding: 9px 12px; border-radius: 10px; background: var(--oppai-surface-2); font-size: 12.5px; }
     .note.bad { background: color-mix(in srgb, #f2b8b5 16%, transparent); color: #f2b8b5; }
     .empty { padding: 26px; text-align: center; color: var(--oppai-text-muted); font-size: 13px; }
-  `];b([S({type:Boolean})],v.prototype,"embedded",2);b([l()],v.prototype,"backgrounds",2);b([l()],v.prototype,"defaultID",2);b([l()],v.prototype,"loading",2);b([l()],v.prototype,"busy",2);b([l()],v.prototype,"note",2);b([l()],v.prototype,"bad",2);b([l()],v.prototype,"editing",2);b([l()],v.prototype,"draftName",2);b([l()],v.prototype,"draftTags",2);b([l()],v.prototype,"version",2);v=b([R("oppai-libby-backgrounds")],v);var he=Object.defineProperty,ue=Object.getOwnPropertyDescriptor,p=(e,t,s,o)=>{for(var n=o>1?void 0:o?ue(t,s):t,i=e.length-1,r;i>=0;i--)(r=e[i])&&(n=(o?r(t,s,n):r(n))||n);return o&&n&&he(t,s,n),n};const ve=[{id:"appearance",label:"Appearance",icon:"palette",group:"You"},{id:"account",label:"Account",icon:"account_circle",group:"You"},{id:"ai",label:"AI tagging",icon:"smart_toy",group:"Server",server:!0},{id:"scraping",label:"Scraping",icon:"travel_explore",group:"Server",server:!0},{id:"library",label:"Library",icon:"inventory_2",group:"Server"},{id:"android",label:"Android app",icon:"android",group:"Server"},{id:"storage",label:"Storage",icon:"hard_drive",group:"Server"},{id:"diagnostics",label:"Diagnostics",icon:"speed",group:"Server",adminOnly:!0},{id:"privacy",label:"Privacy",icon:"visibility_off",group:"Server",server:!0,adminOnly:!0},{id:"about",label:"About",icon:"info",group:"Server"}];let d=class extends T{constructor(){super(...arguments),this.only="",this.tab="appearance",this.settings=null,this.info=null,this.stats=null,this.apk=null,this.loadError="",this.passkeyList=null,this.passkeyBusy=!1,this.passkeyError="",this.passkeyMsg="",this.passkeyName="",this.passkeyRenaming=null,this.passkeyRevoking=null,this.passkeyPassword="",this.diag=null,this.uiDiag=null,this.storage=null,this.storageBusy=!1,this.storageErr="",this.diagBusy=!1,this.diagErr="",this.dirty=!1,this.saving=!1,this.saved=!1,this.theme=z(),this.fit=C(),this.hideLibby=O(),this.genModels=[],this.genLoras=[],this.genBoards=[],this.genError="",this.pwCurrent="",this.pwNew="",this.pwConfirm="",this.pwBusy=!1,this.pwMsg="",this.pwErr="",this.refs=null,this.refStamp=Date.now(),this.refNote="",this.tts=void 0,this.describe=null,this.describeBusy=!1,this.describeNote="",this.ttsErrors={},this.addPasskey=async()=>{this.passkeyBusy=!0,this.passkeyError="",this.passkeyMsg="";try{const e=await X(this.passkeyName.trim());this.passkeyName="",this.passkeyMsg=`Added “${e.name}”. You can sign in with it now.`,await this.loadPasskeys()}catch(e){const t=Z(e);t&&(this.passkeyError=t)}finally{this.passkeyBusy=!1}},this.cancelRevoke=()=>{this.passkeyRevoking=null,this.passkeyPassword=""},this.loadStorage=async()=>{this.storageBusy=!0,this.storageErr="";try{this.storage=await h.storage()}catch(e){this.storageErr=e.message}finally{this.storageBusy=!1}},this.runCleanup=async()=>{this.storageBusy=!0,this.storageErr="";try{const e=await h.cleanupStorage(["uploads","temp"]);this.storage=e.storage,_(`Reclaimed ${e.freedHuman}.`,"success")}catch(e){this.storageErr=e.message}finally{this.storageBusy=!1}},this.loadDiagnostics=async()=>{this.diagBusy=!0,this.diagErr="";try{this.diag=await h.diagnostics(),this.uiDiag=E()}catch(e){this.diagErr=e.message}finally{this.diagBusy=!1}},this.resetDiagnostics=async()=>{this.diagBusy=!0,this.diagErr="";try{U(),await h.resetDiagnostics(),this.diag=await h.diagnostics(),this.uiDiag=E()}catch(e){this.diagErr=e.message}finally{this.diagBusy=!1}}}connectedCallback(){super.connectedCallback(),F(this,"settings"),this.load(),this.loadGenLists(),this.loadTTS(),this.loadDescribe(),this.loadReferences()}async loadReferences(){try{this.refs=await h.libbyReferences()}catch{this.refs=null}}async setReference(e,t){var n;const s=(n=t.files)==null?void 0:n[0];if(t.value="",!s)return;const o=await new Promise((i,r)=>{const u=new FileReader;u.onload=()=>i(String(u.result)),u.onerror=()=>r(u.error),u.readAsDataURL(s)});try{await h.setLibbyReference(e,o),this.refNote="",this.refStamp=Date.now(),await this.loadReferences()}catch(i){this.refNote=i.message}}async clearReference(e){try{await h.deleteLibbyReference(e),this.refNote="",await this.loadReferences()}catch(t){this.refNote=t.message}}referenceTile(e,t){var o;const s=!!((o=this.refs)!=null&&o[e]);return a`<div style="display:flex;flex-direction:column;gap:6px;align-items:center;width:132px;">
+  `];b([S({type:Boolean})],v.prototype,"embedded",2);b([l()],v.prototype,"backgrounds",2);b([l()],v.prototype,"defaultID",2);b([l()],v.prototype,"loading",2);b([l()],v.prototype,"busy",2);b([l()],v.prototype,"note",2);b([l()],v.prototype,"bad",2);b([l()],v.prototype,"editing",2);b([l()],v.prototype,"draftName",2);b([l()],v.prototype,"draftTags",2);b([l()],v.prototype,"version",2);v=b([B("oppai-libby-backgrounds")],v);var he=Object.defineProperty,ue=Object.getOwnPropertyDescriptor,p=(e,t,s,o)=>{for(var r=o>1?void 0:o?ue(t,s):t,i=e.length-1,n;i>=0;i--)(n=e[i])&&(r=(o?n(t,s,r):n(r))||r);return o&&r&&he(t,s,r),r};const ve=[{id:"appearance",label:"Appearance",icon:"palette",group:"You"},{id:"account",label:"Account",icon:"account_circle",group:"You"},{id:"ai",label:"AI tagging",icon:"smart_toy",group:"Server",server:!0},{id:"scraping",label:"Scraping",icon:"travel_explore",group:"Server",server:!0},{id:"library",label:"Library",icon:"inventory_2",group:"Server"},{id:"android",label:"Android app",icon:"android",group:"Server"},{id:"storage",label:"Storage",icon:"hard_drive",group:"Server"},{id:"diagnostics",label:"Diagnostics",icon:"speed",group:"Server",adminOnly:!0},{id:"privacy",label:"Privacy",icon:"visibility_off",group:"Server",server:!0,adminOnly:!0},{id:"about",label:"About",icon:"info",group:"Server"}];let d=class extends M{constructor(){super(...arguments),this.only="",this.tab="appearance",this.settings=null,this.info=null,this.stats=null,this.apk=null,this.loadError="",this.passkeyList=null,this.passkeyBusy=!1,this.passkeyError="",this.passkeyMsg="",this.passkeyName="",this.passkeyRenaming=null,this.passkeyRevoking=null,this.passkeyPassword="",this.diag=null,this.uiDiag=null,this.storage=null,this.storageBusy=!1,this.storageErr="",this.diagBusy=!1,this.diagErr="",this.dirty=!1,this.saving=!1,this.saved=!1,this.theme=D(),this.fit=I(),this.hideLibby=O(),this.genModels=[],this.genLoras=[],this.genLoraTriggers={},this.genBoards=[],this.genError="",this.pwCurrent="",this.pwNew="",this.pwConfirm="",this.pwBusy=!1,this.pwMsg="",this.pwErr="",this.refs=null,this.refStamp=Date.now(),this.refNote="",this.tts=void 0,this.describe=null,this.describeBusy=!1,this.describeNote="",this.ttsErrors={},this.addPasskey=async()=>{this.passkeyBusy=!0,this.passkeyError="",this.passkeyMsg="";try{const e=await X(this.passkeyName.trim());this.passkeyName="",this.passkeyMsg=`Added “${e.name}”. You can sign in with it now.`,await this.loadPasskeys()}catch(e){const t=Z(e);t&&(this.passkeyError=t)}finally{this.passkeyBusy=!1}},this.cancelRevoke=()=>{this.passkeyRevoking=null,this.passkeyPassword=""},this.loadStorage=async()=>{this.storageBusy=!0,this.storageErr="";try{this.storage=await h.storage()}catch(e){this.storageErr=e.message}finally{this.storageBusy=!1}},this.runCleanup=async()=>{this.storageBusy=!0,this.storageErr="";try{const e=await h.cleanupStorage(["uploads","temp"]);this.storage=e.storage,_(`Reclaimed ${e.freedHuman}.`,"success")}catch(e){this.storageErr=e.message}finally{this.storageBusy=!1}},this.loadDiagnostics=async()=>{this.diagBusy=!0,this.diagErr="";try{this.diag=await h.diagnostics(),this.uiDiag=E()}catch(e){this.diagErr=e.message}finally{this.diagBusy=!1}},this.resetDiagnostics=async()=>{this.diagBusy=!0,this.diagErr="";try{U(),await h.resetDiagnostics(),this.diag=await h.diagnostics(),this.uiDiag=E()}catch(e){this.diagErr=e.message}finally{this.diagBusy=!1}}}connectedCallback(){super.connectedCallback(),F(this,"settings"),this.load(),this.loadGenLists(),this.loadTTS(),this.loadDescribe(),this.loadReferences()}async loadReferences(){try{this.refs=await h.libbyReferences()}catch{this.refs=null}}async setReference(e,t){var r;const s=(r=t.files)==null?void 0:r[0];if(t.value="",!s)return;const o=await new Promise((i,n)=>{const u=new FileReader;u.onload=()=>i(String(u.result)),u.onerror=()=>n(u.error),u.readAsDataURL(s)});try{await h.setLibbyReference(e,o),this.refNote="",this.refStamp=Date.now(),await this.loadReferences()}catch(i){this.refNote=i.message}}async clearReference(e){try{await h.deleteLibbyReference(e),this.refNote="",await this.loadReferences()}catch(t){this.refNote=t.message}}referenceTile(e,t){var o;const s=!!((o=this.refs)!=null&&o[e]);return a`<div style="display:flex;flex-direction:column;gap:6px;align-items:center;width:132px;">
       <div style="width:132px;height:176px;border-radius:12px;overflow:hidden;display:grid;place-items:center;
         background:var(--md-sys-color-surface-container-highest);color:var(--md-sys-color-on-surface-variant);font-size:12px;text-align:center;">
         ${s?a`<img src=${h.libbyReferenceURL(e,this.refStamp)} alt=${`Libby, ${t.toLowerCase()}`} style="width:100%;height:100%;object-fit:cover;"/>`:a`<span>No picture</span>`}
@@ -123,22 +123,22 @@ import{z as M,i as B,v as S,u as l,a as T,e as h,b as a,A as c,t as R,an as z,ao
         <label class="btn-inline">
           ${s?"Replace":"Upload"}
           <input type="file" accept="image/*" hidden ?disabled=${!this.canEdit}
-            @change=${n=>void this.setReference(e,n.target)}/>
+            @change=${r=>void this.setReference(e,r.target)}/>
         </label>
         ${s?a`<button class="btn-inline" ?disabled=${!this.canEdit}
           @click=${()=>void this.clearReference(e)}>Remove</button>`:c}
       </div>
-    </div>`}async load(){try{const[e,t]=await Promise.all([h.getSettings(),h.stats()]);this.settings=e.settings,this.info=e.readOnly,this.stats=t}catch(e){this.loadError=e.message}try{this.apk=await h.apkInfo()}catch{this.apk={available:!1}}}get canEdit(){var e;return!!((e=this.user)!=null&&e.isAdmin)}openTab(e){G(()=>{this.tab=e}),e==="diagnostics"&&!this.diag&&!this.diagBusy&&this.loadDiagnostics(),e==="storage"&&!this.storage&&!this.storageBusy&&this.loadStorage(),e==="account"&&!this.passkeyList&&this.loadPasskeys()}editLora(e,t){var o;const s=[...((o=this.settings)==null?void 0:o.libbyGenLoras)??[]];s[e]&&(s[e]={...s[e],...t},this.edit({libbyGenLoras:s}))}edit(e){!this.settings||!this.canEdit||(this.settings={...this.settings,...e},this.dirty=!0,this.saved=!1)}async save(){if(this.settings){this.saving=!0;try{const e=await h.saveSettings(this.settings);this.settings=e.settings,this.info=e.readOnly,this.dirty=!1,this.saved=!0,V(!!e.settings.incognito),this.loadTTS(!0),this.loadDescribe()}catch(e){this.loadError=e.message}finally{this.saving=!1}}}pickTheme(e){this.theme=e,W(e),K(e)}pickFit(e){this.fit=e,H(e)}async changePassword(){if(this.pwMsg="",this.pwErr="",this.pwNew!==this.pwConfirm){this.pwErr="The new passwords don't match.";return}if(this.pwNew.length<8){this.pwErr="Use at least 8 characters.";return}this.pwBusy=!0;try{await h.changePassword(this.pwCurrent,this.pwNew),this.pwMsg="Password changed.",this.pwCurrent=this.pwNew=this.pwConfirm=""}catch(e){this.pwErr=e.message}finally{this.pwBusy=!1}}render(){if(this.only)return this.renderOnly(this.only);const e=ve.filter(n=>!n.adminOnly||this.canEdit),t=e.find(n=>n.id===this.tab)??e[0],s=this.dirty||this.saved;let o="";return a`
+    </div>`}async load(){try{const[e,t]=await Promise.all([h.getSettings(),h.stats()]);this.settings=e.settings,this.info=e.readOnly,this.stats=t}catch(e){this.loadError=e.message}try{this.apk=await h.apkInfo()}catch{this.apk={available:!1}}}get canEdit(){var e;return!!((e=this.user)!=null&&e.isAdmin)}openTab(e){G(()=>{this.tab=e}),e==="diagnostics"&&!this.diag&&!this.diagBusy&&this.loadDiagnostics(),e==="storage"&&!this.storage&&!this.storageBusy&&this.loadStorage(),e==="account"&&!this.passkeyList&&this.loadPasskeys()}editLora(e,t){var o;const s=[...((o=this.settings)==null?void 0:o.libbyGenLoras)??[]];s[e]&&(s[e]={...s[e],...t},this.edit({libbyGenLoras:s}))}editCameraLora(e,t){var r;const s=[...((r=this.settings)==null?void 0:r.libbyCameraLoras)??[]];if(!s[e])return;const o={...s[e],...t};t.name&&!s[e].trigger&&(o.trigger=this.genLoraTriggers[t.name]??""),s[e]=o,this.edit({libbyCameraLoras:s})}edit(e){!this.settings||!this.canEdit||(this.settings={...this.settings,...e},this.dirty=!0,this.saved=!1)}async save(){if(this.settings){this.saving=!0;try{const e=await h.saveSettings(this.settings);this.settings=e.settings,this.info=e.readOnly,this.dirty=!1,this.saved=!0,W(!!e.settings.incognito),this.loadTTS(!0),this.loadDescribe()}catch(e){this.loadError=e.message}finally{this.saving=!1}}}pickTheme(e){this.theme=e,V(e),K(e)}pickFit(e){this.fit=e,H(e)}async changePassword(){if(this.pwMsg="",this.pwErr="",this.pwNew!==this.pwConfirm){this.pwErr="The new passwords don't match.";return}if(this.pwNew.length<8){this.pwErr="Use at least 8 characters.";return}this.pwBusy=!0;try{await h.changePassword(this.pwCurrent,this.pwNew),this.pwMsg="Password changed.",this.pwCurrent=this.pwNew=this.pwConfirm=""}catch(e){this.pwErr=e.message}finally{this.pwBusy=!1}}render(){if(this.only)return this.renderOnly(this.only);const e=ve.filter(r=>!r.adminOnly||this.canEdit),t=e.find(r=>r.id===this.tab)??e[0],s=this.dirty||this.saved;let o="";return a`
       <div class="shell">
         <nav class="cat-rail" aria-label="Settings categories">
-          ${e.map(n=>{const i=n.group===o?c:a`<div class="cat-head">${n.group}</div>`;return o=n.group,a`${i}
+          ${e.map(r=>{const i=r.group===o?c:a`<div class="cat-head">${r.group}</div>`;return o=r.group,a`${i}
               <button
-                class="cat-row ${n.id===this.tab?"on":""}"
-                aria-current=${n.id===this.tab?"page":"false"}
-                @click=${()=>this.openTab(n.id)}
+                class="cat-row ${r.id===this.tab?"on":""}"
+                aria-current=${r.id===this.tab?"page":"false"}
+                @click=${()=>this.openTab(r.id)}
               >
-                <span class="material-symbols-rounded">${n.icon}</span>
-                <span class="cat-label">${n.label}</span>
+                <span class="material-symbols-rounded">${r.icon}</span>
+                <span class="cat-label">${r.label}</span>
               </button>`})}
           <div class="cat-sep"></div>
           <button class="cat-row danger" @click=${()=>this.dispatchEvent(new CustomEvent("logout",{bubbles:!0,composed:!0}))}>
@@ -363,7 +363,7 @@ import{z as M,i as B,v as S,u as l,a as T,e as h,b as a,A as c,t as R,an as z,ao
           </div>
         </div>
       </section>
-    `}renderLibbyVoice(){const e=this.settings;if(!e)return c;const t=this.tts,s=(t==null?void 0:t.voices)??[],o=s.filter(r=>r.installed),n=s.filter(r=>!r.installed),i=new Set((t==null?void 0:t.downloading)??[]);return a`<section class="card">
+    `}renderLibbyVoice(){const e=this.settings;if(!e)return c;const t=this.tts,s=(t==null?void 0:t.voices)??[],o=s.filter(n=>n.installed),r=s.filter(n=>!n.installed),i=new Set((t==null?void 0:t.downloading)??[]);return a`<section class="card">
       <h3><span class="material-symbols-rounded">record_voice_over</span>Libby’s voice</h3>
       <p class="card-sub">
         ${t===void 0?"Checking the server…":t?t.engine==="kokoro"&&t.ready?a`Speaking with <strong>Kokoro</strong>, the natural voice, on the server’s CPU. Turn playback on per device with the speaker button in Chat.`:t.engine==="piper"&&t.ready?a`Speaking with <strong>piper</strong> on the server’s CPU. Turn playback on per device with the speaker button in Chat.`:t.engine==="openai"&&t.ready?a`Speaking through the speech server at <code>${e.ttsUrl}</code>.`:a`Not speaking from the server${t.detail?a` — ${t.detail}`:c}. Devices fall back to their own voices.`:"The server did not answer about speech."}
@@ -375,8 +375,8 @@ import{z as M,i as B,v as S,u as l,a as T,e as h,b as a,A as c,t as R,an as z,ao
           <div class="field-help">Auto uses the most natural voice there is — a speech server when one is set below (falling back to this box if it fails), then Kokoro, then piper. Piper is quicker and flatter; Off leaves devices to their own voices.</div>
         </div>
         <div class="field-control">
-          <select ?disabled=${!this.canEdit} @change=${r=>this.edit({ttsEngine:r.target.value})}>
-            ${[["auto","Auto"],["kokoro",`Kokoro — natural${t&&!t.kokoroInstalled?" (not installed)":""}`],["piper",`Piper — light${t&&!t.piperInstalled?" (not installed)":""}`],["openai","Speech server"],["off","Off"]].map(([r,u])=>a`<option value=${r} ?selected=${e.ttsEngine===r}>${u}</option>`)}
+          <select ?disabled=${!this.canEdit} @change=${n=>this.edit({ttsEngine:n.target.value})}>
+            ${[["auto","Auto"],["kokoro",`Kokoro — natural${t&&!t.kokoroInstalled?" (not installed)":""}`],["piper",`Piper — light${t&&!t.piperInstalled?" (not installed)":""}`],["openai","Speech server"],["off","Off"]].map(([n,u])=>a`<option value=${n} ?selected=${e.ttsEngine===n}>${u}</option>`)}
           </select>
         </div>
       </div>
@@ -387,10 +387,10 @@ import{z as M,i as B,v as S,u as l,a as T,e as h,b as a,A as c,t as R,an as z,ao
           <div class="field-help">${o.length?"Installed voices. Downloaded ones can be removed below.":"No voice is installed yet — download one below."}</div>
         </div>
         <div class="field-control" style="display:flex; gap:8px; align-items:center;">
-          <select ?disabled=${!this.canEdit} @change=${r=>this.edit({ttsVoice:r.target.value})}>
+          <select ?disabled=${!this.canEdit} @change=${n=>this.edit({ttsVoice:n.target.value})}>
             <option value="" ?selected=${!e.ttsVoice}>Engine’s default</option>
-            ${o.map(r=>a`<option value=${r.id} ?selected=${r.id===e.ttsVoice}>${r.label}${r.bundled?" · bundled":""}</option>`)}
-            ${e.ttsVoice&&!o.some(r=>r.id===e.ttsVoice)?a`<option value=${e.ttsVoice} selected>${e.ttsVoice} (not installed)</option>`:c}
+            ${o.map(n=>a`<option value=${n.id} ?selected=${n.id===e.ttsVoice}>${n.label}${n.bundled?" · bundled":""}</option>`)}
+            ${e.ttsVoice&&!o.some(n=>n.id===e.ttsVoice)?a`<option value=${e.ttsVoice} selected>${e.ttsVoice} (not installed)</option>`:c}
           </select>
           <button class="btn" ?disabled=${!(t!=null&&t.ready)} title="Hear the current voice" @click=${()=>void this.testVoice()}>Test</button>
         </div>
@@ -403,7 +403,7 @@ import{z as M,i as B,v as S,u as l,a as T,e as h,b as a,A as c,t as R,an as z,ao
         </div>
         <div class="field-control">
           <input type="range" min="0.5" max="2" step="0.05" .value=${String(e.ttsSpeed)} ?disabled=${!this.canEdit}
-            @input=${r=>this.edit({ttsSpeed:Number(r.target.value)})} />
+            @input=${n=>this.edit({ttsSpeed:Number(n.target.value)})} />
         </div>
       </div>
 
@@ -414,11 +414,11 @@ import{z as M,i as B,v as S,u as l,a as T,e as h,b as a,A as c,t as R,an as z,ao
         </div>
         <div class="field-control">
           <ul class="voice-list">
-            ${o.map(r=>a`<li><span>${r.label}<small>${r.quality??""}${r.bundled?" · bundled":""}</small></span>
-              ${!r.bundled&&this.canEdit?a`<button class="btn" @click=${()=>void this.deleteVoice(r.id)}>Remove</button>`:c}</li>`)}
-            ${n.map(r=>a`<li><span>${r.label}<small>${r.quality??""}${r.bytes?` · ${Math.round(r.bytes/1e6)} MB`:""}</small></span>
-              ${this.ttsErrors[r.id]?a`<em class="voice-error">${this.ttsErrors[r.id]}</em>`:c}
-              ${i.has(r.id)?a`<span class="hint">Downloading…</span>`:this.canEdit?a`<button class="btn" @click=${()=>void this.downloadVoice(r.id)}>Download</button>`:c}</li>`)}
+            ${o.map(n=>a`<li><span>${n.label}<small>${n.quality??""}${n.bundled?" · bundled":""}</small></span>
+              ${!n.bundled&&this.canEdit?a`<button class="btn" @click=${()=>void this.deleteVoice(n.id)}>Remove</button>`:c}</li>`)}
+            ${r.map(n=>a`<li><span>${n.label}<small>${n.quality??""}${n.bytes?` · ${Math.round(n.bytes/1e6)} MB`:""}</small></span>
+              ${this.ttsErrors[n.id]?a`<em class="voice-error">${this.ttsErrors[n.id]}</em>`:c}
+              ${i.has(n.id)?a`<span class="hint">Downloading…</span>`:this.canEdit?a`<button class="btn" @click=${()=>void this.downloadVoice(n.id)}>Download</button>`:c}</li>`)}
           </ul>
         </div>
       </div>`:c}
@@ -430,19 +430,19 @@ import{z as M,i as B,v as S,u as l,a as T,e as h,b as a,A as c,t as R,an as z,ao
         </div>
         <div class="field-control">
           <input type="text" autocomplete="off" placeholder="http://host:8880" .value=${e.ttsUrl} ?disabled=${!this.canEdit}
-            @change=${r=>this.edit({ttsUrl:r.target.value})} />
+            @change=${n=>this.edit({ttsUrl:n.target.value})} />
         </div>
         <div class="field-control">
           <input type="text" autocomplete="off" placeholder="Model (default tts-1)" .value=${e.ttsModel} ?disabled=${!this.canEdit}
-            @change=${r=>this.edit({ttsModel:r.target.value})} />
+            @change=${n=>this.edit({ttsModel:n.target.value})} />
         </div>
         <div class="field-control">
           <input type="password" autocomplete="new-password" placeholder=${e.ttsApiKeySet?"API key saved — enter to replace":"API key (optional)"}
             .value=${e.ttsApiKey} ?disabled=${!this.canEdit}
-            @change=${r=>this.edit({ttsApiKey:r.target.value})} />
+            @change=${n=>this.edit({ttsApiKey:n.target.value})} />
         </div>
       </div>
-    </section>`}async loadTTS(e=!1){var t,s;this.tts=await D(e);try{this.ttsErrors=await h.ttsVoiceErrors()}catch{}(s=(t=this.tts)==null?void 0:t.downloading)!=null&&s.length&&window.setTimeout(()=>void this.loadTTS(!0),4e3)}async loadDescribe(){try{this.describe=await h.describeStatus()}catch{this.describe=null}}async probeVision(){this.describeBusy=!0,this.describeNote="";try{const e=await h.describeProbe();this.describeNote=`The model answered: “${e.description}”`}catch(e){this.describeNote=e.message}finally{this.describeBusy=!1}}async toggleBackfill(){var e;this.describeBusy=!0;try{(e=this.describe)!=null&&e.backfilling?await h.describeBackfillStop():await h.describeBackfill(),await this.loadDescribe()}catch(t){this.describeNote=t.message}finally{this.describeBusy=!1}}async testVoice(){I(),await ae("Hi. This is what I sound like. Saved to your library, by the way — nice pick.")}async downloadVoice(e){try{await h.downloadTTSVoice(e),await this.loadTTS(!0)}catch(t){this.loadError=t.message}}async deleteVoice(e){if(confirm(`Remove the ${e} voice from the server?`))try{await h.deleteTTSVoice(e),await this.loadTTS(!0)}catch(t){this.loadError=t.message}}renderLibbyModel(){const e=this.settings;return a`
+    </section>`}async loadTTS(e=!1){var t,s;this.tts=await C(e);try{this.ttsErrors=await h.ttsVoiceErrors()}catch{}(s=(t=this.tts)==null?void 0:t.downloading)!=null&&s.length&&window.setTimeout(()=>void this.loadTTS(!0),4e3)}async loadDescribe(){try{this.describe=await h.describeStatus()}catch{this.describe=null}}async probeVision(){this.describeBusy=!0,this.describeNote="";try{const e=await h.describeProbe();this.describeNote=`The model answered: “${e.description}”`}catch(e){this.describeNote=e.message}finally{this.describeBusy=!1}}async toggleBackfill(){var e;this.describeBusy=!0;try{(e=this.describe)!=null&&e.backfilling?await h.describeBackfillStop():await h.describeBackfill(),await this.loadDescribe()}catch(t){this.describeNote=t.message}finally{this.describeBusy=!1}}async testVoice(){z(),await ae("Hi. This is what I sound like. Saved to your library, by the way — nice pick.")}async downloadVoice(e){try{await h.downloadTTSVoice(e),await this.loadTTS(!0)}catch(t){this.loadError=t.message}}async deleteVoice(e){if(confirm(`Remove the ${e} voice from the server?`))try{await h.deleteTTSVoice(e),await this.loadTTS(!0)}catch(t){this.loadError=t.message}}renderLibbyModel(){const e=this.settings;return a`
       <section class="card">
         <h3><span class="material-symbols-rounded">memory</span>Her model</h3>
         <p class="card-sub">The chat backend every character talks through. Saved for the whole server.</p>
@@ -670,7 +670,7 @@ import{z as M,i as B,v as S,u as l,a as T,e as h,b as a,A as c,t as R,an as z,ao
           pictures for you in chat. She always asks first — nothing is generated or saved until
           you press Allow.
         </p>
-      </section>`;const t=this.genModels,s=this.genLoras,o=e.libbyGenLoras??[],n=this.genBoards;return a`<section class="card">
+      </section>`;const t=this.genModels,s=this.genLoras,o=e.libbyGenLoras??[],r=this.genBoards;return a`<section class="card">
       <h3><span class="material-symbols-rounded">auto_awesome</span>Libby’s image generation</h3>
       <p class="card-sub">
         What she uses when she offers to make you a picture. She always asks first — nothing is
@@ -703,34 +703,34 @@ import{z as M,i as B,v as S,u as l,a as T,e as h,b as a,A as c,t as R,an as z,ao
             LoRAs you like her drawn with.</div>
         </div>
         <div class="field-control" style="display:flex; flex-direction:column; gap:8px; align-items:stretch;">
-          ${o.map((i,r)=>a`<div style="display:flex; gap:8px; align-items:center;">
+          ${o.map((i,n)=>a`<div style="display:flex; gap:8px; align-items:center;">
             ${s.length?a`<select style="flex:1; min-width:0;" ?disabled=${!this.canEdit}
-                  aria-label="LoRA ${r+1}"
-                  @change=${u=>this.editLora(r,{name:u.target.value})}>
+                  aria-label="LoRA ${n+1}"
+                  @change=${u=>this.editLora(n,{name:u.target.value})}>
                   ${(s.includes(i.name)?s:[i.name,...s]).map(u=>a`<option value=${u} ?selected=${u===i.name}>${u}</option>`)}
                 </select>`:a`<input type="text" autocomplete="off" placeholder="LoRA name" style="flex:1; min-width:0;"
-                  aria-label="LoRA ${r+1}"
+                  aria-label="LoRA ${n+1}"
                   .value=${i.name} ?disabled=${!this.canEdit}
-                  @change=${u=>this.editLora(r,{name:u.target.value})} />`}
+                  @change=${u=>this.editLora(n,{name:u.target.value})} />`}
             <input type="number" step="0.05" min="-2" max="2" style="width:90px;"
-              aria-label="LoRA ${r+1} strength"
+              aria-label="LoRA ${n+1} strength"
               .value=${String(i.weight)} ?disabled=${!this.canEdit}
-              @change=${u=>this.editLora(r,{weight:Number(u.target.value)})} />
-            <button class="btn-inline" title="Remove" aria-label="Remove LoRA ${r+1}" ?disabled=${!this.canEdit}
-              @click=${()=>this.edit({libbyGenLoras:o.filter((u,g)=>g!==r)})}>
+              @change=${u=>this.editLora(n,{weight:Number(u.target.value)})} />
+            <button class="btn-inline" title="Remove" aria-label="Remove LoRA ${n+1}" ?disabled=${!this.canEdit}
+              @click=${()=>this.edit({libbyGenLoras:o.filter((u,g)=>g!==n)})}>
               <span class="material-symbols-rounded" style="font-size:18px;">delete</span>
             </button>
           </div>`)}
           <button class="btn-inline" style="align-self:flex-start; display:inline-flex; align-items:center; gap:6px;"
             ?disabled=${!this.canEdit||o.length>=8}
-            @click=${()=>this.edit({libbyGenLoras:[...o,{name:s.find(i=>!o.some(r=>r.name===i))??"",weight:1}]})}>
+            @click=${()=>this.edit({libbyGenLoras:[...o,{name:s.find(i=>!o.some(n=>n.name===i))??"",weight:1}]})}>
             <span class="material-symbols-rounded" style="font-size:18px;">add</span>
             ${o.length?"Add another LoRA":"Add a LoRA"}
           </button>
         </div>
       </div>
 
-      ${n.length?a`<div class="field">
+      ${r.length?a`<div class="field">
             <div class="field-text">
               <div class="field-label">Board</div>
               <div class="field-help">The InvokeAI board her pictures are filed into, so what she
@@ -740,7 +740,7 @@ import{z as M,i as B,v as S,u as l,a as T,e as h,b as a,A as c,t as R,an as z,ao
               <select ?disabled=${!this.canEdit}
                 @change=${i=>this.edit({libbyGenBoard:i.target.value})}>
                 <option value="" ?selected=${!e.libbyGenBoard}>Uncategorized</option>
-                ${n.map(i=>a`<option value=${i} ?selected=${i===e.libbyGenBoard}>${i}</option>`)}
+                ${r.map(i=>a`<option value=${i} ?selected=${i===e.libbyGenBoard}>${i}</option>`)}
               </select>
             </div>
           </div>`:c}
@@ -813,6 +813,8 @@ import{z as M,i as B,v as S,u as l,a as T,e as h,b as a,A as c,t as R,an as z,ao
           </select>
         </div>
       </div>
+
+      ${this.renderCameraLoras(e)}
 
       <div class="field stack">
         <div class="field-text">
@@ -894,7 +896,47 @@ import{z as M,i as B,v as S,u as l,a as T,e as h,b as a,A as c,t as R,an as z,ao
           ></button>
         </div>
       </div>
-    </section>`}async loadGenLists(){try{const e=await h.imageGenStatus();if(!e.enabled||!e.reachable){e.enabled&&(this.genError=e.error||"The image generator isn't reachable.");return}this.genModels=(e.models??[]).map(t=>t.title||t.model_name).filter(Boolean),this.genLoras=(e.loras??[]).map(t=>t.name).filter(Boolean),this.genBoards=(e.boards??[]).map(t=>t.name).filter(Boolean)}catch(e){this.genError=e.message}}renderAI(){const e=this.settings,t=this.info;return a`
+    </section>`}async loadGenLists(){try{const e=await h.imageGenStatus();if(!e.enabled||!e.reachable){e.enabled&&(this.genError=e.error||"The image generator isn't reachable.");return}this.genModels=(e.models??[]).map(t=>t.title||t.model_name).filter(Boolean),this.genLoras=(e.loras??[]).map(t=>t.name).filter(Boolean),this.genLoraTriggers=Object.fromEntries((e.loras??[]).map(t=>[t.name,(t.triggerPhrases??[]).join(", ")])),this.genBoards=(e.boards??[]).map(t=>t.name).filter(Boolean)}catch(e){this.genError=e.message}}renderCameraLoras(e){const t=this.genLoras,s=e.libbyCameraLoras??[];return a`<div class="field stack">
+      <div class="field-text">
+        <div class="field-label">LoRAs she can choose</div>
+        <div class="field-help">
+          Ones she adds to a single picture when the shot calls for it — a pose, an act, a
+          style — on top of the LoRAs above. Say when each one helps; that note is all she
+          has to go on. Trigger words are added to the prompt with it.
+        </div>
+      </div>
+      <div class="field-control" style="display:flex; flex-direction:column; gap:12px; align-items:stretch;">
+        ${s.map((o,r)=>a`<div style="display:flex; flex-direction:column; gap:6px;">
+          <div style="display:flex; gap:8px; align-items:center;">
+            ${t.length?a`<select style="flex:1; min-width:0;" ?disabled=${!this.canEdit} aria-label="Optional LoRA ${r+1}"
+                  @change=${i=>this.editCameraLora(r,{name:i.target.value})}>
+                  ${(t.includes(o.name)?t:[o.name,...t]).map(i=>a`<option value=${i} ?selected=${i===o.name}>${i}</option>`)}
+                </select>`:a`<input type="text" autocomplete="off" placeholder="LoRA name" style="flex:1; min-width:0;"
+                  aria-label="Optional LoRA ${r+1}" .value=${o.name} ?disabled=${!this.canEdit}
+                  @change=${i=>this.editCameraLora(r,{name:i.target.value})} />`}
+            <input type="number" step="0.05" min="-2" max="2" style="width:90px;"
+              aria-label="Optional LoRA ${r+1} strength" .value=${String(o.weight)} ?disabled=${!this.canEdit}
+              @change=${i=>this.editCameraLora(r,{weight:Number(i.target.value)})} />
+            <button class="btn-inline" title="Remove" aria-label="Remove optional LoRA ${r+1}" ?disabled=${!this.canEdit}
+              @click=${()=>this.edit({libbyCameraLoras:s.filter((i,n)=>n!==r)})}>
+              <span class="material-symbols-rounded" style="font-size:18px;">delete</span>
+            </button>
+          </div>
+          <input type="text" autocomplete="off" maxlength="160" placeholder="When it helps — e.g. POV shots from above"
+            aria-label="When optional LoRA ${r+1} helps" .value=${o.when} ?disabled=${!this.canEdit}
+            @change=${i=>this.editCameraLora(r,{when:i.target.value})} />
+          <input type="text" autocomplete="off" maxlength="200" placeholder="Trigger words (optional)"
+            aria-label="Optional LoRA ${r+1} trigger words" .value=${o.trigger} ?disabled=${!this.canEdit}
+            @change=${i=>this.editCameraLora(r,{trigger:i.target.value})} />
+        </div>`)}
+        <button class="btn-inline" style="align-self:flex-start; display:inline-flex; align-items:center; gap:6px;"
+          ?disabled=${!this.canEdit||s.length>=12}
+          @click=${()=>{const o=t.find(r=>!s.some(i=>i.name===r))??"";this.edit({libbyCameraLoras:[...s,{name:o,weight:1,when:"",trigger:this.genLoraTriggers[o]??""}]})}}>
+          <span class="material-symbols-rounded" style="font-size:18px;">add</span>
+          ${s.length?"Add another":"Add one she can choose"}
+        </button>
+      </div>
+    </div>`}renderAI(){const e=this.settings,t=this.info;return a`
       <section class="card">
         <h3><span class="material-symbols-rounded">auto_awesome</span>AI auto-tagging</h3>
         <p class="card-sub">
@@ -1182,9 +1224,9 @@ import{z as M,i as B,v as S,u as l,a as T,e as h,b as a,A as c,t as R,an as z,ao
           ${e.tags} ${e.tags===1?"tag":"tags"}
         </p>
         <div class="stat-grid">
-          ${Object.keys(A).map(s=>{const o=t.get(s);return a`<div class="stat">
+          ${Object.keys(L).map(s=>{const o=t.get(s);return a`<div class="stat">
               <div class="stat-num">${(o==null?void 0:o.count)??0}</div>
-              <div class="stat-label">${A[s].label} · ${f((o==null?void 0:o.bytes)??0)}</div>
+              <div class="stat-label">${L[s].label} · ${f((o==null?void 0:o.bytes)??0)}</div>
             </div>`})}
         </div>
       </section>
@@ -1509,7 +1551,7 @@ import{z as M,i as B,v as S,u as l,a as T,e as h,b as a,A as c,t as R,an as z,ao
       </section>
     `}renderFetchHealth(e){const t=e.metrics.counters,s=[["Fetches completed",t["scrape.fetch.ok"]??0,"Pages and listings fetched successfully."],["Retried",t["scrape.fetch.retry"]??0,"A site failed transiently and we tried again."],["Gave up",t["scrape.fetch.exhausted"]??0,"Still failing after every retry."],["Queued behind another request",t["scrape.host_queued"]??0,"A steady number here means we're fanning out wider than the site allows."],["Asked to back off",t["scrape.fetch.backoff_too_long"]??0,"A site asked for a longer wait than we'll hold a click open for."]];return s.every(([,o])=>o===0)?c:a`
       <h4 class="diag-head">Outbound fetches</h4>
-      ${s.map(([o,n,i])=>n===0?c:a`<div class="diag-row"><strong>${n}</strong> ${o} <span class="field-help">— ${i}</span></div>`)}
+      ${s.map(([o,r,i])=>r===0?c:a`<div class="diag-row"><strong>${r}</strong> ${o} <span class="field-help">— ${i}</span></div>`)}
     `}diagStat(e,t){return a`<div class="stat">
       <div class="stat-num diag-stat-num">${t}</div>
       <div class="stat-label">${e}</div>
@@ -1524,7 +1566,7 @@ import{z as M,i as B,v as S,u as l,a as T,e as h,b as a,A as c,t as R,an as z,ao
         ${this.readOnlyField("Database","SQLite metadata store.",e.dbPath)}
         ${this.readOnlyField("Session length","How long a login stays valid.",`${e.sessionHours} hours`)}
       </section>
-    `:c}switchField(e,t,s,o,n=!1){const i=!this.canEdit||n;return a`
+    `:c}switchField(e,t,s,o,r=!1){const i=!this.canEdit||r;return a`
       <div class="field">
         <div class="field-text">
           <div class="field-label">${e}</div>
@@ -1549,7 +1591,7 @@ import{z as M,i as B,v as S,u as l,a as T,e as h,b as a,A as c,t as R,an as z,ao
         </div>
         <div class="field-control"><span class="ro">${s}</span></div>
       </div>
-    `}};d.styles=[M,Q,B`
+    `}};d.styles=[R,Q,T`
       :host {
         display: block;
       }
@@ -2069,4 +2111,4 @@ import{z as M,i as B,v as S,u as l,a as T,e as h,b as a,A as c,t as R,an as z,ao
         gap: 12px;
         max-width: 360px;
       }
-    `];p([S({attribute:!1})],d.prototype,"user",2);p([S({attribute:!1})],d.prototype,"only",2);p([l()],d.prototype,"tab",2);p([l()],d.prototype,"settings",2);p([l()],d.prototype,"info",2);p([l()],d.prototype,"stats",2);p([l()],d.prototype,"apk",2);p([l()],d.prototype,"loadError",2);p([l()],d.prototype,"passkeyList",2);p([l()],d.prototype,"passkeyBusy",2);p([l()],d.prototype,"passkeyError",2);p([l()],d.prototype,"passkeyMsg",2);p([l()],d.prototype,"passkeyName",2);p([l()],d.prototype,"passkeyRenaming",2);p([l()],d.prototype,"passkeyRevoking",2);p([l()],d.prototype,"passkeyPassword",2);p([l()],d.prototype,"diag",2);p([l()],d.prototype,"uiDiag",2);p([l()],d.prototype,"storage",2);p([l()],d.prototype,"storageBusy",2);p([l()],d.prototype,"storageErr",2);p([l()],d.prototype,"diagBusy",2);p([l()],d.prototype,"diagErr",2);p([l()],d.prototype,"dirty",2);p([l()],d.prototype,"saving",2);p([l()],d.prototype,"saved",2);p([l()],d.prototype,"theme",2);p([l()],d.prototype,"fit",2);p([l()],d.prototype,"hideLibby",2);p([l()],d.prototype,"genModels",2);p([l()],d.prototype,"genLoras",2);p([l()],d.prototype,"genBoards",2);p([l()],d.prototype,"genError",2);p([l()],d.prototype,"pwCurrent",2);p([l()],d.prototype,"pwNew",2);p([l()],d.prototype,"pwConfirm",2);p([l()],d.prototype,"pwBusy",2);p([l()],d.prototype,"pwMsg",2);p([l()],d.prototype,"pwErr",2);p([l()],d.prototype,"refs",2);p([l()],d.prototype,"refStamp",2);p([l()],d.prototype,"refNote",2);p([l()],d.prototype,"tts",2);p([l()],d.prototype,"describe",2);p([l()],d.prototype,"describeBusy",2);p([l()],d.prototype,"describeNote",2);p([l()],d.prototype,"ttsErrors",2);d=p([R("oppai-settings")],d);function P(e){if(!e)return"never";const t=Math.max(0,(Date.now()-e)/1e3);if(t<90)return"just now";const s=Math.round(t/60);if(s<60)return`${s} min ago`;const o=Math.round(s/60);if(o<24)return`${o}h ago`;const n=Math.round(o/24);return n<=30?`${n} day${n===1?"":"s"} ago`:new Date(e).toLocaleDateString()}function ge(e){const t=Math.max(0,Math.floor(e)),s=Math.floor(t/86400),o=Math.floor(t%86400/3600),n=Math.floor(t%3600/60);return s>0?`${s}d ${o}h`:o>0?`${o}h ${n}m`:n>0?`${n}m ${t%60}s`:`${t}s`}function f(e){if(!e)return"0 B";const t=["B","KB","MB","GB","TB"];let s=e,o=0;for(;s>=1024&&o<t.length-1;)s/=1024,o++;return`${s<10&&o>0?s.toFixed(1):Math.round(s)} ${t[o]}`}const we=Object.freeze(Object.defineProperty({__proto__:null,get OppaiSettings(){return d}},Symbol.toStringTag,{value:"Module"}));export{me as a,I as b,we as c,ye as l,ae as s};
+    `];p([S({attribute:!1})],d.prototype,"user",2);p([S({attribute:!1})],d.prototype,"only",2);p([l()],d.prototype,"tab",2);p([l()],d.prototype,"settings",2);p([l()],d.prototype,"info",2);p([l()],d.prototype,"stats",2);p([l()],d.prototype,"apk",2);p([l()],d.prototype,"loadError",2);p([l()],d.prototype,"passkeyList",2);p([l()],d.prototype,"passkeyBusy",2);p([l()],d.prototype,"passkeyError",2);p([l()],d.prototype,"passkeyMsg",2);p([l()],d.prototype,"passkeyName",2);p([l()],d.prototype,"passkeyRenaming",2);p([l()],d.prototype,"passkeyRevoking",2);p([l()],d.prototype,"passkeyPassword",2);p([l()],d.prototype,"diag",2);p([l()],d.prototype,"uiDiag",2);p([l()],d.prototype,"storage",2);p([l()],d.prototype,"storageBusy",2);p([l()],d.prototype,"storageErr",2);p([l()],d.prototype,"diagBusy",2);p([l()],d.prototype,"diagErr",2);p([l()],d.prototype,"dirty",2);p([l()],d.prototype,"saving",2);p([l()],d.prototype,"saved",2);p([l()],d.prototype,"theme",2);p([l()],d.prototype,"fit",2);p([l()],d.prototype,"hideLibby",2);p([l()],d.prototype,"genModels",2);p([l()],d.prototype,"genLoras",2);p([l()],d.prototype,"genLoraTriggers",2);p([l()],d.prototype,"genBoards",2);p([l()],d.prototype,"genError",2);p([l()],d.prototype,"pwCurrent",2);p([l()],d.prototype,"pwNew",2);p([l()],d.prototype,"pwConfirm",2);p([l()],d.prototype,"pwBusy",2);p([l()],d.prototype,"pwMsg",2);p([l()],d.prototype,"pwErr",2);p([l()],d.prototype,"refs",2);p([l()],d.prototype,"refStamp",2);p([l()],d.prototype,"refNote",2);p([l()],d.prototype,"tts",2);p([l()],d.prototype,"describe",2);p([l()],d.prototype,"describeBusy",2);p([l()],d.prototype,"describeNote",2);p([l()],d.prototype,"ttsErrors",2);d=p([B("oppai-settings")],d);function P(e){if(!e)return"never";const t=Math.max(0,(Date.now()-e)/1e3);if(t<90)return"just now";const s=Math.round(t/60);if(s<60)return`${s} min ago`;const o=Math.round(s/60);if(o<24)return`${o}h ago`;const r=Math.round(o/24);return r<=30?`${r} day${r===1?"":"s"} ago`:new Date(e).toLocaleDateString()}function ge(e){const t=Math.max(0,Math.floor(e)),s=Math.floor(t/86400),o=Math.floor(t%86400/3600),r=Math.floor(t%3600/60);return s>0?`${s}d ${o}h`:o>0?`${o}h ${r}m`:r>0?`${r}m ${t%60}s`:`${t}s`}function f(e){if(!e)return"0 B";const t=["B","KB","MB","GB","TB"];let s=e,o=0;for(;s>=1024&&o<t.length-1;)s/=1024,o++;return`${s<10&&o>0?s.toFixed(1):Math.round(s)} ${t[o]}`}const we=Object.freeze(Object.defineProperty({__proto__:null,get OppaiSettings(){return d}},Symbol.toStringTag,{value:"Module"}));export{me as a,z as b,we as c,ye as l,ae as s};

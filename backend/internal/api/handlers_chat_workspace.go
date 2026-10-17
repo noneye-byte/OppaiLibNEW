@@ -262,6 +262,8 @@ type chatImageGen struct {
 	Shot string `json:"shot,omitempty"`
 	// Score is what the judge gave it out of 10, 0 when nothing judged it.
 	Score float64 `json:"score,omitempty"`
+	// Loras are the ones she chose for it, by name, so an edit keeps them.
+	Loras []string `json:"loras,omitempty"`
 }
 
 type chatWorkspace struct {

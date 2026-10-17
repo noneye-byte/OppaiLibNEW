@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/youruser/oppailib/internal/settings"
 )
 
 func TestTheLineIsHeldWhateverWordsAShotUses(t *testing.T) {
@@ -238,5 +240,68 @@ func TestAskedForOneSheAlreadyHasNoShotIsTaken(t *testing.T) {
 	runTurn(t, s, token, turnFor("send that red dress pic again", ""))
 	if len(f.gens) != 0 {
 		t.Fatalf("a saved picture they asked for again was retaken: %v", f.gens)
+	}
+}
+
+// A picture is one picture. A model still trained on the old tool may ask for a set; it
+// gets one, made in one run of one.
+func TestAPictureIsOnePictureEvenWhenASetIsAskedFor(t *testing.T) {
+	s, token, f := turnServer(t, func(n int, body map[string]any) (int, map[string]any) {
+		if n == 0 {
+			return http.StatusOK, say("", callTool("p", toolTakePhoto, map[string]any{"shot": "on the bed", "count": 3}))
+		}
+		return http.StatusOK, say("there")
+	})
+	runTurn(t, s, token, firstTurn)
+	if len(f.gens) != 1 || f.gens[0]["n_iter"].(float64) != 1 {
+		t.Fatalf("expected one run of one: %v", f.gens)
+	}
+	for _, m := range storedConversation(t, s).Messages {
+		if len(m.Images) > 1 {
+			t.Fatalf("a set was sent: %+v", m)
+		}
+	}
+}
+
+// The LoRAs she may choose are offered by name with what each is for; one she picks goes
+// on that picture with its trigger words, one she invents goes nowhere, and "same but…"
+// keeps what the picture it starts from was made with.
+func TestALoraSheChoosesIsUsedForThatPictureAndKeptByAnEdit(t *testing.T) {
+	s, token, f := turnServer(t, func(n int, body map[string]any) (int, map[string]any) {
+		switch n {
+		case 0:
+			return http.StatusOK, say("", callTool("p", toolTakePhoto, map[string]any{"shot": "looking up at you", "loras": []any{"pov_v3", "invented"}}))
+		case 2:
+			return http.StatusOK, say("", callTool("e", toolEditPhoto, map[string]any{"change": "smiling", "strength": "subtle"}))
+		}
+		return http.StatusOK, say("there")
+	})
+	cur := s.settings.Get()
+	cur.LibbyCameraLoras = []settings.CameraLora{
+		{Name: "pov_v3", Weight: 0.8, When: "POV shots from above", Trigger: "pov, from above"},
+		{Name: "watercolor", Weight: 1, When: "painterly pictures"},
+	}
+	s.settings.Set(cur)
+	runTurn(t, s, token, firstTurn)
+	var offered map[string]any
+	for _, tl := range f.chats()[0]["tools"].([]any) {
+		fn := tl.(map[string]any)["function"].(map[string]any)
+		if fn["name"] == toolTakePhoto {
+			offered = fn["parameters"].(map[string]any)["properties"].(map[string]any)["loras"].(map[string]any)
+		}
+	}
+	if offered == nil || !strings.Contains(offered["description"].(string), "pov_v3: POV shots from above") {
+		t.Fatalf("the LoRAs were not offered with their notes: %v", offered)
+	}
+	prompt := f.gens[0]["prompt"].(string)
+	if !strings.Contains(prompt, "<lora:pov_v3:0.8>") || !strings.Contains(prompt, "pov, from above") {
+		t.Fatalf("the chosen LoRA or its words are missing: %s", prompt)
+	}
+	if strings.Contains(prompt, "invented") || strings.Contains(prompt, "watercolor") {
+		t.Fatalf("a LoRA she did not choose from the list was used: %s", prompt)
+	}
+	runTurn(t, s, token, `{"conversationId":"0123456789abcdef0123456789abcdef","messages":[{"id":"cccccccccccccccccccccccccccccccc","role":"user","content":"same but smiling","at":5}]}`)
+	if len(f.gens) != 2 || !strings.Contains(f.gens[1]["prompt"].(string), "<lora:pov_v3:0.8>") {
+		t.Fatalf("the edit lost the LoRA its picture was made with: %v", f.gens)
 	}
 }

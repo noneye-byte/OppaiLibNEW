@@ -157,13 +157,13 @@ func (t *turnRun) execTakePhoto(args map[string]any) (string, bool) {
 	if shot == "" {
 		return "Describe the shot to take one.", true
 	}
-	count, _ := argInt(args, "count")
 	req := t.cameraReq()
-	req.shot, req.framing, req.outfit, req.count = shot, argString(args, "framing"), argString(args, "outfit"), max(count, 1)
+	req.shot, req.framing, req.outfit = shot, argString(args, "framing"), argString(args, "outfit")
+	req.loras = argList(args, "loras")
 	if argBool(args, "copy_their_pose") {
 		req.poseFrom = lastPictureOfTheirs(t.v.conv.Messages)
 	}
-	t.stream.send("status", map[string]any{"phase": "photo", "count": req.count})
+	t.stream.send("status", map[string]any{"phase": "photo", "count": 1})
 	res, err := t.s.takePictures(t.ctx, req)
 	return t.sendCameraResult(res, err, argBool(args, "snap"), "sends a picture")
 }

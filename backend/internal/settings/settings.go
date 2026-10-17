@@ -184,6 +184,11 @@ type Settings struct {
 	// send the best: 1 sends the first, up to 4. Judging needs a model that can see —
 	// the vision model, or her own when it can — and without one only the first is made.
 	LibbyCameraCandidates int `json:"libbyCameraCandidates"`
+	// LibbyCameraLoras are the LoRAs she may add to one picture when its shot needs
+	// one — a pose, an act, a style the checkpoint draws badly — on top of
+	// LibbyGenLoras, which go on everything. Each says when it helps, because that note
+	// is all she has to choose by: a file name like "pov_v3-000012" tells her nothing.
+	LibbyCameraLoras []CameraLora `json:"libbyCameraLoras"`
 	// The ControlNet extension's names for copying a pose from a photo they send and
 	// for keeping her face from a reference picture. Blank model = that feature off.
 	// Install-specific, which is why they are settings: "openpose_full" with
@@ -289,6 +294,7 @@ const (
 	keyLibbyGenNegative   = "libby.gen.negative_prompt"
 	keyLibbyGenToLibrary  = "libby.gen.to_library"
 	keyLibbyCameraCands   = "libby.camera.candidates"
+	keyLibbyCameraLoras   = "libby.camera.loras"
 	keyLibbyPoseModule    = "libby.camera.pose_module"
 	keyLibbyPoseModel     = "libby.camera.pose_model"
 	keyLibbyFaceModule    = "libby.camera.face_module"
@@ -333,6 +339,7 @@ func Defaults(cfg *config.Config) Settings {
 		UploadStaleHours:      48,
 		TempStaleHours:        24,
 		LibbyGenLoras:         []LoraChoice{},
+		LibbyCameraLoras:      []CameraLora{},
 		LibbyCameraCandidates: 2,
 		LibbyPoseModule:       "openpose_full",
 		LibbyFaceModule:       "ip-adapter-auto",
@@ -345,6 +352,21 @@ type LoraChoice struct {
 	Name   string  `json:"name"`
 	Weight float64 `json:"weight"`
 }
+
+// CameraLora is a LoRA she may choose for one picture.
+type CameraLora struct {
+	Name   string  `json:"name"`
+	Weight float64 `json:"weight"`
+	// When is what she is told it is for, in a few words: "POV shots from above".
+	When string `json:"when"`
+	// Trigger is the words the LoRA was trained on, added to the prompt with it. Many
+	// LoRAs do little or nothing without theirs.
+	Trigger string `json:"trigger"`
+}
+
+// maxCameraLoras bounds what she chooses from. Every one is a line in her take_photo
+// tool, which every turn pays for in context.
+const maxCameraLoras = 12
 
 // maxLibbyGenLoras bounds the list. Past a handful, LoRAs fight each other more than
 // they add anything, and every one is another model the generator has to load.
@@ -494,6 +516,12 @@ func Merge(base Settings, stored map[string]string) Settings {
 		}
 		s.LibbyGenLoras = []LoraChoice{{Name: name, Weight: weight}}
 	}
+	if v, ok := stored[keyLibbyCameraLoras]; ok {
+		var loras []CameraLora
+		if json.Unmarshal([]byte(v), &loras) == nil {
+			s.LibbyCameraLoras = loras
+		}
+	}
 	if v, ok := stored[keyLibbyGenBoard]; ok {
 		s.LibbyGenBoard = v
 	}
@@ -583,6 +611,7 @@ func (s Settings) Map() map[string]string {
 		keyLibbyGenNegative:   s.LibbyGenNegativePrompt,
 		keyLibbyGenToLibrary:  strconv.FormatBool(s.LibbyGenToLibrary),
 		keyLibbyCameraCands:   strconv.Itoa(s.LibbyCameraCandidates),
+		keyLibbyCameraLoras:   cameraLorasJSON(s.LibbyCameraLoras),
 		keyLibbyPoseModule:    s.LibbyPoseModule,
 		keyLibbyPoseModel:     s.LibbyPoseModel,
 		keyLibbyFaceModule:    s.LibbyFaceModule,
@@ -744,6 +773,7 @@ func (s *Settings) Clamp() {
 	s.LibbyGenBoard = strings.TrimSpace(s.LibbyGenBoard)
 	s.LibbyGenPrompt = strings.TrimSpace(s.LibbyGenPrompt)
 	s.LibbyGenNegativePrompt = strings.TrimSpace(s.LibbyGenNegativePrompt)
+	s.LibbyCameraLoras = cleanCameraLoras(s.LibbyCameraLoras)
 	if s.LibbyCameraCandidates < 1 {
 		s.LibbyCameraCandidates = 1
 	} else if s.LibbyCameraCandidates > 4 {
@@ -786,6 +816,45 @@ func cleanLoras(in []LoraChoice) []LoraChoice {
 		}
 	}
 	return out
+}
+
+// cleanCameraLoras is cleanLoras for the ones she chooses, with their notes cut to a
+// line: they go into her tool's description verbatim.
+func cleanCameraLoras(in []CameraLora) []CameraLora {
+	out := []CameraLora{}
+	seen := map[string]bool{}
+	for _, l := range in {
+		l.Name = strings.TrimSpace(l.Name)
+		if l.Name == "" || seen[l.Name] {
+			continue
+		}
+		seen[l.Name] = true
+		l.Weight = min(max(l.Weight, -2), 2)
+		l.When = cutLine(l.When, 160)
+		l.Trigger = cutLine(l.Trigger, 200)
+		out = append(out, l)
+		if len(out) == maxCameraLoras {
+			break
+		}
+	}
+	return out
+}
+
+// cutLine folds whitespace (newlines included) to single spaces and cuts to n runes.
+func cutLine(text string, n int) string {
+	runes := []rune(strings.Join(strings.Fields(text), " "))
+	if len(runes) > n {
+		runes = runes[:n]
+	}
+	return strings.TrimSpace(string(runes))
+}
+
+func cameraLorasJSON(loras []CameraLora) string {
+	raw, err := json.Marshal(cleanCameraLoras(loras))
+	if err != nil {
+		return "[]"
+	}
+	return string(raw)
 }
 
 func libbyLorasJSON(loras []LoraChoice) string {
