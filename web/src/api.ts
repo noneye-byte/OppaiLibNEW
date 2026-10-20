@@ -89,7 +89,12 @@ export interface GameSiteAccount {
   label: string;
   signedIn: boolean;
   user?: string;
+  /** Always false now: neither site can be signed in to with a password from a server. */
   password: boolean;
+  /** "launchy" for F95zone, which the server reads through Launchy's browser. */
+  via?: string;
+  /** What to do about a site that cannot be read, in a sentence. */
+  note?: string;
 }
 
 export interface GameSitesResponse {
@@ -142,6 +147,8 @@ export interface GameSourceReport {
   changelog: string;
   sources: GameDownloadSource[];
   degraded: boolean;
+  /** Why a degraded page could not be read, when it is something to act on. */
+  reason?: string;
   /** Whether the page was read as a member. An empty `sources` means "none listed"
    *  when true and "none a guest may see" when false — F95zone serves the thread to
    *  anyone but hides every download link. */
@@ -164,13 +171,60 @@ export interface GameUpdatesResponse {
   sweep: GameUpdateSweep;
 }
 
-/** Whether Launchy is connected, and what it is running. */
+/** A site as Launchy sees it. `challenged` means it wants someone at the PC to press Verify. */
+export interface LaunchyAccount {
+  site: GameSite;
+  signedIn: boolean;
+  user?: string;
+  challenged?: boolean;
+}
+
+/** A game Launchy is running right now. */
+export interface LaunchySession {
+  gameId: number;
+  title: string;
+  startedAt: number;
+}
+
+/** A download Launchy opened in the PC's browser and is waiting on, or finished. */
+export interface LaunchyDownload {
+  id: string;
+  gameId?: number;
+  title: string;
+  label?: string;
+  status: "awaiting" | "importing" | "extracting" | "done" | "failed" | "cancelled";
+  message?: string;
+  startedAt: number;
+  finishedAt?: number;
+}
+
+/** Whether Launchy is connected, and everything it last said about itself. A launcher
+ *  too old to report leaves the report fields empty — `capabilities` is how a client
+ *  knows what it may ask for. */
 export interface LaunchyStatus {
   connected: boolean;
   name?: string;
   lastSeen?: number;
   running: number[];
   pending: number;
+  version?: string;
+  capabilities?: string[];
+  accounts?: LaunchyAccount[];
+  sessions?: LaunchySession[];
+  downloads?: LaunchyDownload[];
+  sync?: { running: boolean; lastSync?: number; lastError?: string };
+  reportedAt?: number;
+}
+
+export type LaunchyAction =
+  | "launch" | "stop" | "sync" | "backup-saves" | "restore-save" | "download" | "cancel-download";
+
+export interface LaunchyRequest {
+  action: LaunchyAction;
+  gameId?: number;
+  saveId?: number;
+  downloadId?: string;
+  source?: GameDownloadSource;
 }
 
 export interface LaunchCommand {
@@ -179,8 +233,19 @@ export interface LaunchCommand {
   gameId: number;
   status: "pending" | "sent" | "done" | "failed";
   error?: string;
+  /** What Launchy said about a success ("Backed up 14 files from …"). */
+  message?: string;
   createdAt: number;
   doneAt?: number;
+}
+
+/** A key Launchy holds. Only its last four characters are ever shown. */
+export interface LaunchyKey {
+  id: number;
+  name: string;
+  hint: string;
+  createdAt: number;
+  lastUsedAt?: number;
 }
 
 /** How many items one page of the grid asks for. The server caps a page at 200; this
@@ -2651,7 +2716,7 @@ export const api = {
     request<GameRemote>(`/api/media/${gameId}/remote/acknowledge`, { method: "POST" }),
   gameSources: (gameId: number) => request<GameSourceReport>(`/api/media/${gameId}/sources`, {}, 90_000),
 
-  // Launchy, the desktop launcher. Nothing here reaches the PC directly: a launch
+  // Launchy, the desktop launcher. Nothing here reaches the PC directly: a request
   // is queued on the server and the launcher picks it up on its next poll.
   launchyStatus: () => request<LaunchyStatus>("/api/launchy"),
   launchyLaunch: (gameId: number) =>
@@ -2659,6 +2724,15 @@ export const api = {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ gameId }),
     }),
   launchyLaunchStatus: (cmdId: string) => request<LaunchCommand>(`/api/launchy/launch/${cmdId}`),
+  launchyRequest: (req: LaunchyRequest) =>
+    request<LaunchCommand>("/api/launchy/requests", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(req),
+    }),
+  launchyRequestStatus: (cmdId: string) => request<LaunchCommand>(`/api/launchy/requests/${cmdId}`),
+  // Linking: a one-time code for a launchy://link link, and the keys it has bought.
+  launchyPairing: () => request<{ code: string; expiresAt: number }>("/api/launchy/pairing", { method: "POST" }),
+  launchyKeys: () => request<{ items: LaunchyKey[] }>("/api/launchy/keys"),
+  revokeLaunchyKey: (id: number) => request<void>(`/api/launchy/keys/${id}`, { method: "DELETE" }),
 
   // HTML5 game builds. playInfo 404s for a game that is only a download, which is
   // how the viewer decides whether to offer a Play button at all.

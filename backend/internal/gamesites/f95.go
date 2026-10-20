@@ -5,9 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
-	"net/http/cookiejar"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -19,7 +16,8 @@ import (
 // F95zone's "latest updates" page is fed by a JSON endpoint, which is used
 // directly for browsing. It reports tags as numeric ids with no public table to
 // resolve them against, so the real tag list is read off the thread page when a
-// result is inspected or added. Threads are XenForo, so the login is XenForo's.
+// result is inspected or added. Every read goes through the client's Browser when
+// there is one — see the package comment.
 
 const (
 	f95Origin  = "https://f95zone.to"
@@ -260,18 +258,13 @@ func (c *Client) detailF95(ctx context.Context, item Item) (Item, error) {
 	return ParseF95Detail(page, item), nil
 }
 
-// fetchF95Thread reads a thread, signing back in once if the session has lapsed
-// and a login is on file.
+// fetchF95Thread reads a thread. A login wall in its place is ErrSignedOut: there is
+// no stored password to sign back in with any more, so the browser that holds the
+// sign-in is the one to renew it.
 func (c *Client) fetchF95Thread(ctx context.Context, threadURL string) (string, error) {
 	page, err := c.fetch(ctx, F95, threadURL, f95Referer)
-	if errors.Is(err, ErrSignedOut) || (err == nil && isF95LoginWall(page)) {
-		if rerr := c.renewF95(ctx); rerr != nil {
-			return "", ErrSignedOut
-		}
-		page, err = c.fetch(ctx, F95, threadURL, f95Referer)
-		if err == nil && isF95LoginWall(page) {
-			return "", ErrSignedOut
-		}
+	if err == nil && isF95LoginWall(page) {
+		return "", ErrSignedOut
 	}
 	return page, err
 }
@@ -546,7 +539,7 @@ func (c *Client) reportF95(ctx context.Context, threadURL string) (*Report, erro
 	}, nil
 }
 
-/* --------------------------------------------------------------- the login */
+/* ------------------------------------------------------ who is reading */
 
 // f95Visitor reads the account block in the page header and reports who, if
 // anyone, the site thinks is reading. XenForo renders that one block two ways —
@@ -582,113 +575,6 @@ func f95Visitor(page string) (user string, signedIn bool) {
 	return name, true
 }
 
-// loginF95 performs the XenForo login: read the CSRF token off the login page,
-// post the credentials, keep the session cookies. Its own jar over the shared
-// transport, so cookies set across the login redirect are captured.
-func (c *Client) loginF95(ctx context.Context) error {
-	c.mu.Lock()
-	user, pass := c.f95User, c.f95Pass
-	c.mu.Unlock()
-	if user == "" || pass == "" {
-		return errors.New("no F95zone login on file")
-	}
-	jar, err := cookiejar.New(nil)
-	if err != nil {
-		return err
-	}
-	client := &http.Client{Transport: c.base.Transport, Timeout: c.base.Timeout, CheckRedirect: c.base.CheckRedirect, Jar: jar}
-
-	// 1. The login page carries the CSRF token every XenForo form must echo back.
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, f95Origin+"/login/", nil)
-	if err != nil {
-		return err
-	}
-	c.decorate(req, "", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-	if err := c.throttle(ctx, req.URL.Host); err != nil {
-		return err
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("F95zone could not be reached: %w", err)
-	}
-	doc, err := goquery.NewDocumentFromReader(io.LimitReader(resp.Body, 4<<20))
-	resp.Body.Close()
-	if err != nil {
-		return err
-	}
-	token, _ := doc.Find(`input[name="_xfToken"]`).First().Attr("value")
-	if token == "" {
-		token, _ = doc.Find("html").First().Attr("data-csrf")
-	}
-	if token == "" {
-		return errors.New("F95zone did not serve its login form — it may be showing a browser check")
-	}
-
-	// 2. Post the credentials. remember=1 asks for the long-lived cookie.
-	form := url.Values{
-		"login":       {user},
-		"password":    {pass},
-		"remember":    {"1"},
-		"_xfToken":    {token},
-		"_xfRedirect": {f95Origin + "/"},
-	}
-	req, err = http.NewRequestWithContext(ctx, http.MethodPost, f95Origin+"/login/login", strings.NewReader(form.Encode()))
-	if err != nil {
-		return err
-	}
-	c.decorate(req, f95Origin+"/login/", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	if err := c.throttle(ctx, req.URL.Host); err != nil {
-		return err
-	}
-	resp, err = client.Do(req)
-	if err != nil {
-		return fmt.Errorf("F95zone could not be reached: %w", err)
-	}
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	landed := resp.Request.URL.String()
-	resp.Body.Close()
-
-	// XenForo sets xf_user on a successful sign-in; its absence means the
-	// credentials were rejected, or a challenge got in the way.
-	u, _ := url.Parse(f95Origin + "/")
-	for _, ck := range jar.Cookies(u) {
-		if ck.Name == "xf_user" && ck.Value != "" {
-			c.setJar(F95, jar)
-			return nil
-		}
-	}
-	// Two-step is not something a password can get past, and saying "check your
-	// password" to someone whose password was right is the least useful thing we
-	// could do — so it is named, along with the way in.
-	if strings.Contains(landed, "two-step") || strings.Contains(string(body), "two-step") {
-		return errors.New("that account has two-step verification, which a password alone cannot pass — sign in with the xf_user cookie instead")
-	}
-	// XenForo prints exactly what was wrong ("The requested user X could not be
-	// found", "Incorrect password"). Its sentence beats any guess of ours.
-	if said := f95LoginError(string(body)); said != "" {
-		return errors.New("F95zone says: " + said)
-	}
-	return errors.New("F95zone would not sign in, and did not say why — check the username and password")
-}
-
-// f95LoginError lifts the error XenForo prints above the login form.
-func f95LoginError(page string) string {
-	m := f95BlockError.FindStringSubmatch(page)
-	if m == nil {
-		return ""
-	}
-	said := inlineText(m[1])
-	// The block also carries the form's own furniture when the markup shifts;
-	// a paragraph is an explanation, a page is not.
-	if len(said) > 300 {
-		said = clampText(said, 300)
-	}
-	return said
-}
-
-var f95BlockError = regexp.MustCompile(`(?is)<div[^>]*class="[^"]*blockMessage--error[^"]*"[^>]*>(.*?)</div>`)
-
 // ItemFromURL reads a game page by address and returns it as a result, for adding
 // a game whose page the user pasted rather than found in a listing.
 func (c *Client) ItemFromURL(ctx context.Context, rawURL string) (Item, error) {
@@ -696,7 +582,7 @@ func (c *Client) ItemFromURL(ctx context.Context, rawURL string) (Item, error) {
 	if !ok {
 		return Item{}, errors.New("that is not an itch.io or F95zone game page")
 	}
-	if !c.SignedIn(site) && !(site == F95 && c.renewF95(ctx) == nil) {
+	if !c.SignedIn(site) {
 		return Item{}, ErrSignedOut
 	}
 	if site == F95 {

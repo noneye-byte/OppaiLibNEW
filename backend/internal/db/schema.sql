@@ -183,6 +183,25 @@ CREATE TABLE IF NOT EXISTS game_launchy (
 );
 CREATE INDEX IF NOT EXISTS idx_game_launchy_launchy ON game_launchy(launchy_id);
 
+-- Keys a program signs in with instead of a session — today only Launchy's. A
+-- session suits a person: it idles out, and a restart ends it on purpose. A launcher
+-- that sits on a PC and polls all day is not a person, and pairing it with a session
+-- meant it came unpaired every time the server restarted. Only the SHA-256 of the
+-- key is kept, so a database dump hands out nothing that signs in; `hint` is the
+-- key's last few characters, for telling two of them apart in a list. `scope` names
+-- what the key may reach (see api.keyScopeAllows) — never the whole API.
+CREATE TABLE IF NOT EXISTS api_keys (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    scope        TEXT NOT NULL,
+    name         TEXT NOT NULL DEFAULT '',
+    hash         TEXT NOT NULL UNIQUE,
+    hint         TEXT NOT NULL DEFAULT '',
+    created_at   INTEGER NOT NULL,
+    last_used_at INTEGER NOT NULL DEFAULT 0       -- unix seconds, 0 = never
+);
+CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys(user_id);
+
 -- Reusable image-generation character references. The original reference and the
 -- derived appearance-only prompt tags are encrypted at rest like media metadata.
 CREATE TABLE IF NOT EXISTS characters (

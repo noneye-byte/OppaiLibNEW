@@ -1,6 +1,10 @@
 package gamesites
 
 import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
 	"reflect"
 	"strings"
 	"testing"
@@ -195,6 +199,82 @@ func TestCookiesAreOnlyAcceptedWhenTheyProveASession(t *testing.T) {
 	c.SignOut(F95)
 	if c.SignedIn(F95) {
 		t.Fatal("signed out")
+	}
+}
+
+func TestACloudflareCheckIsToldApartFromAPage(t *testing.T) {
+	check := http.Header{"Cf-Mitigated": {"challenge"}}
+	if !IsChallenge(http.StatusForbidden, check, "") {
+		t.Fatal("a 403 Cloudflare marks as a challenge is one")
+	}
+	if !IsChallenge(http.StatusServiceUnavailable, http.Header{}, `<title>Just a moment...</title><script src="https://challenges.cloudflare.com/x.js">`) {
+		t.Fatal("the interstitial is a challenge even without the header")
+	}
+	if IsChallenge(http.StatusOK, check, "") || IsChallenge(http.StatusForbidden, http.Header{}, "Forbidden") {
+		t.Fatal("a page, or a plain refusal, is not a challenge")
+	}
+}
+
+// browserStub stands in for the launcher's browser.
+type browserStub struct {
+	ready    bool
+	signedIn bool
+	note     string
+	asked    []string
+	page     string
+	err      error
+}
+
+func (b *browserStub) Ready(Site) bool { return b.ready }
+func (b *browserStub) Account(Site) (bool, string, string) {
+	return b.signedIn, "Owen", b.note
+}
+func (b *browserStub) Fetch(_ context.Context, u, _ string) (int, string, string, error) {
+	b.asked = append(b.asked, u)
+	return 200, u, b.page, b.err
+}
+
+func TestF95zoneGoesThroughTheBrowserAndItchDoesNot(t *testing.T) {
+	c := New(nil, "test")
+	b := &browserStub{ready: true, signedIn: true, page: f95Thread}
+	c.SetBrowser(b)
+
+	acct := c.Account(context.Background(), F95)
+	if !acct.SignedIn || acct.User != "Owen" || acct.Via != "launchy" {
+		t.Fatalf("account = %+v", acct)
+	}
+	if v, _, err := c.Latest(context.Background(), F95, "https://f95zone.to/threads/270043/"); err != nil || v == "" {
+		t.Fatalf("latest through the browser: %q %v", v, err)
+	}
+	if len(b.asked) != 1 || b.asked[0] != "https://f95zone.to/threads/270043/" {
+		t.Fatalf("the browser was asked for %v", b.asked)
+	}
+	// itch.io still reads with its own cookie: an itch account is never the browser's.
+	if acct := c.Account(context.Background(), Itch); acct.Via != "" {
+		t.Fatalf("itch.io account = %+v", acct)
+	}
+
+	// A browser that is not ready (the launcher is offline) is not used, and F95zone
+	// says what to do rather than offering a password form.
+	b.ready = false
+	acct = c.Account(context.Background(), F95)
+	if acct.SignedIn || acct.Password || !strings.Contains(acct.Note, "Launchy") {
+		t.Fatalf("offline account = %+v", acct)
+	}
+	if err := c.Login(context.Background(), F95, "owen", "hunter2"); err == nil || !strings.Contains(err.Error(), "Launchy") {
+		t.Fatalf("a password sign-in should be refused with directions, got %v", err)
+	}
+}
+
+func TestAChallengedReadSaysWhyInTheReport(t *testing.T) {
+	c := New(nil, "test")
+	c.SetBrowser(&browserStub{ready: true, signedIn: true, err: fmt.Errorf("%w: press Verify", ErrChallenged)})
+	rep := c.Report(context.Background(), F95, "https://f95zone.to/threads/1/")
+	if !rep.Degraded || !strings.Contains(rep.Reason, "Verify") {
+		t.Fatalf("report = %+v", rep)
+	}
+	if _, _, err := c.Latest(context.Background(), F95, "https://f95zone.to/threads/1/"); !errors.Is(err, ErrChallenged) {
+		t.Fatalf("latest: %v, want ErrChallenged so the sweep can say so", err)
 	}
 }
 

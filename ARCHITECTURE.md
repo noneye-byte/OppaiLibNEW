@@ -95,6 +95,9 @@ library bundled in the image; there is no second service to orchestrate.
    sweep compares them without decrypting every row
 - `game_launchy(game_id, launchy_id, installed, version, play_seconds, last_played,
    launch_count, updated_at)` — the desktop launcher's side of a game
+- `api_keys(id, user_id, scope, name, hash, hint, created_at, last_used_at)` — keys a
+   program signs in with instead of a session (today only Launchy's). Only the hash is
+   kept; `scope` limits the routes a key reaches
 - `collections(id, name)` and `collection_items(collection_id, media_id, position)`
 - `progress(user_id, media_id, position, updated_at)` — watch/read progress
 - `scrape_jobs`, `ai_jobs` — background job queue
@@ -191,7 +194,7 @@ The repo layout in §5 is the skeleton; the parts of the tree it does not mentio
 | Passkeys | `api/handlers_passkeys.go` | WebAuthn alongside passwords |
 | Games | `api/handlers_webgame.go`, `api/handlers_game_saves.go` | browser-playable builds, save backups |
 | Game sites | `internal/gamesites/`, `api/handlers_games.go` | itch.io and F95zone as game catalogues: signed-in browsing, adding, and "has this been updated?" |
-| Launchy | `api/handlers_launchy.go` | the desktop launcher's pairing: library sync, save bundles, and launch requests it polls for |
+| Launchy | `api/handlers_launchy.go`, `api/launchy_control.go`, `api/api_keys.go` | the desktop launcher's pairing: library sync, save bundles, the requests it polls for (launch, close, sync, saves, downloads), its state report, the key it links with — and F95zone, which is read through its browser |
 
 ## 7. Decisions that changed
 
@@ -217,6 +220,17 @@ outlives the change:
   scraper still owns turning one of their URLs into a library entry. The parsing is a
   port of the desktop launcher's, kept in step so both ends of the pairing read a page
   the same way.
+- **The server does not read F95zone itself.** It used to, signed in with a stored
+  password. In October 2026 F95zone put a Cloudflare "Verify you are human" check in
+  front of every page, login included, and a server cannot — and should not try to —
+  tick that box. So F95zone is read through the paired launcher's browser, where a
+  person did: `gamesites.Browser` is the seam, `api.launchyBrowser` the implementation,
+  and a read is a `fetch` request down the launcher's long poll with the page coming back
+  as its outcome. With no launcher running, F95zone is honestly unavailable.
+- **Launchy links with a key, not a session.** A session is a person's: it idles out,
+  and a restart ends it on purpose. The launcher held one and kept coming unpaired. It
+  now holds a scoped key (`api_keys`), handed over through a one-time code in a
+  `launchy://link` link.
 - **The image is not ~20 MB.** §1's justification for Go still holds, but the shipped
   image carries ffmpeg, the ONNX runtime, Piper and ~68 MB of Libby's artwork embedded
   in the binary. There is a lean image variant for boxes that do not want all of it.

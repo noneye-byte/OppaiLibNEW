@@ -27,9 +27,13 @@ func TestGameSitesStartSignedOutAndBrowsingRefusesUntilSignedIn(t *testing.T) {
 	if len(sites.Sites) != 2 || sites.Sites[0].SignedIn || sites.Sites[1].SignedIn {
 		t.Fatalf("sites = %+v, want both signed out", sites.Sites)
 	}
-	// itch.io cannot take a password; F95zone can.
-	if sites.Sites[0].Password || !sites.Sites[1].Password {
+	// Neither takes a password any more, and F95zone — which no server can read now
+	// — says where to sign in instead of drawing a form that cannot work.
+	if sites.Sites[0].Password || sites.Sites[1].Password {
 		t.Fatalf("password capability: %+v", sites.Sites)
+	}
+	if !strings.Contains(sites.Sites[1].Note, "Launchy") {
+		t.Fatalf("F95zone's note should point at Launchy: %q", sites.Sites[1].Note)
 	}
 	if len(sites.Sorts["itch"]) == 0 || len(sites.Sorts["f95"]) == 0 {
 		t.Fatalf("sorts missing: %+v", sites.Sorts)

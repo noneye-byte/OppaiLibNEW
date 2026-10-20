@@ -102,8 +102,7 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	s.ApplySettings(next)
 	s.log.Info("settings: updated", "ai_enabled", next.AIEnabled, "ai_auto_tag", next.AIAutoTag,
-		"scrape_delay_ms", next.ScrapeDelayMs, "respect_robots", next.ScrapeRespectRobots,
-		"f95_login", next.F95Username != "")
+		"scrape_delay_ms", next.ScrapeDelayMs, "respect_robots", next.ScrapeRespectRobots)
 	writeJSON(w, http.StatusOK, settingsResponse{Settings: next.Redacted(), ReadOnly: s.readOnly()})
 }
 
@@ -120,7 +119,6 @@ func (s *Server) ApplySettings(cur settings.Settings) {
 		MaxTags:  cur.AIMaxTags,
 	})
 	s.scraper.SetOptions(cur.ScrapeUserAgent, cur.ScrapeDelay(), cur.ScrapeRespectRobots)
-	s.scraper.SetF95Credentials(cur.F95Username, cur.F95Password)
 	s.sources.SetRule34Credentials(cur.Rule34UserID, cur.Rule34APIKey)
 	s.applyGameSiteSettings(cur)
 	s.applyTTSSettings(cur)

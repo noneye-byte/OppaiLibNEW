@@ -35,11 +35,13 @@ import (
 //	POST   /api/media/{id}/remote/acknowledge  the newest version is the one installed
 //	GET    /api/media/{id}/sources             where the build can be had, off the page
 //
-// A site is browsed signed in or not at all (see gamesites). The sign-in for
-// F95zone is the login already in Settings; itch.io's is its session cookie,
-// because its login page is behind a browser challenge a server cannot pass — so
-// the cookie is pasted here, or pushed by Launchy, which signs in through the
-// site's own page in a real browser window.
+// A site is browsed signed in or not at all (see gamesites). Neither site can be
+// signed in to from here with a password: both login pages are behind a browser
+// check a server cannot pass. itch.io's sign-in is its session cookie — pasted
+// here, or pushed by Launchy, which signs in through the site's own page in a real
+// browser window. F95zone went further and put the check in front of every page,
+// so it is read through Launchy outright (see launchyBrowser), and is signed in
+// whenever Launchy is.
 
 // remoteRef is what ref_enc seals.
 type remoteRef struct {
@@ -87,7 +89,6 @@ func (s *Server) applyGameSiteSettings(cur settings.Settings) {
 		return
 	}
 	s.games.SetUserAgent(cur.ScrapeUserAgent)
-	s.games.SetF95Credentials(cur.F95Username, cur.F95Password)
 	if cur.F95Cookie != "" {
 		if err := s.games.SetCookie(gamesites.F95, cur.F95Cookie); err != nil {
 			s.log.Warn("f95 cookie from settings rejected", "err", err)
@@ -165,23 +166,20 @@ func (s *Server) handleGameSiteLogin(w http.ResponseWriter, r *http.Request) {
 			cur.F95Cookie = strings.TrimSpace(req.Cookie)
 		}
 	default:
-		if err := s.games.Login(ctx, site, req.Username, req.Password); err != nil {
-			// Deliberately not 401. The client treats a 401 from anywhere as "your
-			// OppaiLib session has ended" and signs the user out on the spot — which
-			// is what a rejected *F95zone* password used to do, throwing you out of
-			// your own library for mistyping someone else's. This is an upstream
-			// refusal, and it is reported as one.
-			writeErr(w, http.StatusBadGateway, err.Error())
-			return
-		}
-		cur.F95Username, cur.F95Password = strings.TrimSpace(req.Username), req.Password
-		cur.F95Cookie = ""
+		// Neither site takes a password from here any more; Login says what does
+		// work. Deliberately not 401: the client treats a 401 from anywhere as "your
+		// OppaiLib session has ended" and signs the user out on the spot — which is
+		// what a rejected F95zone password once did, throwing you out of your own
+		// library over someone else's site. 409: the precondition (a browser that
+		// can sign in) is missing, not anything about the caller.
+		err := s.games.Login(ctx, site, req.Username, req.Password)
+		writeErr(w, http.StatusConflict, err.Error())
+		return
 	}
 	if err := s.db.PutSettings(r.Context(), cur.Map()); err != nil {
 		s.log.Warn("game site login: saving settings", "site", site, "err", err)
 	}
 	s.settings.Set(cur)
-	s.scraper.SetF95Credentials(cur.F95Username, cur.F95Password)
 	// A sign-in that was accepted and then does not read as signed in is still a
 	// failure, and answering 200 with signedIn:false made it an invisible one: the
 	// form simply stayed where it was, with nothing said. Say it instead — the
@@ -205,15 +203,15 @@ func (s *Server) handleGameSiteLogout(w http.ResponseWriter, r *http.Request) {
 		cur.ItchCookie = ""
 	} else {
 		cur.F95Cookie = ""
+		// The old password login is cleared too: it can no longer sign anything in,
+		// and a password kept for nothing is still a password kept.
 		cur.F95Username, cur.F95Password = "", ""
-		s.games.SetF95Credentials("", "")
-		s.scraper.SetF95Credentials("", "")
 	}
 	if err := s.db.PutSettings(r.Context(), cur.Map()); err != nil {
 		s.log.Warn("game site logout: saving settings", "site", site, "err", err)
 	}
 	s.settings.Set(cur)
-	writeJSON(w, http.StatusOK, gamesites.Account{Site: site, Label: site.Label(), Password: site == gamesites.F95})
+	writeJSON(w, http.StatusOK, s.games.Account(r.Context(), site))
 }
 
 // remoteIndex maps every remote reference in the library back to its game, keyed
@@ -270,6 +268,11 @@ func (s *Server) handleGameBrowse(w http.ResponseWriter, r *http.Request) {
 		// 409, not 401 — see handleGameSiteLogin. A site we are not signed in to is
 		// a precondition of this request, not a statement about the caller's session.
 		writeErr(w, http.StatusConflict, "sign in to "+site.Label()+" to browse it")
+		return
+	}
+	if errors.Is(err, gamesites.ErrChallenged) || errors.Is(err, gamesites.ErrBrowserGone) {
+		// Also 409: what is missing is a person at the PC, and the message says which.
+		writeErr(w, http.StatusConflict, err.Error())
 		return
 	}
 	if err != nil {

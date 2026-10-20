@@ -197,13 +197,13 @@ func (e *Engine) robotsChecker() *robotsCache {
 // Register appends a site-specific parser (takes priority over the generic one).
 func (e *Engine) Register(p Parser) { e.site = append(e.site, p) }
 
-// SetF95Credentials pushes the F95 login into a registered F95 parser, if any. A
-// no-op when F95 support isn't compiled in / registered, so callers needn't know
-// whether it exists.
-func (e *Engine) SetF95Credentials(username, password string) {
+// SetF95Reader gives a registered F95 parser, if any, the reader it fetches threads
+// through. A no-op when F95 support isn't registered, so callers needn't know
+// whether it exists. See F95Parser.
+func (e *Engine) SetF95Reader(read F95Reader) {
 	for _, p := range e.site {
 		if f, ok := p.(*F95Parser); ok {
-			f.SetCredentials(username, password)
+			f.SetReader(read)
 		}
 	}
 }

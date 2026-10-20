@@ -10,8 +10,10 @@ import {
   type Media,
   type MediaTag,
   type GameSourceReport,
+  type LaunchyRequest,
   type LaunchyStatus,
 } from "../api.js";
+import { awaitOutcome, launchyCan, launchyRunning } from "../launchy.js";
 import { libbyReact } from "../libby-voice.js";
 import { formatMoment } from "../chat-links.js";
 import { loadSlideshow, nextSlide, saveSlideshow, type SlideshowPrefs } from "../slideshow.js";
@@ -114,6 +116,9 @@ export class OppaiViewer extends LitElement {
   // version; `sources` the builds that page lists, fetched on demand.
   @state() private launchy: LaunchyStatus | null = null;
   @state() private launching = "";
+  /** Which of the other PC buttons is waiting on Launchy — "stop", "backup",
+   *  "restore:<save>", "download:<source>" — so only that one says so. */
+  @state() private pcBusy = "";
   @state() private checking = false;
   @state() private sources: GameSourceReport | null = null;
   @state() private sourcesLoading = false;
@@ -893,6 +898,9 @@ export class OppaiViewer extends LitElement {
         border: 1px solid var(--oppai-border-strong);
       }
       .remote .src:hover { background: var(--oppai-nav-hover); }
+      /* "on PC" beside a link: the same chip, as a button. */
+      .remote button.src { font: inherit; font-size: 12px; cursor: pointer; }
+      .remote button.src[disabled] { opacity: 0.6; cursor: default; }
       .pc-stat { display: inline-flex; align-items: center; gap: 4px; margin-right: 12px; }
 
       /* HTML5 game player */
@@ -1048,6 +1056,24 @@ export class OppaiViewer extends LitElement {
       mascotSay((err as Error).message, "error");
     } finally {
       this.launching = "";
+      api.launchyStatus().then((st) => (this.launchy = st)).catch(() => {});
+    }
+  }
+
+  /** Any other request of Launchy about this game: queues it, waits for the PC's
+   *  answer, and says it. `key` names the button, so only that one shows it is busy. */
+  private async pcRequest(key: string, req: LaunchyRequest, done: string) {
+    this.pcBusy = key;
+    try {
+      const cmd = await api.launchyRequest(req);
+      const out = await awaitOutcome(api.launchyRequestStatus, cmd.id);
+      if (out.status === "done") mascotSay(out.message || done);
+      else mascotSay(out.error || "Launchy could not do that.", "error");
+      if (req.action === "backup-saves" && out.status === "done") void this.loadSaves(req.gameId ?? 0);
+    } catch (err) {
+      mascotSay((err as Error).message, "error");
+    } finally {
+      if (this.pcBusy === key) this.pcBusy = "";
       api.launchyStatus().then((st) => (this.launchy = st)).catch(() => {});
     }
   }
@@ -2109,11 +2135,21 @@ export class OppaiViewer extends LitElement {
                         Download
                       </a>`}
                   ${m.launchy?.installed && this.launchy?.connected
-                    ? html`<button class="btn-primary" ?disabled=${!!this.launching} title="Start it in Launchy on your PC"
-                        @click=${() => void this.launchOnPC(m.id)}>
-                        <span class="material-symbols-rounded fill-icon" style="font-size:20px;">${this.launching ? "hourglass_top" : "play_arrow"}</span>
-                        ${this.launching ? "Starting…" : this.launchy.running.includes(m.id) ? "Running on PC" : "Launch on PC"}
-                      </button>`
+                    ? launchyRunning(this.launchy, m.id) && launchyCan(this.launchy, "stop")
+                      ? html`<button class="btn-primary" ?disabled=${this.pcBusy === "stop"} title="Close it on your PC"
+                          @click=${() => {
+                            if (confirm(`Close ${m.title || "this game"} on the PC? Anything unsaved in it is lost.`)) {
+                              void this.pcRequest("stop", { action: "stop", gameId: m.id }, "Closed it on the PC.");
+                            }
+                          }}>
+                          <span class="material-symbols-rounded fill-icon" style="font-size:20px;">stop_circle</span>
+                          ${this.pcBusy === "stop" ? "Closing…" : "Close on PC"}
+                        </button>`
+                      : html`<button class="btn-primary" ?disabled=${!!this.launching} title="Start it in Launchy on your PC"
+                          @click=${() => void this.launchOnPC(m.id)}>
+                          <span class="material-symbols-rounded fill-icon" style="font-size:20px;">${this.launching ? "hourglass_top" : "play_arrow"}</span>
+                          ${this.launching ? "Starting…" : launchyRunning(this.launchy, m.id) ? "Running on PC" : "Launch on PC"}
+                        </button>`
                     : nothing}
                   <button class="btn-outline" @click=${this.toggleFav}>
                     <span
@@ -2230,6 +2266,17 @@ export class OppaiViewer extends LitElement {
               (s) => html`<div class="save-row">
                 <span class="save-name" title=${s.label}>${s.label}</span>
                 <span class="save-meta">${formatBytes(s.size)} · ${saveDate(s.createdAt)}</span>
+                ${m.launchy && launchyCan(this.launchy, "saves")
+                  ? html`<button class="save-act" title="Restore this save into the game on your PC"
+                      ?disabled=${this.pcBusy === `restore:${s.id}`}
+                      @click=${() => {
+                        if (confirm(`Restore "${s.label}" into ${m.title || "the game"} on the PC? Save files there with the same names are overwritten.`)) {
+                          void this.pcRequest(`restore:${s.id}`, { action: "restore-save", gameId: m.id, saveId: s.id }, "Restored it on the PC.");
+                        }
+                      }}>
+                      <span class="material-symbols-rounded" style="font-size:20px;">${this.pcBusy === `restore:${s.id}` ? "hourglass_empty" : "history"}</span>
+                    </button>`
+                  : nothing}
                 <a class="save-act" title="Download this save" href=${api.gameSaveURL(m.id, s.id)} download>
                   <span class="material-symbols-rounded" style="font-size:20px;">download</span>
                 </a>
@@ -2248,6 +2295,14 @@ export class OppaiViewer extends LitElement {
         <input type="file" multiple hidden ?disabled=${this.saveUploading}
           @change=${(e: Event) => void this.uploadSave(e, m.id)} />
       </label>
+      ${m.launchy && launchyCan(this.launchy, "saves")
+        ? html`<button class="btn-outline gallery-upload" ?disabled=${this.pcBusy === "backup"}
+            title="Zip the game's save folder on the PC and keep it here"
+            @click=${() => void this.pcRequest("backup", { action: "backup-saves", gameId: m.id }, "Backed the saves up from the PC.")}>
+            <span class="material-symbols-rounded">cloud_upload</span>
+            ${this.pcBusy === "backup" ? "Backing up…" : "Back up from the PC"}
+          </button>`
+        : nothing}
     `;
   }
 
@@ -2281,11 +2336,17 @@ export class OppaiViewer extends LitElement {
         ${r.hasUpdate && r.changelog ? html`<div class="log">${r.changelog}</div>` : nothing}
         ${this.sources
           ? this.sources.degraded
-            ? html`<div class="log">The page could not be read just now — <a href=${r.url} target="_blank" rel="noreferrer" style="color:var(--oppai-primary-bright);">open it yourself</a>.</div>`
+            ? html`<div class="log">${this.sources.reason || "The page could not be read just now."} — <a href=${r.url} target="_blank" rel="noreferrer" style="color:var(--oppai-primary-bright);">open it yourself</a>.</div>`
             : html`<div class="srcs">
                 ${this.sources.sources.map((src) => html`<a class="src" href=${src.url} target="_blank" rel="noreferrer" title=${src.url}>
                   <span class="material-symbols-rounded" style="font-size:16px;">open_in_new</span>${src.label}
-                </a>`)}
+                </a>${launchyCan(this.launchy, "download")
+                  ? html`<button class="src" title="Open this download in the browser on your PC — Launchy picks the file up and installs it"
+                      ?disabled=${this.pcBusy === `download:${src.id}`}
+                      @click=${() => void this.pcRequest(`download:${src.id}`, { action: "download", gameId: m.id, source: src }, "Started the download on the PC.")}>
+                      <span class="material-symbols-rounded" style="font-size:16px;">download</span>${this.pcBusy === `download:${src.id}` ? "Opening…" : "on PC"}
+                    </button>`
+                  : nothing}`)}
                 ${!this.sources.sources.length
                   ? this.sources.signedIn
                     ? html`<span>No downloads are listed on the page.</span>`

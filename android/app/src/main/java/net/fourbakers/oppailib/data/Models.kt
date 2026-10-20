@@ -269,9 +269,9 @@ data class GameCheckResponse(val remote: GameRemote, val changed: Boolean = fals
 /**
  * Whether a game site is signed in, and as whom when it will say.
  *
- * [password] is true for a site that takes a username and password here, which is
- * F95zone. itch.io does not — its login page is behind a browser check no server can
- * pass — and is signed in by pasting its session cookie instead.
+ * [password] is always false now: neither site can be signed in to from a server.
+ * [via] is "launchy" for F95zone, which the server reads through Launchy's browser on
+ * the PC, and [note] says in a sentence what is missing when a site cannot be read.
  */
 @Serializable
 data class GameSiteAccount(
@@ -280,6 +280,8 @@ data class GameSiteAccount(
     val signedIn: Boolean = false,
     val user: String = "",
     val password: Boolean = false,
+    val via: String = "",
+    val note: String = "",
 )
 
 /** One ordering a site's listing offers. [key] is passed straight back to it. */

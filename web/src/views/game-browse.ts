@@ -20,9 +20,11 @@ import { requestOpenMedia } from "../chat-links.js";
  * keeps its adult games from anyone who has not asked for them and F95zone hides
  * threads and every download link from guests, so a catalogue browsed signed out
  * would quietly show half of what is there. The sign-in lives here, on the tab that
- * needs it, rather than in Settings: F95zone takes a username and password; itch.io
- * cannot (its login page is behind a browser check no server can pass) and is
- * signed in by pasting its session cookie, or by Launchy handing its own over.
+ * needs it, rather than in Settings. Neither site can be signed in to from a server
+ * any more. itch.io's login page is behind a browser check, so it is signed in by
+ * pasting its session cookie, or by Launchy handing its own over. F95zone put the
+ * check in front of every page, so the server reads it through Launchy outright:
+ * it is signed in whenever Launchy is, and this tab only says how to get there.
  *
  * Adding a result goes through the same import a pasted URL does, and the page is
  * remembered as where the game came from — which is what the Updates face reads.
@@ -35,9 +37,7 @@ export class OppaiGameBrowse extends LitElement {
   @state() private sites: GameSitesResponse | null = null;
   @state() private sitesError = "";
 
-  // Sign-in form state. The password never leaves this element except to the server.
-  @state() private username = "";
-  @state() private password = "";
+  // Sign-in form state: itch.io's pasted cookie, which only ever goes to the server.
   @state() private cookie = "";
   @state() private signingIn = false;
   @state() private signInError = "";
@@ -226,14 +226,10 @@ export class OppaiGameBrowse extends LitElement {
     this.signingIn = true;
     this.signInError = "";
     try {
-      const body = this.cookie.trim()
-        ? { cookie: this.cookie.trim() }
-        : { username: this.username.trim(), password: this.password };
-      const acct = await api.gameSiteLogin(site, body);
+      const acct = await api.gameSiteLogin(site, { cookie: this.cookie.trim() });
       this.sites = this.sites
         ? { ...this.sites, sites: this.sites.sites.map((s) => (s.site === site ? acct : s)) }
         : this.sites;
-      this.password = "";
       this.cookie = "";
       if (acct.signedIn) void this.search(1);
     } catch (err) {
@@ -393,42 +389,45 @@ export class OppaiGameBrowse extends LitElement {
 
   private renderSignIn(acct: GameSiteAccount | null) {
     const label = acct?.label ?? this.site;
-    const itch = this.site === "itch";
+    if (this.site === "f95") {
+      // Nothing to type: F95zone is read through Launchy, signed in there. The note is
+      // the server's account of what is missing — Launchy offline, signed out, or
+      // waiting on someone to press Verify.
+      return html`
+        <div class="signin">
+          <h3>F95zone is read through Launchy</h3>
+          <p>
+            F95zone now asks every visitor to prove they are a person before it shows any
+            page — its login included — which no server can do. Launchy, on your PC, is a
+            real browser: sign in to F95zone there (Settings → Accounts) and keep Launchy
+            running, and this tab reads F95zone through it.
+          </p>
+          ${acct?.note ? html`<div class="err">${acct.note}</div>` : nothing}
+          <div class="row">
+            <button class="btn-primary" @click=${() => void this.loadSites()}>
+              <span class="material-symbols-rounded" style="font-size:20px;">refresh</span>Check again
+            </button>
+          </div>
+        </div>
+      `;
+    }
     return html`
       <div class="signin">
         <h3>Sign in to ${label}</h3>
-        ${itch
-          ? html`<p>
-              itch.io only shows adult games to an account that has asked for them, and
-              its login page sits behind a browser check that a server cannot pass — so
-              sign in here with the session cookie from a browser where you are already
-              signed in. Open itch.io, open the developer tools (F12 → Application →
-              Cookies) and copy the value of the <code>itchio</code> cookie. If Launchy is
-              paired and signed in to itch.io, it hands its sign-in over on its own.
-            </p>
-            <label>itchio cookie</label>
-            <textarea .value=${this.cookie} placeholder="itchio=…  (or just the value)"
-              @input=${(e: Event) => (this.cookie = (e.target as HTMLTextAreaElement).value)}></textarea>`
-          : html`<p>
-              F95zone hides most game threads and every download link from guests.
-              Sign in with your F95zone account; the login is kept on the server and
-              used only for reading the site.
-            </p>
-            <form @submit=${(e: Event) => { e.preventDefault(); void this.signIn(); }}>
-              <label>Username</label>
-              <input type="text" autocomplete="username" .value=${this.username}
-                @input=${(e: Event) => (this.username = (e.target as HTMLInputElement).value)} />
-              <label>Password</label>
-              <input type="password" autocomplete="current-password" .value=${this.password}
-                @input=${(e: Event) => (this.password = (e.target as HTMLInputElement).value)} />
-              <button type="submit" hidden></button>
-            </form>
-            <div class="or">or, for an account with two-step verification</div>
-            <label>xf_user cookie</label>
-            <textarea .value=${this.cookie} placeholder="xf_user=…; xf_session=…  (or just the xf_user value)"
-              @input=${(e: Event) => (this.cookie = (e.target as HTMLTextAreaElement).value)}></textarea>`}
+        <p>
+          itch.io only shows adult games to an account that has asked for them, and
+          its login page sits behind a browser check that a server cannot pass — so
+          sign in here with the session cookie from a browser where you are already
+          signed in. Open itch.io, open the developer tools (F12 → Application →
+          Cookies) and copy the value of the <code>itchio</code> cookie. If Launchy is
+          linked and signed in to itch.io, it hands its sign-in over on its own.
+        </p>
+        ${acct?.note ? html`<div class="err">${acct.note}</div>` : nothing}
+        <label>itchio cookie</label>
+        <textarea .value=${this.cookie} placeholder="itchio=…  (or just the value)"
+          @input=${(e: Event) => (this.cookie = (e.target as HTMLTextAreaElement).value)}></textarea>
         <div class="row">
-          <button class="btn-primary" ?disabled=${this.signingIn || (!this.cookie.trim() && (itch || !this.username.trim() || !this.password))}
+          <button class="btn-primary" ?disabled=${this.signingIn || !this.cookie.trim()}
             @click=${() => void this.signIn()}>
             <span class="material-symbols-rounded" style="font-size:20px;">login</span>
             ${this.signingIn ? "Signing in…" : "Sign in"}
@@ -450,12 +449,15 @@ export class OppaiGameBrowse extends LitElement {
         <button class="btn-outline" type="submit" ?disabled=${this.loading}>Search</button>
         <div class="account">
           <span class="material-symbols-rounded" style="font-size:18px;">account_circle</span>
-          ${acct.user || "Signed in"}
-          <button class="chip ghost" type="button" @click=${() => void this.signOut()}>
+          ${acct.user || "Signed in"}${acct.via === "launchy" ? " · through Launchy" : ""}
+          ${acct.via === "launchy"
+            ? nothing
+            : html`<button class="chip ghost" type="button" @click=${() => void this.signOut()}>
             <span class="material-symbols-rounded" style="font-size:16px;">logout</span>Sign out
-          </button>
+          </button>`}
         </div>
       </form>
+      ${acct.note ? html`<div class="err" style="margin: 0 0 12px;">${acct.note}</div>` : nothing}
     `;
   }
 

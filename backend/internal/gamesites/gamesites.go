@@ -17,6 +17,13 @@
 // threads and every download link from guests, and a catalogue that half-works
 // signed out is a catalogue that quietly lies — so Browse refuses outright until
 // the site is signed in, and says so.
+//
+// F95zone is read through a Browser rather than directly. Since October 2026 every
+// page of it, the login form included, sits behind a Cloudflare check with a
+// "Verify you are human" box, which no server can tick and none should try to. The
+// paired launcher is a real browser with a person at it, so F95zone is read through
+// that: its sign-in, its check passed, its page. Without one, F95zone answers
+// ErrChallenged and the account says why.
 package gamesites
 
 import (
@@ -168,6 +175,9 @@ type Report struct {
 	Sources   []DownloadSource `json:"sources"`
 	// Degraded marks a page that could not be read; nothing else is trustworthy then.
 	Degraded bool `json:"degraded"`
+	// Reason says why a degraded page could not be read, when that is something the
+	// user can do something about ("sign in to F95zone in Launchy").
+	Reason string `json:"reason,omitempty"`
 	// SignedIn is whether the read was made as a member. It matters for an empty
 	// source list: F95zone serves a thread to anyone but hides every download link
 	// from a guest, so "no downloads on the page" and "no downloads for you" look
@@ -182,24 +192,56 @@ type Account struct {
 	SignedIn bool   `json:"signedIn"`
 	User     string `json:"user,omitempty"`
 	// Password is true for a site that can be signed in to with a username and
-	// password from here. itch.io cannot: its login page sits behind a browser
-	// challenge no server can pass, so it is signed in by cookie — pasted, or handed
-	// over by the desktop launcher.
+	// password from here. Neither can any more: both login pages sit behind a browser
+	// check no server can pass. It stays in the response so an older client that
+	// reads it draws no password form.
 	Password bool `json:"password"`
+	// Via names who reads the site for us when it is not this server: "launchy" for
+	// F95zone read through the paired launcher's browser.
+	Via string `json:"via,omitempty"`
+	// Note is what the user should know or do about this site, in a sentence — set
+	// when it cannot be read and the reason is theirs to fix.
+	Note string `json:"note,omitempty"`
 }
 
 // ErrSignedOut is what Browse answers for a site that is not signed in.
 var ErrSignedOut = errors.New("sign in to browse")
+
+// ErrChallenged is a page answered with a Cloudflare check in its place — the
+// "Verify you are human" box. Only a person at a real browser gets past one, so it
+// is reported rather than retried, wrapped in a sentence that says where to go.
+var ErrChallenged = errors.New("the site wants a person at a real browser")
+
+// ErrBrowserGone is a read handed to the browser that never came back: the launcher
+// went offline, or sat on it past the deadline.
+var ErrBrowserGone = errors.New("Launchy did not answer — is it still running on the PC?")
+
+// f95NeedsLaunchy is what F95zone's account says when there is no browser to read it
+// through.
+const f95NeedsLaunchy = "F95zone now asks every visitor to prove they are a person, which a server cannot do. " +
+	"Sign in to F95zone in Launchy and keep Launchy running on the PC — OppaiLib reads F95zone through it."
+
+// A Browser is a real browser, with a person at it, that the client borrows to
+// read a site it cannot read itself. The paired launcher is one.
+type Browser interface {
+	// Ready reports whether a read of site can go through the browser now.
+	Ready(site Site) bool
+	// Account is the browser's own sign-in to site, and a note when it is in no
+	// state to read it (signed out, or waiting on its own human check).
+	Account(site Site) (signedIn bool, user, note string)
+	// Fetch reads one page through the browser's session. A page that came back as
+	// a human check is ErrChallenged.
+	Fetch(ctx context.Context, rawURL, referer string) (status int, final, body string, err error)
+}
 
 // Client holds one signed-in session per site over a shared, guarded transport.
 type Client struct {
 	base *http.Client
 	ua   string
 
-	mu   sync.Mutex
-	jars map[Site]http.CookieJar
-	// The F95zone login, kept so an expired session can be renewed without asking.
-	f95User, f95Pass string
+	mu      sync.Mutex
+	jars    map[Site]http.CookieJar
+	browser Browser
 
 	// One request to a site at a time, with a gap: these are somebody else's pages,
 	// and a check-for-updates sweep is a page per game.
@@ -235,15 +277,28 @@ func (c *Client) SetUserAgent(ua string) {
 	c.mu.Unlock()
 }
 
-// SetF95Credentials records the F95zone login used to renew its session. A change
-// drops the session so the next read signs in afresh.
-func (c *Client) SetF95Credentials(username, password string) {
+// SetBrowser gives the client a real browser to read F95zone through. See Browser.
+func (c *Client) SetBrowser(b Browser) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	if username != c.f95User || password != c.f95Pass {
-		c.f95User, c.f95Pass = username, password
-		delete(c.jars, F95)
+	c.browser = b
+	c.mu.Unlock()
+}
+
+// viaBrowser is the browser a read of site goes through, or nil to read it
+// directly. Only F95zone is: itch.io's pages still serve to a signed-in cookie, and
+// sending every itch read across to the PC would make the catalogue depend on the PC
+// being on for no reason.
+func (c *Client) viaBrowser(site Site) Browser {
+	if site != F95 {
+		return nil
 	}
+	c.mu.Lock()
+	b := c.browser
+	c.mu.Unlock()
+	if b == nil || !b.Ready(site) {
+		return nil
+	}
+	return b
 }
 
 // authCookie is the cookie each site sets only once a session is genuinely signed
@@ -282,9 +337,14 @@ func (c *Client) client(site Site) *http.Client {
 	}
 }
 
-// SignedIn reports whether the site's session cookie is on file. It says a
-// session exists, not that the site still honours it — Account asks the site.
+// SignedIn reports whether the site's session cookie is on file — or, for a site
+// read through a browser, whether the browser says it is signed in. It says a session
+// exists, not that the site still honours it — Account asks the site.
 func (c *Client) SignedIn(site Site) bool {
+	if b := c.viaBrowser(site); b != nil {
+		in, _, _ := b.Account(site)
+		return in
+	}
 	jar := c.jar(site)
 	if jar == nil {
 		return false
@@ -298,8 +358,8 @@ func (c *Client) SignedIn(site Site) bool {
 	return false
 }
 
-// SignOut forgets the site's session. The stored F95zone login is kept: signing
-// out is "drop this session", and the settings screen owns the credentials.
+// SignOut forgets the site's session. A sign-in a browser holds is the browser's
+// to drop — signing F95zone out here forgets only a pasted cookie.
 func (c *Client) SignOut(site Site) {
 	c.mu.Lock()
 	delete(c.jars, site)
@@ -350,51 +410,52 @@ func (c *Client) SetCookie(site Site, raw string) error {
 	return nil
 }
 
-// Login signs in with a username and password. Only F95zone can be: itch.io's
-// login page is behind a Cloudflare challenge that only a real browser passes, and
-// the honest answer is to say so rather than post credentials into a wall.
+// Login would sign in with a username and password, and no longer can for either
+// site: both login pages sit behind a browser check only a person passes. F95zone
+// signed in this way until October 2026, when its whole site went behind the check;
+// posting credentials into the wall now only earns a 403. The honest answer names
+// the way that works instead.
 func (c *Client) Login(ctx context.Context, site Site, username, password string) error {
 	switch site {
 	case F95:
-		if strings.TrimSpace(username) == "" || password == "" {
-			return errors.New("F95zone needs a username and password")
-		}
-		c.SetF95Credentials(username, password)
-		return c.loginF95(ctx)
+		return errors.New("F95zone cannot be signed in to from here any more. " + f95NeedsLaunchy)
 	case Itch:
 		return errors.New("itch.io cannot be signed in to with a password from here — its login page is behind a browser check. Sign in through Launchy, or paste the itchio cookie from your browser")
 	}
 	return fmt.Errorf("unknown site %q", site)
 }
 
-// renewF95 signs F95zone back in from the stored login, for a session that has
-// expired underneath a read.
-func (c *Client) renewF95(ctx context.Context) error {
-	c.mu.Lock()
-	user, pass := c.f95User, c.f95Pass
-	c.mu.Unlock()
-	if user == "" || pass == "" {
-		return ErrSignedOut
-	}
-	return c.loginF95(ctx)
-}
-
 // Account asks the site who we are. A cookie says a session exists; this says
 // whether the site still honours it, so an expired login reads as signed out.
+// A site read through a browser is whatever the browser says of itself.
 func (c *Client) Account(ctx context.Context, site Site) Account {
-	acct := Account{Site: site, Label: site.Label(), Password: site == F95}
+	acct := Account{Site: site, Label: site.Label()}
+	if b := c.viaBrowser(site); b != nil {
+		acct.Via = "launchy"
+		acct.SignedIn, acct.User, acct.Note = b.Account(site)
+		return acct
+	}
 	if !c.SignedIn(site) {
+		if site == F95 {
+			acct.Note = f95NeedsLaunchy
+		}
 		return acct
 	}
 	user, ok, err := c.probe(ctx, site)
+	if errors.Is(err, ErrChallenged) {
+		// Not a verdict on the cookie, which may be perfectly good: the site would
+		// not show us anything to judge it by. Keep it, and say what is in the way.
+		acct.Note = f95NeedsLaunchy
+		if site == Itch {
+			acct.Note = "itch.io answered with a browser check instead of the page. Sign in through Launchy, or try again later."
+		}
+		return acct
+	}
 	if err != nil {
 		// The site would not answer. Trust the cookie rather than logging the user
 		// out over a timeout.
 		acct.SignedIn = true
 		return acct
-	}
-	if !ok && site == F95 && c.renewF95(ctx) == nil {
-		user, ok, _ = c.probe(ctx, site)
 	}
 	acct.SignedIn = ok
 	acct.User = user
@@ -457,6 +518,10 @@ func (c *Client) throttle(ctx context.Context, host string) error {
 // final URL after redirects, and the body — the final URL is how a login wall is
 // recognised. follow=false stops at the first redirect, which is the cheapest
 // possible "are we signed in?" for itch.io.
+//
+// A site read through a browser goes there instead, paced the same way: the gap is a
+// courtesy to the site, and the site cannot tell which machine is asking. A page that
+// comes back as a Cloudflare check is ErrChallenged, from either road.
 func (c *Client) getPage(ctx context.Context, site Site, rawURL, referer string, follow bool) (status int, final, body string, err error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
@@ -465,6 +530,9 @@ func (c *Client) getPage(ctx context.Context, site Site, rawURL, referer string,
 	c.decorate(req, referer, "text/html,application/json,application/xhtml+xml;q=0.9,*/*;q=0.8")
 	if err := c.throttle(ctx, req.URL.Host); err != nil {
 		return 0, "", "", err
+	}
+	if b := c.viaBrowser(site); b != nil {
+		return b.Fetch(ctx, rawURL, referer)
 	}
 	client := c.client(site)
 	if !follow {
@@ -483,7 +551,26 @@ func (c *Client) getPage(ctx context.Context, site Site, rawURL, referer string,
 	if err != nil {
 		return resp.StatusCode, final, "", err
 	}
+	if IsChallenge(resp.StatusCode, resp.Header, string(b)) {
+		if site == F95 {
+			return resp.StatusCode, final, "", fmt.Errorf("%w: %s", ErrChallenged, f95NeedsLaunchy)
+		}
+		return resp.StatusCode, final, "", fmt.Errorf("%w: %s answered with a browser check instead of the page", ErrChallenged, site.Label())
+	}
 	return resp.StatusCode, final, string(b), nil
+}
+
+// IsChallenge recognises a Cloudflare check served in place of a page. The header is
+// Cloudflare's own word for it; the body test catches a check served without one.
+// Either way it is a 403 or a 503 — a 200 that mentions Cloudflare is just a page.
+func IsChallenge(status int, header http.Header, body string) bool {
+	if status != http.StatusForbidden && status != http.StatusServiceUnavailable {
+		return false
+	}
+	if strings.EqualFold(header.Get("cf-mitigated"), "challenge") {
+		return true
+	}
+	return strings.Contains(body, "challenges.cloudflare.com") && strings.Contains(body, "<title>Just a moment")
 }
 
 // fetch is getPage for callers that only want a 200 body.
@@ -531,11 +618,7 @@ func (c *Client) Browse(ctx context.Context, q Query) (*Listing, error) {
 		return nil, fmt.Errorf("unknown site %q", q.Site)
 	}
 	if !c.SignedIn(q.Site) {
-		if q.Site == F95 && c.renewF95(ctx) == nil {
-			// A stored login is as good as a session.
-		} else {
-			return nil, ErrSignedOut
-		}
+		return nil, ErrSignedOut
 	}
 	page := q.Page
 	if page < 1 {
@@ -587,32 +670,46 @@ func (c *Client) Detail(ctx context.Context, item Item) (Item, bool) {
 // page that cannot be read comes back Degraded with no sources rather than as an
 // error, so a caller can still offer "open the page yourself".
 func (c *Client) Report(ctx context.Context, site Site, pageURL string) *Report {
-	if !strings.HasPrefix(strings.ToLower(pageURL), "http") {
-		return &Report{URL: pageURL, Degraded: true}
-	}
-	var rep *Report
-	var err error
-	switch site {
-	case F95:
-		rep, err = c.reportF95(ctx, pageURL)
-	default:
-		rep, err = c.reportItch(ctx, pageURL)
-	}
+	rep, err := c.report(ctx, site, pageURL)
 	if err != nil {
-		return &Report{URL: pageURL, Degraded: true}
+		out := &Report{URL: pageURL, Degraded: true}
+		if errors.Is(err, ErrChallenged) || errors.Is(err, ErrSignedOut) || errors.Is(err, ErrBrowserGone) {
+			out.Reason = err.Error()
+		}
+		return out
 	}
 	return rep
 }
 
+func (c *Client) report(ctx context.Context, site Site, pageURL string) (*Report, error) {
+	if !strings.HasPrefix(strings.ToLower(pageURL), "http") {
+		return nil, errors.New("not a web page")
+	}
+	if site == F95 {
+		return c.reportF95(ctx, pageURL)
+	}
+	return c.reportItch(ctx, pageURL)
+}
+
 // Latest is just the version and changelog — what an update check needs. Unlike
 // Report it fails loudly, because "could not read the page" and "no new version"
-// must not look alike to a sweep.
+// must not look alike to a sweep. A failure the user can fix says how.
 func (c *Client) Latest(ctx context.Context, site Site, pageURL string) (version, changelog string, err error) {
-	rep := c.Report(ctx, site, pageURL)
-	if rep.Degraded {
+	rep, err := c.report(ctx, site, pageURL)
+	if err != nil {
+		if errors.Is(err, ErrChallenged) || errors.Is(err, ErrSignedOut) || errors.Is(err, ErrBrowserGone) {
+			return "", "", err
+		}
 		return "", "", fmt.Errorf("%s would not serve the game page", site.Label())
 	}
 	return rep.Version, rep.Changelog, nil
+}
+
+// ReadF95 reads an F95zone thread the way every other read here does — through the
+// browser when there is one — for the scraper, so a pasted thread URL is read through
+// the same door as a browsed one.
+func (c *Client) ReadF95(ctx context.Context, threadURL string) (string, error) {
+	return c.fetchF95Thread(ctx, threadURL)
 }
 
 // RemoteFromURL recognises a game page on one of the two sites and names it: the

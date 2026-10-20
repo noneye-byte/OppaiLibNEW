@@ -78,7 +78,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
@@ -110,9 +109,10 @@ import java.util.Date
  * downloaded by the time you are back at the PC.
  *
  * Everything here goes through the server and nothing reaches either site from the
- * handset. That is not only privacy: the server is the thing that holds a session on
- * F95zone, and a phone that fetched the thread itself would be a guest — which on
- * F95zone means no download links and, for a good share of threads, no thread. The same
+ * handset. That is not only privacy: a phone that fetched a thread itself would be a
+ * guest — and F95zone now shows a guest nothing at all, only a "Verify you are human"
+ * check. The server reads F95zone through Launchy, the browser on the PC that a person
+ * has signed in and ticked the box in, so the phone sees what that browser sees. The same
  * is true of a card's artwork, which comes back through the scrape proxy rather than
  * from the site's CDN.
  *
@@ -137,10 +137,8 @@ fun GameBrowseScreen(
     var sites by remember { mutableStateOf<GameSitesResponse?>(null) }
     var sitesError by remember { mutableStateOf("") }
 
-    // The sign-in form. None of it is kept: a password typed here goes to the server,
-    // which stores it, and is dropped from this screen the moment the call returns.
-    var username by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
+    // The sign-in form: itch.io's pasted cookie, which goes to the server and is
+    // dropped from this screen the moment the call returns.
     var cookie by remember { mutableStateOf("") }
     var signingIn by remember { mutableStateOf(false) }
     var signInError by remember { mutableStateOf("") }
@@ -280,15 +278,9 @@ fun GameBrowseScreen(
         signingIn = true
         signInError = ""
         scope.launch {
-            val body = if (cookie.isNotBlank()) {
-                GameSiteLoginRequest(cookie = cookie.trim())
-            } else {
-                GameSiteLoginRequest(username = username.trim(), password = password)
-            }
-            runCatching { repo.api.gameSiteLogin(site, body) }
+            runCatching { repo.api.gameSiteLogin(site, GameSiteLoginRequest(cookie = cookie.trim())) }
                 .onSuccess { acct ->
                     sites = sites?.let { s -> s.copy(sites = s.sites.map { if (it.site == site) acct else it }) }
-                    password = ""
                     cookie = ""
                 }
                 .onFailure { signInError = it.serverMessage("That sign-in was refused") }
@@ -414,15 +406,13 @@ fun GameBrowseScreen(
                 account?.signedIn != true -> SignInFace(
                     site = face,
                     label = account?.label ?: face,
-                    username = username,
-                    password = password,
+                    note = account?.note.orEmpty(),
                     cookie = cookie,
                     busy = signingIn,
                     error = signInError,
-                    onUsername = { username = it },
-                    onPassword = { password = it },
                     onCookie = { cookie = it },
                     onSubmit = { keyboard?.hide(); signIn() },
+                    onRetry = { scope.launch { loadSites() } },
                 )
 
                 else -> {
@@ -544,81 +534,68 @@ private fun Centered(content: @Composable () -> Unit) {
 /**
  * The wall in front of a catalogue that has not been signed in to.
  *
- * The two sites take different things and the difference is not cosmetic. F95zone takes
- * an account; itch.io cannot, because its login page sits behind a browser check no
- * server can pass, so it is signed in by pasting a session cookie from a browser that
- * already is. F95zone accepts a cookie too, which is the way in for an account with
- * two-step verification.
+ * Neither site can be signed in to from a server any more, and the two are walled
+ * differently. itch.io's login page sits behind a browser check, so it is signed in by
+ * pasting a session cookie from a browser that already is (or by Launchy handing its
+ * own over). F95zone put the check in front of every page, so the server reads it
+ * through Launchy outright: there is nothing to type here, only what the server says is
+ * missing — Launchy offline, signed out, or waiting on someone to press Verify.
  */
 @Composable
 private fun SignInFace(
     site: String,
     label: String,
-    username: String,
-    password: String,
+    note: String,
     cookie: String,
     busy: Boolean,
     error: String,
-    onUsername: (String) -> Unit,
-    onPassword: (String) -> Unit,
     onCookie: (String) -> Unit,
     onSubmit: () -> Unit,
+    onRetry: () -> Unit,
 ) {
-    val itch = site == FACE_ITCH
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        if (site == FACE_F95) {
+            Text("F95zone is read through Launchy", style = MaterialTheme.typography.titleLarge)
+            Text(
+                "F95zone now asks every visitor to prove they are a person before it shows any page, which no " +
+                    "server can do. Launchy on your PC is a real browser: sign in to F95zone there (Settings → " +
+                    "Accounts) and keep Launchy running, and this tab reads F95zone through it.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (note.isNotEmpty()) {
+                Text(note, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
+            }
+            OutlinedButton(onClick = onRetry) { Text("Check again") }
+            return@Column
+        }
         Text("Sign in to $label", style = MaterialTheme.typography.titleLarge)
         Text(
-            if (itch) {
-                "itch.io only shows adult games to an account that has asked for them, and its login page " +
-                    "sits behind a browser check a server cannot pass. Sign in with the session cookie from a " +
-                    "browser where you already are: open itch.io, then developer tools → Application → Cookies, " +
-                    "and copy the value of the itchio cookie. If Launchy is paired and signed in, it hands its " +
-                    "own sign-in over without any of this."
-            } else {
-                "F95zone hides most game threads and every download link from guests. The login is kept on the " +
-                    "server and used only for reading the site."
-            },
+            "itch.io only shows adult games to an account that has asked for them, and its login page " +
+                "sits behind a browser check a server cannot pass. Sign in with the session cookie from a " +
+                "browser where you already are: open itch.io, then developer tools → Application → Cookies, " +
+                "and copy the value of the itchio cookie. If Launchy is linked and signed in, it hands its " +
+                "own sign-in over without any of this.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        if (!itch) {
-            OutlinedTextField(
-                value = username,
-                onValueChange = onUsername,
-                label = { Text("Username") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            OutlinedTextField(
-                value = password,
-                onValueChange = onPassword,
-                label = { Text("Password") },
-                singleLine = true,
-                visualTransformation = PasswordVisualTransformation(),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
-                keyboardActions = KeyboardActions(onGo = { onSubmit() }),
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Text(
-                "or, for an account with two-step verification",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+        if (note.isNotEmpty()) {
+            Text(note, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
         }
         OutlinedTextField(
             value = cookie,
             onValueChange = onCookie,
-            label = { Text(if (itch) "itchio cookie" else "xf_user cookie") },
-            placeholder = { Text(if (itch) "itchio=…  (or just the value)" else "xf_user=…; xf_session=…") },
+            label = { Text("itchio cookie") },
+            placeholder = { Text("itchio=…  (or just the value)") },
             minLines = 2,
             modifier = Modifier.fillMaxWidth(),
         )
         Button(
             onClick = onSubmit,
-            enabled = !busy && (cookie.isNotBlank() || (!itch && username.isNotBlank() && password.isNotEmpty())),
+            enabled = !busy && cookie.isNotBlank(),
         ) {
             Icon(Icons.AutoMirrored.Filled.Login, contentDescription = null, modifier = Modifier.size(18.dp))
             Text(if (busy) "  Signing in…" else "  Sign in")

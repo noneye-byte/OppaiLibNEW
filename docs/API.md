@@ -304,10 +304,10 @@ where their cookies and the file hosts' captchas already are.
 
 | Method | Path | Notes |
 |--------|------|-------|
-| GET | `/api/games/sites` | → `{sites: [Account], sorts, itchNsfw}` — both sites' sign-in state |
-| POST | `/api/games/sites/{site}/login` | `{username, password}` or `{cookie}` → `Account`; `401` when the site refuses |
-| POST | `/api/games/sites/{site}/logout` | drops the session; for F95zone also forgets the stored login |
-| GET | `/api/games/browse?site=&q=&sort=&page=` | one page → `{items, page, hasMore}`; `401` when the site is not signed in |
+| GET | `/api/games/sites` | → `{sites: [Account], sorts, itchNsfw}` — both sites' sign-in state. `Account` is `{site, label, signedIn, user?, password, via?, note?}`: `via` is `"launchy"` for a site read through the launcher, `note` a sentence on what is missing |
+| POST | `/api/games/sites/{site}/login` | `{cookie}` → `Account`; `502` when the site refuses the cookie. A `{username, password}` body answers `409` with directions — neither site can be signed in to with a password from a server any more |
+| POST | `/api/games/sites/{site}/logout` | drops a pasted cookie; for F95zone also forgets the old stored login |
+| GET | `/api/games/browse?site=&q=&sort=&page=` | one page → `{items, page, hasMore}`; `409` when the site is not signed in, or wants a person at the PC to press Verify |
 | POST | `/api/games/browse/detail` | `{item}` → `{item, degraded}` — the result's own page, read on demand |
 | POST | `/api/games/browse/add` | `{url, id?, version?}` → `{id, created, media, remote}` |
 | GET | `/api/games/updates` | → `{items, tracked, sweep}` — every game whose site has moved on |
@@ -316,15 +316,24 @@ where their cookies and the file hosts' captchas already are.
 **A site is browsed signed in or not at all.** itch.io only serves its adult listings
 to an account that has asked for them and F95zone hides threads and download links
 from guests, so browsing signed out would quietly show a fraction of what is there
-and call it the catalogue. `401` with a message is the honest answer.
+and call it the catalogue. `409` with a message is the honest answer — never `401`,
+which the clients read as "your OppaiLib session ended".
 
-The two sign-ins are not alike. F95zone takes a username and password (the same
-login the scraper uses for members-only threads, shared with it). **itch.io cannot**:
-its login page sits behind a Cloudflare check that only a real browser passes, so it
-is signed in by handing over the `itchio` session cookie — pasted from a browser, or
-pushed by Launchy, which signs in through itch's own page in a real window. Either
-site also accepts a cookie, which is the way in for an F95zone account with two-step
-verification. Cookies are stored like the F95 password: write-only over the API.
+**Neither site can be signed in to from the server.** itch.io's login page sits
+behind a Cloudflare check that only a real browser passes, so it is signed in by
+handing over the `itchio` session cookie — pasted from a browser, or pushed by Launchy,
+which signs in through itch's own page in a real window. Cookies are write-only over
+the API.
+
+**F95zone is read through Launchy.** Since October 2026 every F95zone page, its login
+included, sits behind a "Verify you are human" check. The server does not try to pass
+it; it borrows the launcher's browser, where a person signed in and ticked the box.
+Each F95zone read — listing, thread, update check, a pasted thread URL in the scraper
+— is queued down the launcher's long poll as a `fetch` and the page comes back as the
+command's outcome (see below). F95zone's `Account` is therefore the launcher's own
+report of its sign-in, with `via: "launchy"`; with no launcher connected it is signed
+out and its `note` says so. A launcher whose clearance lapsed reports
+`challenged`, and every read says to press Verify on the PC.
 
 `add` files the game away through the same import a pasted URL uses — cover art,
 description, screenshots and tags — and records the page as where it came from. A
@@ -336,18 +345,26 @@ a browse page mark what you have without the client holding the library.
 
 ## Launchy, the desktop launcher
 
-Launchy is the client in the pairing: it holds an ordinary session, syncs on its own
-schedule, and long-polls for launch requests. The server never reaches out to the PC,
-so nothing has to be configured or opened here and the launcher works from behind any
-router.
+Launchy is the client in the pairing: it holds a key, syncs on its own schedule,
+reports what it is doing, and long-polls for requests. The server never reaches out
+to the PC, so nothing has to be configured or opened here and the launcher works from
+behind any router.
 
 | Method | Path | Notes |
 |--------|------|-------|
-| GET | `/api/launchy` | → `{connected, name, lastSeen, running, pending}` |
+| POST | `/api/launchy/pairing` | session only → `201 {code, expiresAt}` — a one-time code, good for ten minutes |
+| POST | `/api/launchy/pair` | **unauthenticated.** `{code, name}` → `201 {key, id, user}`; `403` for a spent, expired or unknown code |
+| GET | `/api/launchy/keys` | session only → `{items: [{id, name, hint, createdAt, lastUsedAt?}]}` |
+| DELETE | `/api/launchy/keys/{id}` | session only — revokes one |
+| DELETE | `/api/launchy/key` | the calling key revokes itself (Launchy's Unlink); `400` from a session |
+| GET | `/api/launchy` | → `{connected, name, lastSeen, running, pending, version?, capabilities, accounts, sessions, downloads, sync, reportedAt?}` |
+| PUT | `/api/launchy/state` | the launcher's report: `{version, capabilities, accounts: [{site, signedIn, user, challenged}], sessions: [{gameId, title, startedAt}], downloads: [{id, gameId, title, label, status, message, startedAt, finishedAt}], sync: {running, lastSync, lastError}}` |
 | GET | `/api/launchy/commands?wait=&name=&running=` | the launcher's long poll; `wait` is capped at 25 s. Its arrival is the heartbeat |
-| POST | `/api/launchy/commands/{cmd}` | `{ok, error}` — how a request went |
-| POST | `/api/launchy/launch` | `{gameId}` → `202` the queued command, or `409` when the launcher is not connected |
-| GET | `/api/launchy/launch/{cmd}` | how that request went |
+| POST | `/api/launchy/commands/{cmd}` | `{ok, error, message, status?, url?, body?, challenged?}` — how a request went; a `fetch` carries its page |
+| POST | `/api/launchy/requests` | `{action, gameId?, saveId?, downloadId?, source?}` → `202` the queued command |
+| GET | `/api/launchy/requests/{cmd}` | how that request went (`status`, and `message` or `error`) |
+| POST | `/api/launchy/launch` | `{gameId}` — the `launch` request, kept for the phone |
+| GET | `/api/launchy/launch/{cmd}` | the same as `/requests/{cmd}` |
 | GET | `/api/launchy/games` | every game with its remote and launcher state, for the sync |
 | POST | `/api/launchy/games` | multipart `meta` + optional `cover` — a launcher entry becomes a library game |
 | PUT | `/api/launchy/games/{id}` | `meta` — the launcher's state, and any metadata it changed |
@@ -362,9 +379,24 @@ the scraper's tags are not the launcher's to take away. A game with no cover art
 the launcher gets a placeholder drawn from its id, because a game needs a blob and
 two placeholders must not collide on the store's hash.
 
-A launch is refused rather than queued when no launcher is polling: a request that
-sits until a launcher appears hours later and starts a game unbidden is worse than
-an error.
+**Linking.** The launcher signs in with a key, not a session: a session is a
+person's, ends on every restart and idles out, and a launcher holding one came
+unpaired by itself. The web's Settings → Launchy makes a pairing code and opens
+`launchy://link?server=<origin>&code=<code>`; Launchy asks the person at the PC to
+confirm, then trades the code at `/pair` for a key. The key never appears in a link.
+Only its SHA-256 is stored. A key reaches `/api/launchy/*` (minus the key and pairing
+routes), a game's `thumb` and `saves`, and `/api/games/sites/{site}/login` — anything
+else answers `403`. Linking a PC under the same name again replaces its old key.
+
+**Requests.** `action` is one of `launch`, `stop`, `sync`, `backup-saves`,
+`restore-save` (needs `saveId`, refused with `409` while the game runs), `download`
+(needs `source` with an http(s) `url`; the game need not be in Launchy) and
+`cancel-download` (needs `downloadId`). Every one is refused with `409` when no launcher
+is polling — a request that sits until a launcher appears hours later and starts a game
+unbidden is worse than an error — and every one but `launch` also when the launcher
+does not list its capability (`stop`, `sync`, `saves`, `download`), which is how an
+older launcher is never sent something it cannot do. The server's own `fetch`
+requests ride the same queue, are not counted in `pending`, and cannot be read back.
 
 ## Settings
 

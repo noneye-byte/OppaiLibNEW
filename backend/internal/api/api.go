@@ -171,6 +171,9 @@ type Server struct {
 	// The desktop launcher's connection: when it last checked in, what it is running,
 	// and the launch requests waiting for it. See handlers_launchy.go.
 	launchy *launchyRuntime
+	// One-time codes a launchy://link link carries, waiting to be traded for a key.
+	// See api_keys.go.
+	launchyPairings pairings
 }
 
 const (
@@ -267,6 +270,13 @@ func NewServer(cfg *config.Config, database *db.DB, store *storage.Store, sc *sc
 		base = sc.HTTPClient()
 	}
 	s.games = gamesites.New(base, cfg.ScrapeUserAgent)
+	// F95zone checks every visitor for a person at a real browser, so the server reads
+	// it through Launchy's, which has one. The scraper reads it the same way, so a
+	// pasted thread URL and a browsed result reach the site through one door.
+	s.games.SetBrowser(launchyBrowser{l: s.launchy})
+	if sc != nil {
+		sc.SetF95Reader(s.games.ReadF95)
+	}
 	if set != nil {
 		s.applyGameSiteSettings(set.Get())
 	}
@@ -685,10 +695,21 @@ func (s *Server) Handler() http.Handler {
 	// The desktop launcher's pairing: its sync, its long poll for launch requests,
 	// and the button every other client gets because of it. See handlers_launchy.go.
 	mux.HandleFunc("GET /api/launchy", s.requireAuth(s.handleLaunchyStatus))
+	mux.HandleFunc("PUT /api/launchy/state", s.requireAuth(s.handleLaunchyReport))
 	mux.HandleFunc("GET /api/launchy/commands", s.requireAuth(s.handleLaunchyCommands))
 	mux.HandleFunc("POST /api/launchy/commands/{cmd}", s.requireAuth(s.handleLaunchyCommandDone))
 	mux.HandleFunc("POST /api/launchy/launch", s.requireAuth(s.handleLaunchyLaunch))
 	mux.HandleFunc("GET /api/launchy/launch/{cmd}", s.requireAuth(s.handleLaunchyLaunchStatus))
+	mux.HandleFunc("POST /api/launchy/requests", s.requireAuth(s.handleLaunchyRequest))
+	mux.HandleFunc("GET /api/launchy/requests/{cmd}", s.requireAuth(s.handleLaunchyLaunchStatus))
+	// Linking: a key instead of a session, handed over through a one-time code.
+	// /pair is the one unauthenticated route here — the code is the credential.
+	// See api_keys.go.
+	mux.HandleFunc("POST /api/launchy/pairing", s.requireAuth(s.handleLaunchyPairing))
+	mux.HandleFunc("POST /api/launchy/pair", s.handleLaunchyPair)
+	mux.HandleFunc("GET /api/launchy/keys", s.requireAuth(s.handleListLaunchyKeys))
+	mux.HandleFunc("DELETE /api/launchy/keys/{id}", s.requireAuth(s.handleRevokeLaunchyKey))
+	mux.HandleFunc("DELETE /api/launchy/key", s.requireAuth(s.handleUnlinkLaunchy))
 	mux.HandleFunc("GET /api/launchy/games", s.requireAuth(s.handleLaunchyGames))
 	mux.HandleFunc("POST /api/launchy/games", s.requireAuth(s.handleLaunchyCreateGame))
 	mux.HandleFunc("PUT /api/launchy/games/{id}", s.requireAuth(s.handleLaunchySyncGame))
@@ -793,6 +814,12 @@ func (s *Server) requireSession(next http.HandlerFunc, activity bool) http.Handl
 		token := bearer(r)
 		if token == "" {
 			writeErr(w, http.StatusUnauthorized, "missing token")
+			return
+		}
+		// A program's key, not a person's session: no idle rule, and only the routes
+		// its scope names. See api_keys.go.
+		if strings.HasPrefix(token, apiKeyPrefix) {
+			s.serveWithKey(w, r, token, next)
 			return
 		}
 		user, err := s.db.SessionUser(r.Context(), token, s.cfg.WebIdleTimeout)

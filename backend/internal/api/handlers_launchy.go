@@ -3,20 +3,14 @@ package api
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
-	"database/sql"
-	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"image"
 	"image/color"
 	"image/png"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/youruser/oppailib/internal/crypto"
@@ -25,261 +19,16 @@ import (
 	"github.com/youruser/oppailib/internal/models"
 )
 
-// The pairing with Launchy, the desktop game launcher.
+// The pairing with Launchy, the desktop game launcher: the library sync.
 //
-//	GET    /api/launchy                       is the launcher connected, and what is it running
-//	GET    /api/launchy/commands?wait=&running=  the launcher's long poll: check in, collect launch requests
-//	POST   /api/launchy/commands/{cmd}        {ok, error}  the launcher reports a request's outcome
-//	POST   /api/launchy/launch                {gameId}  ask the launcher to start a game
-//	GET    /api/launchy/launch/{cmd}          how that request went
 //	GET    /api/launchy/games                 every game, with its remote and launcher state, for the sync
 //	POST   /api/launchy/games                 multipart meta + cover: a launcher entry becomes a library game
 //	PUT    /api/launchy/games/{id}            the launcher's state and any metadata it changed
 //	DELETE /api/launchy/games/{id}            unpair
 //
-// The launcher is the client throughout. It holds an ordinary session, syncs on
-// its own schedule, and long-polls for launch requests; the server never reaches
-// out to it, so there is nothing to configure on this side and the launcher works
-// from behind any NAT. A launch request from the web or the phone is queued here
-// and picked up on the next poll, which is at most a few seconds away while the
-// launcher is up — and answered with "Launchy is not connected" when it is not,
-// rather than queued into a void.
-
-// launchyStale is how long after its last poll the launcher counts as gone. A poll
-// waits up to 25 seconds, so a healthy launcher is never more than ~30 away.
-const launchyStale = 75 * time.Second
-
-// launchCommand is one request queued for the launcher.
-type launchCommand struct {
-	ID        string `json:"id"`
-	Action    string `json:"action"`
-	GameID    int64  `json:"gameId"`
-	Status    string `json:"status"` // pending|sent|done|failed
-	Error     string `json:"error,omitempty"`
-	CreatedAt int64  `json:"createdAt"`
-	DoneAt    int64  `json:"doneAt,omitempty"`
-}
-
-type launchyRuntime struct {
-	mu       sync.Mutex
-	name     string
-	lastSeen time.Time
-	running  map[int64]bool
-	queue    []*launchCommand
-	// Every command by id, so a client can ask how its request went. Swept of
-	// anything older than a few minutes on each new request.
-	commands map[string]*launchCommand
-	// wake is closed and replaced whenever a command is queued, so a poll blocked
-	// waiting can return at once.
-	wake chan struct{}
-}
-
-func newLaunchyRuntime() *launchyRuntime {
-	return &launchyRuntime{running: map[int64]bool{}, commands: map[string]*launchCommand{}, wake: make(chan struct{})}
-}
-
-func (l *launchyRuntime) connected() bool {
-	return !l.lastSeen.IsZero() && time.Since(l.lastSeen) < launchyStale
-}
-
-// launchyStatus is what every client sees.
-type launchyStatus struct {
-	Connected bool    `json:"connected"`
-	Name      string  `json:"name,omitempty"`
-	LastSeen  int64   `json:"lastSeen,omitempty"`
-	Running   []int64 `json:"running"`
-	Pending   int     `json:"pending"`
-}
-
-func (l *launchyRuntime) status() launchyStatus {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	out := launchyStatus{Connected: l.connected(), Name: l.name, Running: []int64{}, Pending: len(l.queue)}
-	if !l.lastSeen.IsZero() {
-		out.LastSeen = l.lastSeen.Unix()
-	}
-	for id := range l.running {
-		out.Running = append(out.Running, id)
-	}
-	return out
-}
-
-// checkIn records a poll from the launcher: its name and what it is running.
-func (l *launchyRuntime) checkIn(name string, running []int64) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if name != "" {
-		l.name = name
-	}
-	l.lastSeen = time.Now()
-	l.running = map[int64]bool{}
-	for _, id := range running {
-		l.running[id] = true
-	}
-}
-
-// enqueue adds a command and wakes any waiting poll.
-func (l *launchyRuntime) enqueue(action string, gameID int64) *launchCommand {
-	b := make([]byte, 8)
-	_, _ = rand.Read(b)
-	cmd := &launchCommand{ID: hex.EncodeToString(b), Action: action, GameID: gameID, Status: "pending", CreatedAt: time.Now().Unix()}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	for id, old := range l.commands {
-		if time.Since(time.Unix(old.CreatedAt, 0)) > 10*time.Minute {
-			delete(l.commands, id)
-		}
-	}
-	l.commands[cmd.ID] = cmd
-	l.queue = append(l.queue, cmd)
-	close(l.wake)
-	l.wake = make(chan struct{})
-	return cmd
-}
-
-// take hands every queued command to the launcher and marks them sent.
-func (l *launchyRuntime) take() []*launchCommand {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	out := l.queue
-	l.queue = nil
-	for _, cmd := range out {
-		cmd.Status = "sent"
-	}
-	if out == nil {
-		out = []*launchCommand{}
-	}
-	return out
-}
-
-func (l *launchyRuntime) waiter() <-chan struct{} {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.wake
-}
-
-func (l *launchyRuntime) finish(id string, ok bool, errText string) *launchCommand {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	cmd := l.commands[id]
-	if cmd == nil {
-		return nil
-	}
-	cmd.DoneAt = time.Now().Unix()
-	if ok {
-		cmd.Status, cmd.Error = "done", ""
-	} else {
-		cmd.Status, cmd.Error = "failed", errText
-	}
-	return cmd
-}
-
-func (l *launchyRuntime) get(id string) *launchCommand {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.commands[id]
-}
-
-func (s *Server) handleLaunchyStatus(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, s.launchy.status())
-}
-
-// handleLaunchyCommands is the launcher's long poll. It doubles as the heartbeat:
-// the query carries what the launcher is running, and its arrival is what makes
-// the launcher "connected".
-func (s *Server) handleLaunchyCommands(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-	var running []int64
-	for _, part := range strings.Split(q.Get("running"), ",") {
-		if id, err := strconv.ParseInt(strings.TrimSpace(part), 10, 64); err == nil {
-			running = append(running, id)
-		}
-	}
-	s.launchy.checkIn(strings.TrimSpace(q.Get("name")), running)
-
-	wait, _ := strconv.Atoi(q.Get("wait"))
-	if wait < 0 {
-		wait = 0
-	}
-	if wait > 25 {
-		wait = 25
-	}
-	deadline := time.After(time.Duration(wait) * time.Second)
-	for {
-		cmds := s.launchy.take()
-		if len(cmds) > 0 || wait == 0 {
-			writeJSON(w, http.StatusOK, map[string]any{"commands": cmds})
-			return
-		}
-		select {
-		case <-s.launchy.waiter():
-		case <-deadline:
-			writeJSON(w, http.StatusOK, map[string]any{"commands": []*launchCommand{}})
-			return
-		case <-r.Context().Done():
-			return
-		}
-	}
-}
-
-func (s *Server) handleLaunchyCommandDone(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		OK    bool   `json:"ok"`
-		Error string `json:"error"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid body")
-		return
-	}
-	cmd := s.launchy.finish(r.PathValue("cmd"), req.OK, req.Error)
-	if cmd == nil {
-		writeErr(w, http.StatusNotFound, "no such request")
-		return
-	}
-	writeJSON(w, http.StatusOK, cmd)
-}
-
-// handleLaunchyLaunch asks the launcher to start a game. Refused outright when
-// the launcher is not connected: a request that sits in a queue until a launcher
-// shows up hours later and starts a game unbidden is worse than an error.
-func (s *Server) handleLaunchyLaunch(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		GameID int64 `json:"gameId"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.GameID <= 0 {
-		writeErr(w, http.StatusBadRequest, "need a gameId")
-		return
-	}
-	if !s.launchy.status().Connected {
-		writeErr(w, http.StatusConflict, "Launchy is not connected")
-		return
-	}
-	link, err := s.db.GetGameLaunchy(r.Context(), req.GameID)
-	if errors.Is(err, sql.ErrNoRows) {
-		writeErr(w, http.StatusNotFound, "this game is not in Launchy")
-		return
-	}
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "db error")
-		return
-	}
-	if !link.Installed {
-		writeErr(w, http.StatusConflict, "this game is in Launchy but has no executable set")
-		return
-	}
-	writeJSON(w, http.StatusAccepted, s.launchy.enqueue("launch", req.GameID))
-}
-
-func (s *Server) handleLaunchyLaunchStatus(w http.ResponseWriter, r *http.Request) {
-	cmd := s.launchy.get(r.PathValue("cmd"))
-	if cmd == nil {
-		writeErr(w, http.StatusNotFound, "no such request")
-		return
-	}
-	writeJSON(w, http.StatusOK, cmd)
-}
-
-/* ------------------------------------------------------------------ the sync */
+// The connection itself — the long poll, the requests it carries, and the
+// launcher's report about itself — is in launchy_control.go; how the launcher
+// signs in is in api_keys.go.
 
 func toLaunchyLink(row *db.GameLaunchyRow) models.GameLaunchy {
 	return models.GameLaunchy{

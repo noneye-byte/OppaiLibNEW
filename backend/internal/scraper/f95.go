@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/cookiejar"
 	"net/url"
 	"regexp"
 	"strings"
@@ -21,19 +20,21 @@ import (
 // third-party file hosts that rotate and expire, so the thread is the durable
 // place to get it).
 //
-// Most game threads are members-only. The parser signs in with a stored F95
-// account (see SetCredentials) to fetch those; without one, a gated thread returns
-// an actionable error rather than a wall of login HTML scraped as if it were the
-// game. It's a DirectParser because that sign-in and the per-session cookies it
-// yields are its own to manage — the engine's stock fetch carries no cookies.
+// Every page of F95zone sits behind a Cloudflare check that only a person at a real
+// browser passes, so the parser does not fetch threads itself: it reads them through
+// an F95Reader the server supplies (see SetReader), which goes through the paired
+// launcher's browser — the same road the Games tab's reads take. It used to sign in
+// with a stored F95 password and fetch the thread directly, which stopped working the
+// day the check went up over the login page. Without a reader it tries as a guest and
+// says plainly what was in the way. It's a DirectParser because the fetch is its own
+// to make — the engine's stock fetch would hit the same check.
 type F95Parser struct {
-	mu       sync.Mutex
-	username string
-	password string
-	// jar holds the logged-in session once we have one. Reused across scrapes and
-	// rebuilt on a credential change or when a thread turns out still-walled.
-	jar http.CookieJar
+	mu   sync.Mutex
+	read F95Reader
 }
+
+// F95Reader reads one F95zone thread and returns its HTML.
+type F95Reader func(ctx context.Context, threadURL string) (string, error)
 
 func (*F95Parser) Name() string { return "f95zone" }
 
@@ -51,24 +52,20 @@ func (*F95Parser) Parse(doc *goquery.Document, u *url.URL) (*models.ScrapeResult
 	return parseF95Thread(doc, u), nil
 }
 
-// SetCredentials updates the stored F95 login. A change drops any cached session,
-// so the next scrape signs in afresh.
-func (p *F95Parser) SetCredentials(username, password string) {
+// SetReader sets how threads are fetched. See F95Parser.
+func (p *F95Parser) SetReader(read F95Reader) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
-	if username != p.username || password != p.password {
-		p.username, p.password, p.jar = username, password, nil
-	}
+	p.read = read
+	p.mu.Unlock()
 }
 
-func (p *F95Parser) creds() (string, string) {
+func (p *F95Parser) reader() F95Reader {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.username, p.password
+	return p.read
 }
 
-// ScrapeDirect fetches the thread (signing in first if it needs an account) and
-// parses it into a game result.
+// ScrapeDirect fetches the thread and parses it into a game result.
 func (p *F95Parser) ScrapeDirect(ctx context.Context, client *http.Client, ua string, u *url.URL) (*models.ScrapeResult, error) {
 	doc, err := p.fetchThread(ctx, client, ua, u)
 	if err != nil {
@@ -77,48 +74,49 @@ func (p *F95Parser) ScrapeDirect(ctx context.Context, client *http.Client, ua st
 	return parseF95Thread(doc, u), nil
 }
 
-// fetchThread returns the thread document, logging in and retrying once if the
-// first fetch lands on the login wall.
+// fetchThread returns the thread document, through the reader when there is one.
 func (p *F95Parser) fetchThread(ctx context.Context, client *http.Client, ua string, u *url.URL) (*goquery.Document, error) {
+	if read := p.reader(); read != nil {
+		page, err := read(ctx, u.String())
+		if err != nil {
+			return nil, fmt.Errorf("f95zone: %w", err)
+		}
+		doc, err := goquery.NewDocumentFromReader(strings.NewReader(page))
+		if err != nil {
+			return nil, err
+		}
+		if isLoginWall(u, doc) {
+			return nil, fmt.Errorf("f95zone: this thread needs an account — sign in to F95zone in Launchy")
+		}
+		return doc, nil
+	}
 	doc, walled, err := p.get(ctx, client, ua, u.String())
 	if err != nil {
 		return nil, err
 	}
-	if !walled {
-		return doc, nil
-	}
-
-	user, pass := p.creds()
-	if user == "" || pass == "" {
-		return nil, fmt.Errorf("f95zone: this thread needs an account — add your F95 login in Settings")
-	}
-	if err := p.login(ctx, client, ua); err != nil {
-		return nil, fmt.Errorf("f95zone: sign-in failed: %w", err)
-	}
-	doc, walled, err = p.get(ctx, client, ua, u.String())
-	if err != nil {
-		return nil, err
-	}
 	if walled {
-		return nil, fmt.Errorf("f95zone: still signed out after authenticating — check your F95 login in Settings")
+		return nil, fmt.Errorf("f95zone: this thread needs an account — sign in to F95zone in Launchy")
 	}
 	return doc, nil
 }
 
-// get fetches url through the current session and reports whether the page came
-// back as the login wall rather than the thread.
-func (p *F95Parser) get(ctx context.Context, base *http.Client, ua, rawURL string) (*goquery.Document, bool, error) {
+// get fetches url as a guest and reports whether the page came back as the login
+// wall rather than the thread.
+func (p *F95Parser) get(ctx context.Context, client *http.Client, ua, rawURL string) (*goquery.Document, bool, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, false, err
 	}
 	setF95Headers(req, ua)
 
-	resp, err := p.sessionClient(base).Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, false, err
 	}
 	defer resp.Body.Close()
+	if resp.Header.Get("cf-mitigated") == "challenge" {
+		return nil, false, fmt.Errorf("f95zone: the site wants a person at a real browser — sign in to F95zone in Launchy and keep it running, and OppaiLib reads F95zone through it")
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, false, fmt.Errorf("f95zone: %s returned %d", rawURL, resp.StatusCode)
 	}
@@ -128,110 +126,6 @@ func (p *F95Parser) get(ctx context.Context, base *http.Client, ua, rawURL strin
 		return nil, false, err
 	}
 	return doc, isLoginWall(resp.Request.URL, doc), nil
-}
-
-// sessionClient wraps the engine's transport (keeping its SSRF dial guard and
-// timeouts) with the current cookie jar so requests carry the F95 session.
-func (p *F95Parser) sessionClient(base *http.Client) *http.Client {
-	p.mu.Lock()
-	jar := p.jar
-	p.mu.Unlock()
-	return &http.Client{
-		Transport:     base.Transport,
-		Jar:           jar,
-		Timeout:       base.Timeout,
-		CheckRedirect: base.CheckRedirect,
-	}
-}
-
-// login performs the XenForo login flow: read the CSRF token off the login page,
-// post the credentials, and keep the resulting session cookies. It uses its own
-// cookie jar over the engine's transport so cookies set across the login redirect
-// are captured (the engine's stock client keeps no jar).
-func (p *F95Parser) login(ctx context.Context, base *http.Client, ua string) error {
-	user, pass := p.creds()
-	if user == "" || pass == "" {
-		return fmt.Errorf("no credentials configured")
-	}
-
-	jar, err := cookiejar.New(nil)
-	if err != nil {
-		return err
-	}
-	client := &http.Client{
-		Transport:     base.Transport,
-		Jar:           jar,
-		Timeout:       base.Timeout,
-		CheckRedirect: base.CheckRedirect,
-	}
-
-	// 1. The login page carries the CSRF token every XenForo form must echo back.
-	token, err := f95LoginToken(ctx, client, ua)
-	if err != nil {
-		return err
-	}
-
-	// 2. Post the credentials. remember=1 asks for the long-lived cookie, so the
-	//    session outlives a single scrape.
-	form := url.Values{
-		"login":       {user},
-		"password":    {pass},
-		"remember":    {"1"},
-		"_xfToken":    {token},
-		"_xfRedirect": {"https://f95zone.to/"},
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		"https://f95zone.to/login/login", strings.NewReader(form.Encode()))
-	if err != nil {
-		return err
-	}
-	setF95Headers(req, ua)
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Referer", "https://f95zone.to/login/")
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	// Drain and close so the connection is reusable for the thread fetch.
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
-	resp.Body.Close()
-
-	// XenForo sets xf_user (the remember cookie) on a successful sign-in; its
-	// absence means the credentials were rejected (or a challenge got in the way).
-	if !jarHasCookie(jar, "xf_user") {
-		return fmt.Errorf("credentials rejected")
-	}
-	p.mu.Lock()
-	p.jar = jar
-	p.mu.Unlock()
-	return nil
-}
-
-// f95LoginToken GETs the login page and returns its _xfToken CSRF value.
-func f95LoginToken(ctx context.Context, client *http.Client, ua string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://f95zone.to/login/", nil)
-	if err != nil {
-		return "", err
-	}
-	setF95Headers(req, ua)
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	doc, err := goquery.NewDocumentFromReader(io.LimitReader(resp.Body, 4<<20))
-	if err != nil {
-		return "", err
-	}
-	// The token lives in a hidden form input; XenForo also mirrors it on <html
-	// data-csrf>, which is the fallback when the form markup shifts.
-	if v, ok := doc.Find(`input[name="_xfToken"]`).First().Attr("value"); ok && v != "" {
-		return v, nil
-	}
-	if v, ok := doc.Find("html").First().Attr("data-csrf"); ok && v != "" {
-		return v, nil
-	}
-	return "", fmt.Errorf("no CSRF token on login page")
 }
 
 // isLoginWall reports whether a fetched page is the sign-in wall rather than the
@@ -445,22 +339,9 @@ func f95Platforms(haystack string, tags []models.ScrapedTag) []string {
 	return out
 }
 
-// setF95Headers gives a request the browser-like headers F95 (behind Cloudflare)
-// expects to serve a real page rather than a challenge.
+// setF95Headers gives a guest request ordinary browser headers.
 func setF95Headers(req *http.Request, ua string) {
 	req.Header.Set("User-Agent", ua)
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
 	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
-}
-
-// jarHasCookie reports whether the jar holds a cookie of the given name for
-// f95zone.to.
-func jarHasCookie(jar http.CookieJar, name string) bool {
-	u, _ := url.Parse("https://f95zone.to/")
-	for _, c := range jar.Cookies(u) {
-		if c.Name == name {
-			return true
-		}
-	}
-	return false
 }

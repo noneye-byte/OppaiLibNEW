@@ -19,13 +19,15 @@ import { setIncognito } from "../incognito.js";
 import { LIBBY_PROGRESSION_MULTIPLIERS, getProgressionMultiplier, setProgressionMultiplier } from "../libby-meter.js";
 // Registers <oppai-libby-backgrounds>, which the Backgrounds panel renders.
 import "./libby-backgrounds.js";
+// Registers <oppai-launchy-panel>, the Launchy panel.
+import "./launchy-panel.js";
 
 
 /** Libby's sections, drawn by the chat's settings panel through `only`. */
 export type LibbySection = "libby-general" | "libby-model" | "libby-voice" | "libby-pictures";
 
 type SettingsTab =
-  | "appearance" | "libby" | "backgrounds" | "ai" | "scraping" | "library" | "android" | "account" | "storage"
+  | "appearance" | "libby" | "backgrounds" | "ai" | "scraping" | "library" | "android" | "launchy" | "account" | "storage"
   | "diagnostics" | "privacy" | "about";
 
 /**
@@ -42,6 +44,9 @@ const SETTINGS_TABS: { id: SettingsTab; label: string; icon: string; group: stri
   { id: "scraping", label: "Scraping", icon: "travel_explore", group: "Server", server: true },
   { id: "library", label: "Library", icon: "inventory_2", group: "Server" },
   { id: "android", label: "Android app", icon: "android", group: "Server" },
+  // Not a server setting: linking is per user (the key is yours), and the panel is
+  // mostly the PC's live state, which everyone signed in may look at and act on.
+  { id: "launchy", label: "Launchy", icon: "sports_esports", group: "Server" },
   // Admin-only, and hidden rather than disabled for everyone else: the snapshot
   // names every route and every third-party host this install talks to.
   // Not admin-only: "why did my upload fail" is a question the person uploading
@@ -926,6 +931,7 @@ export class OppaiSettings extends LitElement {
       case "scraping": return this.renderScraping();
       case "library": return this.renderLibrary();
       case "android": return this.renderAndroid();
+      case "launchy": return html`<oppai-launchy-panel></oppai-launchy-panel>`;
       case "account": return this.renderAccount();
       case "storage": return this.renderStorage();
       case "diagnostics": return this.renderDiagnostics();
@@ -2252,35 +2258,17 @@ export class OppaiSettings extends LitElement {
                 </div>` : nothing}
               </div>
 
-              <div class="field stack">
+              <div class="field">
                 <div class="field-text">
-                  <div class="field-label">F95zone login</div>
+                  <div class="field-label">F95zone</div>
                   <div class="field-help">
-                    Most f95zone.to game threads are members-only. Sign in with your F95 account and
-                    OppaiLib can fetch those when you scrape a thread URL. Leave blank to scrape only
-                    public threads. Stored on your server; the password is never sent back to this page.
+                    F95zone now asks every visitor to prove they are a person before it shows any
+                    page, which a server cannot do — so OppaiLib reads it through Launchy on your PC,
+                    signed in there. There is no login to enter here any more.
                   </div>
                 </div>
                 <div class="field-control">
-                  <input
-                    type="text"
-                    autocomplete="off"
-                    placeholder="F95 username"
-                    .value=${s.f95Username}
-                    ?disabled=${!this.canEdit}
-                    @change=${(e: Event) =>
-                      this.edit({ f95Username: (e.target as HTMLInputElement).value })}
-                  />
-                </div>
-                <div class="field-control">
-                  <input
-                    type="password"
-                    autocomplete="new-password"
-                    placeholder=${s.f95PasswordSet ? "•••••••• (unchanged)" : "F95 password"}
-                    ?disabled=${!this.canEdit}
-                    @change=${(e: Event) =>
-                      this.edit({ f95Password: (e.target as HTMLInputElement).value })}
-                  />
+                  <button type="button" class="btn-inline" @click=${() => (this.tab = "launchy")}>Launchy settings</button>
                 </div>
               </div>
 
