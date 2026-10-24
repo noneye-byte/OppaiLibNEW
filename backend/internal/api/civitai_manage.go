@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/youruser/oppailib/internal/imagegen"
 )
 
 // Managing the studio's models from the catalogue's side: choosing which of a
@@ -49,7 +51,9 @@ func (s *Server) handleCivitaiCover(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	if err := s.imagegen.UpdateCover(ctx, base, req.Key, data, ct); err != nil {
+	// An A1111 without its models folder cannot be given the file, but the choice
+	// is still kept: the picker shows it from the link (servePickerThumb).
+	if err := s.imagegen.UpdateCover(ctx, base, req.Key, data, ct); err != nil && !errors.Is(err, imagegen.ErrNoModelsDir) {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
 	}
@@ -108,9 +112,14 @@ func (s *Server) handleCivitaiUpdate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "that version has no file to download")
 		return
 	}
-	job, err := s.imagegen.InstallModel(ctx, base, source)
+	spec, err := s.civitaiInstallSpec(ctx, source, m.ID, versionID)
 	if err != nil {
-		writeErr(w, http.StatusBadGateway, err.Error())
+		writeErr(w, civitaiStatus(err), err.Error())
+		return
+	}
+	job, err := s.imagegen.InstallModel(ctx, base, spec)
+	if err != nil {
+		writeErr(w, installErrStatus(err), err.Error())
 		return
 	}
 	if err := s.db.AddCivitaiInstall(ctx, source, m.ID, versionID, req.Key); err != nil {

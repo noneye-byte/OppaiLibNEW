@@ -55,6 +55,8 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -121,11 +123,37 @@ private val civitaiBases = listOf(
  * from the catalogue's side, matched by file hash, with the cover, description and
  * trigger words one tap away, and per model the version to follow, the cover to
  * use, an update to a newer version, and deletion. Installing hands a version to
- * InvokeAI; the server dresses the model once the download completes. The download
- * log stays folded until asked for.
+ * InvokeAI, or for Automatic1111 has the server download it into A1111's models
+ * folder; either way the server dresses the model once the download completes. An
+ * A1111 whose folder is not set can be browsed and linked, not installed into, and the
+ * controls that would need the folder are left out. The download log stays folded
+ * until asked for.
  */
 @Composable
-fun CivitaiTab(repo: Repository, onUsePrompt: (PromptSettings) -> Unit) {
+fun CivitaiTab(
+    repo: Repository,
+    backend: String = "invokeai",
+    canManage: Boolean = true,
+    onUsePrompt: (PromptSettings) -> Unit,
+) {
+    CompositionLocalProvider(LocalCivitaiTarget provides CivitaiTarget(backend, canManage)) {
+        CivitaiTabBody(repo, onUsePrompt)
+    }
+}
+
+/** Which generator the catalogue is installing into, read by the dialogs below
+    without every one of them taking it as an argument. */
+private data class CivitaiTarget(val backend: String, val canManage: Boolean) {
+    val name get() = if (backend == "invokeai") "InvokeAI" else "Automatic1111"
+    val installing get() = if (backend == "invokeai") "InvokeAI is downloading the model; its cover and description follow"
+        else "Downloading into Automatic1111; its cover and description follow"
+}
+
+private val LocalCivitaiTarget = staticCompositionLocalOf { CivitaiTarget("invokeai", true) }
+
+@Composable
+private fun CivitaiTabBody(repo: Repository, onUsePrompt: (PromptSettings) -> Unit) {
+    val target = LocalCivitaiTarget.current
     var page by remember { mutableStateOf(0) }
     var jobs by remember { mutableStateOf<List<InstallJob>>(emptyList()) }
     var jobsOpen by remember { mutableStateOf(false) }
@@ -141,7 +169,7 @@ fun CivitaiTab(repo: Repository, onUsePrompt: (PromptSettings) -> Unit) {
         scope.launch {
             runCatching { repo.api.civitaiInstall(CivitaiInstallRequest(v.downloadUrl, m.id, v.id)) }
                 .onSuccess {
-                    repo.report("InvokeAI is downloading the model; its cover and description follow")
+                    repo.report(target.installing)
                     pollJobs()
                 }
                 .onFailure { repo.report(it.message ?: "Couldn't start the install") }
@@ -531,7 +559,7 @@ private fun CivitaiDetailDialog(
                                 Icon(Icons.Filled.Check, contentDescription = null, Modifier.size(16.dp))
                                 Text("  Installed")
                             }
-                        } else {
+                        } else if (LocalCivitaiTarget.current.canManage) {
                             Button(onClick = { onInstall(m, v); onDismiss() }, enabled = v.downloadUrl.isNotEmpty()) {
                                 Icon(Icons.Filled.Download, contentDescription = null, Modifier.size(16.dp))
                                 Text(if (v.sizeMB > 0) "  Install (${fmtSize(v.sizeMB)})" else "  Install")
@@ -686,7 +714,7 @@ private fun CivitaiPickedDialog(repo: Repository, img: CivitaiImage, onUsePrompt
                             }
                             val facts = buildList {
                                 if (img.model.isNotEmpty()) add("Model ${img.model}")
-                                if (img.sampler.isNotEmpty()) add("Sampler ${img.sampler}${if (settings.sampler.isEmpty()) " (not in InvokeAI)" else ""}")
+                                if (img.sampler.isNotEmpty()) add("Sampler ${img.sampler}${if (settings.sampler.isEmpty()) " (not in the studio's list)" else ""}")
                                 if (settings.steps > 0) add("Steps ${settings.steps}")
                                 if (settings.cfgScale > 0) add("CFG ${settings.cfgScale}")
                                 if (settings.seed > 0) add("Seed ${settings.seed}")
@@ -731,6 +759,7 @@ private fun CivitaiPickedDialog(repo: Repository, img: CivitaiImage, onUsePrompt
  */
 @Composable
 private fun CivitaiAccount(repo: Repository, onUsePrompt: (PromptSettings) -> Unit) {
+    val target = LocalCivitaiTarget.current
     var me by remember { mutableStateOf<CivitaiMe?>(null) }
     var error by remember { mutableStateOf("") }
     var loadingMe by remember { mutableStateOf(true) }
@@ -1027,7 +1056,7 @@ private fun CivitaiAccount(repo: Repository, onUsePrompt: (PromptSettings) -> Un
             onInstall = { mod, v ->
                 scope.launch {
                     runCatching { repo.api.civitaiInstall(CivitaiInstallRequest(v.downloadUrl, mod.id, v.id)) }
-                        .onSuccess { repo.report("InvokeAI is downloading the model; its cover and description follow") }
+                        .onSuccess { repo.report(target.installing) }
                         .onFailure { repo.report(it.message ?: "Couldn't start the install") }
                 }
             },
@@ -1133,6 +1162,7 @@ private fun CivitaiModelCard(repo: Repository, m: CivitaiModel, onClick: () -> U
  */
 @Composable
 private fun CivitaiInstalledList(repo: Repository, onJobs: () -> Unit) {
+    val target = LocalCivitaiTarget.current
     var models by remember { mutableStateOf<List<CivitaiInstalled>>(emptyList()) }
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
@@ -1183,7 +1213,8 @@ private fun CivitaiInstalledList(repo: Repository, onJobs: () -> Unit) {
 
     Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(
-            "Matched to Civitai by file hash. Fetch writes the catalogue's cover, description and trigger words onto the InvokeAI record; tap a model for its version and cover.",
+            if (target.canManage) "${target.name}'s models matched to Civitai by file hash. Fetch writes the catalogue's cover, description and trigger words onto the model; tap one for its version and cover."
+            else "Automatic1111's models matched to Civitai by file hash. Without its models folder set they are linked, not changed: the picker shows Civitai's cover and trigger words.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.weight(1f),
@@ -1256,15 +1287,15 @@ private fun CivitaiInstalledList(repo: Repository, onJobs: () -> Unit) {
                     }
                     if (c != null) {
                         IconButton(onClick = { managing = m }) { Icon(Icons.Filled.Tune, contentDescription = "Version and cover") }
-                    } else {
-                        IconButton(onClick = { deleting = m }) { Icon(Icons.Filled.Delete, contentDescription = "Delete from InvokeAI") }
+                    } else if (target.canManage) {
+                        IconButton(onClick = { deleting = m }) { Icon(Icons.Filled.Delete, contentDescription = "Delete from ${target.name}") }
                     }
                 }
             }
         }
         if (!loading && models.isEmpty() && error.isEmpty()) {
             item {
-                Text("InvokeAI lists no models.", style = MaterialTheme.typography.bodySmall,
+                Text("${target.name} lists no models.", style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp))
             }
         }
@@ -1296,7 +1327,7 @@ private fun CivitaiInstalledList(repo: Repository, onJobs: () -> Unit) {
         AlertDialog(
             onDismissRequest = { deleting = null },
             title = { Text("Delete ${if (m.type == "lora") "LoRA" else "model"}?") },
-            text = { Text("“${m.name}” is removed from InvokeAI, and its file with it.") },
+            text = { Text("“${m.name}” is removed from ${target.name}, and its file with it.") },
             confirmButton = { TextButton(onClick = { delete(m) }) { Text("Delete") } },
             dismissButton = { TextButton(onClick = { deleting = null }) { Text("Cancel") } },
         )
@@ -1362,7 +1393,7 @@ private fun CivitaiManageDialog(
         AlertDialog(
             onDismissRequest = { confirmUpdate = null },
             title = { Text("Update to ${v.name}?") },
-            text = { Text("InvokeAI downloads version ${v.name} of “${c.modelName}”, then the current file is deleted.") },
+            text = { Text("Version ${v.name} of “${c.modelName}” is downloaded into ${LocalCivitaiTarget.current.name}, then the current file is deleted.") },
             confirmButton = { TextButton(onClick = { update(v) }, enabled = !working) { Text("Update") } },
             dismissButton = { TextButton(onClick = { confirmUpdate = null }) { Text("Cancel") } },
         )
@@ -1400,7 +1431,7 @@ private fun CivitaiManageDialog(
                             }
                         }
                         if (v != null && !current) {
-                            Button(onClick = { confirmUpdate = v }, enabled = !working && !busy && v.downloadUrl.isNotEmpty()) {
+                            if (LocalCivitaiTarget.current.canManage) Button(onClick = { confirmUpdate = v }, enabled = !working && !busy && v.downloadUrl.isNotEmpty()) {
                                 Icon(Icons.Filled.Download, contentDescription = null, Modifier.size(16.dp))
                                 Text("  Install ${v.name}, replacing the current file")
                             }
@@ -1449,7 +1480,7 @@ private fun CivitaiManageDialog(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    TextButton(onClick = onDelete) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+                    if (LocalCivitaiTarget.current.canManage) TextButton(onClick = onDelete) { Text("Delete", color = MaterialTheme.colorScheme.error) }
                     Spacer(Modifier.weight(1f))
                     if (working || busy) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
                     TextButton(onClick = onDismiss) { Text("Close") }

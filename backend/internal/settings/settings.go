@@ -55,6 +55,12 @@ type Settings struct {
 	// for the UI (true when a URL is set) — it isn't stored separately.
 	ImageGenURL     string `json:"imageGenUrl"`
 	ImageGenEnabled bool   `json:"imageGenEnabled"`
+	// ImageGenModelsDir is Automatic1111's models folder (the one holding
+	// Stable-diffusion and Lora), as this container sees it. A1111 has no API to
+	// install, describe or delete a model, so those are file operations and this is
+	// where. Never defaulted, like ChatModelDir: blank lists and links models but
+	// changes none. InvokeAI ignores it. See imagegen/a1111_models.go.
+	ImageGenModelsDir string `json:"imageGenModelsDir"`
 
 	// External catalogue APIs. Secret keys are write-only; the Set flags let the
 	// Settings screen distinguish "configured" from "blank" after redaction.
@@ -256,6 +262,7 @@ const (
 	keyItchCookie          = "itch.cookie"
 	keyItchNSFW            = "itch.nsfw"
 	keyImageGenURL         = "imagegen.url"
+	keyImageGenModelsDir   = "imagegen.models_dir"
 	keyCivitaiAPIURL       = "civitai.api_url"
 	keyCivitaiAPIKey       = "civitai.api_key"
 	keyRule34UserID        = "rule34.user_id"
@@ -420,6 +427,9 @@ func Merge(base Settings, stored map[string]string) Settings {
 	if v, ok := stored[keyImageGenURL]; ok {
 		s.ImageGenURL = v
 	}
+	if v, ok := stored[keyImageGenModelsDir]; ok {
+		s.ImageGenModelsDir = v
+	}
 	if v, ok := stored[keyCivitaiAPIURL]; ok {
 		s.CivitaiAPIURL = v
 	}
@@ -576,6 +586,7 @@ func (s Settings) Map() map[string]string {
 		keyItchCookie:          s.ItchCookie,
 		keyItchNSFW:            strconv.FormatBool(s.ItchNSFW),
 		keyImageGenURL:         s.ImageGenURL,
+		keyImageGenModelsDir:   s.ImageGenModelsDir,
 		keyCivitaiAPIURL:       s.CivitaiAPIURL,
 		keyCivitaiAPIKey:       s.CivitaiAPIKey,
 		keyRule34UserID:        s.Rule34UserID,
@@ -691,6 +702,7 @@ func (s *Settings) Clamp() {
 	s.ChatURL = strings.TrimRight(strings.TrimSpace(s.ChatURL), "/")
 	s.ChatModel = strings.TrimSpace(s.ChatModel)
 	s.ChatModelDir = strings.TrimRight(strings.TrimSpace(s.ChatModelDir), "/")
+	s.ImageGenModelsDir = strings.TrimRight(strings.TrimSpace(s.ImageGenModelsDir), "/")
 	s.ChatAPIKey = strings.TrimSpace(s.ChatAPIKey)
 	// A pinned window is bounded rather than rejected: a typo of 80 or 8000000 is
 	// still a statement that the operator wants something other than auto, and

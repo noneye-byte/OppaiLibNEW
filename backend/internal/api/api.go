@@ -269,6 +269,15 @@ func NewServer(cfg *config.Config, database *db.DB, store *storage.Store, sc *sc
 	if sc != nil {
 		base = sc.HTTPClient()
 	}
+	// A1111 is managed through its models folder, which is a live setting; the hashes
+	// of what is in it are slow to compute and kept with the config.
+	s.imagegen.ModelsDir = func() string {
+		if s.settings == nil {
+			return ""
+		}
+		return s.settings.Get().ImageGenModelsDir
+	}
+	s.imagegen.HashCachePath = filepath.Join(cfg.ConfigDir, "a1111-hashes.json")
 	s.games = gamesites.New(base, cfg.ScrapeUserAgent)
 	// F95zone checks every visitor for a person at a real browser, so the server reads
 	// it through Launchy's, which has one. The scraper reads it the same way, so a

@@ -183,7 +183,7 @@ func (s *Server) civitaiApplyToModel(ctx context.Context, base, key string, mode
 	if records, err := s.imagegen.ModelRecords(ctx, base); err == nil {
 		for _, r := range records {
 			if r.Key == key {
-				hash = blake3Of(r.Hash)
+				hash = civitaiHashOf(r.Hash)
 			}
 		}
 	}
@@ -202,17 +202,24 @@ func (s *Server) civitaiApplyToModel(ctx context.Context, base, key string, mode
 		desc = strings.TrimSpace(string(runes[:1500])) + "…"
 	}
 	words := link.TrainedWords
-	if _, err := s.imagegen.UpdateModel(ctx, base, key, imagegen.ModelChanges{
+	base1 := link.BaseModel
+	_, err = s.imagegen.UpdateModel(ctx, base, key, imagegen.ModelChanges{
 		Description:    &desc,
 		TriggerPhrases: &words,
-	}); err != nil {
+		Base:           &base1,
+	})
+	// An A1111 whose models folder is not mounted here has nowhere to write the
+	// dressing. The link is still worth keeping: the picker shows the catalogue's
+	// cover from it and the LoRA's trigger words come from it.
+	writable := !errors.Is(err, imagegen.ErrNoModelsDir)
+	if err != nil && writable {
 		return db.CivitaiLink{}, err
 	}
 	cover := link.CoverURL
 	if cover == "" && len(link.Previews) > 0 {
 		cover = link.Previews[0]
 	}
-	if cover != "" {
+	if cover != "" && writable {
 		if data, ct, err := s.civitaiFetchImage(ctx, cover); err == nil {
 			if err := s.imagegen.UpdateCover(ctx, base, key, data, ct); err != nil {
 				s.log.Warn("civitai: cover art", "model", key, "err", err)
@@ -242,7 +249,7 @@ func (s *Server) civitaiSyncModel(ctx context.Context, base, key string, version
 		}
 	}
 	if record == nil {
-		return db.CivitaiLink{}, errors.New("InvokeAI has no such model")
+		return db.CivitaiLink{}, errors.New("the generator has no such model")
 	}
 	var modelID int64
 	if versionID > 0 {
@@ -255,9 +262,9 @@ func (s *Server) civitaiSyncModel(ctx context.Context, base, key string, version
 		if link, ok, _ := s.db.CivitaiLink(ctx, key); ok && link.ModelID > 0 {
 			modelID, versionID = link.ModelID, link.VersionID
 		} else {
-			hash := blake3Of(record.Hash)
+			hash := civitaiHashOf(record.Hash)
 			if hash == "" {
-				return db.CivitaiLink{}, errors.New("InvokeAI has no file hash for this model, so it cannot be looked up; pick the version by hand")
+				return db.CivitaiLink{}, errors.New("the generator has no file hash for this model yet, so it cannot be looked up; pick the version by hand, or try again once it has been hashed")
 			}
 			v, err := s.civitaiVersionByHash(ctx, hash)
 			if err != nil {
@@ -353,8 +360,13 @@ func (s *Server) civitaiInstalledModels(ctx context.Context, base string, refres
 	var todo []imagegen.ModelRecord
 	for _, r := range records {
 		link, ok := links[r.Key]
-		stale := !ok || refresh || time.Since(time.Unix(link.CheckedAt, 0)) > civitaiLinkStale
-		if stale && blake3Of(r.Hash) != "" {
+		hash := civitaiHashOf(r.Hash)
+		// A changed hash is asked about again at once: an A1111 file is known by a
+		// short hash until it has been read in full, and "not on Civitai" for the
+		// short one says nothing about the long one.
+		stale := !ok || refresh || time.Since(time.Unix(link.CheckedAt, 0)) > civitaiLinkStale ||
+			(link.ModelID == 0 && link.Hash != hash)
+		if stale && hash != "" {
 			todo = append(todo, r)
 		}
 	}
@@ -398,6 +410,9 @@ func (s *Server) civitaiInstalledModels(ctx context.Context, base string, refres
 		item := civitaiInstalledOut{Key: r.Key, Name: r.Name, Type: r.Type, Base: r.Base, HasCover: r.HasCover}
 		if link, ok := links[r.Key]; ok {
 			item.Civitai = civitaiLinkOutOf(link)
+			// The picker's thumbnail falls back to the catalogue's picture when the
+			// generator keeps none (servePickerThumb), so a linked model has a cover.
+			item.HasCover = item.HasCover || len(link.Previews) > 0 || link.CoverURL != ""
 		}
 		out = append(out, item)
 	}
@@ -414,7 +429,7 @@ func (s *Server) civitaiInstalledModels(ctx context.Context, base string, refres
 // including "nothing", so the question is not repeated for a day. A model already
 // linked is only refreshed for its newest version.
 func (s *Server) civitaiLookupByHash(ctx context.Context, r imagegen.ModelRecord, known db.CivitaiLink) (db.CivitaiLink, error) {
-	hash := blake3Of(r.Hash)
+	hash := civitaiHashOf(r.Hash)
 	modelID, versionID := known.ModelID, known.VersionID
 	if modelID == 0 {
 		v, err := s.civitaiVersionByHash(ctx, hash)

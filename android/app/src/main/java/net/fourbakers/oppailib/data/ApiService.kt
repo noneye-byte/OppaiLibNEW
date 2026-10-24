@@ -81,7 +81,7 @@ interface ApiService {
     suspend fun deleteChatImage(@Path("id") id: String)
 
     @GET("api/imagegen/tags")
-    suspend fun booruTags(@Query("q") query: String): TagSuggestions
+    suspend fun booruTags(@Query("q") query: String, @Query("limit") limit: Int = 8): TagSuggestions
 
     @POST("api/auth/login")
     suspend fun login(@Body body: LoginRequest): LoginResponse

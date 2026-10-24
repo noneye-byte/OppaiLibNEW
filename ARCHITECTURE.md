@@ -185,10 +185,10 @@ The repo layout in §5 is the skeleton; the parts of the tree it does not mentio
 |------|-------|------|
 | Libby | `api/libby_turn*.go`, `api/libby_tools.go`, `api/libby_prompt.go`, `api/handlers_libby*.go`, `api/chat_*.go` | the character: a turn engine that streams her replies and acts through tool calls, memory, bond, activities, rooms, identity, stories, watching together |
 | Her camera | `api/libby_camera.go`, `api/camera_shot.go`, `api/libby_clips.go`, `imagegen/comfy.go` | candidates judged by a model that can see, adults-only checks, edits by img2img, pose and face references through ControlNet, clips through a ComfyUI workflow |
-| Image generation | `internal/imagegen/`, `api/handlers_imagegen.go` | A1111/InvokeAI/ComfyUI clients, the outfit studio, the gallery |
+| Image generation | `internal/imagegen/`, `api/handlers_imagegen.go` | A1111/InvokeAI/ComfyUI clients, the outfit studio, the gallery; A1111's models managed through its mounted folder and sidecar files (`imagegen/a1111_models.go`, `a1111_install.go`); prompt completion from Danbooru's vocabulary (`imagegen/tagcomplete.go`) |
 | Voice | `internal/tts/piper.go` | local Piper TTS |
 | Vision | `internal/vision/`, `api/vision_describe.go` | a local multimodal LLM describes pictures and clips in prose |
-| Civitai | `api/handlers_civitai.go`, `api/civitai_installs.go`, `api/civitai_manage.go`, `api/civitai_account.go` | the catalogue browser; the studio's models matched to it by hash, updated to newer versions, given a chosen cover, or deleted; the account page's feeds |
+| Civitai | `api/handlers_civitai.go`, `api/civitai_installs.go`, `api/civitai_manage.go`, `api/civitai_account.go`, `api/civitai_a1111.go` | the catalogue browser; the studio's models (InvokeAI's or A1111's) matched to it by hash, installed, updated to newer versions, given a chosen cover, or deleted; the account page's feeds |
 | Sources | `internal/sources/` | browsable catalogues (rule34, 4chan, YAML-defined sites) |
 | Discord | `internal/discord/` | relay |
 | Passkeys | `api/handlers_passkeys.go` | WebAuthn alongside passwords |

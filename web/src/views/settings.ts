@@ -2296,6 +2296,33 @@ export class OppaiSettings extends LitElement {
                   />
                 </div>
               </div>
+
+              <div class="field stack">
+                <div class="field-text">
+                  <div class="field-label">Automatic1111 models folder</div>
+                  <div class="field-help">
+                    Only for Automatic1111, Forge or SD.Next. They have no API to install or
+                    delete a model, so installing from Civitai, editing a model's description
+                    and trigger words, setting its cover and deleting it are done by writing
+                    into its <code>models</code> folder (the one holding
+                    <code>Stable-diffusion</code> and <code>Lora</code>). Map that folder into
+                    this container and give the path here, e.g. <code>/a1111-models</code>.
+                    Blank still lists models and links them to Civitai — it just changes none.
+                    InvokeAI ignores this.
+                  </div>
+                </div>
+                <div class="field-control">
+                  <input
+                    type="text"
+                    autocomplete="off"
+                    placeholder="/a1111-models"
+                    .value=${s.imageGenModelsDir ?? ""}
+                    ?disabled=${!this.canEdit}
+                    @change=${(e: Event) =>
+                      this.edit({ imageGenModelsDir: (e.target as HTMLInputElement).value })}
+                  />
+                </div>
+              </div>
             `}
       </section>
     `;

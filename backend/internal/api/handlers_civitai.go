@@ -285,7 +285,7 @@ func civitaiVersionOutOf(v civitaiRawVersion, installed map[string]string, detai
 		if f.Primary || (ver.SizeMB == 0 && f.Type == "Model") {
 			ver.SizeMB = int64(f.SizeKB / 1024)
 		}
-		if key, ok := installed[strings.ToUpper(f.Hashes["BLAKE3"])]; ok && f.Hashes["BLAKE3"] != "" {
+		if key, ok := civitaiFileInstalled(f, installed); ok {
 			ver.Installed, ver.InstalledKey = true, key
 		}
 		if detail {
@@ -414,9 +414,10 @@ func (s *Server) civitaiVersionByHash(ctx context.Context, hash string) (*civita
 	return &v, nil
 }
 
-// installedByHash is what InvokeAI holds, keyed by upper-case BLAKE3, which is the
-// hash both catalogues publish. Cached briefly: a search page asks once, not once
-// per model card. Empty (not an error) when there is no InvokeAI to ask.
+// installedByHash is what the generator holds, keyed by the upper-case hash the
+// catalogue publishes for each file — BLAKE3 from InvokeAI, SHA256 or the short
+// AutoV2/AutoV3 from Automatic1111. Cached briefly: a search page asks once, not once
+// per model card. Empty (not an error) when there is no generator to ask.
 func (s *Server) installedByHash(ctx context.Context) map[string]string {
 	set := s.settings.Get()
 	if !set.ImageGenEnabled {
@@ -429,7 +430,7 @@ func (s *Server) installedByHash(ctx context.Context) map[string]string {
 		}
 		m := make(map[string]string, len(records))
 		for _, r := range records {
-			if h := blake3Of(r.Hash); h != "" {
+			if h := civitaiHashOf(r.Hash); h != "" {
 				m[h] = r.Key
 			}
 		}
@@ -441,15 +442,32 @@ func (s *Server) installedByHash(ctx context.Context) map[string]string {
 	return out
 }
 
-// blake3Of reads InvokeAI's "blake3:…" hash as the upper-case hex Civitai uses.
-// Other schemes ("random:", "blake3_multi:" for diffusers folders) have no
+// civitaiHashOf reads a generator's file hash as the upper-case hex Civitai uses:
+// InvokeAI's "blake3:…", or the "sha256:", "autov2:" and "autov3:" an A1111 model is
+// known by (see imagegen/a1111_models.go). The catalogue's by-hash lookup takes all
+// of them. Other schemes ("random:", "blake3_multi:" for diffusers folders) have no
 // counterpart on Civitai and read as no hash.
-func blake3Of(h string) string {
-	rest, ok := strings.CutPrefix(strings.ToLower(strings.TrimSpace(h)), "blake3:")
-	if !ok || rest == "" {
-		return ""
+func civitaiHashOf(h string) string {
+	h = strings.ToLower(strings.TrimSpace(h))
+	for _, scheme := range []string{"blake3:", "sha256:", "autov2:", "autov3:"} {
+		if rest, ok := strings.CutPrefix(h, scheme); ok && rest != "" {
+			return strings.ToUpper(rest)
+		}
 	}
-	return strings.ToUpper(rest)
+	return ""
+}
+
+// civitaiFileInstalled finds a catalogue file among the generator's, by any of the
+// hashes the catalogue lists for it.
+func civitaiFileInstalled(f civitaiRawFile, installed map[string]string) (string, bool) {
+	for _, kind := range []string{"BLAKE3", "SHA256", "AutoV2", "AutoV3"} {
+		if h := strings.ToUpper(f.Hashes[kind]); h != "" {
+			if key, ok := installed[h]; ok {
+				return key, true
+			}
+		}
+	}
+	return "", false
 }
 
 // ── search ──────────────────────────────────────────────────────────────────
@@ -899,9 +917,14 @@ func (s *Server) handleCivitaiInstall(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	job, err := s.imagegen.InstallModel(r.Context(), base, req.URL)
+	spec, err := s.civitaiInstallSpec(r.Context(), req.URL, req.ModelID, req.VersionID)
 	if err != nil {
-		writeErr(w, http.StatusBadGateway, err.Error())
+		writeErr(w, civitaiStatus(err), err.Error())
+		return
+	}
+	job, err := s.imagegen.InstallModel(r.Context(), base, spec)
+	if err != nil {
+		writeErr(w, installErrStatus(err), err.Error())
 		return
 	}
 	if req.ModelID > 0 && req.VersionID > 0 {

@@ -416,6 +416,23 @@ deliberately not defaulted, because guessing a path and deleting what is found t
 not a thing to do on someone's model collection. Blank means the delete controls are
 absent.
 
+`imageGenModelsDir` is the same kind of path for Automatic1111 (Forge, SD.Next): its
+`models` folder — the one holding `Stable-diffusion` and `Lora` — as this container
+sees it. A1111 has no API to install, describe or delete a model, so those are file
+operations: an install from Civitai is downloaded into the right folder, a model's
+description and trigger words go into the `<name>.json` sidecar A1111's own edit card
+writes, its cover into `<name>.preview.png`, and A1111 is asked to rescan. Never
+defaulted; blank still lists A1111's models and links them to Civitai by hash, and
+changes none of them. A path that holds neither `Stable-diffusion` nor `Lora` counts
+as not set. InvokeAI ignores it.
+
+## Image generation
+
+| Method | Path | Notes |
+|--------|------|-------|
+| GET | `/api/imagegen/status` | → `{enabled, reachable, backend, models, loras, vaes, templates, boards?, detailerAvailable, civitai, manageModels, modelsDirSet?}`. `backend` is `invokeai` or `a1111`. `manageModels` says models can be installed, edited, re-covered and deleted from here — always on InvokeAI, on A1111 once `imageGenModelsDir` points at its models folder; `modelsDirSet` (A1111 only) tells "not set" from "set but wrong". Models and LoRAs carry `key`: InvokeAI's record key, or an A1111 file's path under its models folder (`Lora/ink.safetensors`), which is what the Civitai records are kept by. An A1111 LoRA's `triggerPhrases` and `weight` come from its sidecar, else from its Civitai link. `templates` are InvokeAI's style presets or A1111's saved styles |
+| GET | `/api/imagegen/tags?q=&limit=` | prompt completion for the tag being typed → `{items:[{tag, category, count, alias?}], suggestions, correction}`. The vocabulary is Danbooru's — every tag on at least 100 posts, with post counts and aliases — plus this library's own tags (`category` 100). Ranked: the tag itself, tags starting with `q`, an alias that does (`alias` says which), a tag a later word of which does, then near misses for a typo. `suggestions` is `items` as plain names and `correction` a "did you mean", the shape older apps read. `limit` defaults to 12, at most 50 |
+
 ## Diagnostics
 
 | Method | Path | Notes |
@@ -618,9 +635,20 @@ The catalogue, proxied through the server (the `civitai.red` mirror by default; 
 API key, when set, goes in a header and never in a URL). Everything the studio's
 Civitai browser does is here. Uploading is not: Civitai has no public upload API.
 
+Every route works against both generators. InvokeAI downloads an install itself and
+keeps the dressing in its model records. Automatic1111 has no such API, so with
+`imageGenModelsDir` set the server downloads the file into A1111's folder (hashing it
+on the way in), writes the dressing as A1111's sidecar files and asks A1111 to
+rescan; the job list below has the same shape either way. Without the folder, A1111's
+models are still matched and linked — the picker shows the catalogue's cover and a
+LoRA gets its trained words from the link — but install, update, cover and delete
+answer 409. A1111 files are matched by SHA256 (its own when it has computed one, else
+the server's, computed once in the background and kept in `/config/a1111-hashes.json`),
+falling back to A1111's short AutoV2 hash and a LoRA's AutoV3 until then.
+
 | Method | Path | Notes |
 |--------|------|-------|
-| GET | `/api/imagegen/civitai/search?q=&type=&category=&base=&period=&sort=&creator=&nsfw=&cursor=` | one page → `{items, nextCursor}`. `type` ∈ checkpoint, lora, embedding, vae, controlnet, upscaler; `period` ∈ day, week, month, year, all; `sort` ∈ downloaded (default), rated, newest, liked, discussed, collected, images; `nsfw=0` hides adult models. Each version carries `installed` when InvokeAI holds its file (matched by BLAKE3). |
+| GET | `/api/imagegen/civitai/search?q=&type=&category=&base=&period=&sort=&creator=&nsfw=&cursor=` | one page → `{items, nextCursor}`. `type` ∈ checkpoint, lora, embedding, vae, controlnet, upscaler; `period` ∈ day, week, month, year, all; `sort` ∈ downloaded (default), rated, newest, liked, discussed, collected, images; `nsfw=0` hides adult models. Each version carries `installed` when the generator holds its file (matched by BLAKE3, SHA256, AutoV2 or AutoV3). |
 | GET | `/api/imagegen/civitai/models/{id}` | one model's page: sanitized HTML `description`, every version with `files`, showcase `images`, `publishedAt`, and the same `installed` flags |
 | GET | `/api/imagegen/civitai/images?versionId=\|modelId=\|postId=\|collectionId=\|username=&sort=&period=&nsfw=&cursor=` | posted pictures → `{items, nextCursor, withPrompts, keySet}`. Each item carries the prompt and settings behind it when the poster kept them — which Civitai shares only with an API key, hence `withPrompts` and `keySet` — plus `postId` and `createdAt` |
 | GET | `/api/imagegen/civitai/posts?username=&nsfw=&cursor=` | someone's posts, newest first → `{items:[{id, username, createdAt, images}], nextCursor}`. Civitai has no posts endpoint; a page of their pictures is grouped by `postId`, so a post can continue onto the next page (the clients merge it) |
@@ -628,13 +656,13 @@ Civitai browser does is here. Uploading is not: Civitai has no public upload API
 | GET | `/api/imagegen/civitai/categories` | the catalogue's most-used tags → `{categories:[{name,count}]}` |
 | GET | `/api/imagegen/civitai/image?url=` | streams one preview through the server; Civitai hosts only |
 | GET | `/api/imagegen/civitai/me` | who the API key belongs to → `{id, username, image, cover}`; 400 without a key. `cover` is the profile's cover photo when the user record carries one, which the public API mostly does not — the clients fall back to the newest posted picture |
-| POST | `/api/imagegen/civitai/install` | `{url, modelId, versionId}` → InvokeAI's install job. With the ids, the server writes the catalogue's description, trigger words and first preview onto the InvokeAI record once the download completes |
-| GET | `/api/imagegen/civitai/installs` | InvokeAI's install queue → `{jobs}`; a completed job carries `modelKey` |
+| POST | `/api/imagegen/civitai/install` | `{url, modelId, versionId}` → the install job. With the ids, the server writes the catalogue's description, trigger words and first preview onto the model once the download completes. A1111 needs the ids — they say which folder the file goes in and what it is called — and refuses embeddings, which A1111 keeps outside its models folder |
+| GET | `/api/imagegen/civitai/installs` | the install queue → `{jobs}` (InvokeAI's, or the downloads the server is running into A1111's folder, kept in memory); a completed job carries `modelKey` |
 | GET | `/api/imagegen/civitai/installed?refresh=` | the studio's models with their catalogue records → `{models:[{key,name,type,base,hasCover,civitai?}]}`. `civitai` holds the ids, creator, previews, trained words, `updateAvailable` and `coverUrl` (the preview chosen as cover, when one was). Looked up by file hash and remembered for a day; `refresh=1` asks again |
 | POST | `/api/imagegen/civitai/sync` | `{key, versionId?}` → applies the catalogue's cover, description and trigger words to one installed model now, by hash or by the version given → the record, or `{}` when the file is not on Civitai. A cover chosen for the same version is kept |
-| POST | `/api/imagegen/civitai/cover` | `{key, url}` → 204. Makes one of the catalogue's pictures (a Civitai host only) the model's InvokeAI cover and remembers the choice |
+| POST | `/api/imagegen/civitai/cover` | `{key, url}` → 204. Makes one of the catalogue's pictures (a Civitai host only) the model's cover and remembers the choice; on an A1111 without its folder only the choice is kept, and the picker shows it |
 | POST | `/api/imagegen/civitai/update` | `{key, versionId?}` → InvokeAI's install job for that version (the newest when unsaid) of the model the record is linked to. Once the download completes and the new record is dressed, the old record is deleted, file included. 400 when the model is not linked or is already at that version |
-| DELETE | `/api/imagegen/model?key=` | removes a model or LoRA from InvokeAI (its file too, when InvokeAI manages it) and forgets its catalogue record → 204. A LoRA's display name is accepted for `key` |
+| DELETE | `/api/imagegen/model?key=` | removes a model or LoRA from the generator (its file too, when InvokeAI manages it; the file and its sidecars on A1111) and forgets its catalogue record → 204. A LoRA's display name is accepted for `key` |
 
 Model descriptions are HTML written by whoever uploaded the model. The server keeps
 paragraphs, headings, lists, emphasis, code and http(s) links and drops everything

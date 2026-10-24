@@ -167,6 +167,9 @@ func (s *Server) handleImageGenStatus(w http.ResponseWriter, r *http.Request) {
 	// Checkpoints still work there, so report that limitation without declaring the
 	// whole generator unreachable.
 	loras, loraErr := s.imagegen.Loras(ctx, set.ImageGenURL)
+	if backend == imagegen.KindA1111 {
+		s.civitaiTriggerWords(ctx, loras)
+	}
 	out := map[string]any{"enabled": true, "reachable": true, "backend": backend, "models": models, "loras": loras}
 	if loraErr != nil {
 		out["loraError"] = loraErr.Error()
@@ -185,6 +188,14 @@ func (s *Server) handleImageGenStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	out["detailerAvailable"] = s.imagegen.SupportsADetailer(ctx, set.ImageGenURL)
+	// What the studio can do to the generator's models: browse Civitai and link by
+	// hash always; install, edit, re-cover and delete where the generator lets it —
+	// InvokeAI always, A1111 once its models folder is mounted (a1111_models.go).
+	out["civitai"] = true
+	out["manageModels"] = s.imagegen.ManagesModels(ctx, set.ImageGenURL)
+	if backend == imagegen.KindA1111 {
+		out["modelsDirSet"] = strings.TrimSpace(set.ImageGenModelsDir) != ""
+	}
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -1054,15 +1065,24 @@ func (s *Server) handleGetLoraThumb(w http.ResponseWriter, r *http.Request) {
 	s.servePickerThumb(w, r, name)
 }
 
-// servePickerThumb always reads the generator's cover art. InvokeAI is the source of
-// truth for model and LoRA previews; OppaiLib no longer keeps an independent custom
-// thumbnail that can drift from Invoke's model manager.
+// servePickerThumb reads the generator's cover art: InvokeAI's model manager, or the
+// preview file A1111 keeps beside the model. The generator is the source of truth, so
+// OppaiLib keeps no thumbnail of its own that could drift from it. A model the
+// generator has no cover for but the catalogue does — an A1111 model linked by hash,
+// in a folder this side cannot write to — shows the catalogue's picture instead.
 func (s *Server) servePickerThumb(w http.ResponseWriter, r *http.Request, name string) {
 	set := s.settings.Get()
 	if set.ImageGenEnabled {
-		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 		defer cancel()
-		if data, ct, err := s.imagegen.Cover(ctx, set.ImageGenURL, name); err == nil && len(data) > 0 {
+		data, ct, err := s.imagegen.Cover(ctx, set.ImageGenURL, name)
+		if err != nil || len(data) == 0 {
+			var ok bool
+			if data, ct, ok = s.civitaiCoverFor(ctx, set.ImageGenURL, name); !ok {
+				data = nil
+			}
+		}
+		if len(data) > 0 {
 			if ct == "" {
 				ct = http.DetectContentType(data)
 			}
@@ -1115,7 +1135,7 @@ func (s *Server) handleSetLoraThumb(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) setPickerThumb(w http.ResponseWriter, r *http.Request, req setModelThumbReq) {
 	if req.ImageData != "" {
-		writeErr(w, http.StatusBadRequest, "custom thumbnail uploads are disabled; choose an InvokeAI-generated preview")
+		writeErr(w, http.StatusBadRequest, "custom thumbnail uploads are disabled; choose a generated preview")
 		return
 	}
 	if req.PreviewID == "" {

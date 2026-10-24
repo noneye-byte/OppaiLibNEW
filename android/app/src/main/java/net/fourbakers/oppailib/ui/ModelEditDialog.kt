@@ -111,7 +111,7 @@ fun ModelEditDialog(
         }
     }
 
-    /** Removes the record from InvokeAI — file included when InvokeAI manages it. */
+    /** Removes the model from the generator — file included where the server can. */
     fun delete() {
         val m = meta ?: return
         if (busy) return
@@ -134,7 +134,7 @@ fun ModelEditDialog(
         AlertDialog(
             onDismissRequest = { confirmDelete = false },
             title = { Text("Delete ${if (m?.type == "lora") "LoRA" else "model"}?") },
-            text = { Text("“${m?.name ?: name}” is removed from InvokeAI, and its file with it.") },
+            text = { Text("“${m?.name ?: name}” is removed from the generator, and its file with it.") },
             confirmButton = { TextButton(onClick = { delete() }, enabled = !busy) { Text("Delete") } },
             dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } },
         )
@@ -156,7 +156,7 @@ fun ModelEditDialog(
                 }
                 if (m != null) {
                     Text(
-                        "Synced with InvokeAI's model manager.",
+                        "Saved on the generator — InvokeAI's model manager, or the sidecar files Automatic1111 reads.",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

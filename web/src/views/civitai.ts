@@ -1,5 +1,5 @@
 import { LitElement, html, css, nothing } from "lit";
-import { customElement, state } from "lit/decorators.js";
+import { property, customElement, state } from "lit/decorators.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { iconStyles, motionStyles } from "../theme.js";
 import {
@@ -32,10 +32,13 @@ import { promptSettingsFrom, type PromptSettings } from "../civitai-prompt.js";
  * version to follow, which showcase picture is the cover, an update to a newer
  * version, and deletion.
  *
- * Installing hands a version's download URL to InvokeAI, which fetches the file on
- * its own box; the server then writes the catalogue's cover, description and
- * trigger words onto the record once the download completes, so a model arrives
- * looking the way it did on the site. An update is the same, plus the old record
+ * Installing hands a version's download URL to the generator's side: InvokeAI
+ * fetches the file on its own box, and for Automatic1111 the server downloads it into
+ * A1111's models folder. Either way the catalogue's cover, description and trigger
+ * words are written onto the model once the download completes — InvokeAI's record,
+ * or the sidecar files A1111's cards read — so a model arrives looking the way it did
+ * on the site. An A1111 without its models folder set can be browsed and linked but
+ * not installed into, and the controls that would need the folder are not shown. An update is the same, plus the old record
  * is deleted once the new one is in. The install log stays folded away until
  * asked for: a finished download is not news the next time the browser opens.
  *
@@ -83,6 +86,15 @@ const BASES: string[] = [
 
 @customElement("oppai-civitai")
 export class OppaiCivitai extends LitElement {
+  /** Which generator the studio is connected to, "invokeai" or "a1111". */
+  @property() backend = "invokeai";
+  /** Whether models can be installed, updated and deleted there; see ImageGenStatus. */
+  @property({ type: Boolean }) canManage = true;
+
+  private get genName(): string {
+    return this.backend === "invokeai" ? "InvokeAI" : "Automatic1111";
+  }
+
   @state() private tab: Tab = "browse";
 
   // ── browse ──
@@ -933,13 +945,13 @@ export class OppaiCivitai extends LitElement {
     }
   }
 
-  /** Moves the model to another version: InvokeAI downloads it, and the record
-   *  this one is deleted once the new file is in. */
+  /** Moves the model to another version: the new file is downloaded, and this one
+   *  is deleted once it is in. */
   private async updateModel(m: CivitaiInstalled, versionId?: number) {
     if (this.manageBusy) return;
     const target = this.managePage?.versions.find((v) => v.id === (versionId ?? m.civitai?.latestVersionId));
     const label = target ? `version ${target.name}` : "the newest version";
-    if (!confirm(`Update “${m.name}” to ${label}? InvokeAI downloads it, then the current file is deleted.`)) return;
+    if (!confirm(`Update “${m.name}” to ${label}? It is downloaded into ${this.genName}, then the current file is deleted.`)) return;
     this.manageBusy = true;
     try {
       await api.civitaiUpdate(m.key, versionId);
@@ -956,7 +968,7 @@ export class OppaiCivitai extends LitElement {
 
   private async deleteInstalled(m: CivitaiInstalled) {
     if (this.manageBusy) return;
-    if (!confirm(`Delete “${m.name}” from InvokeAI? The file goes with it.`)) return;
+    if (!confirm(`Delete “${m.name}” from ${this.genName}? The file goes with it.`)) return;
     this.manageBusy = true;
     try {
       await api.deleteModel(m.key);
@@ -1216,12 +1228,14 @@ export class OppaiCivitai extends LitElement {
               ${v
                 ? v.installed
                   ? html`<button class="primary" disabled>
-                      <span class="material-symbols-rounded" style="font-size:18px;">check_circle</span> Installed in InvokeAI
+                      <span class="material-symbols-rounded" style="font-size:18px;">check_circle</span> Installed in ${this.genName}
                     </button>`
-                  : html`<button class="primary" ?disabled=${this.installing || !v.downloadUrl} @click=${() => this.install(v)}>
-                      <span class="material-symbols-rounded" style="font-size:18px;">download</span>
-                      Install to InvokeAI${v.sizeMB ? ` (${fmtSize(v.sizeMB)})` : ""}
-                    </button>`
+                  : this.canManage
+                    ? html`<button class="primary" ?disabled=${this.installing || !v.downloadUrl} @click=${() => this.install(v)}>
+                        <span class="material-symbols-rounded" style="font-size:18px;">download</span>
+                        Install to ${this.genName}${v.sizeMB ? ` (${fmtSize(v.sizeMB)})` : ""}
+                      </button>`
+                    : nothing
                 : nothing}
               <button class="ghost" @click=${() => this.toggleGallery()}>
                 <span class="material-symbols-rounded" style="font-size:16px;">photo_library</span>
@@ -1230,7 +1244,11 @@ export class OppaiCivitai extends LitElement {
             </div>
             ${this.galleryOpen ? this.renderGallery() : nothing}
             <div class="sub" style="margin-top:10px;">
-              InvokeAI downloads the file itself; the cover, description and trigger words follow once it is in.
+              ${!this.canManage
+                ? "To install from here, set Automatic1111's models folder under Settings → Image generation — A1111 has no API that takes a download."
+                : this.backend === "invokeai"
+                  ? "InvokeAI downloads the file itself; the cover, description and trigger words follow once it is in."
+                  : "The server downloads the file into Automatic1111's models folder and asks it to rescan; the cover, description and trigger words follow as A1111's own sidecar files."}
             </div>
           </div>
         </div>
@@ -1289,7 +1307,7 @@ export class OppaiCivitai extends LitElement {
               ${settings.negativePrompt ? html`<h4>Negative</h4><div class="p">${settings.negativePrompt}</div>` : nothing}
               <div class="kv">
                 ${img.model ? html`<span>Model</span><span>${img.model}</span>` : nothing}
-                ${img.sampler ? html`<span>Sampler</span><span>${img.sampler}${settings.sampler ? "" : " (not in InvokeAI)"}</span>` : nothing}
+                ${img.sampler ? html`<span>Sampler</span><span>${img.sampler}${settings.sampler ? "" : " (not in the studio's list)"}</span>` : nothing}
                 ${settings.steps ? html`<span>Steps</span><span>${settings.steps}</span>` : nothing}
                 ${settings.cfgScale ? html`<span>CFG</span><span>${settings.cfgScale}</span>` : nothing}
                 ${settings.seed ? html`<span>Seed</span><span>${settings.seed}</span>` : nothing}
@@ -1522,8 +1540,9 @@ export class OppaiCivitai extends LitElement {
         </button>
       </div>
       <p class="sync-note">
-        InvokeAI's models matched to Civitai by file hash. “Fetch from Civitai” writes the catalogue's cover, description
-        and trigger words onto the InvokeAI record — the same dressing an install from here gets.
+        ${this.genName}'s models matched to Civitai by file hash. “Fetch from Civitai” writes the catalogue's cover,
+        description and trigger words onto the model — the same dressing an install from here gets${this.canManage ? "" : ". Without A1111's models folder set they are only linked: the picker shows Civitai's cover, but nothing is written to A1111"}.
+        ${this.backend === "invokeai" ? nothing : html`A1111 knows a file by a short hash until it has been read once, so a model may take a minute to match after it first appears.`}
       </p>
       ${this.syncNote ? html`<div class="sync-note" style="color:var(--oppai-text);">${this.syncNote}</div>` : nothing}
       ${this.installedError ? html`<div class="err">${this.installedError}</div>` : nothing}
@@ -1580,7 +1599,7 @@ export class OppaiCivitai extends LitElement {
                 <span class="material-symbols-rounded" style="font-size:16px;">travel_explore</span> Page
               </button>`
             : nothing}
-          ${c?.updateAvailable
+          ${c?.updateAvailable && this.canManage
             ? html`<button class="ghost" title="Download the newest version and delete this one once it is in"
                 ?disabled=${this.manageBusy} @click=${() => this.updateModel(m)}>
                 <span class="material-symbols-rounded" style="font-size:16px;">published_with_changes</span> Update
@@ -1599,9 +1618,9 @@ export class OppaiCivitai extends LitElement {
             : html`<button class="ghost" title="Link by a version id from the site" @click=${() => { this.pinning = m.key; this.pinVersion = ""; }}>
                 <span class="material-symbols-rounded" style="font-size:16px;">link</span>
               </button>`}
-          <button class="ghost danger" title="Delete from InvokeAI, file included" ?disabled=${this.manageBusy} @click=${() => this.deleteInstalled(m)}>
+          ${this.canManage ? html`<button class="ghost danger" title=${`Delete from ${this.genName}, file included`} ?disabled=${this.manageBusy} @click=${() => this.deleteInstalled(m)}>
             <span class="material-symbols-rounded" style="font-size:16px;">delete</span>
-          </button>
+          </button>` : nothing}
         </div>
         ${open && c ? this.renderManage(m) : nothing}
       </div>
@@ -1630,10 +1649,10 @@ export class OppaiCivitai extends LitElement {
         </div>
         ${ver && !current
           ? html`<div class="actions" style="margin-top:8px;">
-              <button class="ghost" ?disabled=${this.manageBusy} title="Download this version into InvokeAI and delete the current file once it is in"
+              ${this.canManage ? html`<button class="ghost" ?disabled=${this.manageBusy} title="Download this version and delete the current file once it is in"
                 @click=${() => this.updateModel(m, ver.id)}>
                 <span class="material-symbols-rounded" style="font-size:16px;">published_with_changes</span> Install ${ver.name}, replacing the current file
-              </button>
+              </button>` : nothing}
               <button class="ghost" ?disabled=${this.syncing === m.key} title="Keep the current file, but take this version's description, trigger words and pictures"
                 @click=${() => this.sync(m, ver.id)}>
                 <span class="material-symbols-rounded" style="font-size:16px;">link</span> Link to ${ver.name} without downloading

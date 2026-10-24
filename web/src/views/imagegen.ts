@@ -80,6 +80,18 @@ import { createZip, type ZipEntry } from "../zip.js";
 import "./imagegen-gallery.js";
 import "./civitai.js";
 import type { PromptSettings } from "../civitai-prompt.js";
+import {
+  applyCompletion,
+  escapeTag,
+  formatCount,
+  localCompletions,
+  mergeCompletions,
+  moveSelection,
+  tokenAt,
+  type Completion,
+  type LocalSources,
+  type PromptToken,
+} from "../prompt-complete.js";
 import type { OppaiInvokeGallery } from "./imagegen-gallery.js";
 
 // ── Web Speech typings ─────────────────────────────────────────────────────────
@@ -134,6 +146,18 @@ interface Shot extends GenPreview {
 
 // Resolution presets under the prompt's Options menu. SD 1.x models train at ~512,
 // SDXL at ~1024 — offering both families beats making people type pixel counts.
+type CreateTab = "models" | "loras" | "look" | "wildcards" | "templates" | "settings";
+
+/** The Create screen's drawers, down its rail in this order. */
+const CREATE_TABS: { id: CreateTab; label: string; icon: string }[] = [
+  { id: "models", label: "Models", icon: "deployed_code" },
+  { id: "loras", label: "LoRAs", icon: "style" },
+  { id: "look", label: "Look", icon: "face" },
+  { id: "wildcards", label: "Wildcards", icon: "category" },
+  { id: "templates", label: "Styles", icon: "palette" },
+  { id: "settings", label: "Settings", icon: "tune" },
+];
+
 const RESOLUTIONS: { label: string; hint: string; w: number; h: number }[] = [
   { label: "Portrait", hint: "512×768", w: 512, h: 768 },
   { label: "Square", hint: "512×512", w: 512, h: 512 },
@@ -483,8 +507,21 @@ export class OppaiImageGen extends LitElement {
   @state() private optimizing = false;
 
   @state() private prompt = "";
-  @state() private tagSuggestions: string[] = [];
-  @state() private tagCorrection = "";
+  /** The suggestions open under whichever prompt is being typed in. */
+  @state() private completions: Completion[] = [];
+  @state() private completionIndex = -1;
+  private completionToken: PromptToken | null = null;
+  @state() private completionField: "prompt" | "negative" = "prompt";
+  private completionSeq = 0;
+  private completionTimer = 0;
+  /** Which drawer the Create screen has open beside the canvas; "" shuts it. A phone
+      starts with it shut, since there it covers the canvas. */
+  @state() private createTab: CreateTab | "" =
+    typeof matchMedia === "function" && matchMedia("(max-width: 900px)").matches ? "" : "models";
+  /** Narrows the Models and LoRAs drawers. */
+  @state() private pickerFilter = "";
+  /** Set while the Create drawer draws the studio's sections, which then come out flat. */
+  private flatSections = false;
   @state() private negative = "";
   @state() private showOptions = false;
 
@@ -2552,6 +2589,631 @@ export class OppaiImageGen extends LitElement {
         .right { min-height: 430px; border-top: 1px solid var(--oppai-border-strong); }
         .shot img { max-height: 52vh; }
       }
+
+      /* ── Create ─────────────────────────────────────────────────────────────
+         The rail, a drawer beside the canvas, the recipe over it and the composer
+         under it. Declared last so it wins over the shared .layout rules above,
+         which still shape the outfit studio. */
+      .create-shell {
+        flex: 1;
+        min-height: 0;
+        display: grid;
+        grid-template-columns: 84px minmax(0, 1fr);
+        background: var(--oppai-bg);
+      }
+      .create-shell.drawer-open { grid-template-columns: 84px 340px minmax(0, 1fr); }
+      .create-shell.with-gallery { grid-template-columns: 84px minmax(0, 1fr) 300px; }
+      .create-shell.drawer-open.with-gallery { grid-template-columns: 84px 340px minmax(0, 1fr) 300px; }
+      .drawer-scrim { display: none; }
+
+      .create-rail {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        padding: 12px 6px;
+        background: var(--oppai-surface);
+        border-right: 1px solid var(--oppai-border-strong);
+        overflow-y: auto;
+        scrollbar-width: none;
+      }
+      .rail-tab {
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 4px;
+        padding: 4px 0 6px;
+        border: 0;
+        background: transparent;
+        color: var(--oppai-text-muted);
+        font: inherit;
+        font-size: 11px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      .rail-icon {
+        width: 56px;
+        height: 32px;
+        display: grid;
+        place-items: center;
+        border-radius: 16px;
+        font-size: 22px;
+        transition: background 0.2s var(--oppai-ease-emphasized), color 0.2s ease;
+      }
+      .rail-tab:hover { color: var(--oppai-text); }
+      .rail-tab:hover .rail-icon { background: var(--oppai-surface-2); }
+      .rail-tab.on { color: var(--oppai-text); }
+      .rail-tab.on .rail-icon {
+        background: var(--oppai-primary-container);
+        color: var(--oppai-on-primary-container, var(--oppai-text));
+      }
+      .rail-badge {
+        position: absolute;
+        top: 0;
+        right: 10px;
+        min-width: 17px;
+        height: 17px;
+        padding: 0 5px;
+        box-sizing: border-box;
+        border-radius: 9px;
+        background: var(--oppai-primary);
+        color: var(--oppai-on-primary);
+        font-size: 10px;
+        font-weight: 700;
+        line-height: 17px;
+        text-align: center;
+      }
+
+      .create-drawer {
+        min-width: 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        background: var(--oppai-surface-2);
+        border-right: 1px solid var(--oppai-border-strong);
+        animation: create-drawer-in 0.22s var(--oppai-ease-emphasized) both;
+      }
+      @keyframes create-drawer-in {
+        from { opacity: 0; transform: translateX(-14px); }
+        to { opacity: 1; transform: none; }
+      }
+      .drawer-head {
+        height: 56px;
+        flex: 0 0 56px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 0 8px 0 18px;
+        box-sizing: border-box;
+        font-size: 16px;
+        font-weight: 700;
+        border-bottom: 1px solid var(--oppai-border);
+      }
+      .drawer-head > .material-symbols-rounded { color: var(--oppai-primary-bright, var(--oppai-primary)); }
+      .drawer-action {
+        width: 36px;
+        height: 36px;
+        border-radius: 18px;
+        border: 0;
+        background: transparent;
+        color: var(--oppai-text-muted);
+        display: grid;
+        place-items: center;
+        cursor: pointer;
+      }
+      .drawer-action:hover { background: var(--oppai-surface-3, var(--oppai-surface)); color: var(--oppai-text); }
+      .drawer-scroll {
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        scrollbar-width: thin;
+        padding: 14px 16px 24px;
+      }
+      .pane { margin-bottom: 18px; }
+      .pane-title {
+        margin: 4px 0 10px;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.7px;
+        text-transform: uppercase;
+        color: var(--oppai-text-muted);
+      }
+      .picker-search {
+        position: relative;
+        display: block;
+        margin-bottom: 14px;
+      }
+      .picker-search input {
+        width: 100%;
+        height: 40px;
+        box-sizing: border-box;
+        padding: 0 14px 0 38px;
+        border: 1px solid var(--oppai-border-strong);
+        border-radius: 20px;
+        background: var(--oppai-surface);
+        color: var(--oppai-text);
+        font: inherit;
+        font-size: 13px;
+        outline: none;
+      }
+      .picker-search input:focus { border-color: var(--oppai-primary); }
+      .picker-search .material-symbols-rounded {
+        position: absolute;
+        left: 12px;
+        top: 10px;
+        font-size: 20px;
+        color: var(--oppai-text-muted);
+        pointer-events: none;
+      }
+      /* Cover cards, two up: a checkpoint or a LoRA is recognised by its picture
+         long before its file name. */
+      .create-drawer .cards,
+      .create-drawer .sec-models .cards {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+      }
+      .create-drawer .card,
+      .create-drawer .sec-models .card {
+        display: block;
+        border: 2px solid transparent;
+        border-radius: 16px;
+        background: var(--oppai-surface);
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
+      }
+      .create-drawer .card:hover { transform: translateY(-2px); border-color: var(--oppai-border-strong); }
+      .create-drawer .card.on,
+      .create-drawer .sec-models .card.on {
+        border-color: var(--oppai-primary);
+        background: var(--oppai-surface);
+        box-shadow: 0 0 0 3px color-mix(in srgb, var(--oppai-primary) 24%, transparent);
+      }
+      .create-drawer .card-art,
+      .create-drawer .card-blank,
+      .create-drawer .sec-models .card-art,
+      .create-drawer .sec-models .card-blank {
+        width: 100%;
+        height: auto;
+        aspect-ratio: 3 / 4;
+      }
+      .create-drawer .card-name,
+      .create-drawer .sec-models .card-name {
+        padding: 8px 10px 9px;
+        font-size: 12px;
+        font-weight: 600;
+      }
+      .create-drawer .lora-weight { border-radius: 10px; }
+      .manage-note {
+        display: flex;
+        gap: 9px;
+        margin-top: 14px;
+        padding: 11px 12px;
+        border-radius: 12px;
+        background: color-mix(in srgb, var(--oppai-primary) 10%, var(--oppai-surface));
+        border: 1px solid color-mix(in srgb, var(--oppai-primary) 30%, transparent);
+        font-size: 12px;
+        line-height: 1.5;
+        color: var(--oppai-text-dim);
+      }
+      .manage-note .material-symbols-rounded { font-size: 18px; color: var(--oppai-primary-bright, var(--oppai-primary)); }
+
+      .create-stage {
+        min-width: 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        background: color-mix(in srgb, var(--oppai-bg) 86%, #000);
+      }
+      .create-gallery { border-left: 1px solid var(--oppai-border-strong); }
+
+      .recipe {
+        flex: 0 0 auto;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        min-width: 0;
+        padding: 10px 14px;
+        background: var(--oppai-surface);
+        border-bottom: 1px solid var(--oppai-border);
+      }
+      .recipe-model {
+        flex: 0 1 auto;
+        min-width: 0;
+        max-width: 320px;
+        display: flex;
+        align-items: center;
+        gap: 11px;
+        padding: 5px 12px 5px 5px;
+        border: 1px solid var(--oppai-border-strong);
+        border-radius: 16px;
+        background: var(--oppai-surface-2);
+        color: var(--oppai-text);
+        font: inherit;
+        text-align: left;
+        cursor: pointer;
+        transition: border-color 0.15s ease, background 0.15s ease;
+      }
+      .recipe-model:hover { border-color: var(--oppai-primary); }
+      .recipe-model img,
+      .recipe-model-icon {
+        flex: 0 0 44px;
+        width: 44px;
+        height: 44px;
+        border-radius: 11px;
+        object-fit: cover;
+        display: grid;
+        place-items: center;
+        background: var(--oppai-surface-3, var(--oppai-surface));
+        color: var(--oppai-text-muted);
+      }
+      .recipe-model-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+      .recipe-kicker {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.55px;
+        text-transform: uppercase;
+        color: var(--oppai-text-muted);
+        white-space: nowrap;
+      }
+      .recipe-model-name {
+        font-size: 14px;
+        font-weight: 700;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .recipe-caret { color: var(--oppai-text-muted); font-size: 20px; }
+      .recipe-chips {
+        flex: 1 1 auto;
+        min-width: 0;
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        overflow-x: auto;
+        scrollbar-width: none;
+        padding: 2px 0;
+      }
+      .recipe-chip,
+      .recipe-civitai,
+      .recipe-ghost {
+        flex: 0 0 auto;
+        height: 34px;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 0 12px;
+        border: 1px solid var(--oppai-border-strong);
+        border-radius: 17px;
+        background: transparent;
+        color: var(--oppai-text-dim);
+        font: inherit;
+        font-size: 12.5px;
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+        cursor: pointer;
+      }
+      .recipe-chip .material-symbols-rounded,
+      .recipe-civitai .material-symbols-rounded,
+      .recipe-ghost .material-symbols-rounded { font-size: 17px; }
+      .recipe-chip:hover,
+      .recipe-ghost:hover { background: var(--oppai-surface-2); color: var(--oppai-text); }
+      .recipe-chip.on { border-color: var(--oppai-primary); color: var(--oppai-text); }
+      .recipe-chip.add { border-style: dashed; }
+      .recipe-chip.lora {
+        padding: 0;
+        gap: 0;
+        border-color: color-mix(in srgb, var(--oppai-primary) 50%, transparent);
+        background: color-mix(in srgb, var(--oppai-primary) 14%, transparent);
+        color: var(--oppai-text);
+      }
+      .recipe-chip-main,
+      .recipe-chip-x {
+        height: 100%;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        border: 0;
+        background: transparent;
+        color: inherit;
+        font: inherit;
+        cursor: pointer;
+      }
+      .recipe-chip-main { padding: 0 4px 0 11px; }
+      .recipe-chip-main b { font-weight: 700; opacity: 0.75; }
+      .recipe-chip-x { padding: 0 9px 0 3px; opacity: 0.65; }
+      .recipe-chip-x:hover { opacity: 1; }
+      .recipe-ghost { width: 34px; padding: 0; justify-content: center; }
+      .recipe-civitai {
+        border-color: transparent;
+        background: var(--oppai-primary-container);
+        color: var(--oppai-on-primary-container, var(--oppai-text));
+        font-weight: 600;
+      }
+      .recipe-civitai:hover { filter: brightness(1.08); }
+
+      .create-stage .canvas-stage { padding: 26px; }
+      .create-stage .canvas-empty {
+        border-radius: 22px;
+        border-style: solid;
+        border-color: var(--oppai-border);
+        background: color-mix(in srgb, var(--oppai-surface) 70%, transparent);
+      }
+
+      .create-stage .prompt-dock {
+        padding: 12px 16px 16px;
+        background: linear-gradient(to bottom, transparent, color-mix(in srgb, var(--oppai-surface) 65%, transparent) 40%);
+        border-top: 0;
+      }
+      .composer {
+        gap: 10px;
+        padding: 12px;
+        border: 1px solid var(--oppai-border-strong);
+        border-radius: 22px;
+        background: var(--oppai-surface-2);
+        box-shadow: 0 -4px 30px rgba(0, 0, 0, 0.22);
+        transition: border-color 0.2s ease, box-shadow 0.2s ease;
+      }
+      .composer:focus-within {
+        border-color: color-mix(in srgb, var(--oppai-primary) 65%, var(--oppai-border-strong));
+        box-shadow: 0 -4px 30px rgba(0, 0, 0, 0.22), 0 0 0 3px color-mix(in srgb, var(--oppai-primary) 14%, transparent);
+      }
+      .composer-fields {
+        display: grid;
+        grid-template-columns: minmax(0, 1.7fr) minmax(200px, 0.8fr);
+        gap: 10px;
+      }
+      .composer .prompt-field textarea {
+        min-height: 96px;
+        max-height: 240px;
+        padding: 12px 14px;
+        border-radius: 15px;
+        border-color: var(--oppai-border);
+        background: var(--oppai-surface);
+        font-size: 14px;
+        line-height: 1.55;
+      }
+      .composer .prompt-field textarea:focus { border-color: var(--oppai-primary); }
+      .composer .prompt-field.negative textarea { padding-top: 29px; font-size: 13px; }
+      .composer .field-tag { top: 9px; left: 14px; }
+      .trigger-row {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 6px;
+      }
+      .trigger-label {
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+        color: var(--oppai-text-muted);
+        margin-right: 4px;
+      }
+      .chip.small { min-height: 28px; padding: 2px 11px; font-size: 12px; border-radius: 14px; }
+      .composer-bar {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        min-height: 46px;
+      }
+      .composer .mic {
+        width: 40px;
+        height: 40px;
+        border-radius: 20px;
+        background: var(--oppai-surface);
+        border: 1px solid var(--oppai-border-strong);
+      }
+      .composer .mic.live { border-color: transparent; }
+      .composer .speech-hint { font-size: 13px; }
+      .count-seg {
+        display: inline-flex;
+        border: 1px solid var(--oppai-border-strong);
+        border-radius: 13px;
+        overflow: hidden;
+      }
+      .count-seg button {
+        width: 38px;
+        height: 36px;
+        border: 0;
+        background: transparent;
+        color: var(--oppai-text-dim);
+        font: inherit;
+        font-size: 13px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      .count-seg button + button { border-left: 1px solid var(--oppai-border); }
+      .count-seg button:hover:not(:disabled) { background: var(--oppai-surface); }
+      .count-seg button.on {
+        background: var(--oppai-primary-container);
+        color: var(--oppai-on-primary-container, var(--oppai-text));
+      }
+      .count-seg button:disabled { cursor: default; opacity: 0.5; }
+      .composer .prompt-summary { font-size: 12px; }
+      .composer .generate {
+        width: auto;
+        min-width: 176px;
+        height: 48px;
+        margin: 0 0 0 auto;
+        padding: 0 26px;
+        border-radius: 24px;
+        font-size: 15px;
+        font-weight: 700;
+        letter-spacing: 0.2px;
+        background: linear-gradient(135deg, var(--oppai-primary), color-mix(in srgb, var(--oppai-primary) 62%, var(--oppai-accent, #c58af9)));
+        box-shadow: 0 8px 22px color-mix(in srgb, var(--oppai-primary) 34%, transparent);
+        transition: transform 0.16s var(--oppai-ease-spring), box-shadow 0.16s ease, filter 0.16s ease;
+      }
+      .composer .generate:hover:not(:disabled) { transform: translateY(-1px); filter: brightness(1.06); }
+      .composer .generate:disabled { box-shadow: none; }
+      .composer .generate.cancel {
+        background: var(--oppai-surface);
+        color: var(--oppai-text);
+        border: 1px solid var(--oppai-border-strong);
+        box-shadow: none;
+      }
+
+      /* The suggestion list opens upward: the composer sits at the bottom of the
+         screen, and a list that opened down would be off it. */
+      .complete {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: calc(100% + 8px);
+        z-index: 20;
+        max-height: 340px;
+        overflow-y: auto;
+        padding: 6px;
+        border: 1px solid var(--oppai-border-strong);
+        border-radius: 16px;
+        background: var(--oppai-surface-2);
+        box-shadow: 0 16px 44px rgba(0, 0, 0, 0.45);
+        animation: oppai-fade-in-up 0.14s ease both;
+      }
+      .complete-row {
+        width: 100%;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 10px;
+        border: 0;
+        border-radius: 10px;
+        background: transparent;
+        color: var(--oppai-text);
+        font: inherit;
+        font-size: 13px;
+        text-align: left;
+        cursor: pointer;
+      }
+      .complete-row.on { background: color-mix(in srgb, var(--oppai-primary) 22%, transparent); }
+      /* Danbooru's own colours for its categories, so a character or an artist reads
+         as one before its name does. */
+      .complete-dot { flex: 0 0 9px; width: 9px; height: 9px; border-radius: 50%; background: #8ab4f8; }
+      .complete-dot.cat-1 { background: #f28b82; }
+      .complete-dot.cat-3 { background: #c58af9; }
+      .complete-dot.cat-4 { background: #81c995; }
+      .complete-dot.cat-5 { background: #fdd663; }
+      .complete-dot.cat-100 { background: var(--oppai-primary); }
+      .complete-dot.cat-lora,
+      .complete-dot.cat-wildcard,
+      .complete-dot.cat-trigger { border-radius: 3px; }
+      .complete-dot.cat-lora { background: var(--oppai-primary); }
+      .complete-dot.cat-wildcard { background: #78d9ec; }
+      .complete-dot.cat-trigger { background: #fdd663; }
+      .complete-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .complete-detail { color: var(--oppai-text-muted); font-size: 11.5px; white-space: nowrap; }
+      .complete-count {
+        min-width: 38px;
+        color: var(--oppai-text-muted);
+        font-size: 11.5px;
+        font-variant-numeric: tabular-nums;
+        text-align: right;
+      }
+      .complete-hint {
+        margin-top: 4px;
+        padding: 7px 10px 3px;
+        border-top: 1px solid var(--oppai-border);
+        color: var(--oppai-text-muted);
+        font-size: 11px;
+      }
+
+      /* Narrower than a drawer, a canvas and a gallery side by side: the drawer
+         floats over the canvas instead of pushing it. */
+      @media (max-width: 1240px) {
+        .create-shell,
+        .create-shell.drawer-open { grid-template-columns: 84px minmax(0, 1fr); position: relative; }
+        .create-shell.with-gallery,
+        .create-shell.drawer-open.with-gallery { grid-template-columns: 84px minmax(0, 1fr) 280px; }
+        .create-drawer {
+          position: absolute;
+          z-index: 30;
+          top: 0;
+          bottom: 0;
+          left: 84px;
+          width: 340px;
+          box-shadow: 18px 0 46px rgba(0, 0, 0, 0.42);
+        }
+      }
+      /* A tablet or a phone: one column that scrolls — the rail across the top, the
+         canvas and composer, then the gallery — and the drawer a sheet from below. */
+      @media (max-width: 900px) {
+        .workspace.create { height: auto; min-height: 100%; }
+        .create-shell,
+        .create-shell.drawer-open,
+        .create-shell.with-gallery,
+        .create-shell.drawer-open.with-gallery { display: flex; flex-direction: column; }
+        .create-rail {
+          position: sticky;
+          top: 0;
+          z-index: 25;
+          flex-direction: row;
+          gap: 2px;
+          padding: 6px 8px;
+          overflow-x: auto;
+          border-right: 0;
+          border-bottom: 1px solid var(--oppai-border-strong);
+        }
+        .rail-tab { flex: 1 0 64px; }
+        .rail-icon { width: 48px; height: 28px; font-size: 20px; }
+        .rail-badge { right: calc(50% - 26px); }
+        .create-stage { min-height: 0; }
+        /* The composer stays in reach while the canvas scrolls under it: on a phone
+           the picture fills the screen, and the prompt is what is changed next. */
+        .create-stage .prompt-dock {
+          position: sticky;
+          bottom: 0;
+          z-index: 6;
+          padding: 8px 10px 10px;
+          background: linear-gradient(to bottom, transparent, var(--oppai-bg) 22%);
+        }
+        .create-gallery { min-height: 440px; border-left: 0; border-top: 1px solid var(--oppai-border-strong); }
+        .drawer-scrim {
+          display: block;
+          position: fixed;
+          inset: 0;
+          z-index: 90;
+          background: rgba(0, 0, 0, 0.5);
+          animation: oppai-fade-in 0.2s ease both;
+        }
+        .create-drawer {
+          position: fixed;
+          z-index: 91;
+          left: 0;
+          right: 0;
+          top: auto;
+          bottom: 0;
+          width: auto;
+          max-height: 78vh;
+          border: 1px solid var(--oppai-border-strong);
+          border-bottom: 0;
+          border-radius: 26px 26px 0 0;
+          box-shadow: 0 -18px 50px rgba(0, 0, 0, 0.5);
+          animation: create-sheet-in 0.28s var(--oppai-ease-emphasized) both;
+        }
+        @keyframes create-sheet-in {
+          from { transform: translateY(40px); opacity: 0; }
+          to { transform: none; opacity: 1; }
+        }
+        .drawer-scroll { padding-bottom: calc(24px + env(safe-area-inset-bottom, 0px)); }
+        .create-drawer .cards,
+        .create-drawer .sec-models .cards { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
+        .recipe { flex-wrap: wrap; padding: 10px 12px; gap: 8px; }
+        .recipe-model { flex: 1 1 auto; max-width: none; }
+        .recipe-chips { flex: 1 1 100%; order: 3; }
+        .create-stage .canvas-stage { min-height: 52vh; padding: 14px; }
+        .composer { gap: 8px; padding: 9px; border-radius: 18px; }
+        .composer-fields { grid-template-columns: 1fr; gap: 6px; }
+        .composer .prompt-field textarea { min-height: 58px; font-size: 14px; }
+        .composer .prompt-field.negative textarea { min-height: 40px; height: 40px; padding-top: 22px; }
+        .composer .field-tag { top: 6px; }
+        .composer .prompt-summary { display: none; }
+        .composer .mic { width: 38px; height: 38px; }
+        .count-seg button { width: 32px; }
+        .composer .generate { flex: 1 1 auto; min-width: 0; height: 44px; margin: 0; padding: 0 16px; }
+      }
     `,
   ];
 
@@ -4089,7 +4751,7 @@ export class OppaiImageGen extends LitElement {
     try {
       await api.setModelThumb({ model: this.checkpoint, previewId: shot.id });
       this.bumpThumbs();
-      this.showToast("Model preview synced to InvokeAI");
+      this.showToast("Set as the model's cover");
     } catch (e) {
       this.showToast((e as Error).message);
     }
@@ -4421,10 +5083,12 @@ export class OppaiImageGen extends LitElement {
     return html`
       <div class="overlay" @click=${(e: Event) => { if (e.target === e.currentTarget) this.metaDraft = null; }}>
         <div class="dialog">
-          <h3>Edit ${isLora ? "LoRA" : "model"} — synced with InvokeAI</h3>
+          <h3>Edit ${isLora ? "LoRA" : "model"} — saved on ${this.status?.backend === "invokeai" ? "InvokeAI" : "Automatic1111"}</h3>
           <div>
             <label class="field">Name</label>
-            <input type="text" .value=${d.name}
+            <!-- Automatic1111 names a model by its file, so the name is not edited there. -->
+            <input type="text" .value=${d.name} ?readonly=${this.status?.backend !== "invokeai"}
+              title=${this.status?.backend !== "invokeai" ? "Automatic1111 names a model by its file" : ""}
               @input=${(e: Event) => (this.metaDraft = { ...d, name: (e.target as HTMLInputElement).value })} />
           </div>
           <div>
@@ -4513,7 +5177,7 @@ export class OppaiImageGen extends LitElement {
                 </div>
               `}
           <div class="dialog-actions">
-            <button class="btn danger" ?disabled=${this.metaBusy} title="Remove from InvokeAI, file included"
+            <button class="btn danger" ?disabled=${this.metaBusy} title="Remove from the generator, file included"
               @click=${() => this.deleteMetaModel()}>Delete</button>
             <button class="btn" @click=${() => (this.metaDraft = null)}>Cancel</button>
             <button class="btn primary" ?disabled=${this.metaBusy || !d.name.trim()} @click=${() => this.saveMeta()}>
@@ -4553,46 +5217,19 @@ export class OppaiImageGen extends LitElement {
     const activeModel = (st.models ?? []).find((model) => model.title === this.checkpoint);
     const modelName = activeModel?.model_name || this.checkpoint || "Choose a model";
     if (this.studio) return this.renderStudio(st, invoke, modelName);
+    const tab = this.createTab;
     return html`
-      <div class="workspace">
-        <div class="workspace-bar">
-          <div class="workspace-tab">
-            <span class="material-symbols-rounded" style="font-size:18px;">auto_awesome</span>
-            Generate
-          </div>
-          <div class="workspace-context">
-            <div class="backend-pill" title="Connected generation backend">
-              <span class="status-dot"></span>
-              ${invoke ? "InvokeAI" : "A1111 / SD.Next"}
-            </div>
-            <div class="model-pill" title=${modelName}>
-              <span class="material-symbols-rounded" style="font-size:15px;">deployed_code</span>
-              <span>${modelName}</span>
-            </div>
-            ${invoke ? html`<button class="ghost" @click=${() => (this.civitaiOpen = true)}>
-              <span class="material-symbols-rounded" style="font-size:17px;">travel_explore</span>
-              <span>Browse Civitai</span>
-            </button>` : nothing}
-          </div>
-        </div>
-        <div class="layout ${invoke ? "" : "no-gallery"}">
-          <aside class="side">
-            <div class="panel-heading">
-              <span class="material-symbols-rounded" style="font-size:16px;">tune</span>
-              Generation setup
-            </div>
-            <div class="panel-scroll">
-              ${this.renderModelSection(st.models ?? [])}
-              ${this.renderLoraSection(st.loras ?? [], st.loraError)}
-              ${this.renderVaeSection(st.vaes ?? [])}
-              ${this.renderSettingsSection(invoke, st.boards ?? [])}
-              ${this.renderTemplateSection(st.templates ?? [])}
-              ${this.renderCharacterSection()}
-              ${this.renderPoseSection()}
-              ${this.renderWildcardSection()}
-            </div>
-          </aside>
-          <section class="workbench">${this.renderCanvasToolbar()}
+      <div class="workspace create">
+        <div class="create-shell ${tab ? "drawer-open" : ""} ${invoke ? "with-gallery" : ""}">
+          ${this.renderCreateRail()}
+          ${tab
+            ? html`<div class="drawer-scrim" @click=${() => (this.createTab = "")}></div>
+                <aside class="create-drawer" aria-label=${CREATE_TABS.find((t) => t.id === tab)?.label ?? ""}>
+                  ${this.renderCreateDrawer(st, invoke)}
+                </aside>`
+            : nothing}
+          <section class="create-stage">
+            ${this.renderRecipeStrip(st, invoke)}
             <div class="canvas-stage">
               ${this.renderResults()}
               ${this.error ? html`<div class="banner">${this.error}</div>` : nothing}
@@ -4601,7 +5238,7 @@ export class OppaiImageGen extends LitElement {
             <div class="prompt-dock">${this.renderPrompt()}</div>
           </section>
           ${invoke
-            ? html`<aside class="right">
+            ? html`<aside class="right create-gallery">
                 <oppai-invoke-gallery workspace
                   @boards-changed=${() => this.loadStatus()}
                   @board-changed=${(e: CustomEvent<{ board: string }>) => (this.board = e.detail.board)}
@@ -4614,36 +5251,186 @@ export class OppaiImageGen extends LitElement {
         </div>
       </div>
       ${this.civitaiOpen
-        ? html`<oppai-civitai @close=${() => this.onCivitaiClose()}
+        ? html`<oppai-civitai backend=${this.status?.backend ?? "invokeai"} .canManage=${!!this.status?.manageModels}
+            @close=${() => this.onCivitaiClose()}
             @use-prompt=${(e: CustomEvent<PromptSettings>) => this.onCivitaiPrompt(e.detail)}></oppai-civitai>`
         : nothing}
     `;
   }
 
-  /**
-   * The strip above the workbench.
-   *
-   * In the studio it names the wardrobe being built and counts the set, because those
-   * are the two facts you look up while working through sixty squares. On the Create
-   * screen it stays what it was: the size and seed the next generation will use.
-   */
-  private renderCanvasToolbar() {
-    return html`<div class="canvas-toolbar">
-      <span class="canvas-name">Generation canvas</span>
-      <span class="toolbar-spacer"></span>
-      ${this.shots.length ? html`<button class="toolbar-clear" @click=${() => this.clearWorkspace()}>
-        <span class="material-symbols-rounded" style="font-size:15px;">delete_sweep</span>
-        Clear workspace
-      </button>` : nothing}
-      <span class="toolbar-stat" title="Output size">
-        <span class="material-symbols-rounded" style="font-size:14px;">aspect_ratio</span>
-        ${this.width} × ${this.height}
-      </span>
-      <span class="toolbar-stat" title="Seed">
-        <span class="material-symbols-rounded" style="font-size:14px;">casino</span>
-        ${this.seed < 0 ? "Random" : this.seed}
-      </span>
+  // ── the Create screen ───────────────────────────────────────────────────────
+  //
+  // Three things, in the order they are used: what to draw with (the rail down the
+  // left, each tab a drawer beside the canvas), what is being drawn with right now
+  // (the recipe strip over the canvas — the model, the LoRAs that are on, the size,
+  // the seed — each one a button back to where it is changed), and what to draw (the
+  // composer under the canvas). It used to be one long accordion of eight sections,
+  // which showed the half-cut top of a section while it was closed and on a phone put
+  // all of them above the canvas. Only one drawer is open at a time, and shutting it
+  // gives the canvas the room.
+
+  private openCreateTab(id: CreateTab, toggle = false) {
+    const next = toggle && this.createTab === id ? "" : id;
+    if (next !== this.createTab) this.pickerFilter = "";
+    this.createTab = next;
+  }
+
+  private renderCreateRail() {
+    const badges: Partial<Record<CreateTab, number>> = {
+      loras: Object.keys(this.selectedLoras).length,
+      look: this.selectedChars.length + this.selectedPoses.length,
+      templates: this.templateId ? 1 : 0,
+    };
+    return html`<nav class="create-rail" aria-label="Generation setup">
+      ${CREATE_TABS.map((t) => html`<button class="rail-tab ${this.createTab === t.id ? "on" : ""}"
+          aria-pressed=${this.createTab === t.id ? "true" : "false"} title=${t.label}
+          @click=${() => this.openCreateTab(t.id, true)}>
+          <span class="material-symbols-rounded rail-icon">${t.icon}</span>
+          <span class="rail-label">${t.label}</span>
+          ${badges[t.id] ? html`<span class="rail-badge">${badges[t.id]}</span>` : nothing}
+        </button>`)}
+    </nav>`;
+  }
+
+  private renderPickerSearch(placeholder: string) {
+    return html`<label class="picker-search">
+      <span class="material-symbols-rounded">search</span>
+      <input type="search" .value=${this.pickerFilter} placeholder=${placeholder} aria-label=${placeholder}
+        @input=${(e: Event) => (this.pickerFilter = (e.target as HTMLInputElement).value)} />
+    </label>`;
+  }
+
+  /** Why the edit, cover and Civitai-install controls are missing on an A1111. */
+  private renderManageNote(st: ImageGenStatus, invoke: boolean) {
+    if (invoke || st.manageModels) return nothing;
+    return html`<div class="manage-note">
+      <span class="material-symbols-rounded">info</span>
+      <span>${st.modelsDirSet
+        ? "The Automatic1111 models folder set in Settings isn't a models folder (it needs Stable-diffusion or Lora inside), so models can't be installed, edited or deleted from here."
+        : "Automatic1111 has no API to install, edit or delete models. Set its models folder under Settings → Image generation and those work here too, Civitai installs included."}</span>
     </div>`;
+  }
+
+  private renderCreateDrawer(st: ImageGenStatus, invoke: boolean) {
+    const tab = this.createTab as CreateTab;
+    const meta = CREATE_TABS.find((t) => t.id === tab)!;
+    // The sections are the studio's accordion sections; drawn flat here, with no
+    // header of their own, because the drawer's header already says what this is.
+    this.flatSections = true;
+    let body: unknown = nothing;
+    try {
+      switch (tab) {
+        case "models":
+          body = html`${this.renderPickerSearch("Search models")}
+            ${this.renderModelSection(st.models ?? [])}
+            ${this.renderManageNote(st, invoke)}`;
+          break;
+        case "loras":
+          body = html`${this.renderPickerSearch("Search LoRAs")}
+            ${this.renderLoraSection(st.loras ?? [], st.loraError)}`;
+          break;
+        case "look":
+          body = html`<div class="pane-title">Characters</div>${this.renderCharacterSection()}
+            <div class="pane-title">Poses</div>${this.renderPoseSection()}`;
+          break;
+        case "wildcards":
+          body = this.renderWildcardSection();
+          break;
+        case "templates":
+          body = this.renderTemplateSection(st.templates ?? []);
+          break;
+        case "settings":
+          body = html`<div class="pane-title">Size</div><div class="pane">${this.renderPromptOptions()}</div>
+            <div class="pane-title">Sampling</div>${this.renderSettingsSection(invoke, st.boards ?? [])}
+            <div class="pane-title">VAE</div>${this.renderVaeSection(st.vaes ?? [])}`;
+          break;
+      }
+    } finally {
+      this.flatSections = false;
+    }
+    return html`
+      <div class="drawer-head">
+        <span class="material-symbols-rounded">${meta.icon}</span>
+        ${meta.label}
+        <span class="toolbar-spacer"></span>
+        ${tab === "models" || tab === "loras"
+          ? html`<button class="drawer-action" title="Find more on Civitai" @click=${() => (this.civitaiOpen = true)}>
+              <span class="material-symbols-rounded">travel_explore</span>
+            </button>`
+          : nothing}
+        <button class="drawer-action" title="Close" aria-label="Close" @click=${() => (this.createTab = "")}>
+          <span class="material-symbols-rounded">close</span>
+        </button>
+      </div>
+      <div class="drawer-scroll">${body}</div>
+    `;
+  }
+
+  /**
+   * The recipe: what the next generation will be made with, readable at a glance and
+   * each part a button to where it is changed. The LoRAs that are on show here with
+   * their weights and can be taken off without opening anything.
+   */
+  private renderRecipeStrip(st: ImageGenStatus, invoke: boolean) {
+    const model = (st.models ?? []).find((m) => m.title === this.checkpoint);
+    const loras = (st.loras ?? []).filter((l) => l.name in this.selectedLoras);
+    const thumb = model ? `${api.modelThumbURL(model.title)}&v=${this.thumbVersion}` : "";
+    return html`<div class="recipe">
+      <button class="recipe-model" title=${model?.title ?? "Choose a model"} @click=${() => this.openCreateTab("models")}>
+        ${thumb && !this.failedThumbs.has(thumb)
+          ? html`<img src=${thumb} alt="" @error=${() => (this.failedThumbs = new Set(this.failedThumbs).add(thumb))} />`
+          : html`<span class="recipe-model-icon"><span class="material-symbols-rounded">deployed_code</span></span>`}
+        <span class="recipe-model-text">
+          <span class="recipe-kicker"><span class="status-dot"></span>${invoke ? "InvokeAI" : "Automatic1111"}${model?.base ? html` · ${model.base}` : nothing}</span>
+          <span class="recipe-model-name">${model?.model_name || this.checkpoint || "Choose a model"}</span>
+        </span>
+        <span class="material-symbols-rounded recipe-caret">expand_more</span>
+      </button>
+      <div class="recipe-chips">
+        ${loras.map((l) => html`<span class="recipe-chip lora">
+          <button class="recipe-chip-main" title="Change the weight in the LoRAs drawer" @click=${() => this.openCreateTab("loras")}>
+            <span class="material-symbols-rounded">style</span>${l.alias || l.name}<b>${this.selectedLoras[l.name]}</b>
+          </button>
+          <button class="recipe-chip-x" title="Take this LoRA off" aria-label=${`Remove ${l.alias || l.name}`} @click=${() => this.toggleLora(l.name)}>
+            <span class="material-symbols-rounded">close</span>
+          </button>
+        </span>`)}
+        ${loras.length ? nothing : html`<button class="recipe-chip add" @click=${() => this.openCreateTab("loras")}>
+          <span class="material-symbols-rounded">add</span>LoRA
+        </button>`}
+        <button class="recipe-chip" title="Output size" @click=${() => this.openCreateTab("settings")}>
+          <span class="material-symbols-rounded">aspect_ratio</span>${this.width}×${this.height}
+        </button>
+        <button class="recipe-chip" title="Sampling settings" @click=${() => this.openCreateTab("settings")}>
+          <span class="material-symbols-rounded">tune</span>${this.steps} steps · CFG ${this.cfg}
+        </button>
+        <button class="recipe-chip ${this.seed >= 0 ? "on" : ""}"
+          title=${this.seed < 0 ? "A new seed every time — click to keep the last picture's" : "This seed is kept — click to go back to random"}
+          @click=${() => this.toggleSeedLock()}>
+          <span class="material-symbols-rounded">${this.seed < 0 ? "casino" : "lock"}</span>${this.seed < 0 ? "Random seed" : this.seed}
+        </button>
+      </div>
+      ${this.shots.length ? html`<button class="recipe-ghost" title="Clear the canvas" @click=${() => this.clearWorkspace()}>
+        <span class="material-symbols-rounded">delete_sweep</span>
+      </button>` : nothing}
+      ${st.civitai ? html`<button class="recipe-civitai" @click=${() => (this.civitaiOpen = true)}>
+        <span class="material-symbols-rounded">travel_explore</span><span>Civitai</span>
+      </button>` : nothing}
+    </div>`;
+  }
+
+  /** Keeps the seed of the picture on the canvas, or goes back to a new one each time. */
+  private toggleSeedLock() {
+    if (this.seed >= 0) {
+      this.seed = -1;
+      return;
+    }
+    const last = this.shots[0]?.seed;
+    if (last === undefined || last < 0) {
+      this.showToast("Generate a picture first — its seed is the one kept");
+      return;
+    }
+    this.seed = last;
   }
 
   // ── the studio ──────────────────────────────────────────────────────────────
@@ -5227,6 +6014,7 @@ export class OppaiImageGen extends LitElement {
   }
 
   private section(id: string, label: string, count: string, body: unknown) {
+    if (this.flatSections) return html`<div class="pane sec-${id}">${body}</div>`;
     const open = !!this.open[id];
     return html`
       <div class="sec sec-${id}">
@@ -5260,9 +6048,14 @@ export class OppaiImageGen extends LitElement {
         </div>`,
       );
     }
+    const filter = this.flatSections ? this.pickerFilter.trim().toLowerCase() : "";
+    const shown = filter
+      ? models.filter((m) => `${m.model_name} ${m.title} ${m.base ?? ""}`.toLowerCase().includes(filter))
+      : models;
     const body = html`
+      ${filter && !shown.length ? html`<div class="sec-note">No model matches “${this.pickerFilter}”.</div>` : nothing}
       <div class="cards">
-        ${models.map((m) => {
+        ${shown.map((m) => {
           const on = m.title === this.checkpoint;
           const thumb = `${api.modelThumbURL(m.title)}&v=${this.thumbVersion}`;
           return html`
@@ -5271,9 +6064,9 @@ export class OppaiImageGen extends LitElement {
                 ${this.renderArt(thumb, m.model_name, "texture")}
                 <div class="card-name">${m.model_name}${m.base ? html`<span class="row-sub">${m.base}</span>` : nothing}</div>
               </button>
-              <button class="card-edit left" title="Edit model settings" @click=${() => this.openMetaEditor(m.title)}>
+              ${this.status?.manageModels ? html`<button class="card-edit left" title="Edit model settings" @click=${() => this.openMetaEditor(m.title)}>
                 <span class="material-symbols-rounded" style="font-size:15px;">edit</span>
-              </button>
+              </button>` : nothing}
             </div>
           `;
         })}
@@ -5293,10 +6086,18 @@ export class OppaiImageGen extends LitElement {
         </div>`,
       );
     }
-    const pages = Math.ceil(loras.length / 6);
+    // The drawer has the height to show them all and a search to narrow them; the
+    // studio's accordion keeps its pages of six.
+    const filter = this.flatSections ? this.pickerFilter.trim().toLowerCase() : "";
+    const matching = filter
+      ? loras.filter((l) => `${l.name} ${l.alias ?? ""} ${(l.triggerPhrases ?? []).join(" ")}`.toLowerCase().includes(filter))
+      : loras;
+    const perPage = this.flatSections ? 60 : 6;
+    const pages = Math.max(1, Math.ceil(matching.length / perPage));
     const page = Math.min(this.loraPage, pages - 1);
-    const visible = loras.slice(page * 6, page * 6 + 6);
+    const visible = matching.slice(page * perPage, page * perPage + perPage);
     const body = html`
+      ${filter && !matching.length ? html`<div class="sec-note">No LoRA matches “${this.pickerFilter}”.</div>` : nothing}
       <div class="cards">
         ${visible.map((lora) => {
           const on = lora.name in this.selectedLoras;
@@ -5307,9 +6108,9 @@ export class OppaiImageGen extends LitElement {
                 ${this.renderArt(thumb, lora.alias || lora.name, "style")}
                 <div class="card-name">${lora.alias || lora.name}</div>
               </button>
-              <button class="card-edit left" title="Edit LoRA settings" @click=${() => this.openMetaEditor(lora.name)}>
+              ${this.status?.manageModels ? html`<button class="card-edit left" title="Edit LoRA settings" @click=${() => this.openMetaEditor(lora.name)}>
                 <span class="material-symbols-rounded" style="font-size:15px;">edit</span>
-              </button>
+              </button>` : nothing}
               ${on ? html`<input class="lora-weight" type="number" min="-2" max="2" step="0.05"
                 aria-label=${`${lora.alias || lora.name} weight`}
                 .value=${String(this.selectedLoras[lora.name])}
@@ -5472,7 +6273,9 @@ export class OppaiImageGen extends LitElement {
       ? html`<div class="sec-note">
           ${templates.length
             ? "No templates you created. Built-in presets are hidden — turn them on below."
-            : "No templates on the generator. In InvokeAI they're called style presets; add some there and reload."}
+            : this.status?.backend === "invokeai"
+              ? "No style presets in InvokeAI yet; add some there and reload."
+              : "No styles saved in Automatic1111 yet; save one from its Styles menu and reload."}
         </div>`
       : html`
           <div class="rows">
@@ -5502,7 +6305,7 @@ export class OppaiImageGen extends LitElement {
         : nothing}
     `;
     const current = templates.find((t) => t.id === this.templateId);
-    return this.section("templates", "Invoke templates", current ? current.name : "none", body);
+    return this.section("templates", "Styles", current ? current.name : "none", body);
   }
 
   private renderCharacterSection() {
@@ -6397,102 +7200,117 @@ export class OppaiImageGen extends LitElement {
 
   private renderPrompt() {
     const outputCount = this.outfitOn ? 1 : this.count;
-    const triggerPhrases = [...new Set(
-      (this.status?.loras ?? [])
-        .filter((lora) => lora.name in this.selectedLoras)
-        .flatMap((lora) => lora.triggerPhrases ?? []),
-    )];
+    const triggerPhrases = this.activeTriggerPhrases();
     return html`
-      <div class="prompt-card">
+      <div class="prompt-card composer">
         ${this.editing ? html`<div class="editing-bar">
           <span class="material-symbols-rounded" style="font-size:17px;">brush</span>
           <span class="editing-copy">Editing <strong>${this.editing.title}</strong>${this.editingLibby ? " — one of Libby's pictures" : ""}.
             Generate, then Save to keep it beside the original, or right-click a result to replace it.</span>
           <button class="chip" @click=${() => (this.editing = null)}>Done</button>
         </div>` : nothing}
-        <div class="prompt-head">
-          <span class="prompt-title">Prompt</span>
-          <span class="toolbar-spacer"></span>
-          <div class="speech-row">
-            <div class="speech-hint">
-              ${this.listening
-                ? this.speech || "Listening…"
-                : this.optimizing
-                  ? "Turning that into a prompt…"
-                  : this.speechSupported
-                    ? "Voice prompt"
-                    : "Voice unavailable"}
-            </div>
-            ${this.speechSupported
-              ? html`<button
-                  class="mic ${this.listening ? "live" : ""}"
-                  title=${this.listening ? "Stop listening" : "Speak your idea"}
-                  @click=${() => this.toggleListening()}
-                >
-                  <span class="material-symbols-rounded">${this.listening ? "stop" : "mic"}</span>
-                </button>`
-              : nothing}
-          </div>
-        </div>
 
-        <div class="prompt-grid">
-          <div class="prompt-field">
-            <span class="field-tag">Positive</span>
+        <div class="composer-fields">
+          <div class="prompt-field positive">
             <textarea
               class="prompt-area"
               aria-label="Positive prompt"
+              aria-autocomplete="list"
               .value=${this.prompt}
-              placeholder="Describe what you want to create…"
+              placeholder="Describe what you want to create — tags complete as you type, and so do <lora: and __wildcards__"
               @input=${(e: Event) => {
                 this.prompt = (e.target as HTMLTextAreaElement).value;
-                void this.updateTagSuggestions();
+                this.onPromptTyping("prompt");
               }}
+              @click=${() => this.onPromptTyping("prompt")}
+              @keydown=${(e: KeyboardEvent) => this.onPromptKey(e, "prompt")}
+              @blur=${() => this.closeCompletionsSoon()}
             ></textarea>
+            ${this.completionField === "prompt" ? this.renderCompletions() : nothing}
           </div>
-          <div class="prompt-field">
+          <div class="prompt-field negative">
             <span class="field-tag negative">Negative</span>
             <textarea
+              class="negative-area"
               aria-label="Negative prompt"
+              aria-autocomplete="list"
               .value=${this.negative}
-              placeholder="What should be excluded…"
-              @input=${(e: Event) => (this.negative = (e.target as HTMLTextAreaElement).value)}
+              placeholder="What to leave out…"
+              @input=${(e: Event) => {
+                this.negative = (e.target as HTMLTextAreaElement).value;
+                this.onPromptTyping("negative");
+              }}
+              @click=${() => this.onPromptTyping("negative")}
+              @keydown=${(e: KeyboardEvent) => this.onPromptKey(e, "negative")}
+              @blur=${() => this.closeCompletionsSoon()}
             ></textarea>
+            ${this.completionField === "negative" ? this.renderCompletions() : nothing}
           </div>
         </div>
 
-        ${this.tagCorrection ? html`<div class="sec-note">Did you mean
-          <button class="chip" @click=${() => this.applySuggestedTag(this.tagCorrection)}>${this.tagCorrection}</button>?
-        </div>` : nothing}
-        ${this.tagSuggestions.length ? html`<div class="chips">
-          ${this.tagSuggestions.map((tag) => html`<button class="chip" @click=${() => this.applySuggestedTag(tag)}>${tag}</button>`)}
-        </div>` : nothing}
-        ${triggerPhrases.length ? html`<div class="chips">
+        ${triggerPhrases.length ? html`<div class="trigger-row">
+          <span class="trigger-label">Trigger words</span>
           ${triggerPhrases.map((phrase) => html`<button
-            class="chip ${this.selectedTriggers.includes(phrase) ? "on" : ""}"
-            title="Add or remove LoRA trigger phrase"
+            class="chip small ${this.selectedTriggers.includes(phrase) ? "on" : ""}"
+            title="Add or remove this LoRA trigger phrase"
             @click=${() => this.toggleTrigger(phrase)}>${phrase}</button>`)}
         </div>` : nothing}
 
-        ${this.showOptions ? html`<div class="prompt-options">${this.renderPromptOptions()}</div>` : nothing}
-
-        <div class="prompt-footer">
-          <button class="adv-toggle" @click=${() => (this.showOptions = !this.showOptions)}>
-            <span class="material-symbols-rounded" style="font-size:17px;">${this.showOptions ? "expand_less" : "tune"}</span>
-            ${this.showOptions ? "Hide size" : "Size"}
-          </button>
-          <span class="prompt-summary">${this.steps} steps · CFG ${this.cfg} · ${outputCount} image${outputCount === 1 ? "" : "s"}</span>
+        <div class="composer-bar">
+          ${this.speechSupported
+            ? html`<button
+                class="mic ${this.listening ? "live" : ""}"
+                title=${this.listening ? "Stop listening" : "Speak your idea"}
+                @click=${() => this.toggleListening()}
+              >
+                <span class="material-symbols-rounded">${this.listening ? "stop" : "mic"}</span>
+              </button>`
+            : nothing}
+          ${this.listening || this.optimizing
+            ? html`<span class="speech-hint">${this.listening ? this.speech || "Listening…" : "Turning that into a prompt…"}</span>`
+            : html`<div class="count-seg" role="group" aria-label="Pictures per run" title=${this.outfitOn ? "The outfit board makes one square at a time" : "Pictures per run"}>
+                ${[1, 2, 3, 4].map((n) => html`<button class=${outputCount === n ? "on" : ""} ?disabled=${this.outfitOn}
+                  aria-pressed=${outputCount === n ? "true" : "false"} @click=${() => (this.count = n)}>${n}</button>`)}
+              </div>
+              <span class="prompt-summary">${outputCount} picture${outputCount === 1 ? "" : "s"} · ${this.width}×${this.height}</span>`}
           ${this.generating
             ? html`<button class="generate cancel" type="button" ?disabled=${this.progress?.cancelled} title="Stop this generation" @click=${() => void this.cancelGeneration()}>
                 <span class="material-symbols-rounded" style="font-size:19px;">close</span>
                 ${this.progress?.cancelled ? "Stopping…" : this.progress?.total ? `Cancel · ${this.progress.step}/${this.progress.total}` : "Cancel"}
               </button>`
-            : html`<button class="generate" ?disabled=${!this.assemblePrompts().prompt.trim()} @click=${() => this.generate()}>
-                <span class="material-symbols-rounded" style="font-size:19px;">auto_awesome</span>
+            : html`<button class="generate" title="Generate (Ctrl+Enter)" ?disabled=${!this.assemblePrompts().prompt.trim()} @click=${() => this.generate()}>
+                <span class="material-symbols-rounded" style="font-size:20px;">auto_awesome</span>
                 ${this.status?.backend === "invokeai" ? "Invoke" : "Generate"}
               </button>`}
         </div>
       </div>
     `;
+  }
+
+  /** The trigger phrases of the LoRAs that are switched on. */
+  private activeTriggerPhrases(): string[] {
+    return [...new Set(
+      (this.status?.loras ?? [])
+        .filter((lora) => lora.name in this.selectedLoras)
+        .flatMap((lora) => lora.triggerPhrases ?? []),
+    )];
+  }
+
+  private renderCompletions() {
+    if (!this.completions.length) return nothing;
+    return html`<div class="complete" role="listbox" aria-label="Suggestions"
+      @mousedown=${(e: Event) => e.preventDefault()}>
+      ${this.completions.map((c, i) => html`<button class="complete-row ${i === this.completionIndex ? "on" : ""}"
+          role="option" aria-selected=${i === this.completionIndex ? "true" : "false"}
+          @mouseenter=${() => (this.completionIndex = i)}
+          @click=${() => void this.acceptCompletion(i)}>
+          <span class="complete-dot cat-${c.kind === "tag" ? String(c.category ?? 0) : c.kind}"></span>
+          <span class="complete-label">${c.label}</span>
+          ${c.detail ? html`<span class="complete-detail">${c.detail}</span>` : nothing}
+          <span class="complete-count">${formatCount(c.count)}</span>
+        </button>`)}
+      <div class="complete-hint">↑ ↓ choose · Tab or Enter inserts · Esc closes</div>
+    </div>`;
   }
 
   /** Applies the automatically-started, manually-reviewed mask to its outfit square.
@@ -6736,22 +7554,139 @@ export class OppaiImageGen extends LitElement {
     }
   }
 
-  private async updateTagSuggestions() {
-    const query = this.prompt.split(",").at(-1)?.trim() ?? "";
-    if (query.length < 2) { this.tagSuggestions = []; this.tagCorrection = ""; return; }
-    try {
-      const result = await api.booruTags(query);
-      this.tagSuggestions = result.suggestions;
-      this.tagCorrection = result.correction ?? "";
-    } catch { this.tagSuggestions = []; this.tagCorrection = ""; }
+  private promptArea(field: "prompt" | "negative") {
+    return this.renderRoot.querySelector<HTMLTextAreaElement>(field === "prompt" ? ".prompt-area" : ".negative-area");
   }
 
-  private applySuggestedTag(tag: string) {
-    const parts = this.prompt.split(",");
-    parts[parts.length - 1] = ` ${tag}`;
-    this.prompt = parts.join(",").trimStart() + ", ";
-    this.tagSuggestions = [];
-    this.tagCorrection = "";
+  /**
+   * Reads the token at the caret and fills the completion list: LoRAs, wildcard lists
+   * and trigger words at once from what the screen already has, tags from the server
+   * a moment after typing pauses. A reply that arrives after more typing is dropped,
+   * so a slow answer for "lo" never replaces the list for "long h".
+   */
+  private onPromptTyping(field: "prompt" | "negative") {
+    const area = this.promptArea(field);
+    if (!area) return;
+    const token = tokenAt(area.value, area.selectionStart ?? area.value.length);
+    const seq = ++this.completionSeq;
+    window.clearTimeout(this.completionTimer);
+    this.completionField = field;
+    this.completionToken = token;
+    if (!token) {
+      this.closeCompletions();
+      return;
+    }
+    const sources: LocalSources = {
+      loras: (this.status?.loras ?? []).map((l) => ({ name: l.name, alias: l.alias, weight: l.weight })),
+      wildcards: this.wildcards.map((w) => ({ name: w.name, lines: w.entries.length })),
+      triggers: field === "prompt" ? this.activeTriggerPhrases() : [],
+    };
+    const local = localCompletions(token, sources);
+    if (token.mode !== "tag" || token.query.length < 2) {
+      this.showCompletions(local);
+      return;
+    }
+    if (local.length) this.showCompletions(local);
+    this.completionTimer = window.setTimeout(async () => {
+      try {
+        const res = await api.booruTags(token.query, 10);
+        if (seq !== this.completionSeq) return;
+        const items = res.items ?? res.suggestions.map((tag) => ({ tag, category: 0, count: 0 }));
+        const tags: Completion[] = items.map((t) => ({
+          kind: "tag" as const, label: t.tag, insert: escapeTag(t.tag),
+          category: t.category, count: t.count,
+          detail: "alias" in t && t.alias ? `“${t.alias}”` : undefined,
+        }));
+        if (!tags.length && res.correction) {
+          tags.push({ kind: "tag", label: res.correction, insert: escapeTag(res.correction), detail: "did you mean" });
+        }
+        this.showCompletions(mergeCompletions(local, tags, 10));
+      } catch {
+        if (seq === this.completionSeq) this.showCompletions(local);
+      }
+    }, 110);
+  }
+
+  private showCompletions(list: Completion[]) {
+    const token = this.completionToken;
+    const area = this.promptArea(this.completionField);
+    // The tag already typed out in full is not a suggestion worth a popup.
+    const typed = token && area ? area.value.slice(token.start, token.end).trim().toLowerCase() : "";
+    if (list.length === 1 && list[0].insert.toLowerCase() === typed) list = [];
+    this.completions = list;
+    this.completionIndex = list.length ? 0 : -1;
+  }
+
+  private closeCompletions() {
+    this.completionSeq++;
+    window.clearTimeout(this.completionTimer);
+    this.completions = [];
+    this.completionIndex = -1;
+  }
+
+  private closeCompletionsSoon() {
+    // Later rather than now: a click on a suggestion is a blur first, and the list
+    // has to still be there for the click to land on.
+    window.setTimeout(() => {
+      if ((this.renderRoot as ShadowRoot).activeElement !== this.promptArea(this.completionField)) {
+        this.closeCompletions();
+      }
+    }, 120);
+  }
+
+  private onPromptKey(e: KeyboardEvent, field: "prompt" | "negative") {
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      this.closeCompletions();
+      if (!this.generating && this.assemblePrompts().prompt.trim()) void this.generate();
+      return;
+    }
+    if (!this.completions.length || this.completionField !== field) return;
+    switch (e.key) {
+      case "ArrowDown":
+      case "ArrowUp":
+        e.preventDefault();
+        this.completionIndex = moveSelection(this.completionIndex, this.completions.length, e.key === "ArrowDown" ? 1 : -1);
+        break;
+      case "Tab":
+      case "Enter":
+        if (e.shiftKey || e.altKey || this.completionIndex < 0) return;
+        e.preventDefault();
+        void this.acceptCompletion(this.completionIndex);
+        break;
+      case "Escape":
+        e.preventDefault();
+        e.stopPropagation();
+        this.closeCompletions();
+        break;
+    }
+  }
+
+  /**
+   * Writes the chosen completion over the token. A LoRA is switched on in the picker
+   * rather than written as "<lora:…>" text: InvokeAI does not read that syntax, and
+   * on either backend the picker is where its weight and trigger words live.
+   */
+  private async acceptCompletion(index: number) {
+    const c = this.completions[index];
+    const token = this.completionToken;
+    const field = this.completionField;
+    const area = this.promptArea(field);
+    if (!c || !token || !area) return;
+    let out = applyCompletion(area.value, token, c.insert);
+    if (c.kind === "lora") {
+      const name = /^<lora:(.*):[^:]*>$/.exec(c.insert)?.[1] ?? "";
+      out = applyCompletion(area.value, token, "");
+      if (name && !(name in this.selectedLoras)) this.toggleLora(name);
+      this.showToast(`${c.label} is on — its weight is in the recipe above`);
+    }
+    if (field === "prompt") this.prompt = out.text;
+    else this.negative = out.text;
+    this.closeCompletions();
+    await this.updateComplete;
+    area.value = out.text;
+    area.focus();
+    area.setSelectionRange(out.caret, out.caret);
   }
 
   private renderPromptOptions() {
@@ -6914,7 +7849,7 @@ export class OppaiImageGen extends LitElement {
       return html`<div class="canvas-empty">
         <span class="material-symbols-rounded">image</span>
         <strong>Your generation canvas</strong>
-        <span>Choose a model and write a prompt. New images appear here while the full history stays in the gallery.</span>
+        <span>Pick a model, write a prompt, and press ${this.status?.backend === "invokeai" ? "Invoke" : "Generate"} — or Ctrl+Enter from the prompt.</span>
       </div>`;
     }
     const positions = this.shots.map((shot, index) => this.nodePosition(shot, index));
@@ -6968,8 +7903,8 @@ export class OppaiImageGen extends LitElement {
                   <span class="material-symbols-rounded" style="font-size:16px;">background_replace</span>
                   ${shot.outfitSlot ? (shot.cutoutReviewed ? "Reviewed" : "Review cutout") : nothing}
                 </button>
-                ${this.status?.backend === "invokeai" ? html`<button class="act"
-                  title="Set as this model's preview in InvokeAI" @click=${() => this.useAsModelThumb(shot)}>
+                ${this.status?.manageModels ? html`<button class="act"
+                  title="Use as this model's cover" @click=${() => this.useAsModelThumb(shot)}>
                   <span class="material-symbols-rounded" style="font-size:16px;">photo_camera</span>
                 </button>` : nothing}
                 <button class="act" title="Copy this image's generation data"

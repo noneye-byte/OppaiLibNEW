@@ -60,6 +60,16 @@ type Client struct {
 	mu        sync.Mutex
 	kinds     map[string]kindEntry
 	detailers map[string]boolEntry
+	coverMiss map[string]time.Time
+
+	// ModelsDir reports Automatic1111's models folder as this process sees it, ""
+	// when none is mounted. A func because it is a live setting. See a1111_models.go.
+	ModelsDir func() string
+	// HashCachePath is where the hashes of that folder's files are remembered.
+	HashCachePath string
+
+	fileHashes *fileHashes
+	installs   *a1111Jobs
 }
 
 // New returns a Client. Generation is slow (tens of seconds on CPU), so the timeout
@@ -69,6 +79,7 @@ func New() *Client {
 		hc:        &http.Client{Timeout: 10 * time.Minute},
 		kinds:     make(map[string]kindEntry),
 		detailers: make(map[string]boolEntry),
+		coverMiss: make(map[string]time.Time),
 	}
 }
 
@@ -76,7 +87,10 @@ func New() *Client {
 // handed back on generate (A1111's checkpoint title, InvokeAI's model key); the rest
 // is for display.
 type Model struct {
-	Title    string         `json:"title"`
+	Title string `json:"title"`
+	// Key is the model's record: InvokeAI's key (the same as Title there), A1111's
+	// path under its models folder. The catalogue's links are kept by it.
+	Key      string         `json:"key,omitempty"`
 	Name     string         `json:"model_name"`
 	Hash     string         `json:"hash,omitempty"`
 	Base     string         `json:"base,omitempty"`
@@ -126,6 +140,7 @@ type Template struct {
 // Alias is a friendlier display label when set.
 type Lora struct {
 	Name           string   `json:"name"`
+	Key            string   `json:"key,omitempty"`
 	Alias          string   `json:"alias,omitempty"`
 	Path           string   `json:"path,omitempty"`
 	Hash           string   `json:"hash,omitempty"`
@@ -154,6 +169,9 @@ type ModelChanges struct {
 	Description    *string        `json:"description"`
 	TriggerPhrases *[]string      `json:"triggerPhrases"`
 	Defaults       *ModelDefaults `json:"defaults"`
+	// Base is the catalogue's base model. A1111's card records the family; InvokeAI
+	// works it out from the file and does not take it.
+	Base *string `json:"base,omitempty"`
 }
 
 // Board is one InvokeAI gallery board. The pseudo-id "none" stands for the
@@ -375,7 +393,11 @@ func (c *Client) Models(ctx context.Context, base string) ([]Model, error) {
 	if kind == KindInvokeAI {
 		return c.invokeModels(ctx, base)
 	}
-	return c.a1111Models(ctx, base)
+	models, err := c.a1111Models(ctx, base)
+	if err == nil {
+		c.a1111Dress(ctx, base, models, nil)
+	}
+	return models, err
 }
 
 // Loras lists the LoRA networks registered with the generator.
@@ -387,11 +409,15 @@ func (c *Client) Loras(ctx context.Context, base string) ([]Lora, error) {
 	if kind == KindInvokeAI {
 		return c.invokeLoras(ctx, base)
 	}
-	return c.a1111Loras(ctx, base)
+	loras, err := c.a1111Loras(ctx, base)
+	if err == nil {
+		c.a1111Dress(ctx, base, nil, loras)
+	}
+	return loras, err
 }
 
-// Vaes lists the standalone VAEs the generator has installed. A1111-style servers
-// don't expose a comparable listing everywhere, so only InvokeAI answers with any.
+// Vaes lists the standalone VAEs the generator has installed. An A1111 build too old
+// to list them answers with none, and the checkpoint's own VAE is used.
 func (c *Client) Vaes(ctx context.Context, base string) ([]Vae, error) {
 	kind, err := c.Backend(ctx, base)
 	if err != nil {
@@ -400,10 +426,11 @@ func (c *Client) Vaes(ctx context.Context, base string) ([]Vae, error) {
 	if kind == KindInvokeAI {
 		return c.invokeVaes(ctx, base)
 	}
-	return []Vae{}, nil
+	return c.a1111Vaes(ctx, base)
 }
 
-// Templates lists the generator's prompt templates (InvokeAI style presets).
+// Templates lists the generator's prompt templates: InvokeAI's style presets,
+// A1111's saved styles.
 func (c *Client) Templates(ctx context.Context, base string) ([]Template, error) {
 	kind, err := c.Backend(ctx, base)
 	if err != nil {
@@ -412,21 +439,32 @@ func (c *Client) Templates(ctx context.Context, base string) ([]Template, error)
 	if kind == KindInvokeAI {
 		return c.invokeTemplates(ctx, base)
 	}
-	return []Template{}, nil
+	return c.a1111Templates(ctx, base)
 }
 
 // Cover fetches the generator's own preview image for a model or LoRA, by selector
-// key or display name. Only InvokeAI keeps cover art; elsewhere this reports
-// "no cover" and the caller falls back to whatever it has.
+// key or display name: InvokeAI's cover art, or the preview file A1111 keeps beside
+// the model.
 func (c *Client) Cover(ctx context.Context, base, name string) ([]byte, string, error) {
 	kind, err := c.Backend(ctx, base)
 	if err != nil {
 		return nil, "", err
 	}
 	if kind != KindInvokeAI {
-		return nil, "", fmt.Errorf("generator keeps no cover images")
+		return c.a1111Cover(ctx, base, name)
 	}
 	return c.invokeCover(ctx, base, name)
+}
+
+// ManagesModels says what the generator at base lets the studio do to its models:
+// InvokeAI everything, A1111 everything once its models folder is mounted here, and
+// otherwise only list them and link them to the catalogue.
+func (c *Client) ManagesModels(ctx context.Context, base string) bool {
+	kind, err := c.Backend(ctx, base)
+	if err != nil {
+		return false
+	}
+	return kind == KindInvokeAI || c.A1111ModelsDirReady()
 }
 
 // errInvokeOnly wraps the features InvokeAI alone offers with a readable refusal
@@ -444,8 +482,12 @@ func (c *Client) requireInvoke(ctx context.Context, base, what string) error {
 
 // ModelDetail fetches the full editable record for a model or LoRA by key or name.
 func (c *Client) ModelDetail(ctx context.Context, base, name string) (*ModelDetail, error) {
-	if err := c.requireInvoke(ctx, base, "editing model settings"); err != nil {
+	kind, err := c.Backend(ctx, base)
+	if err != nil {
 		return nil, err
+	}
+	if kind != KindInvokeAI {
+		return c.a1111Detail(ctx, base, name)
 	}
 	return c.invokeModelDetail(ctx, base, name)
 }
@@ -453,8 +495,12 @@ func (c *Client) ModelDetail(ctx context.Context, base, name string) (*ModelDeta
 // UpdateModel applies a partial edit to a model record, so name, description,
 // trigger phrases and recommended settings stay in sync with InvokeAI's own UI.
 func (c *Client) UpdateModel(ctx context.Context, base, key string, ch ModelChanges) (*ModelDetail, error) {
-	if err := c.requireInvoke(ctx, base, "editing model settings"); err != nil {
+	kind, err := c.Backend(ctx, base)
+	if err != nil {
 		return nil, err
+	}
+	if kind != KindInvokeAI {
+		return c.a1111Update(ctx, base, key, ch)
 	}
 	return c.invokeUpdateModel(ctx, base, key, ch)
 }
@@ -462,8 +508,12 @@ func (c *Client) UpdateModel(ctx context.Context, base, key string, ch ModelChan
 // UpdateCover writes a model or LoRA preview into InvokeAI's own model manager.
 // Keeping InvokeAI as the only source of truth means every client sees the same art.
 func (c *Client) UpdateCover(ctx context.Context, base, name string, data []byte, contentType string) error {
-	if err := c.requireInvoke(ctx, base, "updating model cover art"); err != nil {
+	kind, err := c.Backend(ctx, base)
+	if err != nil {
 		return err
+	}
+	if kind != KindInvokeAI {
+		return c.a1111SetCover(ctx, base, name, data, contentType)
 	}
 	return c.invokeUpdateCover(ctx, base, name, data, contentType)
 }
@@ -552,20 +602,29 @@ func (c *Client) AddImagesToBoard(ctx context.Context, base, boardID string, nam
 	return c.invokeAddImagesToBoard(ctx, base, boardID, names)
 }
 
-// InstallModel asks InvokeAI to download and register a model from a URL (a
-// Civitai download link). The download runs inside InvokeAI; poll InstallJobs.
-func (c *Client) InstallModel(ctx context.Context, base, source string) (*InstallJob, error) {
-	if err := c.requireInvoke(ctx, base, "installing models"); err != nil {
+// InstallModel downloads and registers a model from a URL (a Civitai download
+// link). InvokeAI fetches it itself; for A1111 this side downloads it into the
+// mounted models folder. Either way the call returns at once; poll InstallJobs.
+func (c *Client) InstallModel(ctx context.Context, base string, spec InstallSpec) (*InstallJob, error) {
+	kind, err := c.Backend(ctx, base)
+	if err != nil {
 		return nil, err
 	}
-	return c.invokeInstallModel(ctx, base, source)
+	if kind != KindInvokeAI {
+		return c.a1111Install(ctx, base, spec)
+	}
+	return c.invokeInstallModel(ctx, base, spec.Source)
 }
 
-// ModelRecords lists every model InvokeAI has registered, with the hashes that
-// let them be looked up on Civitai.
+// ModelRecords lists every model the generator has, with the hashes that let them
+// be looked up on Civitai.
 func (c *Client) ModelRecords(ctx context.Context, base string) ([]ModelRecord, error) {
-	if err := c.requireInvoke(ctx, base, "model records"); err != nil {
+	kind, err := c.Backend(ctx, base)
+	if err != nil {
 		return nil, err
+	}
+	if kind != KindInvokeAI {
+		return c.a1111Records(ctx, base)
 	}
 	records, err := c.invokeModelList(ctx, base)
 	if err != nil {
@@ -585,16 +644,25 @@ func (c *Client) ModelRecords(ctx context.Context, base string) ([]ModelRecord, 
 // InvokeAI manages the file (an install from a URL is; a model registered in place
 // from elsewhere on disk is only forgotten).
 func (c *Client) DeleteModel(ctx context.Context, base, key string) error {
-	if err := c.requireInvoke(ctx, base, "deleting models"); err != nil {
+	kind, err := c.Backend(ctx, base)
+	if err != nil {
 		return err
+	}
+	if kind != KindInvokeAI {
+		return c.a1111Delete(ctx, base, key)
 	}
 	return c.invokeDeleteModel(ctx, base, key)
 }
 
-// InstallJobs lists InvokeAI's model-install queue, newest first.
+// InstallJobs lists the model downloads, newest first: InvokeAI's install queue, or
+// the ones this side is running into A1111's folder.
 func (c *Client) InstallJobs(ctx context.Context, base string) ([]InstallJob, error) {
-	if err := c.requireInvoke(ctx, base, "installing models"); err != nil {
+	kind, err := c.Backend(ctx, base)
+	if err != nil {
 		return nil, err
+	}
+	if kind != KindInvokeAI {
+		return c.a1111JobList().list(), nil
 	}
 	return c.invokeInstallJobs(ctx, base)
 }

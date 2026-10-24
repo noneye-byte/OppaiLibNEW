@@ -883,6 +883,8 @@ data class ChatImageUpload(
 @Serializable
 data class GenModel(
     val title: String,
+    /** The model's record: InvokeAI's key, or an A1111 model's path under its folder. */
+    val key: String = "",
     @SerialName("model_name") val modelName: String = "",
     val base: String = "",
     val defaults: GenModelDefaults? = null,
@@ -1226,6 +1228,7 @@ data class LibbyEmotionRequest(val imageData: String)
 @Serializable
 data class GenLora(
     val name: String,
+    val key: String = "",
     val alias: String = "",
     val triggerPhrases: List<String> = emptyList(),
     /** The strength the generator recommends (InvokeAI keeps one per LoRA); zero
@@ -1354,6 +1357,14 @@ data class ImageGenStatus(
     val vaes: List<GenVae> = emptyList(),
     val templates: List<GenTemplate> = emptyList(),
     val detailerAvailable: Boolean = false,
+    /** The Civitai browser works against this generator; both backends say yes. */
+    val civitai: Boolean = false,
+    /** Models can be installed, edited, re-covered and deleted from here: always on
+        InvokeAI, on Automatic1111 once its models folder is set in Settings. */
+    val manageModels: Boolean = false,
+    /** A1111 only: whether a models folder is set at all, so "not set" and "set but
+        not a models folder" can be told apart. */
+    val modelsDirSet: Boolean = false,
 )
 
 @Serializable
@@ -1439,7 +1450,22 @@ data class LibbySendRequest(val mediaId: Long, val text: String = "", val conver
 data class LibbySendResponse(val conversationId: String = "", val messageId: String = "")
 
 @Serializable
-data class TagSuggestions(val suggestions: List<String> = emptyList(), val correction: String = "")
+data class TagSuggestions(
+    val suggestions: List<String> = emptyList(),
+    val correction: String = "",
+    /** The ranked completion with categories and post counts; empty from an older server. */
+    val items: List<TagCompletion> = emptyList(),
+)
+
+/** One tag completion: Danbooru's category (0 general, 1 artist, 3 copyright,
+    4 character, 5 meta; 100 is this library's own) and how many posts carry it. */
+@Serializable
+data class TagCompletion(
+    val tag: String,
+    val category: Int = 0,
+    val count: Long = 0,
+    val alias: String = "",
+)
 
 @Serializable
 data class UrlRequest(val url: String)

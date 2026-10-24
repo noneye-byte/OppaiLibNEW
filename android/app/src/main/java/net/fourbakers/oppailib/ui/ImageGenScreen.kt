@@ -13,6 +13,35 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AspectRatio
+import androidx.compose.material.icons.filled.Category
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Face
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Style
+import androidx.compose.material.icons.filled.TravelExplore
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.ViewInAr
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.InputChip
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import net.fourbakers.oppailib.data.PromptComplete
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -169,8 +198,17 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit, to
     var selectedPoses by remember { mutableStateOf<Set<String>>(draft.selectedPoses.toSet()) }
 
     var prompt by remember { mutableStateOf(draft.prompt) }
-    var tagSuggestions by remember { mutableStateOf<List<String>>(emptyList()) }
-    var tagCorrection by remember { mutableStateOf("") }
+    // Where the caret is in each prompt, which is what completion works from.
+    var promptSel by remember { mutableStateOf(TextRange(draft.prompt.length)) }
+    var negativeSel by remember { mutableStateOf(TextRange(draft.negative.length)) }
+    var completions by remember { mutableStateOf<List<PromptComplete.Completion>>(emptyList()) }
+    var completionToken by remember { mutableStateOf<PromptComplete.Token?>(null) }
+    // Whether the open suggestions belong to the prompt (true) or the negative.
+    var completionFor by remember { mutableStateOf(true) }
+    var completionJob by remember { mutableStateOf<Job?>(null) }
+    // The setup sheet that is up, if any.
+    var sheet by remember { mutableStateOf<SetupSheet?>(null) }
+    var loraFilter by remember { mutableStateOf("") }
     var negative by remember { mutableStateOf(draft.negative) }
     var width by remember { mutableStateOf(draft.width) }
     var height by remember { mutableStateOf(draft.height) }
@@ -336,6 +374,54 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit, to
         return pos to neg
     }
 
+    /**
+     * The prompt or the negative changed, or its caret moved: read the token at the
+     * caret and fill the suggestions — LoRAs, wildcard lists and trigger words at once,
+     * tags from the server once typing pauses. A reply overtaken by more typing is
+     * dropped with the job that asked for it.
+     */
+    fun onTyped(isPrompt: Boolean, value: TextFieldValue) {
+        if (isPrompt) { prompt = value.text; promptSel = value.selection } else { negative = value.text; negativeSel = value.selection }
+        completionJob?.cancel()
+        completionFor = isPrompt
+        val token = if (value.selection.collapsed) PromptComplete.tokenAt(value.text, value.selection.end) else null
+        completionToken = token
+        if (token == null) { completions = emptyList(); return }
+        val triggers = if (isPrompt) status?.loras.orEmpty().filter { it.name in loraWeights }.flatMap { it.triggerPhrases }.distinct() else emptyList()
+        val local = PromptComplete.local(token, status?.loras.orEmpty(), wildcards, triggers)
+        if (token.mode != PromptComplete.Mode.TAG || token.query.length < 2) { completions = local; return }
+        if (local.isNotEmpty()) completions = local
+        val typed = value.text.substring(token.start, token.end).trim()
+        completionJob = scope.launch {
+            delay(140)
+            val res = runCatching { repo.api.booruTags(token.query, 8) }.getOrNull() ?: return@launch
+            val merged = PromptComplete.merge(local, PromptComplete.fromServer(res))
+            // The tag already typed out in full is not worth a list.
+            completions = if (merged.size == 1 && merged[0].insert.equals(typed, ignoreCase = true)) emptyList() else merged
+        }
+    }
+
+    /** Writes a suggestion over the token. A LoRA is switched on in the picker rather
+        than written as "<lora:…>": InvokeAI does not read that, and the picker is
+        where its weight and trigger words live on either backend. */
+    fun accept(c: PromptComplete.Completion) {
+        val token = completionToken ?: return
+        val text = if (completionFor) prompt else negative
+        if (token.end > text.length) return
+        val (next, caret) = if (c.kind == PromptComplete.Kind.LORA) {
+            val name = Regex("""^<lora:(.*):[^:]*>$""").find(c.insert)?.groupValues?.get(1).orEmpty()
+            if (name.isNotEmpty() && name !in loraWeights) {
+                val w = status?.loras?.find { it.name == name }?.weight?.takeIf { it != 0.0 && it.isFinite() } ?: 1.0
+                loraWeights = loraWeights + (name to w)
+            }
+            repo.report("${c.label} is on")
+            PromptComplete.apply(text, token, "")
+        } else PromptComplete.apply(text, token, c.insert)
+        if (completionFor) { prompt = next; promptSel = TextRange(caret) } else { negative = next; negativeSel = TextRange(caret) }
+        completionJob?.cancel()
+        completions = emptyList()
+    }
+
     fun cancelGeneration() = GenSession.cancel(repo)
 
     fun generate() {
@@ -446,538 +532,460 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit, to
             }
 
             else -> Column(Modifier.padding(padding).fillMaxSize()) {
-                // The Gallery and Civitai tabs only make sense against InvokeAI —
-                // an A1111 backend keeps no gallery and installs nothing.
+                // Create first; the Gallery is InvokeAI's own and only it keeps one. The
+                // Civitai browser works against either backend now — an A1111 is linked
+                // by hash and, with its models folder set on the server, installed into.
                 val invoke = st.backend == "invokeai"
-                if (invoke) {
-                    TabRow(selectedTabIndex = tab) {
-                        listOf("Create", "Gallery", "Civitai").forEachIndexed { i, label ->
+                val tabNames = buildList {
+                    add("Create")
+                    if (invoke) add("Gallery")
+                    if (invoke || st.civitai) add("Civitai")
+                }
+                if (tabNames.size > 1) {
+                    TabRow(selectedTabIndex = tab.coerceIn(0, tabNames.size - 1)) {
+                        tabNames.forEachIndexed { i, label ->
                             Tab(selected = tab == i, onClick = { tab = i }, text = { Text(label) })
                         }
                     }
                 }
-                when {
-                    invoke && tab == 1 -> InvokeGalleryTab(
+                when (tabNames.getOrElse(tab) { "Create" }) {
+                    "Gallery" -> InvokeGalleryTab(
                         repo = repo,
                         refreshKey = galleryRefresh,
                         board = board,
                         onBoardChange = { board = it },
                         onSaved = onSaved,
                     )
-                    invoke && tab == 2 -> CivitaiTab(repo, onUsePrompt = { usePrompt(it) })
+                    "Civitai" -> CivitaiTab(
+                        repo,
+                        backend = st.backend,
+                        canManage = st.manageModels,
+                        onUsePrompt = { usePrompt(it) },
+                    )
                     else -> Column(Modifier.weight(1f).fillMaxWidth()) {
-                if (generating) GenerationCard(repo, session, onCancel = { cancelGeneration() })
-                LazyColumn(
-                modifier = Modifier.weight(1f).fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(14.dp),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                    start = 14.dp, end = 14.dp, top = 4.dp, bottom = 24.dp,
-                ),
+                        // ── the rail: what to draw with, each a sheet ───────────
+                        SetupRail(
+                            badges = mapOf(
+                                SetupSheet.LORAS to loraWeights.size,
+                                SetupSheet.LOOK to selectedChars.size + selectedPoses.size,
+                                SetupSheet.STYLES to if (templateId.isNotEmpty()) 1 else 0,
+                            ),
+                            onPick = { sheet = it },
+                        )
+                        // ── the recipe: what the next picture is made with ──────
+                        val model = st.models.find { it.title == checkpoint }
+                        RecipeStrip(
+                            repo = repo,
+                            backendLabel = if (invoke) "InvokeAI" else "Automatic1111",
+                            model = model,
+                            fallbackName = checkpoint,
+                            loras = loraWeights.map { (name, w) ->
+                                (st.loras.find { it.name == name }?.alias?.ifBlank { null } ?: name) to (name to w)
+                            },
+                            size = "$width×$height",
+                            sampling = "$steps steps · CFG ${"%.1f".format(cfg).removeSuffix(".0")}",
+                            seed = seedText.toLongOrNull()?.takeIf { it >= 0 },
+                            onModels = { sheet = SetupSheet.MODELS },
+                            onLoras = { sheet = SetupSheet.LORAS },
+                            onRemoveLora = { loraWeights = loraWeights - it },
+                            onSettings = { sheet = SetupSheet.SETTINGS },
+                            onSeed = {
+                                val locked = (seedText.toLongOrNull() ?: -1) >= 0
+                                val last = shots.firstOrNull()?.preview?.seed
+                                when {
+                                    locked -> seedText = "-1"
+                                    last != null && last >= 0 -> seedText = last.toString()
+                                    else -> repo.report("Generate a picture first — its seed is the one kept")
+                                }
+                            },
+                        )
+                        if (generating) GenerationCard(repo, session, onCancel = { cancelGeneration() })
+
+                        // ── the canvas ─────────────────────────────────────────
+                        LazyColumn(
+                            modifier = Modifier.weight(1f).fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                                start = 14.dp, end = 14.dp, top = 8.dp, bottom = 12.dp,
+                            ),
+                        ) {
+                            if (shots.isEmpty() && !generating) {
+                                item { EmptyCanvas(invoke) }
+                            }
+                            items(shots.chunked(2), key = { it.first().preview.id }) { pair ->
+                                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    pair.forEach { shot ->
+                                        Column(Modifier.weight(1f)) {
+                                            AsyncImage(
+                                                model = repo.genPreviewUrl(shot.preview.id),
+                                                imageLoader = repo.imageLoader,
+                                                contentDescription = "Generated image",
+                                                contentScale = ContentScale.Crop,
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .aspectRatio(3f / 4f)
+                                                    .clip(RoundedCornerShape(18.dp))
+                                                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                                                    .clickable { expandedShot = shot },
+                                            )
+                                            Row(Modifier.fillMaxWidth().padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                                Button(
+                                                    onClick = { save(shot) },
+                                                    enabled = !shot.saved,
+                                                    modifier = Modifier.weight(1f),
+                                                ) {
+                                                    Icon(
+                                                        if (shot.saved) Icons.Filled.Check else Icons.Filled.Save,
+                                                        contentDescription = null,
+                                                        Modifier.size(16.dp),
+                                                    )
+                                                    Text(if (shot.saved) "  Saved" else "  Save")
+                                                }
+                                                // The seed that made this one, back into the form, so a
+                                                // near-miss can be nudged rather than rolled again.
+                                                if (shot.preview.seed > 0) {
+                                                    IconButton(onClick = { seedText = shot.preview.seed.toString(); repo.report("Seed ${shot.preview.seed} kept") }) {
+                                                        Icon(Icons.Filled.Replay, contentDescription = "Reuse this seed")
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    if (pair.size == 1) Box(Modifier.weight(1f)) {}
+                                }
+                            }
+                            if (shots.isNotEmpty() && invoke) {
+                                item {
+                                    Text(
+                                        "Only the latest run shows here; InvokeAI keeps every one in the Gallery tab. " +
+                                            "Save copies a picture into the library.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                        }
+
+                        // ── the composer: what to draw ─────────────────────────
+                        // Pinned under the canvas rather than at the end of a form: the
+                        // prompt is what is changed between runs, and the button that
+                        // matters is never a scroll away.
+                        Composer(
+                            prompt = TextFieldValue(prompt, promptSel.coerceTo(prompt.length)),
+                            negative = TextFieldValue(negative, negativeSel.coerceTo(negative.length)),
+                            onPrompt = { onTyped(true, it) },
+                            onNegative = { onTyped(false, it) },
+                            completions = completions,
+                            completionsFor = completionFor,
+                            onAccept = { accept(it) },
+                            onDismissCompletions = { completions = emptyList() },
+                            triggers = st.loras.filter { it.name in loraWeights }.flatMap { it.triggerPhrases }.distinct(),
+                            selectedTriggers = selectedTriggers,
+                            onToggleTrigger = { phrase ->
+                                selectedTriggers = if (phrase in selectedTriggers) selectedTriggers - phrase else selectedTriggers + phrase
+                            },
+                            count = count,
+                            onCount = { count = it },
+                            error = error,
+                            generating = generating,
+                            cancelling = progress?.cancelled == true,
+                            canGenerate = prompt.isNotBlank(),
+                            generateLabel = if (invoke) "Invoke" else "Generate",
+                            onGenerate = { completions = emptyList(); generate() },
+                            onCancel = { cancelGeneration() },
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    // ── the setup sheets ───────────────────────────────────────────────────────
+    val st = status
+    if (st != null) sheet?.let { which ->
+        ModalBottomSheet(onDismissRequest = { sheet = null }) {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 640.dp)
+                    .verticalScroll(rememberScrollState())
+                    .padding(start = 16.dp, end = 16.dp, bottom = 28.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                // ── model picker ────────────────────────────────────────────
-                item {
-                    SectionLabel("Model")
-                    if (st.models.size > 8) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Icon(which.icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    Text(which.label, style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+                    if ((which == SetupSheet.MODELS || which == SetupSheet.LORAS) && (st.civitai || st.backend == "invokeai")) {
+                        TextButton(onClick = { sheet = null; tab = if (st.backend == "invokeai") 2 else 1 }) {
+                            Icon(Icons.Filled.TravelExplore, contentDescription = null, Modifier.size(18.dp))
+                            Text("  Civitai")
+                        }
+                    }
+                }
+                val canEdit = st.manageModels
+                when (which) {
+                    SetupSheet.MODELS -> {
                         OutlinedTextField(
                             value = modelFilter,
                             onValueChange = { modelFilter = it },
-                            placeholder = { Text("Filter ${st.models.size} models…") },
+                            placeholder = { Text("Search ${st.models.size} models") },
+                            leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
                             singleLine = true,
-                            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                            shape = RoundedCornerShape(24.dp),
+                            modifier = Modifier.fillMaxWidth(),
                         )
-                    }
-                    val shownModels = if (modelFilter.isBlank()) st.models
-                    else st.models.filter { it.modelName.contains(modelFilter, true) || it.title.contains(modelFilter, true) || it.base.contains(modelFilter, true) }
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        items(shownModels.distinctBy { it.title }, key = { it.title }) { m ->
+                        val shown = st.models.distinctBy { it.title }.filter {
+                            modelFilter.isBlank() || it.modelName.contains(modelFilter, true) ||
+                                it.title.contains(modelFilter, true) || it.base.contains(modelFilter, true)
+                        }
+                        CardGrid(shown) { m ->
                             PickerCard(
                                 label = m.modelName.ifBlank { m.title },
                                 imageUrl = repo.modelThumbUrl(m.title),
                                 selected = m.title == checkpoint,
                                 repo = repo,
-                                onClick = { applyModel(m) },
-                                onEdit = if (invoke) ({ editTarget = m.title }) else null,
+                                placeholder = Icons.Filled.ViewInAr,
+                                modifier = Modifier.fillMaxWidth(),
+                                onClick = { applyModel(m); sheet = null },
+                                onEdit = if (canEdit) ({ editTarget = m.title }) else null,
                             )
                         }
+                        if (!canEdit && st.backend != "invokeai") ManageNote(st.modelsDirSet)
                     }
-                }
-
-                // ── LoRAs ───────────────────────────────────────────────────
-                if (st.loras.isNotEmpty()) {
-                    item {
-                        SectionLabel("LoRAs")
-                        // The row is keyed by name, and Compose throws (and the app
-                        // dies) if two items share a key. The server now names a
-                        // duplicate by its key instead, but an older server does not,
-                        // and InvokeAI is happy to hold two LoRAs with one name.
-                        val loras = st.loras.distinctBy { it.name }
-                        LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            items(loras, key = { it.name }) { lora ->
-                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    PickerCard(
-                                        label = lora.alias.ifBlank { lora.name },
-                                        imageUrl = repo.loraThumbUrl(lora.name),
-                                        selected = lora.name in loraWeights,
-                                        repo = repo,
-                                        onEdit = if (invoke) ({ editTarget = lora.name }) else null,
-                                        onClick = {
-                                            loraWeights = if (lora.name in loraWeights) {
-                                                loraWeights - lora.name
-                                            } else {
-                                                // The strength the generator recommends for it,
-                                                // when it has one, the same as the web does.
-                                                loraWeights + (lora.name to lora.weight.takeIf { it != 0.0 && it.isFinite() }.let { it ?: 1.0 })
-                                            }
-                                        },
+                    SetupSheet.LORAS -> {
+                        if (st.loras.isEmpty()) {
+                            SheetNote("No LoRAs installed.")
+                        } else {
+                            OutlinedTextField(
+                                value = loraFilter,
+                                onValueChange = { loraFilter = it },
+                                placeholder = { Text("Search ${st.loras.size} LoRAs") },
+                                leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+                                singleLine = true,
+                                shape = RoundedCornerShape(24.dp),
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                        // Keyed by name, and Compose throws if two items share a key; an
+                        // older server can name two LoRAs alike, so duplicates go first.
+                        val shown = st.loras.distinctBy { it.name }.filter {
+                            loraFilter.isBlank() || it.name.contains(loraFilter, true) || it.alias.contains(loraFilter, true) ||
+                                it.triggerPhrases.any { p -> p.contains(loraFilter, true) }
+                        }
+                        CardGrid(shown) { lora ->
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                PickerCard(
+                                    label = lora.alias.ifBlank { lora.name },
+                                    imageUrl = repo.loraThumbUrl(lora.name),
+                                    selected = lora.name in loraWeights,
+                                    repo = repo,
+                                    placeholder = Icons.Filled.Style,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    onEdit = if (canEdit) ({ editTarget = lora.name }) else null,
+                                    onClick = {
+                                        loraWeights = if (lora.name in loraWeights) loraWeights - lora.name
+                                        // The strength the generator recommends, when it has one.
+                                        else loraWeights + (lora.name to (lora.weight.takeIf { it != 0.0 && it.isFinite() } ?: 1.0))
+                                    },
+                                )
+                                loraWeights[lora.name]?.let { w ->
+                                    Slider(
+                                        value = w.toFloat(),
+                                        onValueChange = { loraWeights = loraWeights + (lora.name to (it * 20).toInt() / 20.0) },
+                                        valueRange = -2f..2f,
                                     )
-                                    loraWeights[lora.name]?.let { w ->
-                                        Slider(
-                                            value = w.toFloat(),
-                                            onValueChange = {
-                                                loraWeights = loraWeights + (lora.name to it.toDouble())
-                                            },
-                                            valueRange = -2f..2f,
-                                            modifier = Modifier.width(110.dp),
-                                        )
-                                        Text(
-                                            "%.2f".format(w),
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        )
-                                    }
+                                    Text("%.2f".format(w), style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
                             }
                         }
                     }
-                }
-
-                // ── VAE ─────────────────────────────────────────────────────
-                if (st.vaes.isNotEmpty()) {
-                    item {
-                        SectionLabel("VAE")
-                        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            FilterChip(selected = vae.isEmpty(), onClick = { vae = "" }, label = { Text("Model default") })
-                            st.vaes.forEach { v ->
-                                FilterChip(
-                                    selected = vae == v.key,
-                                    onClick = { vae = if (vae == v.key) "" else v.key },
-                                    label = { Text(v.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                                )
-                            }
+                    SetupSheet.LOOK -> {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            SectionLabel("Characters")
+                            Box(Modifier.weight(1f))
+                            TextButton(onClick = { charDraft = GenCharacter(id = "", name = "") }) { Text("＋ New") }
                         }
-                    }
-                }
-
-                // ── templates ───────────────────────────────────────────────
-                if (st.templates.isNotEmpty()) {
-                    item {
-                        val builtInCount = st.templates.count { it.builtIn }
-                        val visibleTemplates =
-                            if (showBuiltInTemplates) st.templates
-                            else st.templates.filter { !it.builtIn }
-                        SectionLabel("Templates")
-                        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            visibleTemplates.forEach { t ->
-                                FilterChip(
-                                    selected = templateId == t.id,
-                                    onClick = { templateId = if (templateId == t.id) "" else t.id },
-                                    label = { Text(t.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                                )
-                            }
-                        }
-                        if (builtInCount > 0) {
-                            TextButton(onClick = { showBuiltInTemplates = !showBuiltInTemplates }) {
-                                Text(
-                                    if (showBuiltInTemplates) "Hide built-in presets"
-                                    else "Show built-in presets ($builtInCount)",
-                                )
-                            }
-                        }
-                    }
-                }
-
-                // ── characters ──────────────────────────────────────────────
-                item {
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                    ) {
-                        SectionLabel("Characters")
-                        TextButton(onClick = { charDraft = GenCharacter(id = "", name = "") }) {
-                            Text("＋ New")
-                        }
-                    }
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        items(characters, key = { it.id }) { c ->
+                        if (characters.isEmpty()) SheetNote("Save the people you keep drawing: a prompt fragment and a portrait, added with a tap.")
+                        CardGrid(characters) { c ->
                             PickerCard(
                                 label = c.name,
                                 imageUrl = if (c.hasThumb) repo.characterThumbUrl(c.id) else null,
                                 selected = c.id in selectedChars,
                                 repo = repo,
-                                onClick = {
-                                    selectedChars = if (c.id in selectedChars) selectedChars - c.id else selectedChars + c.id
-                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                onClick = { selectedChars = if (c.id in selectedChars) selectedChars - c.id else selectedChars + c.id },
                                 onEdit = { charDraft = c },
                             )
                         }
-                    }
-                }
-
-                // ── poses ───────────────────────────────────────────────────
-                item {
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                    ) {
-                        SectionLabel("Poses")
-                        TextButton(onClick = { poseDraft = GenCharacter(id = "", name = "") }) {
-                            Text("＋ New")
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            SectionLabel("Poses")
+                            Box(Modifier.weight(1f))
+                            TextButton(onClick = { poseDraft = GenCharacter(id = "", name = "") }) { Text("＋ New") }
                         }
-                    }
-                    if (poses.isEmpty()) {
-                        Text(
-                            "Save the poses you keep asking for — a prompt fragment with a picture, " +
-                                "added to the next generation with a tap.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        items(poses, key = { it.id }) { p ->
+                        if (poses.isEmpty()) SheetNote("Save the poses you keep asking for — a prompt fragment with a picture, added to the next generation with a tap.")
+                        CardGrid(poses) { p ->
                             PickerCard(
                                 label = p.name,
                                 imageUrl = if (p.hasThumb) repo.poseThumbUrl(p.id) else null,
                                 selected = p.id in selectedPoses,
                                 repo = repo,
                                 placeholder = Icons.Filled.Accessibility,
-                                onClick = {
-                                    selectedPoses = if (p.id in selectedPoses) selectedPoses - p.id else selectedPoses + p.id
-                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                onClick = { selectedPoses = if (p.id in selectedPoses) selectedPoses - p.id else selectedPoses + p.id },
                                 onEdit = { poseDraft = p },
                             )
                         }
                     }
-                }
-
-                // ── prompt ──────────────────────────────────────────────────
-                item {
-                    SectionLabel("Prompt")
-                    OutlinedTextField(
-                        value = prompt,
-                        onValueChange = { value ->
-                            prompt = value
-                            val query = value.substringAfterLast(',').trim()
-                            if (query.length < 2) {
-                                tagSuggestions = emptyList(); tagCorrection = ""
-                            } else scope.launch {
-                                runCatching { repo.api.booruTags(query) }.onSuccess {
-                                    tagSuggestions = it.suggestions; tagCorrection = it.correction
-                                }
-                            }
-                        },
-                        placeholder = { Text("masterpiece, best quality, …") },
-                        minLines = 2,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    if (tagCorrection.isNotEmpty()) {
-                        Text("Did you mean: $tagCorrection?", style = MaterialTheme.typography.labelMedium,
-                            modifier = Modifier.clickable {
-                                prompt = prompt.substringBeforeLast(',', "").let { if (it.isBlank()) "$tagCorrection, " else "$it, $tagCorrection, " }
-                                tagSuggestions = emptyList(); tagCorrection = ""
-                            }.padding(top = 4.dp))
-                    }
-                    if (tagSuggestions.isNotEmpty()) {
-                        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(top = 4.dp)) {
-                            items(tagSuggestions) { tag ->
-                                FilterChip(selected = false, onClick = {
-                                    prompt = prompt.substringBeforeLast(',', "").let { if (it.isBlank()) "$tag, " else "$it, $tag, " }
-                                    tagSuggestions = emptyList(); tagCorrection = ""
-                                }, label = { Text(tag) })
-                            }
-                        }
-                    }
-                    val availableTriggers = st.loras
-                        .filter { it.name in loraWeights }
-                        .flatMap { it.triggerPhrases }
-                        .distinct()
-                    if (availableTriggers.isNotEmpty()) {
-                        Text(
-                            "LoRA trigger phrases",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(top = 8.dp),
-                        )
-                        LazyRow(
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            modifier = Modifier.padding(top = 4.dp),
-                        ) {
-                            items(availableTriggers) { phrase ->
-                                FilterChip(
-                                    selected = phrase in selectedTriggers,
-                                    onClick = {
-                                        selectedTriggers = if (phrase in selectedTriggers) {
-                                            selectedTriggers - phrase
-                                        } else {
-                                            selectedTriggers + phrase
-                                        }
-                                    },
-                                    label = { Text(phrase) },
-                                )
-                            }
-                        }
-                    }
-                    if (wildcards.isNotEmpty()) {
-                        Text(
-                            "Wildcards — tap to add; each generate draws a random line",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(top = 8.dp),
-                        )
-                        LazyRow(
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            modifier = Modifier.padding(top = 4.dp),
-                        ) {
-                            items(wildcards, key = { it.id }) { w ->
+                    SetupSheet.WILDCARDS -> {
+                        SheetNote("Tap a list to put it in the prompt — each generate draws a random line from it. Typing __ in the prompt completes them too.")
+                        if (wildcards.isEmpty()) SheetNote("No wildcard lists yet; make them on the web studio.")
+                        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            wildcards.forEach { w ->
                                 val ref = "__${w.name}__"
                                 FilterChip(
                                     selected = ref in prompt,
                                     onClick = {
                                         val base = prompt.trimEnd().trimEnd(',')
                                         prompt = if (base.isBlank()) "$ref, " else "$base, $ref, "
+                                        promptSel = TextRange(prompt.length)
                                     },
                                     label = { Text(ref) },
                                 )
                             }
                         }
                     }
-                    OutlinedTextField(
-                        value = negative,
-                        onValueChange = { negative = it },
-                        placeholder = { Text("Negative prompt (optional)") },
-                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                    )
-                }
-
-                // ── resolution ──────────────────────────────────────────────
-                item {
-                    SectionLabel("Resolution")
-                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        sizePresets.forEach { p ->
-                            FilterChip(
-                                selected = width == p.w && height == p.h,
-                                onClick = { setSize(p.w, p.h) },
-                                label = { Text(p.label) },
+                    SetupSheet.STYLES -> {
+                        val builtInCount = st.templates.count { it.builtIn }
+                        val visible = if (showBuiltInTemplates) st.templates else st.templates.filter { !it.builtIn }
+                        if (visible.isEmpty()) {
+                            SheetNote(
+                                if (st.templates.isNotEmpty()) "No styles you made — built-in presets are hidden."
+                                else if (st.backend == "invokeai") "No style presets in InvokeAI yet."
+                                else "No styles saved in Automatic1111 yet; save one from its Styles menu.",
                             )
                         }
-                    }
-                    Row(
-                        Modifier.fillMaxWidth().padding(top = 8.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        NumberField("Width", widthText, Modifier.weight(1f)) { v ->
-                            widthText = v
-                            v.toIntOrNull()?.let { if (it >= 64) width = snapSize(it) }
-                        }
-                        IconButton(onClick = { setSize(height, width) }) {
-                            Icon(Icons.Filled.SwapHoriz, contentDescription = "Swap width and height")
-                        }
-                        NumberField("Height", heightText, Modifier.weight(1f)) { v ->
-                            heightText = v
-                            v.toIntOrNull()?.let { if (it >= 64) height = snapSize(it) }
-                        }
-                    }
-                }
-
-                // ── settings ────────────────────────────────────────────────
-                item {
-                    SectionLabel("Settings")
-                    // Sliders rather than number boxes: a phone keyboard over a form
-                    // that then snaps "2" to 25 before the "5" arrives was the old way.
-                    SliderRow("Steps", steps.toString(), steps.toFloat(), 1f..80f, 79) { steps = it.toInt() }
-                    SliderRow("CFG", "%.1f".format(cfg), cfg.toFloat(), 1f..30f, 57) { cfg = (it * 2).toInt() / 2.0 }
-                    if (invoke) {
-                        SliderRow("CLIP skip", clipSkip.toString(), clipSkip.toFloat(), 0f..12f, 11) { clipSkip = it.toInt() }
-                    }
-                    var samplerOpen by remember { mutableStateOf(false) }
-                    ExposedDropdownMenuBox(expanded = samplerOpen, onExpandedChange = { samplerOpen = it }) {
-                        OutlinedTextField(
-                            value = schedulers.firstOrNull { it.first == sampler }?.second ?: sampler.ifBlank { schedulers[0].second },
-                            onValueChange = {},
-                            readOnly = true,
-                            label = { Text("Scheduler") },
-                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = samplerOpen) },
-                            modifier = Modifier.fillMaxWidth().menuAnchor(),
-                        )
-                        ExposedDropdownMenu(expanded = samplerOpen, onDismissRequest = { samplerOpen = false }) {
-                            schedulers.forEach { (id, label) ->
-                                DropdownMenuItem(text = { Text(label) }, onClick = { sampler = id; samplerOpen = false })
-                            }
-                        }
-                    }
-                    Row(
-                        Modifier.fillMaxWidth().padding(top = 8.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text("Count", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        listOf(1, 2, 4, 8).forEach { n ->
-                            FilterChip(selected = count == n, onClick = { count = n }, label = { Text(n.toString()) })
-                        }
-                    }
-                    Row(
-                        Modifier.fillMaxWidth().padding(top = 4.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        NumberField("Seed (-1 = random)", seedText, Modifier.weight(1f)) { seedText = it }
-                        IconButton(onClick = { seedText = "-1" }, enabled = seedText != "-1") {
-                            Icon(Icons.Filled.Casino, contentDescription = "Random seed")
-                        }
-                    }
-                    if (st.detailerAvailable) {
-                        Row(
-                            Modifier.horizontalScroll(rememberScrollState()).padding(top = 8.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            FilterChip(
-                                selected = detailerEnabled,
-                                onClick = { detailerEnabled = !detailerEnabled },
-                                label = { Text("ADetailer") },
-                            )
-                            if (detailerEnabled) {
-                                listOf(
-                                    "face_yolov8n.pt" to "Face (fast)",
-                                    "face_yolov8s.pt" to "Face (accurate)",
-                                    "hand_yolov8n.pt" to "Hands",
-                                    "person_yolov8n-seg.pt" to "Person",
-                                ).forEach { (model, label) ->
-                                    FilterChip(
-                                        selected = detailerModel == model,
-                                        onClick = { detailerModel = model },
-                                        label = { Text(label) },
-                                    )
-                                }
-                            }
-                        }
-                        if (detailerEnabled) {
-                            OutlinedTextField(
-                                value = detailerPrompt,
-                                onValueChange = { detailerPrompt = it },
-                                label = { Text("Detail prompt (blank reuses prompt)") },
-                                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                            )
-                            OutlinedTextField(
-                                value = detailerNegative,
-                                onValueChange = { detailerNegative = it },
-                                label = { Text("Detail negative prompt") },
-                                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                            )
-                            Row(
-                                Modifier.fillMaxWidth().padding(top = 8.dp),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        visible.forEach { t ->
+                            Surface(
+                                onClick = { templateId = if (templateId == t.id) "" else t.id },
+                                shape = RoundedCornerShape(14.dp),
+                                color = if (templateId == t.id) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+                                modifier = Modifier.fillMaxWidth(),
                             ) {
-                                NumberField("Confidence", detailerConfidence.toString(), Modifier.weight(1f)) {
-                                    detailerConfidence = (it.toDoubleOrNull() ?: 0.3).coerceIn(0.05, 1.0)
-                                }
-                                NumberField("Denoise", detailerDenoise.toString(), Modifier.weight(1f)) {
-                                    detailerDenoise = (it.toDoubleOrNull() ?: 0.4).coerceIn(0.05, 1.0)
-                                }
-                                NumberField("Mask blur", detailerMaskBlur.toString(), Modifier.weight(1f)) {
-                                    detailerMaskBlur = (it.toIntOrNull() ?: 4).coerceIn(0, 64)
+                                Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                                    Text(t.name, style = MaterialTheme.typography.titleSmall)
+                                    if (t.prompt.isNotBlank()) Text(t.prompt, style = MaterialTheme.typography.bodySmall,
+                                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
                             }
                         }
+                        if (builtInCount > 0) {
+                            TextButton(onClick = { showBuiltInTemplates = !showBuiltInTemplates }) {
+                                Text(if (showBuiltInTemplates) "Hide built-in presets" else "Show built-in presets ($builtInCount)")
+                            }
+                        }
                     }
-                }
-
-                // ── results ─────────────────────────────────────────────────
-                if (shots.isNotEmpty()) {
-                    item { SectionLabel("Latest creation — save what you want to keep") }
-                    items(shots.chunked(2), key = { it.first().preview.id }) { pair ->
-                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            pair.forEach { shot ->
-                                Column(Modifier.weight(1f)) {
-                                    AsyncImage(
-                                        model = repo.genPreviewUrl(shot.preview.id),
-                                        imageLoader = repo.imageLoader,
-                                        contentDescription = "Generated image",
-                                        contentScale = ContentScale.Crop,
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .aspectRatio(3f / 4f)
-                                            .clip(RoundedCornerShape(14.dp))
-                                            .background(MaterialTheme.colorScheme.surfaceVariant)
-                                            .clickable { expandedShot = shot },
+                    SetupSheet.SETTINGS -> {
+                        SectionLabel("Size")
+                        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            sizePresets.forEach { p ->
+                                FilterChip(selected = width == p.w && height == p.h, onClick = { setSize(p.w, p.h) }, label = { Text(p.label) })
+                            }
+                        }
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            NumberField("Width", widthText, Modifier.weight(1f)) { v ->
+                                widthText = v
+                                v.toIntOrNull()?.let { if (it >= 64) width = snapSize(it) }
+                            }
+                            IconButton(onClick = { setSize(height, width) }) {
+                                Icon(Icons.Filled.SwapHoriz, contentDescription = "Swap width and height")
+                            }
+                            NumberField("Height", heightText, Modifier.weight(1f)) { v ->
+                                heightText = v
+                                v.toIntOrNull()?.let { if (it >= 64) height = snapSize(it) }
+                            }
+                        }
+                        SectionLabel("Sampling")
+                        // Sliders rather than number boxes: a phone keyboard over a form
+                        // that then snaps "2" to 25 before the "5" arrives was the old way.
+                        SliderRow("Steps", steps.toString(), steps.toFloat(), 1f..80f, 79) { steps = it.toInt() }
+                        SliderRow("CFG", "%.1f".format(cfg), cfg.toFloat(), 1f..30f, 57) { cfg = (it * 2).toInt() / 2.0 }
+                        if (st.backend == "invokeai") {
+                            SliderRow("CLIP skip", clipSkip.toString(), clipSkip.toFloat(), 0f..12f, 11) { clipSkip = it.toInt() }
+                        }
+                        var samplerOpen by remember { mutableStateOf(false) }
+                        ExposedDropdownMenuBox(expanded = samplerOpen, onExpandedChange = { samplerOpen = it }) {
+                            OutlinedTextField(
+                                value = schedulers.firstOrNull { it.first == sampler }?.second ?: sampler.ifBlank { schedulers[0].second },
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text("Scheduler") },
+                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = samplerOpen) },
+                                modifier = Modifier.fillMaxWidth().menuAnchor(),
+                            )
+                            ExposedDropdownMenu(expanded = samplerOpen, onDismissRequest = { samplerOpen = false }) {
+                                schedulers.forEach { (id, label) ->
+                                    DropdownMenuItem(text = { Text(label) }, onClick = { sampler = id; samplerOpen = false })
+                                }
+                            }
+                        }
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            NumberField("Seed (-1 = random)", seedText, Modifier.weight(1f)) { seedText = it }
+                            IconButton(onClick = { seedText = "-1" }, enabled = seedText != "-1") {
+                                Icon(Icons.Filled.Casino, contentDescription = "Random seed")
+                            }
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text("More per run", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            listOf(6, 8).forEach { n -> FilterChip(selected = count == n, onClick = { count = n }, label = { Text(n.toString()) }) }
+                        }
+                        if (st.vaes.isNotEmpty()) {
+                            SectionLabel("VAE")
+                            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                FilterChip(selected = vae.isEmpty(), onClick = { vae = "" }, label = { Text("Model default") })
+                                st.vaes.forEach { v ->
+                                    FilterChip(
+                                        selected = vae == v.key,
+                                        onClick = { vae = if (vae == v.key) "" else v.key },
+                                        label = { Text(v.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                                     )
-                                    Row(Modifier.fillMaxWidth().padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                        Button(
-                                            onClick = { save(shot) },
-                                            enabled = !shot.saved,
-                                            modifier = Modifier.weight(1f),
-                                        ) {
-                                            Icon(
-                                                if (shot.saved) Icons.Filled.Check else Icons.Filled.Save,
-                                                contentDescription = null,
-                                                Modifier.size(16.dp),
-                                            )
-                                            Text(if (shot.saved) "  Saved" else "  Save")
-                                        }
-                                        // The seed that made this one, back into the form, so a
-                                        // near-miss can be nudged rather than rolled again.
-                                        if (shot.preview.seed > 0) {
-                                            IconButton(onClick = { seedText = shot.preview.seed.toString(); repo.report("Seed ${shot.preview.seed} set") }) {
-                                                Icon(Icons.Filled.Replay, contentDescription = "Reuse this seed")
-                                            }
-                                        }
+                                }
+                            }
+                        }
+                        if (st.detailerAvailable) {
+                            SectionLabel("Detailer")
+                            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                FilterChip(selected = detailerEnabled, onClick = { detailerEnabled = !detailerEnabled }, label = { Text("ADetailer") })
+                                if (detailerEnabled) {
+                                    listOf(
+                                        "face_yolov8n.pt" to "Face (fast)",
+                                        "face_yolov8s.pt" to "Face (accurate)",
+                                        "hand_yolov8n.pt" to "Hands",
+                                        "person_yolov8n-seg.pt" to "Person",
+                                    ).forEach { (m, label) ->
+                                        FilterChip(selected = detailerModel == m, onClick = { detailerModel = m }, label = { Text(label) })
                                     }
                                 }
                             }
-                            if (pair.size == 1) Box(Modifier.weight(1f)) {}
+                            if (detailerEnabled) {
+                                OutlinedTextField(value = detailerPrompt, onValueChange = { detailerPrompt = it },
+                                    label = { Text("Detail prompt (blank reuses prompt)") }, modifier = Modifier.fillMaxWidth())
+                                OutlinedTextField(value = detailerNegative, onValueChange = { detailerNegative = it },
+                                    label = { Text("Detail negative prompt") }, modifier = Modifier.fillMaxWidth())
+                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    NumberField("Confidence", detailerConfidence.toString(), Modifier.weight(1f)) {
+                                        detailerConfidence = (it.toDoubleOrNull() ?: 0.3).coerceIn(0.05, 1.0)
+                                    }
+                                    NumberField("Denoise", detailerDenoise.toString(), Modifier.weight(1f)) {
+                                        detailerDenoise = (it.toDoubleOrNull() ?: 0.4).coerceIn(0.05, 1.0)
+                                    }
+                                    NumberField("Mask blur", detailerMaskBlur.toString(), Modifier.weight(1f)) {
+                                        detailerMaskBlur = (it.toIntOrNull() ?: 4).coerceIn(0, 64)
+                                    }
+                                }
+                            }
                         }
-                    }
-                    item {
-                        Text(
-                            "Only your latest creation shows here. Everything you generate is kept " +
-                                "in the Gallery tab — browse, save, or delete earlier ones there. " +
-                                "Save copies an image into the library.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-            }
-                // The Generate button lives under the form rather than at the end of
-                // it: the form is long, and scrolling past the detailer settings to
-                // find the one button that matters was the phone's worst habit.
-                HorizontalDivider()
-                Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp)) {
-                    if (error.isNotEmpty()) {
-                        Text(
-                            error,
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.padding(bottom = 6.dp).clickable { GenSession.clearError() },
-                        )
-                    }
-                    if (generating) {
-                        OutlinedButton(onClick = { cancelGeneration() }, enabled = progress?.cancelled != true, modifier = Modifier.fillMaxWidth()) {
-                            CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                            Text(if (progress?.cancelled == true) "  Stopping…" else "  Generating — cancel")
-                        }
-                    } else {
-                        Button(
-                            onClick = { generate() },
-                            enabled = prompt.isNotBlank(),
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Icon(Icons.Filled.AutoAwesome, contentDescription = null, Modifier.size(18.dp))
-                            Text(if (count > 1) "  Generate ×$count" else "  Generate")
-                        }
-                    }
-                }
                     }
                 }
             }
@@ -1159,7 +1167,7 @@ private fun SectionLabel(text: String) {
  * A model/LoRA/character tile: cover art with a caption. A missing or failed
  * thumbnail renders a placeholder icon rather than an empty dark box — a model
  * without a preview used to read as a black tile. [onEdit] adds a small pencil
- * overlay that opens the record editor (InvokeAI backends only).
+ * overlay that opens the record editor (wherever the server can manage models).
  */
 @Composable
 private fun PickerCard(
@@ -1170,12 +1178,13 @@ private fun PickerCard(
     onClick: () -> Unit,
     onEdit: (() -> Unit)? = null,
     placeholder: androidx.compose.ui.graphics.vector.ImageVector = Icons.Filled.Person,
+    modifier: Modifier = Modifier.width(110.dp),
 ) {
     val border = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
     Surface(
         onClick = onClick,
-        shape = RoundedCornerShape(12.dp),
-        modifier = Modifier.width(110.dp).border(2.dp, border, RoundedCornerShape(12.dp)),
+        shape = RoundedCornerShape(16.dp),
+        modifier = modifier.border(if (selected) 2.dp else 1.dp, border, RoundedCornerShape(16.dp)),
         color = MaterialTheme.colorScheme.surfaceVariant,
     ) {
         Column {
@@ -1260,5 +1269,384 @@ private fun SliderRow(
         Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.width(64.dp))
         Slider(value = value, onValueChange = onChange, valueRange = range, steps = steps, modifier = Modifier.weight(1f))
         Text(shown, style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(36.dp))
+    }
+}
+
+/** What a setup sheet holds, in the order the rail lists them. */
+private enum class SetupSheet(val label: String, val icon: androidx.compose.ui.graphics.vector.ImageVector) {
+    MODELS("Models", Icons.Filled.ViewInAr),
+    LORAS("LoRAs", Icons.Filled.Style),
+    LOOK("Look", Icons.Filled.Face),
+    WILDCARDS("Wildcards", Icons.Filled.Category),
+    STYLES("Styles", Icons.Filled.Palette),
+    SETTINGS("Settings", Icons.Filled.Tune),
+}
+
+private fun TextRange.coerceTo(length: Int) = TextRange(start.coerceIn(0, length), end.coerceIn(0, length))
+
+/**
+ * The row of setup sheets over the canvas. It used to be the form itself — model,
+ * LoRAs, VAE, templates, characters, poses, the prompt, size and settings in one long
+ * scroll, with the picture at the bottom of it. Now each is a sheet that comes up
+ * over the canvas and goes away again, and the count on a sheet says what is on in it.
+ */
+@Composable
+private fun SetupRail(badges: Map<SetupSheet, Int>, onPick: (SetupSheet) -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        SetupSheet.entries.forEach { s ->
+            val badge = badges[s] ?: 0
+            Column(
+                Modifier
+                    .clip(RoundedCornerShape(16.dp))
+                    .clickable { onPick(s) }
+                    .padding(horizontal = 6.dp, vertical = 4.dp)
+                    .width(58.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Box {
+                    Box(
+                        Modifier
+                            .size(width = 48.dp, height = 30.dp)
+                            .clip(RoundedCornerShape(15.dp))
+                            .background(
+                                if (badge > 0) MaterialTheme.colorScheme.primaryContainer
+                                else MaterialTheme.colorScheme.surfaceVariant,
+                            ),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            s.icon,
+                            contentDescription = null,
+                            tint = if (badge > 0) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                    if (badge > 0) {
+                        Text(
+                            badge.toString(),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onPrimary,
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(MaterialTheme.colorScheme.primary)
+                                .padding(horizontal = 5.dp),
+                        )
+                    }
+                }
+                Text(s.label, style = MaterialTheme.typography.labelSmall, maxLines = 1,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+}
+
+/**
+ * What the next picture is made with: the model with its cover, the LoRAs that are on
+ * (each with its weight, and a cross to take it off), the size, steps and CFG, and
+ * whether the seed is kept. Each one opens where it is changed.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun RecipeStrip(
+    repo: Repository,
+    backendLabel: String,
+    model: GenModel?,
+    fallbackName: String,
+    loras: List<Pair<String, Pair<String, Double>>>,
+    size: String,
+    sampling: String,
+    seed: Long?,
+    onModels: () -> Unit,
+    onLoras: () -> Unit,
+    onRemoveLora: (String) -> Unit,
+    onSettings: () -> Unit,
+    onSeed: () -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Surface(
+            onClick = onModels,
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        ) {
+            Row(Modifier.padding(5.dp).padding(end = 8.dp), verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Box(Modifier.size(42.dp).clip(RoundedCornerShape(11.dp)).background(MaterialTheme.colorScheme.surface),
+                    contentAlignment = Alignment.Center) {
+                    if (model != null) {
+                        SubcomposeAsyncImage(
+                            model = repo.modelThumbUrl(model.title),
+                            imageLoader = repo.imageLoader,
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize(),
+                            error = { Icon(Icons.Filled.ViewInAr, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+                        )
+                    } else {
+                        Icon(Icons.Filled.ViewInAr, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+                Column {
+                    Text(backendLabel.uppercase() + (model?.base?.takeIf { it.isNotBlank() }?.let { " · $it" } ?: ""),
+                        style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                    Text(model?.modelName?.ifBlank { model.title } ?: fallbackName.ifBlank { "Choose a model" },
+                        style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.widthIn(max = 190.dp))
+                }
+                Icon(Icons.Filled.ExpandMore, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        loras.forEach { (label, pick) ->
+            val (name, weight) = pick
+            InputChip(
+                selected = true,
+                onClick = onLoras,
+                label = { Text("$label  ${"%.2f".format(weight).trimEnd('0').trimEnd('.')}") },
+                leadingIcon = { Icon(Icons.Filled.Style, contentDescription = null, Modifier.size(16.dp)) },
+                trailingIcon = {
+                    Icon(Icons.Filled.Close, contentDescription = "Take $label off",
+                        modifier = Modifier.size(18.dp).clip(RoundedCornerShape(9.dp)).clickable { onRemoveLora(name) })
+                },
+            )
+        }
+        if (loras.isEmpty()) {
+            AssistChip(onClick = onLoras, label = { Text("LoRA") },
+                leadingIcon = { Icon(Icons.Filled.Add, contentDescription = null, Modifier.size(16.dp)) })
+        }
+        AssistChip(onClick = onSettings, label = { Text(size) },
+            leadingIcon = { Icon(Icons.Filled.AspectRatio, contentDescription = null, Modifier.size(16.dp)) })
+        AssistChip(onClick = onSettings, label = { Text(sampling) },
+            leadingIcon = { Icon(Icons.Filled.Tune, contentDescription = null, Modifier.size(16.dp)) })
+        FilterChip(
+            selected = seed != null,
+            onClick = onSeed,
+            label = { Text(seed?.toString() ?: "Random seed") },
+            leadingIcon = { Icon(if (seed != null) Icons.Filled.Lock else Icons.Filled.Casino, contentDescription = null, Modifier.size(16.dp)) },
+        )
+    }
+}
+
+@Composable
+private fun EmptyCanvas(invoke: Boolean) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = 24.dp)
+            .clip(RoundedCornerShape(24.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+            .padding(horizontal = 24.dp, vertical = 40.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Icon(Icons.Filled.Image, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(40.dp))
+        Text("Your canvas", style = MaterialTheme.typography.titleMedium)
+        Text(
+            "Pick a model from the row above, write a prompt below and press ${if (invoke) "Invoke" else "Generate"}. " +
+                "Tags complete as you type.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+        )
+    }
+}
+
+/**
+ * The prompt, its suggestions, the LoRAs' trigger words, how many pictures, and the
+ * button. The suggestions sit over the field they belong to, the way a keyboard's do,
+ * so the list never pushes the field out from under the thumb that is typing.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun Composer(
+    prompt: TextFieldValue,
+    negative: TextFieldValue,
+    onPrompt: (TextFieldValue) -> Unit,
+    onNegative: (TextFieldValue) -> Unit,
+    completions: List<PromptComplete.Completion>,
+    completionsFor: Boolean,
+    onAccept: (PromptComplete.Completion) -> Unit,
+    onDismissCompletions: () -> Unit,
+    triggers: List<String>,
+    selectedTriggers: Set<String>,
+    onToggleTrigger: (String) -> Unit,
+    count: Int,
+    onCount: (Int) -> Unit,
+    error: String,
+    generating: Boolean,
+    cancelling: Boolean,
+    canGenerate: Boolean,
+    generateLabel: String,
+    onGenerate: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    var negativeOpen by remember { mutableStateOf(negative.text.isNotBlank()) }
+    Surface(
+        shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        shadowElevation = 10.dp,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            Modifier.fillMaxWidth().imePadding().padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            if (error.isNotEmpty()) {
+                Text(
+                    error,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.clickable { GenSession.clearError() },
+                )
+            }
+            if (completions.isNotEmpty() && completionsFor) CompletionList(completions, onAccept, onDismissCompletions)
+            OutlinedTextField(
+                value = prompt,
+                onValueChange = onPrompt,
+                placeholder = { Text("Describe it — tags complete as you type, and so do <lora: and __") },
+                minLines = 2,
+                maxLines = 5,
+                shape = RoundedCornerShape(18.dp),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            if (negativeOpen) {
+                if (completions.isNotEmpty() && !completionsFor) CompletionList(completions, onAccept, onDismissCompletions)
+                OutlinedTextField(
+                    value = negative,
+                    onValueChange = onNegative,
+                    label = { Text("Negative") },
+                    maxLines = 3,
+                    shape = RoundedCornerShape(18.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            if (triggers.isNotEmpty()) {
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    items(triggers) { phrase ->
+                        FilterChip(selected = phrase in selectedTriggers, onClick = { onToggleTrigger(phrase) }, label = { Text(phrase) })
+                    }
+                }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(selected = negativeOpen, onClick = { negativeOpen = !negativeOpen }, label = { Text("Negative") })
+                SingleChoiceSegmentedButtonRow(Modifier.width(150.dp)) {
+                    (1..4).forEach { n ->
+                        SegmentedButton(
+                            selected = count == n,
+                            onClick = { onCount(n) },
+                            shape = SegmentedButtonDefaults.itemShape(index = n - 1, count = 4),
+                            icon = {},
+                        ) { Text(n.toString()) }
+                    }
+                }
+                Box(Modifier.weight(1f))
+                if (generating) {
+                    OutlinedButton(onClick = onCancel, enabled = !cancelling, modifier = Modifier.height(48.dp)) {
+                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                        Text(if (cancelling) "  Stopping…" else "  Cancel")
+                    }
+                } else {
+                    Button(onClick = onGenerate, enabled = canGenerate, modifier = Modifier.height(48.dp)) {
+                        Icon(Icons.Filled.AutoAwesome, contentDescription = null, Modifier.size(18.dp))
+                        Text("  $generateLabel")
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Danbooru's colours for its categories, so a character or an artist reads as one first. */
+private fun categoryColor(c: PromptComplete.Completion): Color = when (c.kind) {
+    PromptComplete.Kind.LORA -> Color(0xFFFFB68A)
+    PromptComplete.Kind.WILDCARD -> Color(0xFF78D9EC)
+    PromptComplete.Kind.TRIGGER -> Color(0xFFFDD663)
+    PromptComplete.Kind.TAG -> when (c.category) {
+        1 -> Color(0xFFF28B82)
+        3 -> Color(0xFFC58AF9)
+        4 -> Color(0xFF81C995)
+        5 -> Color(0xFFFDD663)
+        100 -> Color(0xFFFFB68A)
+        else -> Color(0xFF8AB4F8)
+    }
+}
+
+@Composable
+private fun CompletionList(
+    items: List<PromptComplete.Completion>,
+    onAccept: (PromptComplete.Completion) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHighest,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(vertical = 4.dp)) {
+            items.take(6).forEach { c ->
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable { onAccept(c) }
+                        .padding(horizontal = 14.dp, vertical = 9.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Box(Modifier.size(9.dp).clip(RoundedCornerShape(if (c.kind == PromptComplete.Kind.TAG) 5.dp else 2.dp)).background(categoryColor(c)))
+                    Text(c.label, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f))
+                    if (c.detail.isNotEmpty()) Text(c.detail, style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                    val n = PromptComplete.formatCount(c.count)
+                    if (n.isNotEmpty()) Text(n, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End).padding(end = 4.dp)) { Text("Hide") }
+        }
+    }
+}
+
+/**
+ * Cover cards, three to a row. Not a lazy grid: it lives in a sheet that scrolls as a
+ * whole. Capped, so a box with five hundred LoRAs does not load five hundred covers
+ * to show the first twelve — the search above narrows it instead.
+ */
+@Composable
+private fun <T> CardGrid(items: List<T>, columns: Int = 3, cap: Int = 60, cell: @Composable (T) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        items.take(cap).chunked(columns).forEach { row ->
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                row.forEach { Box(Modifier.weight(1f)) { cell(it) } }
+                repeat(columns - row.size) { Box(Modifier.weight(1f)) }
+            }
+        }
+        if (items.size > cap) SheetNote("Showing $cap of ${items.size} — search to find the rest.")
+    }
+}
+
+@Composable
+private fun SheetNote(text: String) {
+    Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+}
+
+/** Why there are no edit pencils on an Automatic1111's models. */
+@Composable
+private fun ManageNote(dirSet: Boolean) {
+    Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.secondaryContainer) {
+        Text(
+            if (dirSet) "The Automatic1111 models folder set on the server isn't a models folder (it needs Stable-diffusion or Lora inside), so models can't be installed, edited or deleted from here."
+            else "Automatic1111 has no API to install, edit or delete models. Set its models folder in the web Settings → Image generation and those work here too, Civitai installs included.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSecondaryContainer,
+            modifier = Modifier.padding(12.dp),
+        )
     }
 }

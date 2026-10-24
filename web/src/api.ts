@@ -496,6 +496,8 @@ export interface Settings {
   // Image generation: the base URL of a local Automatic1111 / SD.Next WebUI. Empty
   // disables the feature; imageGenEnabled is a derived, read-only mirror of "URL set".
   imageGenUrl: string;
+  /** Automatic1111's models folder as the server sees it; blank manages nothing. */
+  imageGenModelsDir: string;
   imageGenEnabled: boolean;
   civitaiApiUrl: string;
   civitaiApiKey: string;
@@ -1406,6 +1408,8 @@ export interface APKInfo {
 /** One checkpoint the generator can load. `title` is the selector value the API wants. */
 export interface GenModel {
   title: string;
+  /** The model's record: InvokeAI's key, or an A1111 model's path under its folder. */
+  key?: string;
   model_name: string;
   hash?: string;
   /** Model family — "sd-1", "sd-2", "sdxl" — when the generator reports one. */
@@ -1427,6 +1431,7 @@ export interface GenModelDefaults {
 
 export interface GenLora {
   name: string;
+  key?: string;
   alias?: string;
   path?: string;
   hash?: string;
@@ -1506,6 +1511,25 @@ export interface ImageGenStatus {
   templates?: GenTemplate[];
   boards?: GalleryBoard[];
   detailerAvailable?: boolean;
+  /** The Civitai browser works against this generator (it does against both). */
+  civitai?: boolean;
+  /** Models can be installed, edited, re-covered and deleted from here: always on
+      InvokeAI, and on A1111 once its models folder is set in Settings. */
+  manageModels?: boolean;
+  /** A1111 only: whether a models folder has been set at all, so the screen can tell
+      "not set" from "set, but not a models folder". */
+  modelsDirSet?: boolean;
+}
+
+/** One prompt completion from the server's tag vocabulary. */
+export interface TagCompletion {
+  tag: string;
+  /** Danbooru's category: 0 general, 1 artist, 3 copyright, 4 character, 5 meta;
+      100 is a tag from this library rather than from Danbooru. */
+  category: number;
+  count: number;
+  /** The alias that matched, when the tag was found by one ("boobs" → breasts). */
+  alias?: string;
 }
 
 /** A just-generated image, held server-side in memory until saved. `id` streams it. */
@@ -2649,8 +2673,8 @@ export const api = {
 
   imageGenStatus: () => request<ImageGenStatus>("/api/imagegen/status", {}, 12_000),
 
-  booruTags: (q: string) => request<{ suggestions: string[]; correction?: string }>(
-    `/api/imagegen/tags?q=${encodeURIComponent(q)}`,
+  booruTags: (q: string, limit = 12) => request<{ items?: TagCompletion[]; suggestions: string[]; correction?: string }>(
+    `/api/imagegen/tags?q=${encodeURIComponent(q)}&limit=${limit}`,
   ),
   gameGallery: (gameId: number) => request<{ items: Media[] }>(`/api/media/${gameId}/gallery`),
   uploadGameGallery: (gameId: number, file: File) => {
