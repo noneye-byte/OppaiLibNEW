@@ -39,15 +39,27 @@ import (
 // a1111Folder is one kind of file A1111 loads, and where under the models folder it
 // lives. Type is the name InvokeAI's records use for the same kind, so the catalogue
 // and the clients read both backends alike.
+//
+// Folder is A1111's own name for it and is what keys are written with, so a link kept
+// by key means the same file whatever the folder is really called. On disk it may be
+// called something else: Linux tells "Lora" from "lora", and the A1111 images built
+// to share one model store with ComfyUI point their --ckpt-dir and --lora-dir at
+// "checkpoints" and "loras". Aliases are those other names, lowercase, most likely
+// first; localPath maps a key onto whichever one the folder actually has.
 type a1111Folder struct {
-	Type   string
-	Folder string
+	Type    string
+	Folder  string
+	Aliases []string
 }
 
 var (
-	a1111Checkpoints = a1111Folder{"main", "Stable-diffusion"}
-	a1111LoraFolder  = a1111Folder{"lora", "Lora"}
-	a1111VaeFolder   = a1111Folder{"vae", "VAE"}
+	a1111Checkpoints = a1111Folder{"main", "Stable-diffusion", []string{"stable-diffusion", "checkpoints", "checkpoint", "ckpt"}}
+	a1111LoraFolder  = a1111Folder{"lora", "Lora", []string{"lora", "loras"}}
+	a1111VaeFolder   = a1111Folder{"vae", "VAE", []string{"vae"}}
+	a1111ControlNet  = a1111Folder{"controlnet", "ControlNet", []string{"controlnet"}}
+	a1111Upscalers   = a1111Folder{"upscaler", "ESRGAN", []string{"esrgan", "upscale_models"}}
+
+	a1111AllFolders = []a1111Folder{a1111Checkpoints, a1111LoraFolder, a1111VaeFolder, a1111ControlNet, a1111Upscalers}
 )
 
 // a1111InstallFolders maps a catalogue type (as the Civitai search filter names it,
@@ -61,8 +73,8 @@ var a1111InstallFolders = map[string]a1111Folder{
 	"dora":       a1111LoraFolder,
 	"lycoris":    a1111LoraFolder,
 	"vae":        a1111VaeFolder,
-	"controlnet": {"controlnet", "ControlNet"},
-	"upscaler":   {"upscaler", "ESRGAN"},
+	"controlnet": a1111ControlNet,
+	"upscaler":   a1111Upscalers,
 }
 
 // A1111InstallFolder says where a model of the catalogue's type would be installed,
@@ -99,16 +111,23 @@ func stem(p string) string {
 func a1111KeyOf(remote string, f a1111Folder) string {
 	p := strings.ReplaceAll(remote, "\\", "/")
 	lower := strings.ToLower(p)
-	marker := "/" + strings.ToLower(f.Folder) + "/"
-	if i := strings.LastIndex(lower, marker); i >= 0 {
-		return f.Folder + "/" + p[i+len(marker):]
+	best, end := -1, 0
+	for _, name := range f.Aliases {
+		marker := "/" + name + "/"
+		if i := strings.LastIndex(lower, marker); i > best {
+			best, end = i, i+len(marker)
+		}
+	}
+	if best >= 0 {
+		return f.Folder + "/" + p[end:]
 	}
 	return f.Folder + "/" + path.Base(p)
 }
 
 // localPath is where a key lives in the configured models folder, "" without one.
 // The key is cleaned as if rooted, so one that climbs ("../") stays inside the folder
-// rather than reaching somewhere else on the box.
+// rather than reaching somewhere else on the box. Its first part is A1111's name for
+// the folder, which is put back as whatever the folder is called here.
 func localPath(dir, key string) string {
 	if dir == "" || key == "" {
 		return ""
@@ -117,7 +136,73 @@ func localPath(dir, key string) string {
 	if clean == "" {
 		return ""
 	}
+	head, rest, _ := strings.Cut(clean, "/")
+	for _, f := range a1111AllFolders {
+		if strings.EqualFold(head, f.Folder) {
+			return filepath.Join(subfolderPath(dir, f), filepath.FromSlash(rest))
+		}
+	}
 	return filepath.Join(dir, filepath.FromSlash(clean))
+}
+
+// subfolders remembers each models folder's listing for a few seconds: localPath is
+// asked once per model on every listing, and on Unraid's FUSE shares a directory
+// read is not free.
+var subfolders = struct {
+	sync.Mutex
+	m map[string]subfolderList
+}{m: map[string]subfolderList{}}
+
+type subfolderList struct {
+	names []string
+	at    time.Time
+}
+
+func listSubfolders(dir string) []string {
+	subfolders.Lock()
+	defer subfolders.Unlock()
+	if l, ok := subfolders.m[dir]; ok && time.Since(l.at) < 5*time.Second {
+		return l.names
+	}
+	var names []string
+	if entries, err := os.ReadDir(dir); err == nil {
+		for _, e := range entries {
+			if e.IsDir() {
+				names = append(names, e.Name())
+			}
+		}
+	}
+	subfolders.m[dir] = subfolderList{names, time.Now()}
+	return names
+}
+
+// forgetSubfolders drops a folder's remembered listing, after making a folder in it.
+func forgetSubfolders(dir string) {
+	subfolders.Lock()
+	delete(subfolders.m, dir)
+	subfolders.Unlock()
+}
+
+// findSubfolder is the folder under dir that holds f's kind, by any of its names.
+func findSubfolder(dir string, f a1111Folder) (string, bool) {
+	names := listSubfolders(dir)
+	for _, alias := range f.Aliases {
+		for _, n := range names {
+			if strings.ToLower(n) == alias {
+				return filepath.Join(dir, n), true
+			}
+		}
+	}
+	return "", false
+}
+
+// subfolderPath is where f's kind lives under dir: the folder there is, or A1111's
+// own name for one that is not there yet.
+func subfolderPath(dir string, f a1111Folder) string {
+	if p, ok := findSubfolder(dir, f); ok {
+		return p
+	}
+	return filepath.Join(dir, f.Folder)
 }
 
 // a1111MountPoint is where the Unraid template maps A1111's models folder. With the
@@ -144,14 +229,42 @@ type A1111ModelsDir struct {
 	Problem string
 }
 
-// looksLikeA1111Models says whether dir holds a Stable-diffusion or Lora folder.
+// looksLikeA1111Models says whether dir holds a checkpoint or LoRA folder, by any of
+// their names.
 func looksLikeA1111Models(dir string) bool {
 	for _, f := range []a1111Folder{a1111Checkpoints, a1111LoraFolder} {
-		if info, err := os.Stat(filepath.Join(dir, f.Folder)); err == nil && info.IsDir() {
+		if _, ok := findSubfolder(dir, f); ok {
 			return true
 		}
 	}
 	return false
+}
+
+// folderContents names what is in dir, for a refusal to show what was actually seen.
+func folderContents(dir string) string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
+	var names []string
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		n := e.Name()
+		if e.IsDir() {
+			n += "/"
+		}
+		names = append(names, n)
+	}
+	if len(names) == 0 {
+		return "it is empty"
+	}
+	sort.Strings(names)
+	if len(names) > 10 {
+		names = append(names[:10], fmt.Sprintf("and %d more", len(names)-10))
+	}
+	return "it holds " + strings.Join(names, ", ")
 }
 
 // resolveA1111ModelsDir finds the models folder p means. The setting asks for
@@ -162,6 +275,9 @@ func looksLikeA1111Models(dir string) bool {
 func resolveA1111ModelsDir(p string) (string, string) {
 	info, err := os.Stat(p)
 	if err != nil {
+		if strings.HasPrefix(p, "/mnt/") {
+			return "", fmt.Sprintf("%s does not exist inside the OppaiLib container — that looks like the path on the Unraid host; use the container path of the mapping instead (/a1111-models in the template), or leave this blank", p)
+		}
 		return "", fmt.Sprintf("%s does not exist inside the OppaiLib container — map Automatic1111's models folder to it in the container's settings", p)
 	}
 	if !info.IsDir() {
@@ -173,59 +289,174 @@ func resolveA1111ModelsDir(p string) (string, string) {
 	if inner := filepath.Join(p, "models"); looksLikeA1111Models(inner) {
 		return inner, ""
 	}
-	base := filepath.Base(p)
-	for _, f := range a1111InstallFolders {
-		if strings.EqualFold(base, f.Folder) && looksLikeA1111Models(filepath.Dir(p)) {
-			return filepath.Dir(p), ""
+	base := strings.ToLower(filepath.Base(p))
+	for _, f := range a1111AllFolders {
+		for _, alias := range f.Aliases {
+			if base == alias && looksLikeA1111Models(filepath.Dir(p)) {
+				return filepath.Dir(p), ""
+			}
 		}
 	}
-	return "", fmt.Sprintf("%s holds neither Stable-diffusion nor Lora — point it at the folder Automatic1111 keeps those in (its models folder)", p)
+	return "", fmt.Sprintf("%s has no checkpoint or LoRA folder in it (looked for Stable-diffusion, checkpoints, Lora and loras, in any case) and %s — point it at the folder Automatic1111 keeps those in", p, folderContents(p))
+}
+
+// a1111MountInfo is where Linux lists this process's mounts. A var for the tests.
+var a1111MountInfo = "/proc/self/mountinfo"
+
+// mountPoints reads the mount points out of a mountinfo listing. The fifth field is
+// the mount point, with spaces and the like written as octal escapes.
+func mountPoints(info string) []string {
+	var out []string
+	for _, line := range strings.Split(info, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 5 {
+			continue
+		}
+		out = append(out, unescapeMount(fields[4]))
+	}
+	return out
+}
+
+func unescapeMount(s string) string {
+	if !strings.Contains(s, `\`) {
+		return s
+	}
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+3 < len(s) {
+			var v byte
+			ok := true
+			for _, c := range s[i+1 : i+4] {
+				if c < '0' || c > '7' {
+					ok = false
+					break
+				}
+				v = v*8 + byte(c-'0')
+			}
+			if ok {
+				b.WriteByte(v)
+				i += 3
+				continue
+			}
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
+}
+
+// notModelMounts are mounts that are the system's or OppaiLib's own, never A1111's.
+var notModelMounts = []string{"/proc", "/sys", "/dev", "/etc", "/run", "/usr", "/tmp", "/var", "/opt", "/config", "/media", "/db", "/cache"}
+
+var discovered = struct {
+	sync.Mutex
+	dir string
+	at  time.Time
+}{}
+
+// discoverA1111Mount looks through what is mounted into the container for a models
+// folder, for the operator who mapped one under some other container path and left
+// the setting blank — or typed the host's path into it. Only a folder with a
+// checkpoint folder counts here, stricter than for a path given by hand: a
+// text-generation-webui mount has a "loras" folder too, and its LoRAs are not these.
+func discoverA1111Mount() string {
+	discovered.Lock()
+	defer discovered.Unlock()
+	if time.Since(discovered.at) < 30*time.Second {
+		return discovered.dir
+	}
+	discovered.at = time.Now()
+	discovered.dir = ""
+	data, err := os.ReadFile(a1111MountInfo)
+	if err != nil {
+		return ""
+	}
+	for _, mp := range mountPoints(string(data)) {
+		if mp == "/" || mp == "" {
+			continue
+		}
+		skip := false
+		for _, sys := range notModelMounts {
+			if mp == sys || strings.HasPrefix(mp, sys+"/") {
+				skip = true
+				break
+			}
+		}
+		if skip {
+			continue
+		}
+		dir, _ := resolveA1111ModelsDir(mp)
+		if dir == "" {
+			continue
+		}
+		if _, ok := findSubfolder(dir, a1111Checkpoints); ok {
+			discovered.dir = dir
+			return dir
+		}
+	}
+	return ""
+}
+
+// locate finds the models folder: the setting, else the template's mount point,
+// else any models folder mounted into the container. It returns what was looked at,
+// what that resolved to, and why the first choice would not do when nothing did.
+func (c *Client) locate() (p, dir, problem string) {
+	if c.ModelsDir != nil {
+		p = strings.TrimSpace(c.ModelsDir())
+	}
+	if p == "" {
+		if info, err := os.Stat(a1111MountPoint); err == nil && info.IsDir() {
+			p = a1111MountPoint
+		}
+	}
+	if p != "" {
+		if dir, problem = resolveA1111ModelsDir(p); dir != "" {
+			return p, dir, ""
+		}
+	}
+	if found := discoverA1111Mount(); found != "" {
+		if p == "" {
+			p = found
+		}
+		return p, found, ""
+	}
+	return p, "", problem
 }
 
 // A1111ModelsDir reads the setting and the folder behind it. It touches the disk —
 // a write probe included — so it is for status and for the operations that write, not
 // for every listing.
 func (c *Client) A1111ModelsDir() A1111ModelsDir {
-	st := A1111ModelsDir{Path: c.modelsDirPath()}
-	if st.Path == "" {
-		return st
-	}
-	st.Dir, st.Problem = resolveA1111ModelsDir(st.Path)
+	var st A1111ModelsDir
+	st.Path, st.Dir, st.Problem = c.locate()
 	if st.Dir == "" {
 		return st
 	}
-	if f, err := os.CreateTemp(st.Dir, ".oppailib-writable-*"); err == nil {
+	// The probe goes where installs go, so a folder that is writable at the top but
+	// not below (a share whose subfolders belong to someone else) is caught too.
+	probeIn := subfolderPath(st.Dir, a1111LoraFolder)
+	if _, err := os.Stat(probeIn); err != nil {
+		probeIn = st.Dir
+	}
+	if f, err := os.CreateTemp(probeIn, ".oppailib-writable-*"); err == nil {
 		name := f.Name()
 		f.Close()
 		os.Remove(name)
 		st.Writable = true
 	} else {
-		st.Problem = fmt.Sprintf("%s is mounted read-only — OppaiLib has to write into it to install, edit or delete models", st.Path)
+		reason := err.Error()
+		var pe *os.PathError
+		if errors.As(err, &pe) {
+			reason = pe.Err.Error()
+		}
+		st.Problem = fmt.Sprintf("OppaiLib can't write into %s (%s) — the mapping has to be read/write, and a network share has to let the container's root user write", probeIn, reason)
 	}
 	return st
-}
-
-// modelsDirPath is the setting, or the mount point when that is blank and mounted.
-func (c *Client) modelsDirPath() string {
-	if c.ModelsDir != nil {
-		if p := strings.TrimSpace(c.ModelsDir()); p != "" {
-			return p
-		}
-	}
-	if info, err := os.Stat(a1111MountPoint); err == nil && info.IsDir() {
-		return a1111MountPoint
-	}
-	return ""
 }
 
 // modelsDir is the resolved models folder for reading sidecars, "" without one. It
 // skips the write probe, which only the writes need.
 func (c *Client) modelsDir() string {
-	p := c.modelsDirPath()
-	if p == "" {
-		return ""
-	}
-	dir, _ := resolveA1111ModelsDir(p)
+	_, dir, _ := c.locate()
 	return dir
 }
 
@@ -784,7 +1015,7 @@ func (c *Client) A1111FolderMatch(ctx context.Context, base string) (A1111Folder
 	}
 	for _, f := range []a1111Folder{a1111Checkpoints, a1111LoraFolder, a1111VaeFolder} {
 		n := 0
-		_ = filepath.WalkDir(filepath.Join(dir, f.Folder), func(p string, d os.DirEntry, err error) error {
+		_ = filepath.WalkDir(subfolderPath(dir, f), func(p string, d os.DirEntry, err error) error {
 			if err == nil && !d.IsDir() && a1111ModelExts[strings.ToLower(filepath.Ext(p))] {
 				n++
 			}

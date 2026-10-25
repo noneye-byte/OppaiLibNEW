@@ -12,7 +12,6 @@ import (
 	"net/url"
 	"os"
 	"path"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -145,9 +144,10 @@ func (c *Client) a1111Install(ctx context.Context, base string, spec InstallSpec
 	if jobs.busy(spec.Source) {
 		return nil, errors.New("that file is already downloading")
 	}
-	if err := os.MkdirAll(filepath.Join(dir, folder.Folder), 0o755); err != nil {
+	if err := os.MkdirAll(subfolderPath(dir, folder), 0o755); err != nil {
 		return nil, fmt.Errorf("can't write to the models folder: %w", err)
 	}
+	forgetSubfolders(dir)
 	job := jobs.add(spec.Source)
 	go c.a1111Download(base, dir, folder, spec, job)
 	out := *job

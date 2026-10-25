@@ -423,8 +423,12 @@ operations: an install from Civitai is downloaded into the right folder, a model
 description and trigger words go into the `<name>.json` sidecar A1111's own edit card
 writes, its cover into `<name>.preview.png`, and A1111 is asked to rescan. Blank means
 `/a1111-models`, the container template's mount point, when something that looks like
-a models folder is mounted there, and otherwise nothing: A1111's models are still
-listed and linked to Civitai by hash, and none of them change. The webui's own folder
+a models folder is mounted there; failing that (or when the path that is set does not
+work, such as the Unraid host's path), any models folder with a checkpoint folder that
+is mounted into the container. With none, A1111's models are still listed and linked
+to Civitai by hash, and none of them change. The folders inside are matched by any of
+their usual names in any case — `Stable-diffusion` or `checkpoints`, `Lora` or `loras`,
+`VAE`, `ControlNet`, `ESRGAN` or `upscale_models` — while keys keep A1111's own names. The webui's own folder
 (holding `models`) or a folder inside `models` is taken to mean `models`; a path that
 is missing, holds neither `Stable-diffusion` nor `Lora`, or is mounted read-only is
 not used, and the status says which. InvokeAI ignores it.

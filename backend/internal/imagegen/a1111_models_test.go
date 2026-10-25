@@ -225,7 +225,7 @@ func TestAWrongFolderSaysWhatIsWrongWithIt(t *testing.T) {
 	}
 	empty := t.TempDir()
 	c.ModelsDir = func() string { return empty }
-	if st := c.A1111ModelsDir(); !strings.Contains(st.Problem, "neither Stable-diffusion nor Lora") {
+	if st := c.A1111ModelsDir(); !strings.Contains(st.Problem, "no checkpoint or LoRA folder") {
 		t.Fatalf("status = %+v", st)
 	}
 }
@@ -361,5 +361,64 @@ func TestAFolderThatIsNotTheOneA1111ReadsIsCaught(t *testing.T) {
 	}
 	if err := c.A1111Rescan(context.Background(), base); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestComfyStyleAndLowercaseFolderNamesAreTakenForA1111s(t *testing.T) {
+	dir := t.TempDir()
+	for _, sub := range []string{"checkpoints", "loras"} {
+		if err := os.MkdirAll(filepath.Join(dir, sub), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, problem := resolveA1111ModelsDir(dir); got != dir {
+		t.Fatalf("resolved to %q: %s", got, problem)
+	}
+	// Keys keep A1111's own names; on disk they land in the folders that are there.
+	if got := localPath(dir, "Lora/styles/ink.safetensors"); got != filepath.Join(dir, "loras", "styles", "ink.safetensors") {
+		t.Fatalf("localPath = %s", got)
+	}
+	if got := a1111KeyOf("/data/models/loras/styles/ink.safetensors", a1111LoraFolder); got != "Lora/styles/ink.safetensors" {
+		t.Fatalf("key = %s", got)
+	}
+	if got := a1111KeyOf("/data/models/checkpoints/dream.safetensors", a1111Checkpoints); got != "Stable-diffusion/dream.safetensors" {
+		t.Fatalf("key = %s", got)
+	}
+}
+
+func TestAModelsFolderMountedAnywhereIsFoundWhenNothingIsSet(t *testing.T) {
+	c, _, _, dir := a1111Fixture(t)
+	oldMount, oldInfo := a1111MountPoint, a1111MountInfo
+	t.Cleanup(func() {
+		a1111MountPoint, a1111MountInfo = oldMount, oldInfo
+		discovered.at = time.Time{}
+	})
+	a1111MountPoint = filepath.Join(t.TempDir(), "absent")
+	info := filepath.Join(t.TempDir(), "mountinfo")
+	lines := "22 1 0:21 / / rw - overlay overlay rw\n" +
+		"30 22 0:40 / /config rw - fuse.shfs shfs rw\n" +
+		"31 22 0:41 / " + filepath.ToSlash(dir) + " rw - fuse.shfs shfs rw\n"
+	if err := os.WriteFile(info, []byte(lines), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a1111MountInfo = info
+	discovered.at = time.Time{}
+	c.ModelsDir = func() string { return "" }
+	if st := c.A1111ModelsDir(); st.Dir != filepath.ToSlash(dir) && st.Dir != dir {
+		t.Fatalf("status = %+v", st)
+	}
+	// The host's path typed into the setting does not stop the mount being found.
+	c.ModelsDir = func() string { return "/mnt/user/appdata/stable-diffusion/models" }
+	if st := c.A1111ModelsDir(); st.Dir == "" || !st.Writable {
+		t.Fatalf("status = %+v", st)
+	}
+}
+
+func TestTheHostsPathIsCalledOutAsTheHostsPath(t *testing.T) {
+	if _, problem := resolveA1111ModelsDir("/mnt/user/appdata/a1111/models"); !strings.Contains(problem, "Unraid host") {
+		t.Fatalf("problem = %s", problem)
+	}
+	if got := mountPoints(`36 35 98:0 / /mnt/with\040space rw - ext4 /dev/sda rw`); len(got) != 1 || got[0] != "/mnt/with space" {
+		t.Fatalf("mount points = %q", got)
 	}
 }

@@ -95,7 +95,7 @@ func folderCheck(dir imagegen.A1111ModelsDir) genCheck {
 		c.OK = true
 		c.Detail = fmt.Sprintf("%s is a models folder and OppaiLib can write into it.", dir.Dir)
 		if dir.Dir != dir.Path {
-			c.Detail = fmt.Sprintf("%s was given; using %s inside it, which is a models folder OppaiLib can write into.", dir.Path, dir.Dir)
+			c.Detail = fmt.Sprintf("%s was given; using %s, which is a models folder OppaiLib can write into.", dir.Path, dir.Dir)
 		}
 	}
 	return c
