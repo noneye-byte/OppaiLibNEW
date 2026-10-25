@@ -138,6 +138,10 @@ type Server struct {
 	// See civitai_installs.go.
 	civitaiMu       sync.Mutex
 	civitaiWatching bool
+	// civitaiApplyMu lets one pass over the finished installs run at a time. Two at
+	// once (the watcher and a poll of the install list) each saw a job completed and
+	// each dressed the model and retired the version it replaced.
+	civitaiApplyMu sync.Mutex
 
 	// The LoRA trainer, and the runs being sent to it and followed. See
 	// lora_training.go.

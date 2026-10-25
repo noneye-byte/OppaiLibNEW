@@ -20,10 +20,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends git libgl1 libg
     && rm -rf /var/lib/apt/lists/*
 
 # sd-scripts' requirements end with "-e .", which installs its own library package
-# from the checkout, so they are installed from inside it.
+# from the checkout, so they are installed from inside it. numpy is held below 2: the
+# opencv-python they pin (4.8.1.78) is built against numpy 1 and fails to import
+# ("_ARRAY_API not found") beside numpy 2, which pip otherwise picks.
 RUN git clone --depth 1 --branch "${SD_SCRIPTS_VERSION}" https://github.com/kohya-ss/sd-scripts /opt/sd-scripts \
     && cd /opt/sd-scripts \
-    && pip install --no-cache-dir -r requirements.txt \
+    && pip install --no-cache-dir -r requirements.txt "numpy<2" \
     && python -c "import torch, accelerate, transformers, diffusers, library.train_util"
 
 # The CLIP tokenizers every SD 1.5 and SDXL run loads, saved where sd-scripts'

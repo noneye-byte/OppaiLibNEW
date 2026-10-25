@@ -63,6 +63,9 @@ type trainRunner struct {
 	mu        sync.Mutex
 	watching  bool
 	preparing map[int64]bool
+	// step lets one pass over the live runs happen at a time, so a finished run is
+	// installed once however many callers notice it.
+	step sync.Mutex
 }
 
 func (s *Server) trainState() *trainRunner {
@@ -668,6 +671,9 @@ func (s *Server) trainWatch() {
 // trainStep moves every live run on by what the trainer and the generator say, and
 // returns how many are still live.
 func (s *Server) trainStep(ctx context.Context) int {
+	st := s.trainState()
+	st.step.Lock()
+	defer st.step.Unlock()
 	rows, err := s.db.LoraTrainings(ctx, true, 50)
 	if err != nil || len(rows) == 0 {
 		return 0

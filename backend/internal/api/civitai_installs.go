@@ -79,6 +79,8 @@ func (s *Server) civitaiInstallLoop() {
 // drops the ones whose job failed or vanished. It returns how many are still
 // waiting on a download.
 func (s *Server) civitaiApplyFinishedInstalls(ctx context.Context) int {
+	s.civitaiApplyMu.Lock()
+	defer s.civitaiApplyMu.Unlock()
 	pending, err := s.db.CivitaiInstalls(ctx)
 	if err != nil || len(pending) == 0 {
 		return 0
