@@ -388,11 +388,14 @@ func TestComfyStyleAndLowercaseFolderNamesAreTakenForA1111s(t *testing.T) {
 
 func TestAModelsFolderMountedAnywhereIsFoundWhenNothingIsSet(t *testing.T) {
 	c, _, _, dir := a1111Fixture(t)
-	oldMount, oldInfo := a1111MountPoint, a1111MountInfo
+	oldMount, oldInfo, oldSkip := a1111MountPoint, a1111MountInfo, notModelMounts
 	t.Cleanup(func() {
-		a1111MountPoint, a1111MountInfo = oldMount, oldInfo
+		a1111MountPoint, a1111MountInfo, notModelMounts = oldMount, oldInfo, oldSkip
 		discovered.at = time.Time{}
 	})
+	// The test's folder is under /tmp on Linux, which a real container never mounts
+	// models into and so is skipped; only OppaiLib's own mount stays skipped here.
+	notModelMounts = []string{"/config"}
 	a1111MountPoint = filepath.Join(t.TempDir(), "absent")
 	info := filepath.Join(t.TempDir(), "mountinfo")
 	lines := "22 1 0:21 / / rw - overlay overlay rw\n" +
