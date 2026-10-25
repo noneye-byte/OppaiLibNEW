@@ -56,6 +56,7 @@ import {
 import { libbyReact } from "../libby-voice.js";
 import { canvasToBlob, CutoutSession, DEFAULT_COMPOSE, loadImage } from "../cutout.js";
 import { outfitArchiveFilename, outfitImageFilename } from "../outfit-name.js";
+import { manageModelsNote } from "../model-manage.js";
 import {
   DEFAULT_OUTFIT_GEAR,
   OUTFIT_EXPOSURE_TIERS,
@@ -5252,6 +5253,7 @@ export class OppaiImageGen extends LitElement {
       </div>
       ${this.civitaiOpen
         ? html`<oppai-civitai backend=${this.status?.backend ?? "invokeai"} .canManage=${!!this.status?.manageModels}
+            .manageNote=${manageModelsNote(this.status)}
             @close=${() => this.onCivitaiClose()}
             @use-prompt=${(e: CustomEvent<PromptSettings>) => this.onCivitaiPrompt(e.detail)}></oppai-civitai>`
         : nothing}
@@ -5302,12 +5304,11 @@ export class OppaiImageGen extends LitElement {
 
   /** Why the edit, cover and Civitai-install controls are missing on an A1111. */
   private renderManageNote(st: ImageGenStatus, invoke: boolean) {
-    if (invoke || st.manageModels) return nothing;
+    const note = invoke ? "" : manageModelsNote(st);
+    if (!note) return nothing;
     return html`<div class="manage-note">
       <span class="material-symbols-rounded">info</span>
-      <span>${st.modelsDirSet
-        ? "The Automatic1111 models folder set in Settings isn't a models folder (it needs Stable-diffusion or Lora inside), so models can't be installed, edited or deleted from here."
-        : "Automatic1111 has no API to install, edit or delete models. Set its models folder under Settings → Image generation and those work here too, Civitai installs included."}</span>
+      <span>${note}</span>
     </div>`;
   }
 

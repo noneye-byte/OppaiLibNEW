@@ -1516,9 +1516,13 @@ export interface ImageGenStatus {
   /** Models can be installed, edited, re-covered and deleted from here: always on
       InvokeAI, and on A1111 once its models folder is set in Settings. */
   manageModels?: boolean;
-  /** A1111 only: whether a models folder has been set at all, so the screen can tell
-      "not set" from "set, but not a models folder". */
+  /** A1111 only: whether a models folder has been set at all (or mounted at
+      /a1111-models), so the screen can tell "not set" from "set, but not usable". */
   modelsDirSet?: boolean;
+  /** A1111 only: the models folder the setting resolved to, "" when it did not. */
+  modelsDir?: string;
+  /** A1111 only: why the folder that is set can't be used, in words for the operator. */
+  modelsDirProblem?: string;
 }
 
 /** One prompt completion from the server's tag vocabulary. */

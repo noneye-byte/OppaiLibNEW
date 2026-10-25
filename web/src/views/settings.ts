@@ -1,7 +1,7 @@
 import { speak, stopSpeaking, ttsStatus, type TTSStatus } from "../speech.js";
 import { LitElement, html, css, nothing } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
-import { api, mascotSay, type APKInfo, type Diagnostics, type LibbyReferenceSlot, type Passkey, type PasskeyList, type Settings, type ReadOnlyInfo, type Stats, type StorageReport, type Timing, type User } from "../api.js";
+import { api, mascotSay, type APKInfo, type Diagnostics, type ImageGenStatus, type LibbyReferenceSlot, type Passkey, type PasskeyList, type Settings, type ReadOnlyInfo, type Stats, type StorageReport, type Timing, type User } from "../api.js";
 import { passkeyErrorMessage, registerPasskey } from "../passkeys.js";
 import { withViewTransition } from "../motion.js";
 import { profileUpdates, resetUIMetrics, uiMetricsSnapshot, type UIMetricsSnapshot } from "../ui-metrics.js";
@@ -17,8 +17,6 @@ import { KIND_META, type Kind, type ComicFit, loadComicFit, saveComicFit } from 
 import { loadHideLibby, saveHideLibby } from "../libby.js";
 import { setIncognito } from "../incognito.js";
 import { LIBBY_PROGRESSION_MULTIPLIERS, getProgressionMultiplier, setProgressionMultiplier } from "../libby-meter.js";
-// Registers <oppai-libby-backgrounds>, which the Backgrounds panel renders.
-import "./libby-backgrounds.js";
 // Registers <oppai-launchy-panel>, the Launchy panel.
 import "./launchy-panel.js";
 
@@ -27,35 +25,40 @@ import "./launchy-panel.js";
 export type LibbySection = "libby-general" | "libby-model" | "libby-voice" | "libby-pictures";
 
 type SettingsTab =
-  | "appearance" | "libby" | "backgrounds" | "ai" | "scraping" | "library" | "android" | "launchy" | "account" | "storage"
-  | "diagnostics" | "privacy" | "about";
+  | "appearance" | "account" | "library" | "scraping" | "ai" | "imagegen" | "android" | "launchy"
+  | "storage" | "privacy" | "diagnostics" | "about";
 
 /**
  * The settings categories, as a Discord-style rail: grouped, one panel at a time.
  * `server` marks the panels an admin writes back to the server, which are the only
  * ones that can be read-only.
+ *
+ * Grouped by what a setting is about rather than by where it is stored. Everything
+ * but "You" used to sit under one "Server" heading, and the image generator, the A1111
+ * models folder and the Civitai key lived in Scraping — so every hint that pointed at
+ * "Settings → Image generation" pointed at a panel that did not exist. Libby's own
+ * settings are in her chat, not here.
  */
 const SETTINGS_TABS: { id: SettingsTab; label: string; icon: string; group: string; server?: boolean; adminOnly?: boolean }[] = [
   { id: "appearance", label: "Appearance", icon: "palette", group: "You" },
-  // Its own panel rather than a card inside Libby: it is a gallery of pictures with
-  // four operations each, and the Android app gives it a screen for the same reason.
   { id: "account", label: "Account", icon: "account_circle", group: "You" },
-  { id: "ai", label: "AI tagging", icon: "smart_toy", group: "Server", server: true },
-  { id: "scraping", label: "Scraping", icon: "travel_explore", group: "Server", server: true },
-  { id: "library", label: "Library", icon: "inventory_2", group: "Server" },
-  { id: "android", label: "Android app", icon: "android", group: "Server" },
+  { id: "library", label: "Library", icon: "inventory_2", group: "Library" },
+  { id: "scraping", label: "Import & scraping", icon: "travel_explore", group: "Library", server: true },
+  { id: "ai", label: "Tagging & descriptions", icon: "smart_toy", group: "AI", server: true },
+  { id: "imagegen", label: "Image generation", icon: "auto_awesome", group: "AI", server: true },
+  { id: "android", label: "Android app", icon: "android", group: "Apps" },
   // Not a server setting: linking is per user (the key is yours), and the panel is
   // mostly the PC's live state, which everyone signed in may look at and act on.
-  { id: "launchy", label: "Launchy", icon: "sports_esports", group: "Server" },
-  // Admin-only, and hidden rather than disabled for everyone else: the snapshot
-  // names every route and every third-party host this install talks to.
+  { id: "launchy", label: "Launchy", icon: "sports_esports", group: "Apps" },
   // Not admin-only: "why did my upload fail" is a question the person uploading
   // needs answered, and the paths here are already in the read-only server info.
   { id: "storage", label: "Storage", icon: "hard_drive", group: "Server" },
-  { id: "diagnostics", label: "Diagnostics", icon: "speed", group: "Server", adminOnly: true },
   // Admin-only and server-side because incognito is not a preference: it changes
   // what this host answers to everyone, including people who never sign in.
   { id: "privacy", label: "Privacy", icon: "visibility_off", group: "Server", server: true, adminOnly: true },
+  // Admin-only, and hidden rather than disabled for everyone else: the snapshot
+  // names every route and every third-party host this install talks to.
+  { id: "diagnostics", label: "Diagnostics", icon: "speed", group: "Server", adminOnly: true },
   { id: "about", label: "About", icon: "info", group: "Server" },
 ];
 
@@ -120,6 +123,9 @@ export class OppaiSettings extends LitElement {
   @state() private genLoraTriggers: Record<string, string> = {};
   @state() private genBoards: string[] = [];
   @state() private genError = "";
+  /** The generator's status as last read, for the Image generation panel to say what
+      the URL and the models folder actually found. */
+  @state() private genStatus: ImageGenStatus | null = null;
 
   @state() private pwCurrent = "";
   @state() private pwNew = "";
@@ -291,6 +297,14 @@ export class OppaiSettings extends LitElement {
         color: var(--oppai-text-muted);
         margin-top: 2px;
       }
+      /* What the server found for a field, under its help: a fact, not advice, so it
+         reads in the body colour and only turns red or green when it is a verdict. */
+      .field-status {
+        margin-top: 6px;
+        color: var(--oppai-text);
+      }
+      .field-status.ok { color: var(--oppai-primary-bright); }
+      .field-status.bad { color: var(--oppai-error); }
       .field-control {
         flex-shrink: 0;
         display: flex;
@@ -808,6 +822,7 @@ export class OppaiSettings extends LitElement {
       setIncognito(!!res.settings.incognito);
       void this.loadTTS(true);
       void this.loadDescribe();
+      void this.loadGenLists();
     } catch (e) {
       this.loadError = (e as Error).message;
     } finally {
@@ -925,10 +940,9 @@ export class OppaiSettings extends LitElement {
   private renderTab() {
     switch (this.tab) {
       case "appearance": return this.renderAppearance();
-      case "libby": return this.renderLibby();
-      case "backgrounds": return html`<section class="card"><oppai-libby-backgrounds></oppai-libby-backgrounds></section>`;
       case "ai": return this.renderAI();
       case "scraping": return this.renderScraping();
+      case "imagegen": return this.renderImageGen();
       case "library": return this.renderLibrary();
       case "android": return this.renderAndroid();
       case "launchy": return html`<oppai-launchy-panel></oppai-launchy-panel>`;
@@ -1638,7 +1652,7 @@ export class OppaiSettings extends LitElement {
       return html`<section class="card">
         <h3><span class="material-symbols-rounded">auto_awesome</span>Libby’s image generation</h3>
         <p class="card-sub">
-          Set an image generator URL under <strong>Library</strong> and Libby can offer to make
+          Set an image generator URL under <strong>Settings → Image generation</strong> and Libby can offer to make
           pictures for you in chat. She always asks first — nothing is generated or saved until
           you press Allow.
         </p>
@@ -1896,8 +1910,10 @@ export class OppaiSettings extends LitElement {
    * an optional service is down is a bad trade.
    */
   private async loadGenLists() {
+    this.genError = "";
     try {
       const status = await api.imageGenStatus();
+      this.genStatus = status;
       if (!status.enabled || !status.reachable) {
         if (status.enabled) this.genError = status.error || "The image generator isn't reachable.";
         return;
@@ -1910,6 +1926,7 @@ export class OppaiSettings extends LitElement {
       this.genLoraTriggers = Object.fromEntries((status.loras ?? []).map((l) => [l.name, (l.triggerPhrases ?? []).join(", ")]));
       this.genBoards = (status.boards ?? []).map((b) => b.name).filter(Boolean);
     } catch (e) {
+      this.genStatus = null;
       this.genError = (e as Error).message;
     }
   }
@@ -2208,32 +2225,6 @@ export class OppaiSettings extends LitElement {
 
               <div class="field stack">
                 <div class="field-text">
-                  <div class="field-label">Civitai API</div>
-                  <div class="field-help">
-                    Catalogue API base and optional token. The public mirror works without a token;
-                    use <code>https://civitai.com/api/v1</code> with your key for authenticated access.
-                    The key is stored on this server and is never sent back to the browser.
-                  </div>
-                </div>
-                <div class="field-control">
-                  <input type="text" autocomplete="off" placeholder="https://civitai.red/api/v1"
-                    .value=${s.civitaiApiUrl} ?disabled=${!this.canEdit}
-                    @change=${(e: Event) => this.edit({ civitaiApiUrl: (e.target as HTMLInputElement).value })} />
-                </div>
-                <div class="field-control">
-                  <input type="password" autocomplete="new-password"
-                    placeholder=${s.civitaiKeySet ? "•••••••• (unchanged)" : "Civitai API key (optional)"}
-                    ?disabled=${!this.canEdit}
-                    @change=${(e: Event) => this.edit({ civitaiApiKey: (e.target as HTMLInputElement).value })} />
-                </div>
-                ${s.civitaiKeySet ? html`<div class="field-control">
-                  <button type="button" class="btn-inline" ?disabled=${!this.canEdit}
-                    @click=${() => this.edit({ civitaiApiKey: "", civitaiKeySet: false })}>Clear saved key</button>
-                </div>` : nothing}
-              </div>
-
-              <div class="field stack">
-                <div class="field-text">
                   <div class="field-label">Rule34.xxx API</div>
                   <div class="field-help">
                     The authenticated JSON API makes browsing faster and supplies original media URLs,
@@ -2272,28 +2263,46 @@ export class OppaiSettings extends LitElement {
                 </div>
               </div>
 
+            `}
+      </section>
+    `;
+  }
+
+  /**
+   * The image generator, the models folder Automatic1111 is managed through, and
+   * Civitai, which both generators install from. They used to be three fields at the
+   * bottom of Scraping. Each line under a field says what the server found when it
+   * last looked: a models folder that is mounted but subtly wrong (the webui's own
+   * folder, the host's path typed instead of the container's, a read-only mount) used
+   * to read exactly like one that was never set.
+   */
+  private renderImageGen() {
+    const s = this.settings;
+    return html`
+      <section class="card">
+        <h3><span class="material-symbols-rounded">auto_awesome</span>Image generation</h3>
+        <p class="card-sub">
+          The generator behind the Create tab and Libby's pictures. Prompts stay on your own
+          hardware — nothing is sent to a cloud service.
+        </p>
+        ${!s
+          ? html`<div class="field-help">Loading…</div>`
+          : html`
               <div class="field stack">
                 <div class="field-text">
-                  <div class="field-label">Image generation</div>
+                  <div class="field-label">Generator</div>
                   <div class="field-help">
                     URL of a local image generator on your network — an InvokeAI server
-                    (e.g. <code>http://192.168.1.10:9090</code>) or an Automatic1111 / SD.Next
-                    one (e.g. <code>http://192.168.1.10:7860</code>). Which API it speaks is
-                    detected automatically. Set it to turn on the <strong>Create</strong> tab;
-                    leave blank to keep it off. Prompts stay on your own hardware — nothing is
-                    sent to a cloud service.
+                    (e.g. <code>http://192.168.1.10:9090</code>) or an Automatic1111 / Forge /
+                    SD.Next one (e.g. <code>http://192.168.1.10:7860</code>). Which API it speaks
+                    is detected automatically. Blank turns the Create tab off.
+                    ${this.genStatusLine(s)}
                   </div>
                 </div>
                 <div class="field-control">
-                  <input
-                    type="text"
-                    autocomplete="off"
-                    placeholder="http://host:7860"
-                    .value=${s.imageGenUrl}
-                    ?disabled=${!this.canEdit}
-                    @change=${(e: Event) =>
-                      this.edit({ imageGenUrl: (e.target as HTMLInputElement).value })}
-                  />
+                  <input type="text" autocomplete="off" placeholder="http://host:7860"
+                    .value=${s.imageGenUrl} ?disabled=${!this.canEdit}
+                    @change=${(e: Event) => this.edit({ imageGenUrl: (e.target as HTMLInputElement).value })} />
                 </div>
               </div>
 
@@ -2301,31 +2310,103 @@ export class OppaiSettings extends LitElement {
                 <div class="field-text">
                   <div class="field-label">Automatic1111 models folder</div>
                   <div class="field-help">
-                    Only for Automatic1111, Forge or SD.Next. They have no API to install or
-                    delete a model, so installing from Civitai, editing a model's description
-                    and trigger words, setting its cover and deleting it are done by writing
-                    into its <code>models</code> folder (the one holding
-                    <code>Stable-diffusion</code> and <code>Lora</code>). Map that folder into
-                    this container and give the path here, e.g. <code>/a1111-models</code>.
-                    Blank still lists models and links them to Civitai — it just changes none.
-                    InvokeAI ignores this.
+                    Only for Automatic1111, Forge or SD.Next, which have no API to install or
+                    delete a model — so installing from Civitai, editing a model's description
+                    and trigger words, setting its cover and deleting it are done by writing into
+                    its <code>models</code> folder (the one holding <code>Stable-diffusion</code>
+                    and <code>Lora</code>). Map that folder into this container at
+                    <code>/a1111-models</code> and it is found by itself; give a path here only if
+                    you mapped it somewhere else. Without it, models are still listed and linked
+                    to Civitai — just never changed.
+                    ${this.modelsFolderLine(s)}
                   </div>
                 </div>
                 <div class="field-control">
-                  <input
-                    type="text"
-                    autocomplete="off"
-                    placeholder="/a1111-models"
-                    .value=${s.imageGenModelsDir ?? ""}
-                    ?disabled=${!this.canEdit}
-                    @change=${(e: Event) =>
-                      this.edit({ imageGenModelsDir: (e.target as HTMLInputElement).value })}
-                  />
+                  <input type="text" autocomplete="off" placeholder="/a1111-models"
+                    .value=${s.imageGenModelsDir ?? ""} ?disabled=${!this.canEdit}
+                    @change=${(e: Event) => this.edit({ imageGenModelsDir: (e.target as HTMLInputElement).value })} />
                 </div>
               </div>
             `}
       </section>
+
+      <section class="card">
+        <h3><span class="material-symbols-rounded">download</span>Civitai</h3>
+        <p class="card-sub">The model catalogue Create browses, links your models to and installs from.</p>
+        ${!s
+          ? html`<div class="field-help">Loading…</div>`
+          : html`
+              <div class="field stack">
+                <div class="field-text">
+                  <div class="field-label">Civitai API</div>
+                  <div class="field-help">
+                    Catalogue API base and optional key. The public mirror works without a key;
+                    use <code>https://civitai.com/api/v1</code> with yours to see the prompts behind
+                    posted pictures and your own account. The key is stored on this server and is
+                    never sent back to the browser.
+                  </div>
+                </div>
+                <div class="field-control">
+                  <input type="text" autocomplete="off" placeholder="https://civitai.red/api/v1"
+                    .value=${s.civitaiApiUrl} ?disabled=${!this.canEdit}
+                    @change=${(e: Event) => this.edit({ civitaiApiUrl: (e.target as HTMLInputElement).value })} />
+                </div>
+                <div class="field-control">
+                  <input type="password" autocomplete="new-password"
+                    placeholder=${s.civitaiKeySet ? "•••••••• (unchanged)" : "Civitai API key (optional)"}
+                    ?disabled=${!this.canEdit}
+                    @change=${(e: Event) => this.edit({ civitaiApiKey: (e.target as HTMLInputElement).value })} />
+                </div>
+                ${s.civitaiKeySet ? html`<div class="field-control">
+                  <button type="button" class="btn-inline" ?disabled=${!this.canEdit}
+                    @click=${() => this.edit({ civitaiApiKey: "", civitaiKeySet: false })}>Clear saved key</button>
+                </div>` : nothing}
+              </div>
+            `}
+      </section>
     `;
+  }
+
+  /** What the generator URL reached, as of the last save. */
+  private genStatusLine(s: Settings) {
+    const st = this.genStatus;
+    if (!s.imageGenUrl.trim()) return nothing;
+    let text: string;
+    let bad = false;
+    if (this.dirty) {
+      text = "Save to check it.";
+    } else if (!st) {
+      if (!this.genError) return html`<div class="field-status">Checking…</div>`;
+      text = this.genError;
+      bad = true;
+    } else if (!st.reachable) {
+      text = `Not reachable${st.error ? `: ${st.error}` : "."}`;
+      bad = true;
+    } else {
+      const name = st.backend === "invokeai" ? "InvokeAI" : "Automatic1111";
+      const n = (st.models ?? []).length;
+      const l = (st.loras ?? []).length;
+      text = `Connected to ${name} — ${n} ${n === 1 ? "model" : "models"}, ${l} ${l === 1 ? "LoRA" : "LoRAs"}.`;
+    }
+    return html`<div class="field-status ${bad ? "bad" : ""}">${text}</div>`;
+  }
+
+  /** What the server made of the models folder, as of the last save. */
+  private modelsFolderLine(s: Settings) {
+    const st = this.genStatus;
+    if (this.dirty) return html`<div class="field-status">Save to check it.</div>`;
+    if (!st?.reachable) return nothing;
+    if (st.backend === "invokeai") {
+      return html`<div class="field-status">Not needed: InvokeAI installs and edits models itself.</div>`;
+    }
+    if (st.manageModels) {
+      const found = !(s.imageGenModelsDir ?? "").trim();
+      return html`<div class="field-status ok">
+        Using <code>${st.modelsDir}</code>${found ? " — found mounted, so there is nothing to set" : ""}. Models can be installed, edited and deleted.
+      </div>`;
+    }
+    if (st.modelsDirProblem) return html`<div class="field-status bad">${st.modelsDirProblem}.</div>`;
+    return html`<div class="field-status">Nothing is mounted at <code>/a1111-models</code> and no path is set.</div>`;
   }
 
   private renderLibrary() {

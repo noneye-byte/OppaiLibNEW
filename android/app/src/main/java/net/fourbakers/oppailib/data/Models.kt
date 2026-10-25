@@ -1362,9 +1362,11 @@ data class ImageGenStatus(
     /** Models can be installed, edited, re-covered and deleted from here: always on
         InvokeAI, on Automatic1111 once its models folder is set in Settings. */
     val manageModels: Boolean = false,
-    /** A1111 only: whether a models folder is set at all, so "not set" and "set but
-        not a models folder" can be told apart. */
+    /** A1111 only: whether a models folder is set at all (or mounted at /a1111-models),
+        so "not set" and "set but not usable" can be told apart. */
     val modelsDirSet: Boolean = false,
+    /** A1111 only: why the folder that is set can't be used, in the server's words. */
+    val modelsDirProblem: String = "",
 )
 
 @Serializable

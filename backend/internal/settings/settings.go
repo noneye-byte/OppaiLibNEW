@@ -58,8 +58,9 @@ type Settings struct {
 	// ImageGenModelsDir is Automatic1111's models folder (the one holding
 	// Stable-diffusion and Lora), as this container sees it. A1111 has no API to
 	// install, describe or delete a model, so those are file operations and this is
-	// where. Never defaulted, like ChatModelDir: blank lists and links models but
-	// changes none. InvokeAI ignores it. See imagegen/a1111_models.go.
+	// where. Not defaulted here; blank falls back to the template's /a1111-models
+	// mount when one is there and looks right, and otherwise lists and links models
+	// but changes none. InvokeAI ignores it. See imagegen/a1111_models.go.
 	ImageGenModelsDir string `json:"imageGenModelsDir"`
 
 	// External catalogue APIs. Secret keys are write-only; the Set flags let the

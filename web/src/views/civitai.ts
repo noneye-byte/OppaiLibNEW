@@ -90,6 +90,9 @@ export class OppaiCivitai extends LitElement {
   @property() backend = "invokeai";
   /** Whether models can be installed, updated and deleted there; see ImageGenStatus. */
   @property({ type: Boolean }) canManage = true;
+  /** Why not, when canManage is off: what the server found wrong with A1111's models
+      folder, or where to mount it. See model-manage.ts. */
+  @property() manageNote = "";
 
   private get genName(): string {
     return this.backend === "invokeai" ? "InvokeAI" : "Automatic1111";
@@ -1245,7 +1248,7 @@ export class OppaiCivitai extends LitElement {
             ${this.galleryOpen ? this.renderGallery() : nothing}
             <div class="sub" style="margin-top:10px;">
               ${!this.canManage
-                ? "To install from here, set Automatic1111's models folder under Settings → Image generation — A1111 has no API that takes a download."
+                ? this.manageNote || "Automatic1111 has no API that takes a download, so installing from here needs its models folder mapped into the OppaiLib container."
                 : this.backend === "invokeai"
                   ? "InvokeAI downloads the file itself; the cover, description and trigger words follow once it is in."
                   : "The server downloads the file into Automatic1111's models folder and asks it to rescan; the cover, description and trigger words follow as A1111's own sidecar files."}
@@ -1541,7 +1544,7 @@ export class OppaiCivitai extends LitElement {
       </div>
       <p class="sync-note">
         ${this.genName}'s models matched to Civitai by file hash. “Fetch from Civitai” writes the catalogue's cover,
-        description and trigger words onto the model — the same dressing an install from here gets${this.canManage ? "" : ". Without A1111's models folder set they are only linked: the picker shows Civitai's cover, but nothing is written to A1111"}.
+        description and trigger words onto the model — the same dressing an install from here gets${this.canManage ? "" : ". Until OppaiLib can write into A1111's models folder they are only linked: the picker shows Civitai's cover, but nothing is written to A1111"}.
         ${this.backend === "invokeai" ? nothing : html`A1111 knows a file by a short hash until it has been read once, so a model may take a minute to match after it first appears.`}
       </p>
       ${this.syncNote ? html`<div class="sync-note" style="color:var(--oppai-text);">${this.syncNote}</div>` : nothing}

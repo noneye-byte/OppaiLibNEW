@@ -192,9 +192,16 @@ func (s *Server) handleImageGenStatus(w http.ResponseWriter, r *http.Request) {
 	// hash always; install, edit, re-cover and delete where the generator lets it —
 	// InvokeAI always, A1111 once its models folder is mounted (a1111_models.go).
 	out["civitai"] = true
-	out["manageModels"] = s.imagegen.ManagesModels(ctx, set.ImageGenURL)
 	if backend == imagegen.KindA1111 {
-		out["modelsDirSet"] = strings.TrimSpace(set.ImageGenModelsDir) != ""
+		// The folder is read once here rather than again through ManagesModels: the
+		// check probes it with a write.
+		dir := s.imagegen.A1111ModelsDir()
+		out["manageModels"] = dir.Dir != "" && dir.Writable
+		out["modelsDirSet"] = dir.Path != ""
+		out["modelsDir"] = dir.Dir
+		out["modelsDirProblem"] = dir.Problem
+	} else {
+		out["manageModels"] = s.imagegen.ManagesModels(ctx, set.ImageGenURL)
 	}
 	writeJSON(w, http.StatusOK, out)
 }

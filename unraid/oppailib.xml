@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <Container version="2">
   <Name>OppaiLib</Name>
-  <Version>0.59.0</Version>
+  <Version>0.59.1</Version>
   <Repository>ghcr.io/noneye-byte/oppailib:latest</Repository>
   <Registry>https://github.com/noneye-byte/OppaiLibNEW/pkgs/container/oppailib</Registry>
   <Network>bridge</Network>
@@ -68,7 +68,7 @@
 
   <Config Name="Speech server URL (optional)" Target="OPPAI_TTS_URL" Default="" Mode="" Description="Optional. Libby speaks out of the box through the bundled piper voice on the CPU; set this to use an OpenAI-compatible speech server instead (Kokoro-FastAPI, openedai-speech: the /v1/audio/speech endpoint). Also settable at runtime in Settings → Libby's voice, where more piper voices can be downloaded into /config/tts." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
 
-  <Config Name="Automatic1111 models (optional)" Target="/a1111-models" Default="" Mode="rw" Description="Optional, and only for Automatic1111 / Forge / SD.Next. A1111 has no API to install or delete a model, so installing from Civitai, editing a model's description and trigger words, setting its cover and deleting it are done by writing into its models folder. Map the same host folder A1111 loads from (the one holding Stable-diffusion and Lora), then set /a1111-models in Settings → Image generation. Leave both blank and A1111's models are still listed and linked to Civitai, just never changed. InvokeAI does not need this." Type="Path" Display="advanced" Required="false" Mask="false"></Config>
+  <Config Name="Automatic1111 models (optional)" Target="/a1111-models" Default="" Mode="rw" Description="Optional, and only for Automatic1111 / Forge / SD.Next. A1111 has no API to install or delete a model, so installing from Civitai, editing a model's description and trigger words, setting its cover and deleting it are done by writing into its models folder. Map the same host folder A1111 loads from (the one holding Stable-diffusion and Lora); OppaiLib finds it at /a1111-models by itself, and Settings → Image generation shows whether it did. Leave it blank and A1111's models are still listed and linked to Civitai, just never changed. InvokeAI does not need this." Type="Path" Display="advanced" Required="false" Mask="false"></Config>
   <Config Name="Image Generation URL" Target="OPPAI_IMAGEGEN_URL" Default="" Mode="" Description="Local image generator for the Create tab: an InvokeAI server (default port 9090) or Automatic1111 / SD.Next (the /sdapi/v1 flavour, default port 7860). Which API it speaks is detected automatically. Blank disables the feature. Also settable at runtime in Settings." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
 
   <Config Name="Web Idle Timeout (minutes)" Target="OPPAI_WEB_IDLE_MINUTES" Default="60" Mode="" Description="How long a browser session may sit unused before it is signed out. Browser sessions are also signed out whenever the container restarts. The Android app is exempt from both — it stays signed in. Set to 0 to disable the idle timeout." Type="Variable" Display="advanced" Required="false" Mask="false">60</Config>

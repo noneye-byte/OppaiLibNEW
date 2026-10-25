@@ -750,7 +750,7 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit, to
                                 onEdit = if (canEdit) ({ editTarget = m.title }) else null,
                             )
                         }
-                        if (!canEdit && st.backend != "invokeai") ManageNote(st.modelsDirSet)
+                        if (!canEdit && st.backend != "invokeai") ManageNote(st.modelsDirProblem)
                     }
                     SetupSheet.LORAS -> {
                         if (st.loras.isEmpty()) {
@@ -1639,11 +1639,11 @@ private fun SheetNote(text: String) {
 
 /** Why there are no edit pencils on an Automatic1111's models. */
 @Composable
-private fun ManageNote(dirSet: Boolean) {
+private fun ManageNote(problem: String) {
     Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.secondaryContainer) {
         Text(
-            if (dirSet) "The Automatic1111 models folder set on the server isn't a models folder (it needs Stable-diffusion or Lora inside), so models can't be installed, edited or deleted from here."
-            else "Automatic1111 has no API to install, edit or delete models. Set its models folder in the web Settings → Image generation and those work here too, Civitai installs included.",
+            if (problem.isNotBlank()) "$problem. Until then Automatic1111's models are listed and linked to Civitai, but can't be installed, edited or deleted from here."
+            else "Automatic1111 has no API to install, edit or delete models, so OppaiLib does it in its models folder. Map that folder into the OppaiLib container at /a1111-models (or set where it is in the web Settings → Image generation) and those work here too, Civitai installs included.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSecondaryContainer,
             modifier = Modifier.padding(12.dp),

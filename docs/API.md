@@ -421,16 +421,19 @@ absent.
 sees it. A1111 has no API to install, describe or delete a model, so those are file
 operations: an install from Civitai is downloaded into the right folder, a model's
 description and trigger words go into the `<name>.json` sidecar A1111's own edit card
-writes, its cover into `<name>.preview.png`, and A1111 is asked to rescan. Never
-defaulted; blank still lists A1111's models and links them to Civitai by hash, and
-changes none of them. A path that holds neither `Stable-diffusion` nor `Lora` counts
-as not set. InvokeAI ignores it.
+writes, its cover into `<name>.preview.png`, and A1111 is asked to rescan. Blank means
+`/a1111-models`, the container template's mount point, when something that looks like
+a models folder is mounted there, and otherwise nothing: A1111's models are still
+listed and linked to Civitai by hash, and none of them change. The webui's own folder
+(holding `models`) or a folder inside `models` is taken to mean `models`; a path that
+is missing, holds neither `Stable-diffusion` nor `Lora`, or is mounted read-only is
+not used, and the status says which. InvokeAI ignores it.
 
 ## Image generation
 
 | Method | Path | Notes |
 |--------|------|-------|
-| GET | `/api/imagegen/status` | → `{enabled, reachable, backend, models, loras, vaes, templates, boards?, detailerAvailable, civitai, manageModels, modelsDirSet?}`. `backend` is `invokeai` or `a1111`. `manageModels` says models can be installed, edited, re-covered and deleted from here — always on InvokeAI, on A1111 once `imageGenModelsDir` points at its models folder; `modelsDirSet` (A1111 only) tells "not set" from "set but wrong". Models and LoRAs carry `key`: InvokeAI's record key, or an A1111 file's path under its models folder (`Lora/ink.safetensors`), which is what the Civitai records are kept by. An A1111 LoRA's `triggerPhrases` and `weight` come from its sidecar, else from its Civitai link. `templates` are InvokeAI's style presets or A1111's saved styles |
+| GET | `/api/imagegen/status` | → `{enabled, reachable, backend, models, loras, vaes, templates, boards?, detailerAvailable, civitai, manageModels, modelsDirSet?, modelsDir?, modelsDirProblem?}`. `backend` is `invokeai` or `a1111`. `manageModels` says models can be installed, edited, re-covered and deleted from here — always on InvokeAI, on A1111 once `imageGenModelsDir` (or the `/a1111-models` mount) is a writable models folder; A1111 only: `modelsDirSet` tells "not set" from "set but wrong", `modelsDir` is the folder in use and `modelsDirProblem` says what is wrong with the one that is set. Models and LoRAs carry `key`: InvokeAI's record key, or an A1111 file's path under its models folder (`Lora/ink.safetensors`), which is what the Civitai records are kept by. An A1111 LoRA's `triggerPhrases` and `weight` come from its sidecar, else from its Civitai link. `templates` are InvokeAI's style presets or A1111's saved styles |
 | GET | `/api/imagegen/tags?q=&limit=` | prompt completion for the tag being typed → `{items:[{tag, category, count, alias?}], suggestions, correction}`. The vocabulary is Danbooru's — every tag on at least 100 posts, with post counts and aliases — plus this library's own tags (`category` 100). Ranked: the tag itself, tags starting with `q`, an alias that does (`alias` says which), a tag a later word of which does, then near misses for a typo. `suggestions` is `items` as plain names and `correction` a "did you mean", the shape older apps read. `limit` defaults to 12, at most 50 |
 
 ## Diagnostics

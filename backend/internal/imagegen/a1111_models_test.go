@@ -179,6 +179,57 @@ func TestA1111InstallIsRefusedWithoutAModelsFolder(t *testing.T) {
 	}
 }
 
+func TestTheMountedModelsFolderIsUsedWhenTheSettingIsBlank(t *testing.T) {
+	c, _, _, dir := a1111Fixture(t)
+	old := a1111MountPoint
+	t.Cleanup(func() { a1111MountPoint = old })
+	a1111MountPoint = dir
+	c.ModelsDir = func() string { return "" }
+	st := c.A1111ModelsDir()
+	if st.Path != dir || st.Dir != dir || !st.Writable || st.Problem != "" {
+		t.Fatalf("status = %+v", st)
+	}
+	// Nothing mounted and nothing set is "not set", not a problem to explain.
+	a1111MountPoint = filepath.Join(t.TempDir(), "absent")
+	if st := c.A1111ModelsDir(); st.Path != "" || st.Problem != "" {
+		t.Fatalf("status = %+v", st)
+	}
+}
+
+func TestTheWebuiFolderOrAFolderInsideModelsIsTakenForModels(t *testing.T) {
+	c, _, _, dir := a1111Fixture(t)
+	// The fixture's folder is "models" itself; its parent stands in for the webui.
+	models := filepath.Join(t.TempDir(), "models")
+	if err := os.Rename(dir, models); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{filepath.Dir(models), filepath.Join(models, "Lora")} {
+		c.ModelsDir = func() string { return p }
+		if st := c.A1111ModelsDir(); st.Dir != models {
+			t.Fatalf("%s resolved to %+v", p, st)
+		}
+	}
+}
+
+func TestAWrongFolderSaysWhatIsWrongWithIt(t *testing.T) {
+	c, _, base, _ := a1111Fixture(t)
+	missing := filepath.Join(t.TempDir(), "nowhere")
+	c.ModelsDir = func() string { return missing }
+	st := c.A1111ModelsDir()
+	if st.Dir != "" || !strings.Contains(st.Problem, "does not exist") {
+		t.Fatalf("status = %+v", st)
+	}
+	_, err := c.InstallModel(context.Background(), base, InstallSpec{Source: "https://civitai.com/x", Type: "Checkpoint"})
+	if !errors.Is(err, ErrNoModelsDir) || !strings.Contains(err.Error(), "does not exist") {
+		t.Fatalf("err = %v", err)
+	}
+	empty := t.TempDir()
+	c.ModelsDir = func() string { return empty }
+	if st := c.A1111ModelsDir(); !strings.Contains(st.Problem, "neither Stable-diffusion nor Lora") {
+		t.Fatalf("status = %+v", st)
+	}
+}
+
 func TestA1111EditsGoToTheSidecarAndKeepWhatA1111Wrote(t *testing.T) {
 	c, _, base, dir := a1111Fixture(t)
 	lora := filepath.Join(dir, "Lora", "ink.safetensors")

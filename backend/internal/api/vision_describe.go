@@ -62,7 +62,7 @@ func (s *Server) visionClient() *vision.Client {
 func (s *Server) describeMedia(ctx context.Context, row *db.MediaRow) (string, error) {
 	client := s.visionClient()
 	if !client.Enabled() {
-		return "", errors.New("no vision model is configured — add one under Settings → AI")
+		return "", errors.New("no vision model is configured — add one under Settings → Tagging & descriptions")
 	}
 	frames, err := s.ai.SampleFrames(ctx, row.BlobPath, row.Kind, describeFrames(row.Kind))
 	if err != nil {
@@ -291,7 +291,7 @@ func (s *Server) handleDescribeMedia(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.settings.Get().VisionEnabled {
-		writeErr(w, http.StatusServiceUnavailable, "no vision model is configured — add one under Settings → AI")
+		writeErr(w, http.StatusServiceUnavailable, "no vision model is configured — add one under Settings → Tagging & descriptions")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), describeTimeout)

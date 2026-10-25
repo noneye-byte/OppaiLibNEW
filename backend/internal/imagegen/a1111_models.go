@@ -32,8 +32,9 @@ import (
 // one holding Stable-diffusion and Lora) as this container sees it. Without it the
 // models still list, still link to Civitai by hash and still show a cover if A1111
 // has one; they just cannot be installed, edited or deleted from here. Guessing a
-// path to write multi-gigabyte files into is not a thing to do, so it is never
-// defaulted.
+// path to write multi-gigabyte files into is not a thing to do, so the only default
+// is the mount point the container template maps for exactly this, and only when
+// something is mounted there that looks like a models folder.
 
 // a1111Folder is one kind of file A1111 loads, and where under the models folder it
 // lives. Type is the name InvokeAI's records use for the same kind, so the catalogue
@@ -119,24 +120,32 @@ func localPath(dir, key string) string {
 	return filepath.Join(dir, filepath.FromSlash(clean))
 }
 
-func (c *Client) modelsDir() string {
-	if c.ModelsDir == nil {
-		return ""
-	}
-	return strings.TrimSpace(c.ModelsDir())
+// a1111MountPoint is where the Unraid template maps A1111's models folder. With the
+// setting blank and a models folder mounted here, it is used: the operator who added
+// that mapping has already said where the folder is, and making them type the same
+// path again into Settings is how "I mounted it and it still says set the folder"
+// happens. A var so the tests can point it somewhere that exists.
+var a1111MountPoint = "/a1111-models"
+
+// A1111ModelsDir is what the configured models folder turned out to be.
+type A1111ModelsDir struct {
+	// Path is what was looked at: the setting, or the mount point when that is blank
+	// and something is mounted there. "" when neither.
+	Path string
+	// Dir is the models folder it resolved to, "" when it did not. It can differ
+	// from Path, which may name A1111's install folder or one of the folders inside
+	// "models" instead of "models" itself.
+	Dir string
+	// Writable says installs and edits can go into Dir. A read-only mount still
+	// lends its sidecars to the listings.
+	Writable bool
+	// Problem says, for the operator, why Path is not usable; "" when it is or when
+	// nothing is set at all.
+	Problem string
 }
 
-// ErrNoModelsDir is an A1111 change that needs the models folder when none is set.
-var ErrNoModelsDir = errors.New("Automatic1111 has no API for this; set its models folder under Settings → Image generation")
-
-// A1111ModelsDirReady says whether the configured models folder is there and looks
-// like one: it holds a Stable-diffusion or Lora folder. A path that exists but is
-// the wrong one would otherwise take installs into a folder A1111 never reads.
-func (c *Client) A1111ModelsDirReady() bool {
-	dir := c.modelsDir()
-	if dir == "" {
-		return false
-	}
+// looksLikeA1111Models says whether dir holds a Stable-diffusion or Lora folder.
+func looksLikeA1111Models(dir string) bool {
 	for _, f := range []a1111Folder{a1111Checkpoints, a1111LoraFolder} {
 		if info, err := os.Stat(filepath.Join(dir, f.Folder)); err == nil && info.IsDir() {
 			return true
@@ -145,11 +154,108 @@ func (c *Client) A1111ModelsDirReady() bool {
 	return false
 }
 
+// resolveA1111ModelsDir finds the models folder p means. The setting asks for
+// "models" itself, but the two near misses are common enough to take as meant: the
+// webui's own folder (which holds "models"), and one of the folders inside it, picked
+// because that is where the files visibly are. Anything else is refused with a reason
+// rather than written into, since a wrong folder takes installs A1111 never sees.
+func resolveA1111ModelsDir(p string) (string, string) {
+	info, err := os.Stat(p)
+	if err != nil {
+		return "", fmt.Sprintf("%s does not exist inside the OppaiLib container — map Automatic1111's models folder to it in the container's settings", p)
+	}
+	if !info.IsDir() {
+		return "", fmt.Sprintf("%s is a file, not Automatic1111's models folder", p)
+	}
+	if looksLikeA1111Models(p) {
+		return p, ""
+	}
+	if inner := filepath.Join(p, "models"); looksLikeA1111Models(inner) {
+		return inner, ""
+	}
+	base := filepath.Base(p)
+	for _, f := range a1111InstallFolders {
+		if strings.EqualFold(base, f.Folder) && looksLikeA1111Models(filepath.Dir(p)) {
+			return filepath.Dir(p), ""
+		}
+	}
+	return "", fmt.Sprintf("%s holds neither Stable-diffusion nor Lora — point it at the folder Automatic1111 keeps those in (its models folder)", p)
+}
+
+// A1111ModelsDir reads the setting and the folder behind it. It touches the disk —
+// a write probe included — so it is for status and for the operations that write, not
+// for every listing.
+func (c *Client) A1111ModelsDir() A1111ModelsDir {
+	st := A1111ModelsDir{Path: c.modelsDirPath()}
+	if st.Path == "" {
+		return st
+	}
+	st.Dir, st.Problem = resolveA1111ModelsDir(st.Path)
+	if st.Dir == "" {
+		return st
+	}
+	if f, err := os.CreateTemp(st.Dir, ".oppailib-writable-*"); err == nil {
+		name := f.Name()
+		f.Close()
+		os.Remove(name)
+		st.Writable = true
+	} else {
+		st.Problem = fmt.Sprintf("%s is mounted read-only — OppaiLib has to write into it to install, edit or delete models", st.Path)
+	}
+	return st
+}
+
+// modelsDirPath is the setting, or the mount point when that is blank and mounted.
+func (c *Client) modelsDirPath() string {
+	if c.ModelsDir != nil {
+		if p := strings.TrimSpace(c.ModelsDir()); p != "" {
+			return p
+		}
+	}
+	if info, err := os.Stat(a1111MountPoint); err == nil && info.IsDir() {
+		return a1111MountPoint
+	}
+	return ""
+}
+
+// modelsDir is the resolved models folder for reading sidecars, "" without one. It
+// skips the write probe, which only the writes need.
+func (c *Client) modelsDir() string {
+	p := c.modelsDirPath()
+	if p == "" {
+		return ""
+	}
+	dir, _ := resolveA1111ModelsDir(p)
+	return dir
+}
+
+// ErrNoModelsDir is an A1111 change that needs the models folder when none is set.
+var ErrNoModelsDir = errors.New("Automatic1111 has no API for this; map its models folder into the container at /a1111-models, or set where it is under Settings → Image generation")
+
+// modelsDirError is ErrNoModelsDir with the reason the folder that is set will not
+// do, which is the part the operator can act on.
+type modelsDirError struct{ problem string }
+
+func (e modelsDirError) Error() string        { return "Automatic1111 has no API for this, and " + e.problem }
+func (e modelsDirError) Is(target error) bool { return target == ErrNoModelsDir }
+
+// A1111ModelsDirReady says whether the models folder is there, looks like one (it
+// holds a Stable-diffusion or Lora folder) and can be written to. A path that exists
+// but is the wrong one would otherwise take installs into a folder A1111 never reads.
+func (c *Client) A1111ModelsDirReady() bool {
+	st := c.A1111ModelsDir()
+	return st.Dir != "" && st.Writable
+}
+
 func (c *Client) requireModelsDir() (string, error) {
-	if !c.A1111ModelsDirReady() {
+	st := c.A1111ModelsDir()
+	if st.Dir == "" || !st.Writable {
+		if st.Problem != "" {
+			return "", modelsDirError{st.Problem}
+		}
 		return "", ErrNoModelsDir
 	}
-	return c.modelsDir(), nil
+	return st.Dir, nil
 }
 
 type a1111ModelRaw struct {
