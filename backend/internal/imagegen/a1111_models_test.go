@@ -337,3 +337,29 @@ func TestA1111KeysCannotClimbOutOfTheModelsFolder(t *testing.T) {
 		t.Fatalf("file name = %q", got)
 	}
 }
+
+func TestAFolderThatIsNotTheOneA1111ReadsIsCaught(t *testing.T) {
+	c, _, base, dir := a1111Fixture(t)
+	for _, f := range []string{"Stable-diffusion/dream.safetensors", "Lora/ink.safetensors"} {
+		if err := os.WriteFile(filepath.Join(dir, filepath.FromSlash(f)), []byte("w"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m, err := c.A1111FolderMatch(context.Background(), base)
+	if err != nil || m.Reported != 2 || m.Found != 2 || m.Files["Lora"] != 1 {
+		t.Fatalf("match = %+v, %v", m, err)
+	}
+	// A second folder shaped like a models folder, but not the one A1111 lists from.
+	other := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(other, "Lora"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	c.ModelsDir = func() string { return other }
+	m, err = c.A1111FolderMatch(context.Background(), base)
+	if err != nil || m.Reported != 2 || m.Found != 0 || m.Missing == "" {
+		t.Fatalf("match = %+v, %v", m, err)
+	}
+	if err := c.A1111Rescan(context.Background(), base); err != nil {
+		t.Fatal(err)
+	}
+}

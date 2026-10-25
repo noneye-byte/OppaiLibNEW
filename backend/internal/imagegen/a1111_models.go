@@ -760,6 +760,59 @@ func (c *Client) a1111Refresh(ctx context.Context, base, typ string) {
 	}
 }
 
+// A1111FolderMatch is how well the models folder mounted here agrees with what A1111
+// lists. A folder can look right — Stable-diffusion and Lora inside, writable — and
+// still be a different copy from the one A1111 reads (another share, an old backup,
+// the host path of a second install); installs then land where A1111 never looks, and
+// nothing about the folder alone says so.
+type A1111FolderMatch struct {
+	Reported int            // models, LoRAs and VAEs A1111 lists
+	Found    int            // of those, the ones at the same path under the folder
+	Missing  string         // one A1111 lists that is not there, as an example
+	Files    map[string]int // model files under each of the folders, by folder
+}
+
+// a1111ModelExts are the extensions A1111 loads a model from.
+var a1111ModelExts = map[string]bool{".safetensors": true, ".ckpt": true, ".pt": true, ".pth": true, ".bin": true}
+
+// A1111FolderMatch lists A1111's models and looks for each one in the folder.
+func (c *Client) A1111FolderMatch(ctx context.Context, base string) (A1111FolderMatch, error) {
+	out := A1111FolderMatch{Files: map[string]int{}}
+	dir := c.modelsDir()
+	if dir == "" {
+		return out, ErrNoModelsDir
+	}
+	for _, f := range []a1111Folder{a1111Checkpoints, a1111LoraFolder, a1111VaeFolder} {
+		n := 0
+		_ = filepath.WalkDir(filepath.Join(dir, f.Folder), func(p string, d os.DirEntry, err error) error {
+			if err == nil && !d.IsDir() && a1111ModelExts[strings.ToLower(filepath.Ext(p))] {
+				n++
+			}
+			return nil
+		})
+		out.Files[f.Folder] = n
+	}
+	files, err := c.a1111Files(ctx, base)
+	if err != nil {
+		return out, err
+	}
+	for _, f := range files {
+		out.Reported++
+		if _, err := os.Stat(localPath(dir, f.Key)); err == nil {
+			out.Found++
+		} else if out.Missing == "" {
+			out.Missing = f.Key
+		}
+	}
+	return out, nil
+}
+
+// A1111Rescan asks A1111 to read its LoRA folder again, which is what every install
+// and delete from here ends with. Harmless to call: it only rescans.
+func (c *Client) A1111Rescan(ctx context.Context, base string) error {
+	return c.postJSON(ctx, base+"/sdapi/v1/refresh-loras", map[string]any{}, nil)
+}
+
 // a1111Vaes lists A1111's standalone VAEs for the picker.
 func (c *Client) a1111Vaes(ctx context.Context, base string) ([]Vae, error) {
 	var raw []a1111VaeRaw

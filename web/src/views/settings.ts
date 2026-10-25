@@ -1,7 +1,7 @@
 import { speak, stopSpeaking, ttsStatus, type TTSStatus } from "../speech.js";
 import { LitElement, html, css, nothing } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
-import { api, mascotSay, type APKInfo, type Diagnostics, type ImageGenStatus, type LibbyReferenceSlot, type Passkey, type PasskeyList, type Settings, type ReadOnlyInfo, type Stats, type StorageReport, type Timing, type User } from "../api.js";
+import { api, mascotSay, type APKInfo, type Diagnostics, type GenCheck, type ImageGenStatus, type LibbyReferenceSlot, type Passkey, type PasskeyList, type Settings, type ReadOnlyInfo, type Stats, type StorageReport, type Timing, type User } from "../api.js";
 import { passkeyErrorMessage, registerPasskey } from "../passkeys.js";
 import { withViewTransition } from "../motion.js";
 import { profileUpdates, resetUIMetrics, uiMetricsSnapshot, type UIMetricsSnapshot } from "../ui-metrics.js";
@@ -126,6 +126,10 @@ export class OppaiSettings extends LitElement {
   /** The generator's status as last read, for the Image generation panel to say what
       the URL and the models folder actually found. */
   @state() private genStatus: ImageGenStatus | null = null;
+  /** The Test button's results; null until it has been pressed. */
+  @state() private genChecks: GenCheck[] | null = null;
+  @state() private genCheckBusy = false;
+  @state() private genCheckErr = "";
 
   @state() private pwCurrent = "";
   @state() private pwNew = "";
@@ -305,6 +309,20 @@ export class OppaiSettings extends LitElement {
       }
       .field-status.ok { color: var(--oppai-primary-bright); }
       .field-status.bad { color: var(--oppai-error); }
+      .checks {
+        list-style: none;
+        margin: 10px 0 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        font-size: 13px;
+      }
+      .checks li { display: flex; gap: 8px; align-items: flex-start; overflow-wrap: anywhere; }
+      .checks .material-symbols-rounded { font-size: 18px; flex-shrink: 0; }
+      .checks .ok .material-symbols-rounded { color: var(--oppai-primary-bright); }
+      .checks .bad .material-symbols-rounded { color: var(--oppai-error); }
+      .checks .skip .material-symbols-rounded { color: var(--oppai-text-muted); }
       .field-control {
         flex-shrink: 0;
         display: flex;
@@ -2327,6 +2345,8 @@ export class OppaiSettings extends LitElement {
                     @change=${(e: Event) => this.edit({ imageGenModelsDir: (e.target as HTMLInputElement).value })} />
                 </div>
               </div>
+
+              ${this.renderGenCheck()}
             `}
       </section>
 
@@ -2365,6 +2385,49 @@ export class OppaiSettings extends LitElement {
             `}
       </section>
     `;
+  }
+
+  private async runGenCheck() {
+    this.genCheckBusy = true;
+    this.genCheckErr = "";
+    try {
+      this.genChecks = (await api.imageGenCheck()).checks;
+    } catch (e) {
+      this.genCheckErr = (e as Error).message;
+    } finally {
+      this.genCheckBusy = false;
+    }
+    // The test can find what the status missed (a folder fixed since), so the
+    // lines under the fields are read again with it.
+    void this.loadGenLists();
+  }
+
+  /** The Test button and, once pressed, one row per link it tried. */
+  private renderGenCheck() {
+    return html`<div class="field stack">
+      <div class="field-text">
+        <div class="field-label">Test everything</div>
+        <div class="field-help">
+          Tries each step an install from Civitai takes — the generator, its rescan route,
+          the models folder and whether it is the one Automatic1111 reads, the Civitai API,
+          the key, and the start of a real download (no file is kept). Save first.
+        </div>
+      </div>
+      <div class="field-control">
+        <button class="btn" ?disabled=${!this.canEdit || this.genCheckBusy || this.dirty} @click=${() => void this.runGenCheck()}>
+          ${this.genCheckBusy ? "Testing…" : "Test"}
+        </button>
+      </div>
+      ${this.genCheckErr ? html`<div class="field-status bad">${this.genCheckErr}</div>` : nothing}
+      ${this.genChecks
+        ? html`<ul class="checks">
+            ${this.genChecks.map((c) => html`<li class=${c.skipped ? "skip" : c.ok ? "ok" : "bad"}>
+              <span class="material-symbols-rounded">${c.skipped ? "info" : c.ok ? "check_circle" : "error"}</span>
+              <span><strong>${c.label}</strong> — ${c.detail}</span>
+            </li>`)}
+          </ul>`
+        : nothing}
+    </div>`;
   }
 
   /** What the generator URL reached, as of the last save. */

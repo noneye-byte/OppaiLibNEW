@@ -459,6 +459,8 @@ func (s *Server) Handler() http.Handler {
 	// until explicitly saved; the opaque preview read capability is the one exception so
 	// completed outfit states remain visible after a web login expires.
 	mux.HandleFunc("GET /api/imagegen/status", s.requireAuth(s.handleImageGenStatus))
+	// Admin-only: it writes a probe file into the models folder and asks A1111 to rescan.
+	mux.HandleFunc("POST /api/imagegen/check", s.requireAuth(s.requireAdmin(s.handleImageGenCheck)))
 	mux.HandleFunc("POST /api/imagegen/prompt", s.requireAuth(s.handleImageGenPrompt))
 	mux.HandleFunc("POST /api/imagegen/generate", s.requireAuth(s.handleImageGenGenerate))
 	mux.HandleFunc("GET /api/imagegen/progress/{id}", s.requireAuth(s.handleImageGenProgress))

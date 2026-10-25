@@ -1525,6 +1525,17 @@ export interface ImageGenStatus {
   modelsDirProblem?: string;
 }
 
+/** One link the Image generation panel's Test tried: the generator, its rescan
+    route, the models folder, whether it is A1111's own, Civitai, the key, a download. */
+export interface GenCheck {
+  id: string;
+  label: string;
+  ok: boolean;
+  /** Nothing to try here (no key set, InvokeAI needs no folder); not a failure. */
+  skipped?: boolean;
+  detail: string;
+}
+
 /** One prompt completion from the server's tag vocabulary. */
 export interface TagCompletion {
   tag: string;
@@ -2676,6 +2687,8 @@ export const api = {
   // into the library. Everything here talks to a local generator on the user's network.
 
   imageGenStatus: () => request<ImageGenStatus>("/api/imagegen/status", {}, 12_000),
+  /** Admin only: tries every link an install depends on, one result each. */
+  imageGenCheck: () => request<{ checks: GenCheck[] }>("/api/imagegen/check", { method: "POST" }, 95_000),
 
   booruTags: (q: string, limit = 12) => request<{ items?: TagCompletion[]; suggestions: string[]; correction?: string }>(
     `/api/imagegen/tags?q=${encodeURIComponent(q)}&limit=${limit}`,
