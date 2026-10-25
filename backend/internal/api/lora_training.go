@@ -66,6 +66,8 @@ type trainRunner struct {
 	// step lets one pass over the live runs happen at a time, so a finished run is
 	// installed once however many callers notice it.
 	step sync.Mutex
+	// tasks are the imports and tagging runs filling a set (lora_sources.go).
+	tasks *trainTasks
 }
 
 func (s *Server) trainState() *trainRunner {
@@ -73,11 +75,15 @@ func (s *Server) trainState() *trainRunner {
 	return s.train
 }
 
-// trainSource is which pictures a run is trained on: one of these.
+// trainSource is which pictures a run is trained on: one of the first three, less
+// the ones dropped from the set on the Train screen. Dropping is kept here rather
+// than done to the collection, so a picture left out of one LoRA stays in the
+// collection and in the library.
 type trainSource struct {
 	CollectionID int64   `json:"collectionId,omitempty"`
 	Tag          string  `json:"tag,omitempty"`
 	MediaIDs     []int64 `json:"mediaIds,omitempty"`
+	Exclude      []int64 `json:"exclude,omitempty"`
 }
 
 // trainRequest is what the studio asks for. Zero numbers take the trainer's defaults.
@@ -96,6 +102,15 @@ type trainRequest struct {
 	LearningRate float64  `json:"learningRate,omitempty"`
 	Optimizer    string   `json:"optimizer,omitempty"`
 	ClipSkip     int      `json:"clipSkip,omitempty"`
+	// Alpha, NoiseOffset and TextEncoderLR are the presets' finer settings; zero
+	// takes the trainer's defaults (half the rank, none, half the learning rate).
+	Alpha         float64 `json:"alpha,omitempty"`
+	NoiseOffset   float64 `json:"noiseOffset,omitempty"`
+	TextEncoderLR float64 `json:"textEncoderLr,omitempty"`
+	// Preset is the kind of LoRA the screen set the numbers up for ("character",
+	// "style" …), recorded so "train again" opens on it. The server reads nothing
+	// from it: the numbers it chose are in the request.
+	Preset string `json:"preset,omitempty"`
 	// LowVRAM trains the UNet alone at a smaller size, for a card under 12 GB.
 	LowVRAM bool `json:"lowVram,omitempty"`
 	Flip    bool `json:"flip,omitempty"`
@@ -166,7 +181,8 @@ func (s *Server) handleTrainList(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 	base, token, ok := s.trainerSettings()
-	out := map[string]any{"configured": ok}
+	// tagger says whether the screen can offer to tag a set.
+	out := map[string]any{"configured": ok, "tagger": s.ai.Enabled()}
 	jobs := map[string]trainer.Job{}
 	if ok {
 		if h, err := s.trainer.Health(ctx, base, token); err != nil {
@@ -202,8 +218,27 @@ func (s *Server) handleTrainList(w http.ResponseWriter, r *http.Request) {
 
 // ── choosing the pictures ───────────────────────────────────────────────────
 
-// trainPictureRows are the stills a source names, at most trainMaxPictures of them.
+// trainPictureRows are the stills a source names, less its exclusions, at most
+// trainMaxPictures of them.
 func (s *Server) trainPictureRows(ctx context.Context, src trainSource) ([]*db.MediaRow, error) {
+	rows, err := s.trainSourceRows(ctx, src)
+	if err != nil || len(src.Exclude) == 0 {
+		return rows, err
+	}
+	drop := make(map[int64]bool, len(src.Exclude))
+	for _, id := range src.Exclude {
+		drop[id] = true
+	}
+	kept := rows[:0]
+	for _, row := range rows {
+		if !drop[row.ID] {
+			kept = append(kept, row)
+		}
+	}
+	return kept, nil
+}
+
+func (s *Server) trainSourceRows(ctx context.Context, src trainSource) ([]*db.MediaRow, error) {
 	var ids []int64
 	switch {
 	case len(src.MediaIDs) > 0:
@@ -220,7 +255,7 @@ func (s *Server) trainPictureRows(ctx context.Context, src trainSource) ([]*db.M
 			}
 		}
 	case strings.TrimSpace(src.Tag) != "":
-		rows, err := s.db.MediaPage(ctx, db.MediaFilter{Kind: string(models.KindImage), Tag: strings.TrimSpace(src.Tag)}, trainMaxPictures, 0)
+		rows, err := s.db.MediaPage(ctx, db.MediaFilter{Kind: string(models.KindImage), Tag: strings.TrimSpace(src.Tag)}, trainMaxPictures+len(src.Exclude), 0)
 		if err != nil {
 			return nil, err
 		}
@@ -249,9 +284,26 @@ type trainPreviewReq struct {
 	LeaveOut []string    `json:"leaveOut"`
 }
 
+// trainPreviewItem is one picture of a set as it would be trained: its caption, and
+// the tags behind it, for the screen's per-picture tag editor.
+type trainPreviewItem struct {
+	ID      int64          `json:"id"`
+	Caption string         `json:"caption"`
+	Tags    []trainItemTag `json:"tags"`
+	Width   int64          `json:"width,omitempty"`
+	Height  int64          `json:"height,omitempty"`
+}
+
+type trainItemTag struct {
+	Name string `json:"name"`
+	// Manual is a tag typed by a person rather than the tagger's.
+	Manual bool `json:"manual,omitempty"`
+}
+
 // handleTrainPreview says what a source would train on before anything is sent:
-// how many pictures, which (for thumbnails), the tags they share — which is what
-// the leave-out list is picked from — and one caption as it would be written.
+// every picture with its caption as it would be written, the tags the pictures
+// share — which is what the leave-out list is picked from — and how many have no
+// tags at all yet, which is what the tagger is offered for.
 func (s *Server) handleTrainPreview(w http.ResponseWriter, r *http.Request) {
 	var req trainPreviewReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -278,18 +330,31 @@ func (s *Server) handleTrainPreview(w http.ResponseWriter, r *http.Request) {
 	for _, id := range ids {
 		sets = append(sets, tagsByID[id])
 	}
-	example := ""
-	if len(ids) > 0 {
-		example = loraCaption(req.Trigger, tagsByID[ids[0]], loraLeaveOut(req.LeaveOut), req.Captions)
+	leaveOut := loraLeaveOut(req.LeaveOut)
+	items := make([]trainPreviewItem, 0, len(rows))
+	untagged := 0
+	for _, row := range rows {
+		content := loraContentTags(tagsByID[row.ID])
+		if len(content) == 0 {
+			untagged++
+		}
+		tags := make([]trainItemTag, 0, len(content))
+		for _, t := range content {
+			tags = append(tags, trainItemTag{Name: loraCaptionTag(t.Name), Manual: t.Source == "manual"})
+		}
+		items = append(items, trainPreviewItem{
+			ID: row.ID, Caption: loraCaption(req.Trigger, tagsByID[row.ID], leaveOut, req.Captions),
+			Tags: tags, Width: row.Width.Int64, Height: row.Height.Int64,
+		})
 	}
-	shown := ids
-	if len(shown) > 24 {
-		shown = shown[:24]
+	example := ""
+	if len(items) > 0 {
+		example = items[0].Caption
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"count": len(ids), "mediaIds": shown, "commonTags": loraCommonTags(sets, 40),
+		"count": len(ids), "mediaIds": ids, "items": items, "commonTags": loraCommonTags(sets, 60),
 		"exampleCaption": example, "suggestedRepeats": loraRepeats(len(ids)),
-		"limit": trainMaxPictures,
+		"untagged": untagged, "limit": trainMaxPictures,
 	})
 }
 
@@ -499,6 +564,7 @@ func (s *Server) trainSpec(ctx context.Context, req trainRequest, ckpt imagegen.
 		Name: req.Name, Trigger: req.Trigger, Base: trainer.BaseRef{Key: ckpt.Key, Size: ckpt.Size},
 		Resolution: req.Resolution, Rank: req.Rank, Epochs: req.Epochs, Repeats: req.Repeats,
 		LearningRate: req.LearningRate, Optimizer: req.Optimizer, ClipSkip: req.ClipSkip, Flip: req.Flip,
+		Alpha: req.Alpha, NoiseOffset: req.NoiseOffset, TextEncoderLR: req.TextEncoderLR,
 	}
 	if spec.Repeats <= 0 {
 		spec.Repeats = loraRepeats(images)

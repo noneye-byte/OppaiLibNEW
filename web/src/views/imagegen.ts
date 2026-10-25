@@ -5028,7 +5028,7 @@ export class OppaiImageGen extends LitElement {
       ${this.trainOpen
         // Out here rather than in renderBody, which shows a spinner while the status
         // reloads: a finished run reloads it, and the form must not be torn down.
-        ? html`<oppai-lora-train .models=${this.status?.models ?? []} .checkpoint=${this.checkpoint}
+        ? html`<oppai-lora-train .models=${this.status?.models ?? []} .loras=${this.status?.loras ?? []} .checkpoint=${this.checkpoint}
             @close=${() => (this.trainOpen = false)}
             @trained=${(e: CustomEvent<{ name: string }>) => {
               this.showToast(`${e.detail.name} is trained and installed`);

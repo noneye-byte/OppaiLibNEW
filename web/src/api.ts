@@ -1652,6 +1652,8 @@ export interface TrainSource {
   collectionId?: number;
   tag?: string;
   mediaIds?: number[];
+  /** Pictures dropped from the set on the Train screen; they stay in the library. */
+  exclude?: number[];
 }
 
 /** What starting a training run asks for. Zero numbers take the trainer's defaults. */
@@ -1669,6 +1671,11 @@ export interface TrainRequest {
   learningRate?: number;
   optimizer?: string;
   clipSkip?: number;
+  alpha?: number;
+  noiseOffset?: number;
+  textEncoderLr?: number;
+  /** The kind of LoRA the numbers were set up for; see lora-presets.ts. */
+  preset?: string;
   lowVram?: boolean;
   flip?: boolean;
   freeGpu?: boolean;
@@ -1707,10 +1714,56 @@ export interface Training {
 export interface TrainPreview {
   count: number;
   mediaIds: number[];
+  /** Every picture of the set, as it would be captioned. */
+  items: TrainPreviewItem[];
   commonTags: { name: string; count: number }[];
   exampleCaption: string;
   suggestedRepeats: number;
+  /** How many pictures have no content tags at all. */
+  untagged: number;
   limit: number;
+}
+
+export interface TrainPreviewItem {
+  id: number;
+  caption: string;
+  /** Its content tags, strongest first; manual ones were typed by a person. */
+  tags: { name: string; manual?: boolean }[];
+  width?: number;
+  height?: number;
+}
+
+/** An import or a tagging run filling a training set, while it runs. */
+export interface TrainTask {
+  id: string;
+  kind: "import" | "autotag";
+  total: number;
+  done: number;
+  failed: number;
+  finished: boolean;
+  error?: string;
+  collectionId?: number;
+  mediaIds?: number[];
+}
+
+/** One page of an X account's pictures; cursor is absent on the last. */
+export interface TwitterMediaPage {
+  account?: { name: string; screenName: string; avatar?: string; mediaCount: number; protected?: boolean };
+  pictures: TwitterPicture[];
+  cursor?: string;
+}
+
+export interface TwitterPicture {
+  id: string;
+  url: string;
+  thumb: string;
+  tweetUrl: string;
+  text?: string;
+  width?: number;
+  height?: number;
+  repost?: boolean;
+  sensitive?: boolean;
+  created?: number;
 }
 
 /** The full editable record of a model or LoRA, mirrored from InvokeAI. */
@@ -3230,10 +3283,25 @@ export const api = {
   // Runs on the trainer, followed by the server; see backend/internal/api/lora_training.go.
 
   trainList: () =>
-    request<{ configured: boolean; trainer?: TrainerHealth; trainerError?: string; trainings: Training[] }>(
+    request<{ configured: boolean; tagger?: boolean; trainer?: TrainerHealth; trainerError?: string; trainings: Training[] }>(
       "/api/imagegen/train", {}, 20_000),
-  trainPreview: (body: { source: TrainSource; trigger: string; captions?: string; leaveOut?: string[] }) =>
-    request<TrainPreview>("/api/imagegen/train/preview", { method: "POST", body: JSON.stringify(body) }, 40_000),
+  trainPreview: (body: { source: TrainSource; trigger: string; captions?: string; leaveOut?: string[] }, signal?: AbortSignal) =>
+    request<TrainPreview>("/api/imagegen/train/preview", { method: "POST", body: JSON.stringify(body), signal }, 40_000),
+  /** One page of an X account's pictures, to pick a set from. */
+  trainTwitter: (user: string, cursor = "") =>
+    request<TwitterMediaPage>(
+      `/api/imagegen/train/twitter?user=${encodeURIComponent(user)}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`,
+      {}, 60_000),
+  /** Downloads the kept pictures into the library and a collection, in the background. */
+  trainImport: (body: {
+    items: { url: string; source?: string; title?: string }[];
+    collectionId?: number;
+    collectionName?: string;
+  }) => request<TrainTask>("/api/imagegen/train/import", { method: "POST", body: JSON.stringify(body) }, 30_000),
+  /** Tags a set's untagged pictures (or every one, with redo) in the background. */
+  trainAutotag: (body: { source: TrainSource; redo?: boolean }) =>
+    request<TrainTask>("/api/imagegen/train/autotag", { method: "POST", body: JSON.stringify(body) }, 40_000),
+  trainTask: (id: string) => request<TrainTask>(`/api/imagegen/train-tasks/${encodeURIComponent(id)}`, {}, 15_000),
   trainStart: (body: TrainRequest) =>
     request<Training>("/api/imagegen/train", { method: "POST", body: JSON.stringify(body) }, 40_000),
   trainCancel: (id: number) =>

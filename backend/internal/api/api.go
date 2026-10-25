@@ -583,6 +583,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/imagegen/train/{id}/cancel", s.requireAuth(s.handleTrainCancel))
 	mux.HandleFunc("DELETE /api/imagegen/train/{id}", s.requireAuth(s.handleTrainDelete))
 	mux.HandleFunc("GET /api/imagegen/train/{id}/sample", s.requireAuth(s.handleTrainSample))
+	// Filling and tagging a set (lora_sources.go).
+	mux.HandleFunc("GET /api/imagegen/train/twitter", s.requireAuth(s.handleTrainTwitter))
+	mux.HandleFunc("POST /api/imagegen/train/import", s.requireAuth(s.handleTrainImport))
+	mux.HandleFunc("POST /api/imagegen/train/autotag", s.requireAuth(s.handleTrainAutotag))
+	mux.HandleFunc("GET /api/imagegen/train-tasks/{id}", s.requireAuth(s.handleTrainTask))
 	mux.HandleFunc("POST /api/imagegen/civitai/cover", s.requireAuth(s.handleCivitaiCover))
 	mux.HandleFunc("POST /api/imagegen/civitai/update", s.requireAuth(s.handleCivitaiUpdate))
 	mux.HandleFunc("GET /api/imagegen/civitai/posts", s.requireAuth(s.handleCivitaiPosts))
