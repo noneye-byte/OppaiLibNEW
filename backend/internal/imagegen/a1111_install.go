@@ -172,18 +172,24 @@ func (c *Client) a1111Download(base, dir string, folder a1111Folder, spec Instal
 		// key goes to Civitai and nowhere else.
 		req.Header.Set("Authorization", "Bearer "+spec.Token)
 	}
+	// Most installs are Civitai's, and its refusals have a known cause; a LoRA from
+	// the trainer comes from somewhere else and is not to be blamed on Civitai.
+	from := "Civitai"
+	if !strings.Contains(strings.ToLower(req.URL.Host), "civitai") {
+		from = req.URL.Host
+	}
 	resp, err := downloadHTTP.Do(req)
 	if err != nil {
-		fail(fmt.Errorf("Civitai is unreachable: %w", err))
+		fail(fmt.Errorf("%s is unreachable: %w", from, err))
 		return
 	}
 	defer resp.Body.Close()
 	switch {
-	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
+	case (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) && from == "Civitai":
 		fail(errors.New("Civitai wants an account for this file; add an API key under Settings"))
 		return
 	case resp.StatusCode != http.StatusOK:
-		fail(fmt.Errorf("Civitai returned %d", resp.StatusCode))
+		fail(fmt.Errorf("%s returned %d", from, resp.StatusCode))
 		return
 	}
 	// A sign-in page instead of a file is the other way a missing key shows.

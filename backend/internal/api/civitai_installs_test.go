@@ -19,6 +19,7 @@ type fakeInvoke struct {
 	mu          sync.Mutex
 	jobDone     bool
 	patched     map[string]any
+	patches     []map[string]any
 	coverBytes  int
 	coverKey    string
 	description string
@@ -58,9 +59,18 @@ func newFakeInvoke(t *testing.T) (*fakeInvoke, *httptest.Server) {
 		case strings.HasPrefix(r.URL.Path, "/api/v2/models/i/") && r.Method == http.MethodPatch:
 			var body map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&body)
-			f.patched = body
+			// A PATCH changes the fields it names, as InvokeAI's does.
+			if f.patched == nil {
+				f.patched = map[string]any{}
+			}
+			for k, v := range body {
+				f.patched[k] = v
+			}
+			f.patches = append(f.patches, body)
 			key := strings.TrimPrefix(r.URL.Path, "/api/v2/models/i/")
-			fmt.Fprintf(w, `{"key":%q,"name":"fresh_model","type":"main","description":%q}`, key, body["description"])
+			desc, _ := f.patched["description"].(string)
+			out, _ := json.Marshal(map[string]any{"key": key, "name": "fresh_model", "type": "main", "description": desc})
+			_, _ = w.Write(out)
 		default:
 			http.NotFound(w, r)
 		}
@@ -86,7 +96,7 @@ func newFakeCivitai(t *testing.T) (*fakeCivitai, *httptest.Server) {
 		"stats":{"downloadCount":10,"thumbsUpCount":2},
 		"modelVersions":[
 		 {"id":999,"name":"9","baseModel":"SD 1.5","trainedWords":["dream"],"downloadUrl":"https://civitai.com/api/download/models/999",
-		  "description":"<p>newest</p>","publishedAt":"2024-01-01T00:00:00Z",
+		  "description":"<p>newest</p><p>Steps: 25</p><p>Clip skip: 2</p><p>Negative prompt: lowres, bad hands</p>","publishedAt":"2024-01-01T00:00:00Z",
 		  "images":[{"url":"https://image.civitai.com/new1.jpeg","type":"image","width":1,"height":1,"nsfwLevel":1},{"url":"https://evil.example/x.jpeg","type":"image"}],
 		  "files":[{"name":"dreamshaper_9.safetensors","sizeKB":2048,"type":"Model","primary":true,"downloadUrl":"https://civitai.com/api/download/models/999","hashes":{"SHA256":"S9","BLAKE3":"BEEF"},"metadata":{"format":"SafeTensor","fp":"fp16"}}]},
 		 {"id":128713,"name":"8","baseModel":"SD 1.5","trainedWords":[],"downloadUrl":"https://civitai.com/api/download/models/128713",
@@ -101,6 +111,8 @@ func newFakeCivitai(t *testing.T) (*fakeCivitai, *httptest.Server) {
 			fmt.Fprint(w, model)
 		case r.URL.Path == "/model-versions/by-hash/771C807DB56DBFC33FEDA5638D920F6C507DB971DA44772EE44A08DC38C3B437":
 			fmt.Fprint(w, `{"id":128713,"modelId":4384,"name":"8","baseModel":"SD 1.5","model":{"name":"DreamShaper","type":"Checkpoint"}}`)
+		case r.URL.Path == "/model-versions/999":
+			fmt.Fprint(w, `{"id":999,"modelId":4384,"name":"9","baseModel":"SD 1.5"}`)
 		case strings.HasPrefix(r.URL.Path, "/model-versions/by-hash/"):
 			w.WriteHeader(http.StatusNotFound)
 			fmt.Fprint(w, `{"error":"Model not found"}`)
@@ -214,7 +226,7 @@ func TestCivitaiModelDetailIsSanitizedAndComplete(t *testing.T) {
 	if len(f) != 1 || f[0].BLAKE3 != "BEEF" || f[0].Format != "SafeTensor" || f[0].SizeMB != 2 {
 		t.Fatalf("files = %+v", f)
 	}
-	if m.Versions[0].Description != "<p>newest</p>" || m.Versions[0].PublishedAt == "" {
+	if !strings.HasPrefix(m.Versions[0].Description, "<p>newest</p>") || m.Versions[0].PublishedAt == "" {
 		t.Fatalf("version detail = %+v", m.Versions[0])
 	}
 }

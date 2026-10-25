@@ -57,6 +57,7 @@ import { libbyReact } from "../libby-voice.js";
 import { canvasToBlob, CutoutSession, DEFAULT_COMPOSE, loadImage } from "../cutout.js";
 import { outfitArchiveFilename, outfitImageFilename } from "../outfit-name.js";
 import { manageModelsNote } from "../model-manage.js";
+import { importSuggestion, loraNegatives, swapPromptDefault } from "../model-defaults.js";
 import {
   DEFAULT_OUTFIT_GEAR,
   OUTFIT_EXPOSURE_TIERS,
@@ -80,6 +81,7 @@ import "./outfit-wardrobe.js";
 import { createZip, type ZipEntry } from "../zip.js";
 import "./imagegen-gallery.js";
 import "./civitai.js";
+import "./lora-train.js";
 import type { PromptSettings } from "../civitai-prompt.js";
 import {
   applyCompletion,
@@ -597,6 +599,8 @@ export class OppaiImageGen extends LitElement {
 
   /** Whether the Civitai browser is on screen. */
   @state() private civitaiOpen = false;
+  /** The Train a LoRA screen, over the studio like the Civitai browser. */
+  @state() private trainOpen = false;
 
   @query("oppai-invoke-gallery") private galleryPanel?: OppaiInvokeGallery;
 
@@ -3561,11 +3565,16 @@ export class OppaiImageGen extends LitElement {
   }
 
   // Selecting a model applies the generator's per-model defaults (InvokeAI keeps
-  // steps/CFG/size/VAE per model) — everything stays editable afterwards.
+  // steps/CFG/size/VAE per model) — everything stays editable afterwards. Its
+  // recommended prompts replace the last model's (model-defaults.ts).
   private pickModel(m: GenModel) {
+    const prev = (this.status?.models ?? []).find((x) => x.title === this.checkpoint)?.defaults;
     this.checkpoint = m.title;
     const d = m.defaults;
+    if (prev?.positive || d?.positive) this.prompt = swapPromptDefault(this.prompt, prev?.positive, d?.positive, "start");
+    if (prev?.negative || d?.negative) this.negative = swapPromptDefault(this.negative, prev?.negative, d?.negative, "end");
     if (!d) return;
+    if (d.clipSkip) this.clipSkip = d.clipSkip;
     if (d.steps) this.steps = d.steps;
     if (d.cfgScale) this.cfg = d.cfgScale;
     if (d.cfgRescale !== undefined) this.cfgRescale = d.cfgRescale;
@@ -3847,6 +3856,9 @@ export class OppaiImageGen extends LitElement {
         if (p.negativePrompt?.trim()) negParts.push(p.negativePrompt.trim());
       }
     }
+    // What the LoRAs that are on ask to keep out of the picture.
+    negParts.push(loraNegatives(negParts.join(", "),
+      (this.status?.loras ?? []).filter((l) => l.name in this.selectedLoras).map((l) => l.negative)));
     let prompt = parts.filter(Boolean).join(", ");
     let negative = negParts.filter(Boolean).join(", ");
 
@@ -4781,6 +4793,28 @@ export class OppaiImageGen extends LitElement {
     this.metaDraft = { ...d, defaults: { ...(d.defaults ?? {}), ...patch } };
   }
 
+  /** Fills the editor with what the model's Civitai page recommends. Nothing is
+   *  saved until Save, so the import can be read over first. */
+  private async importCivitaiDefaults() {
+    const d = this.metaDraft;
+    if (!d || this.metaBusy) return;
+    this.metaBusy = true;
+    try {
+      const { suggestion, keySet } = await api.civitaiSuggest({ key: d.key });
+      const cur = this.metaDraft;
+      if (!cur) return;
+      const out = importSuggestion(cur.defaults ?? {}, this.metaTriggerText, suggestion, cur.type === "lora");
+      this.metaDraft = { ...cur, defaults: out.defaults };
+      this.metaTriggerText = out.triggerText;
+      const said = out.applied.length ? `Imported ${out.applied.join(", ")} — check them and Save` : "The Civitai page recommends nothing new";
+      this.showToast(keySet ? said : `${said}. A Civitai API key adds what the showcase pictures used.`);
+    } catch (e) {
+      this.showToast((e as Error).message);
+    } finally {
+      this.metaBusy = false;
+    }
+  }
+
   private async saveMeta() {
     const d = this.metaDraft;
     if (!d || this.metaBusy) return;
@@ -4991,6 +5025,16 @@ export class OppaiImageGen extends LitElement {
       ${this.metaDraft ? this.renderMetaEditor(this.metaDraft) : nothing}
       ${this.expandedShot ? this.renderLightbox(this.expandedShot) : nothing}
       ${this.renderCutoutDialog()}
+      ${this.trainOpen
+        // Out here rather than in renderBody, which shows a spinner while the status
+        // reloads: a finished run reloads it, and the form must not be torn down.
+        ? html`<oppai-lora-train .models=${this.status?.models ?? []} .checkpoint=${this.checkpoint}
+            @close=${() => (this.trainOpen = false)}
+            @trained=${(e: CustomEvent<{ name: string }>) => {
+              this.showToast(`${e.detail.name} is trained and installed`);
+              void this.loadStatus();
+            }}></oppai-lora-train>`
+        : nothing}
       ${this.toast ? html`<div class="toast">${this.toast}</div>` : nothing}`;
   }
 
@@ -5103,14 +5147,43 @@ export class OppaiImageGen extends LitElement {
               @input=${(e: Event) => (this.metaTriggerText = (e.target as HTMLInputElement).value)} />
           </div>
           ${isLora
-            ? html`<div>
-                <label class="field">Recommended weight</label>
-                <input class="num" type="number" min="-2" max="2" step="0.05"
-                  .value=${String(defaults.weight ?? "")} placeholder="1"
-                  @input=${(e: Event) =>
-                    this.setMetaDefaults({ weight: Number((e.target as HTMLInputElement).value) || 0 })} />
+            ? html`<div class="meta-grid">
+                <div class="full">
+                  <label class="field">Recommended weight</label>
+                  <input class="num" type="number" min="-2" max="2" step="0.05"
+                    .value=${String(defaults.weight ?? "")} placeholder="1"
+                    @input=${(e: Event) =>
+                      this.setMetaDefaults({ weight: Number((e.target as HTMLInputElement).value) || 0 })} />
+                </div>
+                <div>
+                  <label class="field">Works from</label>
+                  <input class="num" type="number" min="-5" max="5" step="0.05" .value=${String(defaults.weightMin || "")}
+                    @input=${(e: Event) =>
+                      this.setMetaDefaults({ weightMin: Number((e.target as HTMLInputElement).value) || 0 })} />
+                </div>
+                <div>
+                  <label class="field">to</label>
+                  <input class="num" type="number" min="-5" max="5" step="0.05" .value=${String(defaults.weightMax || "")}
+                    @input=${(e: Event) =>
+                      this.setMetaDefaults({ weightMax: Number((e.target as HTMLInputElement).value) || 0 })} />
+                </div>
+                <div class="full">
+                  <label class="field">Negative prompt while it's on</label>
+                  <textarea rows="2" .value=${defaults.negative ?? ""} placeholder="3d, realistic"
+                    @input=${(e: Event) => this.setMetaDefaults({ negative: (e.target as HTMLTextAreaElement).value })}></textarea>
+                </div>
               </div>`
             : html`
+                <div>
+                  <label class="field">Recommended positive (put at the front of the prompt)</label>
+                  <textarea rows="2" .value=${defaults.positive ?? ""} placeholder="masterpiece, best quality"
+                    @input=${(e: Event) => this.setMetaDefaults({ positive: (e.target as HTMLTextAreaElement).value })}></textarea>
+                </div>
+                <div>
+                  <label class="field">Recommended negative</label>
+                  <textarea rows="2" .value=${defaults.negative ?? ""} placeholder="lowres, worst quality"
+                    @input=${(e: Event) => this.setMetaDefaults({ negative: (e.target as HTMLTextAreaElement).value })}></textarea>
+                </div>
                 <div class="meta-grid">
                   <div>
                     <label class="field">Steps</label>
@@ -5142,6 +5215,12 @@ export class OppaiImageGen extends LitElement {
                     <input class="num" type="number" min="64" max="2048" step="8" .value=${String(defaults.height ?? "")}
                       @input=${(e: Event) =>
                         this.setMetaDefaults({ height: Number((e.target as HTMLInputElement).value) || 0 })} />
+                  </div>
+                  <div class="full">
+                    <label class="field">Clip skip</label>
+                    <input class="num" type="number" min="0" max="12" .value=${String(defaults.clipSkip || "")} placeholder="Model's own"
+                      @input=${(e: Event) =>
+                        this.setMetaDefaults({ clipSkip: Number((e.target as HTMLInputElement).value) || 0 })} />
                   </div>
                   <div class="full">
                     <label class="field">Scheduler</label>
@@ -5180,6 +5259,11 @@ export class OppaiImageGen extends LitElement {
           <div class="dialog-actions">
             <button class="btn danger" ?disabled=${this.metaBusy} title="Remove from the generator, file included"
               @click=${() => this.deleteMetaModel()}>Delete</button>
+            <button class="btn" ?disabled=${this.metaBusy}
+              title="Fill in the trigger words, prompts and settings the model's Civitai page recommends"
+              @click=${() => this.importCivitaiDefaults()}>
+              <span class="material-symbols-rounded" style="font-size:17px;">download</span> Import from Civitai
+            </button>
             <button class="btn" @click=${() => (this.metaDraft = null)}>Cancel</button>
             <button class="btn primary" ?disabled=${this.metaBusy || !d.name.trim()} @click=${() => this.saveMeta()}>
               Save
@@ -5354,6 +5438,11 @@ export class OppaiImageGen extends LitElement {
         <span class="material-symbols-rounded">${meta.icon}</span>
         ${meta.label}
         <span class="toolbar-spacer"></span>
+        ${tab === "loras"
+          ? html`<button class="drawer-action" title="Train a LoRA on your own pictures" @click=${() => (this.trainOpen = true)}>
+              <span class="material-symbols-rounded">model_training</span>
+            </button>`
+          : nothing}
         ${tab === "models" || tab === "loras"
           ? html`<button class="drawer-action" title="Find more on Civitai" @click=${() => (this.civitaiOpen = true)}>
               <span class="material-symbols-rounded">travel_explore</span>
@@ -5417,6 +5506,9 @@ export class OppaiImageGen extends LitElement {
       ${st.civitai ? html`<button class="recipe-civitai" @click=${() => (this.civitaiOpen = true)}>
         <span class="material-symbols-rounded">travel_explore</span><span>Civitai</span>
       </button>` : nothing}
+      <button class="recipe-civitai" title="Train a LoRA on your own pictures" @click=${() => (this.trainOpen = true)}>
+        <span class="material-symbols-rounded">model_training</span><span>Train</span>
+      </button>
     </div>`;
   }
 
@@ -6114,6 +6206,7 @@ export class OppaiImageGen extends LitElement {
               </button>` : nothing}
               ${on ? html`<input class="lora-weight" type="number" min="-2" max="2" step="0.05"
                 aria-label=${`${lora.alias || lora.name} weight`}
+                title=${lora.weightMin && lora.weightMax ? `Works at ${lora.weightMin}–${lora.weightMax}` : ""}
                 .value=${String(this.selectedLoras[lora.name])}
                 @input=${(e: Event) => {
                   const value = Number((e.target as HTMLInputElement).value);

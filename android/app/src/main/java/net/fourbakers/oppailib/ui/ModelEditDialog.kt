@@ -54,6 +54,12 @@ fun ModelEditDialog(
     var height by remember { mutableStateOf("") }
     var scheduler by remember { mutableStateOf("") }
     var weight by remember { mutableStateOf("") }
+    var positive by remember { mutableStateOf("") }
+    var negative by remember { mutableStateOf("") }
+    var clipSkip by remember { mutableStateOf("") }
+    var weightMin by remember { mutableStateOf("") }
+    var weightMax by remember { mutableStateOf("") }
+    var note by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(name) {
@@ -70,6 +76,11 @@ fun ModelEditDialog(
                     if (d.height > 0) height = d.height.toString()
                     if (d.scheduler.isNotEmpty()) scheduler = d.scheduler
                     if (d.weight != 0.0) weight = d.weight.toString()
+                    positive = d.positive.orEmpty()
+                    negative = d.negative.orEmpty()
+                    d.clipSkip?.takeIf { it > 0 }?.let { clipSkip = it.toString() }
+                    d.weightMin?.takeIf { it != 0.0 }?.let { weightMin = it.toString() }
+                    d.weightMax?.takeIf { it != 0.0 }?.let { weightMax = it.toString() }
                 }
             }
             .onFailure { error = it.message ?: "Couldn't load the model" }
@@ -81,7 +92,12 @@ fun ModelEditDialog(
         busy = true
         scope.launch {
             val defaults = if (m.type == "lora") {
-                GenModelDefaults(weight = weight.toDoubleOrNull() ?: 0.0)
+                GenModelDefaults(
+                    weight = weight.toDoubleOrNull() ?: 0.0,
+                    negative = negative.trim(),
+                    weightMin = weightMin.toDoubleOrNull() ?: 0.0,
+                    weightMax = weightMax.toDoubleOrNull() ?: 0.0,
+                )
             } else {
                 GenModelDefaults(
                     steps = steps.toIntOrNull() ?: 0,
@@ -90,6 +106,9 @@ fun ModelEditDialog(
                     height = height.toIntOrNull() ?: 0,
                     scheduler = scheduler.trim(),
                     vae = m.defaults?.vae ?: "",
+                    positive = positive.trim(),
+                    negative = negative.trim(),
+                    clipSkip = clipSkip.toIntOrNull() ?: 0,
                 )
             }
             runCatching {
@@ -107,6 +126,43 @@ fun ModelEditDialog(
                 onSaved()
                 onDismiss()
             }.onFailure { error = it.message ?: "Couldn't save the model" }
+            busy = false
+        }
+    }
+
+    /** Fills the fields with what the model's Civitai page recommends; Save keeps them. */
+    fun importFromCivitai() {
+        val m = meta ?: return
+        if (busy) return
+        busy = true
+        scope.launch {
+            runCatching { repo.api.civitaiSuggest(m.key) }
+                .onSuccess { r ->
+                    val s = r.suggestion
+                    val have = triggers.split(",").map { it.trim() }.filter { it.isNotEmpty() }.toMutableList()
+                    for (w in s.triggerWords.flatMap { it.split(",") }.map { it.trim() }) {
+                        if (w.isNotEmpty() && have.none { it.equals(w, ignoreCase = true) }) have += w
+                    }
+                    triggers = have.joinToString(", ")
+                    if (s.negative.isNotEmpty()) negative = s.negative
+                    if (m.type == "lora") {
+                        if (s.weight != 0.0) weight = s.weight.toString()
+                        if (s.weightMin != 0.0 && s.weightMax != 0.0) {
+                            weightMin = s.weightMin.toString(); weightMax = s.weightMax.toString()
+                        }
+                    } else {
+                        if (s.positive.isNotEmpty()) positive = s.positive
+                        if (s.steps > 0) steps = s.steps.toString()
+                        if (s.cfgScale > 0) cfg = s.cfgScale.toString()
+                        if (s.scheduler.isNotEmpty()) scheduler = s.scheduler
+                        if (s.clipSkip > 0) clipSkip = s.clipSkip.toString()
+                        if (s.width > 0 && s.height > 0) { width = s.width.toString(); height = s.height.toString() }
+                    }
+                    note = "Imported from Civitai — check it over, then Save." +
+                        if (r.keySet) "" else " A Civitai API key adds what the showcase pictures used."
+                    error = ""
+                }
+                .onFailure { error = it.message ?: "Couldn't read the Civitai page" }
             busy = false
         }
     }
@@ -164,13 +220,29 @@ fun ModelEditDialog(
                         singleLine = true, modifier = Modifier.fillMaxWidth())
                     OutlinedTextField(description, { description = it }, label = { Text("Description") },
                         minLines = 2, modifier = Modifier.fillMaxWidth())
+                    if (note.isNotEmpty()) {
+                        Text(note, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                    }
+                    TextButton(onClick = { importFromCivitai() }, enabled = !busy) { Text("Import from Civitai") }
                     OutlinedTextField(triggers, { triggers = it },
                         label = { Text("Trigger phrases (comma-separated)") },
                         modifier = Modifier.fillMaxWidth())
                     if (m.type == "lora") {
                         OutlinedTextField(weight, { weight = it }, label = { Text("Recommended weight") },
                             singleLine = true, modifier = Modifier.fillMaxWidth())
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedTextField(weightMin, { weightMin = it }, label = { Text("Works from") },
+                                singleLine = true, modifier = Modifier.weight(1f))
+                            OutlinedTextField(weightMax, { weightMax = it }, label = { Text("to") },
+                                singleLine = true, modifier = Modifier.weight(1f))
+                        }
+                        OutlinedTextField(negative, { negative = it }, label = { Text("Negative while it's on") },
+                            modifier = Modifier.fillMaxWidth())
                     } else {
+                        OutlinedTextField(positive, { positive = it }, label = { Text("Recommended positive") },
+                            modifier = Modifier.fillMaxWidth())
+                        OutlinedTextField(negative, { negative = it }, label = { Text("Recommended negative") },
+                            modifier = Modifier.fillMaxWidth())
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             OutlinedTextField(steps, { steps = it }, label = { Text("Steps") },
                                 singleLine = true, modifier = Modifier.weight(1f))
@@ -185,6 +257,8 @@ fun ModelEditDialog(
                         }
                         OutlinedTextField(scheduler, { scheduler = it },
                             label = { Text("Scheduler (euler_a, dpmpp_2m_k, …)") },
+                            singleLine = true, modifier = Modifier.fillMaxWidth())
+                        OutlinedTextField(clipSkip, { clipSkip = it }, label = { Text("Clip skip") },
                             singleLine = true, modifier = Modifier.fillMaxWidth())
                     }
                 }

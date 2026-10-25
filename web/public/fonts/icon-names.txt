@@ -130,6 +130,7 @@ key
 label
 label_off
 landscape
+launch
 library_add
 light
 light_mode
@@ -147,6 +148,7 @@ menu
 menu_book
 message
 mic
+model_training
 mood
 mop
 more
@@ -226,6 +228,7 @@ sync
 tab
 tabs
 tag
+terminal
 text_fields
 texture
 theaters

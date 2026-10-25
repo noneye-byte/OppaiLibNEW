@@ -23,6 +23,7 @@ import (
 	"github.com/youruser/oppailib/internal/settings"
 	"github.com/youruser/oppailib/internal/sources"
 	"github.com/youruser/oppailib/internal/storage"
+	"github.com/youruser/oppailib/internal/trainer"
 	"github.com/youruser/oppailib/internal/tts"
 	oweb "github.com/youruser/oppailib/internal/web"
 )
@@ -137,6 +138,12 @@ type Server struct {
 	// See civitai_installs.go.
 	civitaiMu       sync.Mutex
 	civitaiWatching bool
+
+	// The LoRA trainer, and the runs being sent to it and followed. See
+	// lora_training.go.
+	trainer   *trainer.Client
+	train     *trainRunner
+	trainOnce sync.Once
 
 	// Pictures being described by the vision model, one at a time. See
 	// vision_describe.go.
@@ -256,6 +263,7 @@ func NewServer(cfg *config.Config, database *db.DB, store *storage.Store, sc *sc
 		installedHashCache: newResolveCache[map[string]string](time.Minute),
 		describe:           newDescribeQueue(),
 		card:               &cardShare{},
+		trainer:            trainer.New(),
 		imageCache:         newImageProxyCache(),
 		gameDetails:        newResolveCache[gameDetail](gameDetailTTL),
 
@@ -318,6 +326,8 @@ func (s *Server) StartBackgroundJobs() {
 	go s.backfillAutoTags()
 	// A card lent to the generator when the server last stopped goes back first thing.
 	go s.resumeParkedCard()
+	// A run started before a restart is followed to its end.
+	go s.trainWatch()
 	// Looking back over conversations that have gone quiet. See libby_reflect.go.
 	go s.startReflecting()
 	go s.startStories()
@@ -561,6 +571,14 @@ func (s *Server) Handler() http.Handler {
 	// catalogue's cover, description and trigger words. See civitai_installs.go.
 	mux.HandleFunc("GET /api/imagegen/civitai/installed", s.requireAuth(s.handleCivitaiInstalled))
 	mux.HandleFunc("POST /api/imagegen/civitai/sync", s.requireAuth(s.handleCivitaiSync))
+	mux.HandleFunc("GET /api/imagegen/civitai/suggest", s.requireAuth(s.handleCivitaiSuggest))
+	// Training a LoRA on the trainer (lora_training.go).
+	mux.HandleFunc("GET /api/imagegen/train", s.requireAuth(s.handleTrainList))
+	mux.HandleFunc("POST /api/imagegen/train", s.requireAuth(s.handleTrainStart))
+	mux.HandleFunc("POST /api/imagegen/train/preview", s.requireAuth(s.handleTrainPreview))
+	mux.HandleFunc("POST /api/imagegen/train/{id}/cancel", s.requireAuth(s.handleTrainCancel))
+	mux.HandleFunc("DELETE /api/imagegen/train/{id}", s.requireAuth(s.handleTrainDelete))
+	mux.HandleFunc("GET /api/imagegen/train/{id}/sample", s.requireAuth(s.handleTrainSample))
 	mux.HandleFunc("POST /api/imagegen/civitai/cover", s.requireAuth(s.handleCivitaiCover))
 	mux.HandleFunc("POST /api/imagegen/civitai/update", s.requireAuth(s.handleCivitaiUpdate))
 	mux.HandleFunc("GET /api/imagegen/civitai/posts", s.requireAuth(s.handleCivitaiPosts))

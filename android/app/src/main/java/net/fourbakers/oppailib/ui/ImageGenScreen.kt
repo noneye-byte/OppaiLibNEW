@@ -285,8 +285,19 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit, to
     }
 
     fun applyModel(m: GenModel) {
+        // The last model's recommended prompts give way to this one's, as on the web
+        // (web/src/model-defaults.ts).
+        val prev = status?.models?.find { it.title == checkpoint }?.defaults
         checkpoint = m.title
-        val d = m.defaults ?: return
+        val next = m.defaults
+        if (prev?.positive != null || next?.positive != null) {
+            prompt = swapPromptDefault(prompt, prev?.positive, next?.positive, atStart = true)
+        }
+        if (prev?.negative != null || next?.negative != null) {
+            negative = swapPromptDefault(negative, prev?.negative, next?.negative, atStart = false)
+        }
+        val d = next ?: return
+        d.clipSkip?.takeIf { it > 0 }?.let { clipSkip = it }
         if (d.steps > 0) steps = d.steps
         if (d.cfgScale > 0) cfg = d.cfgScale
         if (d.width > 0 && d.height > 0) setSize(d.width, d.height)
@@ -361,6 +372,9 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit, to
             if (p.prompt.isNotBlank()) parts += p.prompt.trim()
             if (p.negativePrompt.isNotBlank()) negParts += p.negativePrompt.trim()
         }
+        // What the LoRAs that are on ask to keep out of the picture.
+        negParts += loraNegatives(negParts.joinToString(", "),
+            status?.loras.orEmpty().filter { it.name in loraWeights }.map { it.negative })
         var pos = parts.filter { it.isNotEmpty() }.joinToString(", ")
         var neg = negParts.filter { it.isNotEmpty() }.joinToString(", ")
         val tpl: GenTemplate? = status?.templates?.find { it.id == templateId }

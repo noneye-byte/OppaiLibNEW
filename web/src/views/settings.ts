@@ -2384,6 +2384,44 @@ export class OppaiSettings extends LitElement {
               </div>
             `}
       </section>
+
+      <section class="card">
+        <h3><span class="material-symbols-rounded">model_training</span>LoRA training</h3>
+        <p class="card-sub">The trainer Create's Train screen sends your pictures to. It runs on its own, so a run
+          carries on with the browser closed.</p>
+        ${!s
+          ? html`<div class="field-help">Loading…</div>`
+          : html`
+              <div class="field stack">
+                <div class="field-text">
+                  <div class="field-label">Trainer</div>
+                  <div class="field-help">
+                    The address of the OppaiLib trainer container (<code>ghcr.io/noneye-byte/oppailib-trainer</code>,
+                    on the box with the NVIDIA GPU), e.g. <code>http://192.168.1.10:7870</code>, and the
+                    <code>TRAINER_TOKEN</code> it was started with. Blank hides training. Mount the generator's models
+                    folder into the trainer at <code>/models</code> and checkpoints are read there; otherwise they are
+                    sent from Automatic1111's models folder here. InvokeAI fetches a finished LoRA from this address
+                    itself, so it must be reachable from InvokeAI too.
+                  </div>
+                </div>
+                <div class="field-control">
+                  <input type="text" autocomplete="off" placeholder="http://trainer:7870"
+                    .value=${s.trainerUrl ?? ""} ?disabled=${!this.canEdit}
+                    @change=${(e: Event) => this.edit({ trainerUrl: (e.target as HTMLInputElement).value })} />
+                </div>
+                <div class="field-control">
+                  <input type="password" autocomplete="new-password"
+                    placeholder=${s.trainerTokenSet ? "•••••••• (unchanged)" : "Trainer token"}
+                    ?disabled=${!this.canEdit}
+                    @change=${(e: Event) => this.edit({ trainerToken: (e.target as HTMLInputElement).value })} />
+                </div>
+                ${s.trainerTokenSet ? html`<div class="field-control">
+                  <button type="button" class="btn-inline" ?disabled=${!this.canEdit}
+                    @click=${() => this.edit({ trainerToken: "", trainerTokenSet: false })}>Clear saved token</button>
+                </div>` : nothing}
+              </div>
+            `}
+      </section>
     `;
   }
 

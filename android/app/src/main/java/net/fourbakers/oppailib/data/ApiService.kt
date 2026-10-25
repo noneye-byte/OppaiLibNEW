@@ -418,6 +418,10 @@ interface ApiService {
     @PATCH("api/imagegen/model")
     suspend fun patchModelMeta(@Body body: GenModelMetaPatch): GenModelMeta
 
+    /** What the model's Civitai page recommends; linked by hash on the way if need be. */
+    @GET("api/imagegen/civitai/suggest")
+    suspend fun civitaiSuggest(@Query("key") key: String): CivitaiSuggestResponse
+
     /** Removes a model or LoRA from InvokeAI, file included when InvokeAI manages it. */
     @DELETE("api/imagegen/model")
     suspend fun deleteModel(@Query("key") key: String)

@@ -111,6 +111,16 @@ type ModelDefaults struct {
 	VaePrecision string  `json:"vaePrecision,omitempty"`
 	// Weight is a LoRA's recommended strength (InvokeAI stores just this for LoRAs).
 	Weight float64 `json:"weight,omitempty"`
+
+	// The rest is kept by OppaiLib rather than the generator (db.ModelDefaults):
+	// neither backend has a field for them. Positive is a checkpoint's quality
+	// prefix; Negative is added to the negative prompt for either kind; the weight
+	// range is the span a LoRA's card says it works in.
+	Positive  string  `json:"positive,omitempty"`
+	Negative  string  `json:"negative,omitempty"`
+	ClipSkip  int     `json:"clipSkip,omitempty"`
+	WeightMin float64 `json:"weightMin,omitempty"`
+	WeightMax float64 `json:"weightMax,omitempty"`
 }
 
 // Vae is one standalone VAE the generator can decode with. Key is the selector value
@@ -147,6 +157,11 @@ type Lora struct {
 	Base           string   `json:"base,omitempty"`
 	Weight         float64  `json:"weight,omitempty"`
 	TriggerPhrases []string `json:"triggerPhrases,omitempty"`
+	// Negative is what the LoRA's recommended settings add to the negative prompt
+	// while it is on, and the range the weight it works at.
+	Negative  string  `json:"negative,omitempty"`
+	WeightMin float64 `json:"weightMin,omitempty"`
+	WeightMax float64 `json:"weightMax,omitempty"`
 }
 
 // ModelDetail is the full editable record for one model or LoRA, as InvokeAI's

@@ -76,6 +76,9 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 	if next.CivitaiAPIKey == "" && next.CivitaiKeySet {
 		next.CivitaiAPIKey = current.CivitaiAPIKey
 	}
+	if next.TrainerToken == "" && next.TrainerTokenSet {
+		next.TrainerToken = current.TrainerToken
+	}
 	if next.ItchCookie == "" && next.ItchCookieSet {
 		next.ItchCookie = current.ItchCookie
 	}

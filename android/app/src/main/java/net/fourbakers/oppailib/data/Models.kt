@@ -901,6 +901,41 @@ data class GenModelDefaults(
     val vae: String = "",
     /** A LoRA's recommended strength; zero on main models. */
     val weight: Double = 0.0,
+    // Kept by the server rather than the generator, which has no field for them. Null
+    // is "not sent": the encoder leaves defaults out, so an editor that never touched
+    // these does not clear them, while an explicit "" or 0 does.
+    /** A checkpoint's quality prefix, put at the front of the prompt when it's picked. */
+    val positive: String? = null,
+    /** Added to the negative prompt: on picking a checkpoint, or while a LoRA is on. */
+    val negative: String? = null,
+    val clipSkip: Int? = null,
+    /** The span a LoRA's page says it works in. */
+    val weightMin: Double? = null,
+    val weightMax: Double? = null,
+)
+
+/** What a model's Civitai page recommends, for the editor to import. */
+@Serializable
+data class CivitaiSuggestion(
+    val triggerWords: List<String> = emptyList(),
+    val positive: String = "",
+    val negative: String = "",
+    val steps: Int = 0,
+    val cfgScale: Double = 0.0,
+    val scheduler: String = "",
+    val clipSkip: Int = 0,
+    val width: Int = 0,
+    val height: Int = 0,
+    val weight: Double = 0.0,
+    val weightMin: Double = 0.0,
+    val weightMax: Double = 0.0,
+)
+
+@Serializable
+data class CivitaiSuggestResponse(
+    val suggestion: CivitaiSuggestion = CivitaiSuggestion(),
+    val modelName: String = "",
+    val keySet: Boolean = false,
 )
 
 /** The full editable record of a model or LoRA, mirrored from InvokeAI. */
@@ -1234,6 +1269,8 @@ data class GenLora(
     /** The strength the generator recommends (InvokeAI keeps one per LoRA); zero
         when it has no opinion, in which case picking the LoRA starts it at 1. */
     val weight: Double = 0.0,
+    /** Added to the negative prompt while the LoRA is on. */
+    val negative: String = "",
 )
 
 @Serializable

@@ -114,7 +114,7 @@ func (s *Server) civitaiApplyFinishedInstalls(ctx context.Context) int {
 				_ = s.db.DeleteCivitaiInstall(ctx, p.Source)
 				continue
 			}
-			if _, err := s.civitaiApplyToModel(ctx, set.ImageGenURL, job.ModelKey, p.ModelID, p.VersionID); err != nil {
+			if _, err := s.civitaiApplyToModel(ctx, set.ImageGenURL, job.ModelKey, p.ModelID, p.VersionID, true); err != nil {
 				s.log.Warn("civitai: apply metadata after install", "model", job.ModelKey, "err", err)
 			}
 			// An update: the version this one supersedes goes now that the new file
@@ -173,8 +173,11 @@ func civitaiLinkFrom(key, hash string, m *civitaiRawModel, versionID int64) db.C
 
 // civitaiApplyToModel fetches a model's catalogue page and writes its description,
 // trigger words and cover onto the InvokeAI record, recording the link. The cover
-// is best-effort: a description without a picture is still worth having.
-func (s *Server) civitaiApplyToModel(ctx context.Context, base, key string, modelID, versionID int64) (db.CivitaiLink, error) {
+// is best-effort: a description without a picture is still worth having. A fresh
+// install (fillDefaults) also takes the page's recommended settings for whatever it
+// has none of; a model that was already there keeps its own until someone imports
+// them in the editor, since its settings may be the ones somebody chose.
+func (s *Server) civitaiApplyToModel(ctx context.Context, base, key string, modelID, versionID int64, fillDefaults bool) (db.CivitaiLink, error) {
 	m, err := s.civitaiModel(ctx, modelID)
 	if err != nil {
 		return db.CivitaiLink{}, err
@@ -201,7 +204,7 @@ func (s *Server) civitaiApplyToModel(ctx context.Context, base, key string, mode
 	if runes := []rune(desc); len(runes) > 1500 {
 		desc = strings.TrimSpace(string(runes[:1500])) + "…"
 	}
-	words := link.TrainedWords
+	words := civitaiCleanTriggers(link.TrainedWords)
 	base1 := link.BaseModel
 	_, err = s.imagegen.UpdateModel(ctx, base, key, imagegen.ModelChanges{
 		Description:    &desc,
@@ -230,6 +233,11 @@ func (s *Server) civitaiApplyToModel(ctx context.Context, base, key string, mode
 	}
 	if err := s.db.PutCivitaiLink(ctx, link); err != nil {
 		return db.CivitaiLink{}, err
+	}
+	if fillDefaults {
+		if err := s.civitaiFillDefaults(ctx, base, key, civitaiSuggestionFor(m, link.VersionID)); err != nil {
+			s.log.Warn("civitai: recommended settings", "model", key, "err", err)
+		}
 	}
 	return link, nil
 }
@@ -276,7 +284,7 @@ func (s *Server) civitaiSyncModel(ctx context.Context, base, key string, version
 	if modelID <= 0 {
 		return db.CivitaiLink{}, errCivitaiNotFound
 	}
-	return s.civitaiApplyToModel(ctx, base, key, modelID, versionID)
+	return s.civitaiApplyToModel(ctx, base, key, modelID, versionID, false)
 }
 
 // civitaiInstalledOut is one studio model with its catalogue record, if any.

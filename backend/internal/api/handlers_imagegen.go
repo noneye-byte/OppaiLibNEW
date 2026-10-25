@@ -170,6 +170,7 @@ func (s *Server) handleImageGenStatus(w http.ResponseWriter, r *http.Request) {
 	if backend == imagegen.KindA1111 {
 		s.civitaiTriggerWords(ctx, loras)
 	}
+	s.overlayStatusDefaults(ctx, models, loras)
 	out := map[string]any{"enabled": true, "reachable": true, "backend": backend, "models": models, "loras": loras}
 	if loraErr != nil {
 		out["loraError"] = loraErr.Error()
@@ -688,6 +689,7 @@ func (s *Server) handleGetModelMeta(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
 	}
+	s.overlayDetailDefaults(ctx, detail)
 	writeJSON(w, http.StatusOK, detail)
 }
 
@@ -696,7 +698,9 @@ type modelMetaPatch struct {
 	Name           *string                 `json:"name"`
 	Description    *string                 `json:"description"`
 	TriggerPhrases *[]string               `json:"triggerPhrases"`
-	Defaults       *imagegen.ModelDefaults `json:"defaults"`
+	// Defaults is read twice: as settings, and for which of the fields kept on
+	// this side (model_defaults.go) it names.
+	Defaults json.RawMessage `json:"defaults"`
 }
 
 func (s *Server) handlePatchModelMeta(w http.ResponseWriter, r *http.Request) {
@@ -714,18 +718,34 @@ func (s *Server) handlePatchModelMeta(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusServiceUnavailable, "image generation is not configured")
 		return
 	}
+	defaults, named, err := decodeDefaultsPatch(req.Defaults)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid defaults")
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
-	detail, err := s.imagegen.UpdateModel(ctx, set.ImageGenURL, req.Key, imagegen.ModelChanges{
+	changes := imagegen.ModelChanges{
 		Name:           req.Name,
 		Description:    req.Description,
 		TriggerPhrases: req.TriggerPhrases,
-		Defaults:       req.Defaults,
-	})
+	}
+	if defaults != nil {
+		native := nativeDefaults(*defaults)
+		changes.Defaults = &native
+	}
+	detail, err := s.imagegen.UpdateModel(ctx, set.ImageGenURL, req.Key, changes)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
 	}
+	if defaults != nil {
+		if err := s.saveExtraDefaults(ctx, detail.Key, *defaults, named); err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	s.overlayDetailDefaults(ctx, detail)
 	writeJSON(w, http.StatusOK, detail)
 }
 

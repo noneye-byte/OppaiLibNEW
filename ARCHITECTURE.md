@@ -43,6 +43,8 @@ library bundled in the image; there is no second service to orchestrate.
                         │   ├── /api/scrape      URL → media + meta   │
                         │   ├── /api/libby/turn  Libby (streamed)     │
                         │   ├── /api/imagegen    the studio           │
+                        │   │    …/train         LoRA training ───────┼──▶ trainer (own
+                        │   │                                        │    container, GPU)
                         │   └── /api/ai          auto-tag jobs        │
                         │                                            │
                         │  ┌─────────┐  ┌──────────┐  ┌───────────┐  │
@@ -157,6 +159,8 @@ OppaiLib/
 ├── docker-compose.yml
 ├── .env.example
 ├── unraid/oppailib.xml        ← Community Applications template
+├── unraid/oppailib-trainer.xml ← the LoRA trainer's template
+├── trainer/                   ← the LoRA trainer: its own image, needs a GPU
 ├── backend/
 │   ├── go.mod
 │   ├── cmd/oppailib/main.go
@@ -186,6 +190,8 @@ The repo layout in §5 is the skeleton; the parts of the tree it does not mentio
 | Libby | `api/libby_turn*.go`, `api/libby_tools.go`, `api/libby_prompt.go`, `api/handlers_libby*.go`, `api/chat_*.go` | the character: a turn engine that streams her replies and acts through tool calls, memory, bond, activities, rooms, identity, stories, watching together |
 | Her camera | `api/libby_camera.go`, `api/camera_shot.go`, `api/libby_clips.go`, `imagegen/comfy.go` | candidates judged by a model that can see, adults-only checks, edits by img2img, pose and face references through ControlNet, clips through a ComfyUI workflow |
 | Image generation | `internal/imagegen/`, `api/handlers_imagegen.go` | A1111/InvokeAI/ComfyUI clients, the outfit studio, the gallery; A1111's models managed through its mounted folder and sidecar files (`imagegen/a1111_models.go`, `a1111_install.go`); prompt completion from Danbooru's vocabulary (`imagegen/tagcomplete.go`) |
+| Recommended settings | `api/civitai_suggest.go`, `api/model_defaults.go`, `web/src/model-defaults.ts` | a Civitai page's trigger words, prompts, sampler, steps, CFG, clip skip, size and LoRA weight, read off the card and the showcase and imported as a model's defaults; what the generator cannot keep is kept in `model_defaults` |
+| LoRA training | `trainer/`, `internal/trainer/`, `api/lora_training.go`, `api/lora_dataset.go`, `web/src/views/lora-train.ts` | a companion image (PyTorch, kohya's sd-scripts, a small HTTP API) trains on library pictures captioned from their tags; the server sends them, follows the run with no client open, and installs the LoRA into the generator |
 | Voice | `internal/tts/piper.go` | local Piper TTS |
 | Vision | `internal/vision/`, `api/vision_describe.go` | a local multimodal LLM describes pictures and clips in prose |
 | Civitai | `api/handlers_civitai.go`, `api/civitai_installs.go`, `api/civitai_manage.go`, `api/civitai_account.go`, `api/civitai_a1111.go` | the catalogue browser; the studio's models (InvokeAI's or A1111's) matched to it by hash, installed, updated to newer versions, given a chosen cover, or deleted; the account page's feeds |

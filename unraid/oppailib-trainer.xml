@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>OppaiLib-Trainer</Name>
+  <Repository>ghcr.io/noneye-byte/oppailib-trainer:latest</Repository>
+  <Registry>https://github.com/noneye-byte/OppaiLibNEW/pkgs/container/oppailib-trainer</Registry>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>bash</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/noneye-byte/OppaiLibNEW/issues</Support>
+  <Project>https://github.com/noneye-byte/OppaiLibNEW</Project>
+  <Overview>The LoRA trainer for OppaiLib. OppaiLib's Create → Train screen sends it pictures from your library, captioned from their tags, and it trains a LoRA for an SD 1.5 or SDXL (Pony, Illustrious, NoobAI) checkpoint with kohya's sd-scripts; OppaiLib then installs the result into Automatic1111 or InvokeAI by itself. Needs an NVIDIA GPU (the Nvidia Driver plugin) — 12 GB or more for SDXL, or Low VRAM mode below that. Pictures are deleted from here the moment their run ends.</Overview>
+  <Category>MediaApp:Other</Category>
+  <WebUI/>
+  <TemplateURL>https://raw.githubusercontent.com/noneye-byte/OppaiLibNEW/main/unraid/oppailib-trainer.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/noneye-byte/OppaiLibNEW/main/web/public/icon.png</Icon>
+  <ExtraParams>--runtime=nvidia --shm-size=8g</ExtraParams>
+  <PostArgs/>
+  <CPUset/>
+  <DateInstalled/>
+  <DonateText/>
+  <DonateLink/>
+  <Description>LoRA trainer for OppaiLib. Set a token, then put this container's address and the token under OppaiLib → Settings → Image generation → LoRA training.</Description>
+
+  <Config Name="Port" Target="7870" Default="7870" Mode="tcp" Description="The trainer's API. Only OppaiLib (and InvokeAI, which fetches finished LoRAs from it) needs to reach it." Type="Port" Display="always" Required="true" Mask="false">7870</Config>
+  <Config Name="Data" Target="/data" Default="/mnt/user/appdata/oppailib-trainer" Mode="rw" Description="Runs in progress, finished LoRAs waiting to be installed, and a cache of the few checkpoints OppaiLib has sent. A checkpoint is several GB, so put this on a pool with room." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/oppailib-trainer</Config>
+  <Config Name="Generator's models folder (optional)" Target="/models" Default="" Mode="ro" Description="Optional, read-only. The same models folder Automatic1111 or InvokeAI loads checkpoints from — the one OppaiLib maps at /a1111-models. With it here, checkpoints are read in place; without it, OppaiLib sends the checkpoint over the network the first time it is trained against." Type="Path" Display="always" Required="false" Mask="false"></Config>
+  <Config Name="Token" Target="TRAINER_TOKEN" Default="" Mode="" Description="Any long random string. OppaiLib must be given the same one. Without it, anyone who can reach the port can use the GPU." Type="Variable" Display="always" Required="true" Mask="true"></Config>
+  <Config Name="GPU" Target="NVIDIA_VISIBLE_DEVICES" Default="all" Mode="" Description="Which NVIDIA GPU to train on: all, or a GPU UUID from the Nvidia Driver plugin." Type="Variable" Display="always" Required="true" Mask="false">all</Config>
+  <Config Name="Driver capabilities" Target="NVIDIA_DRIVER_CAPABILITIES" Default="compute,utility" Mode="" Description="Leave as is." Type="Variable" Display="advanced" Required="true" Mask="false">compute,utility</Config>
+  <Config Name="Checkpoints kept" Target="TRAINER_KEEP_BASES" Default="3" Mode="" Description="How many checkpoints sent by OppaiLib are kept in /data for next time." Type="Variable" Display="advanced" Required="false" Mask="false">3</Config>
+</Container>

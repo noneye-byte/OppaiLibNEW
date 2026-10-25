@@ -370,6 +370,47 @@ CREATE TABLE IF NOT EXISTS civitai_models (
     cover_url         TEXT NOT NULL DEFAULT ''   -- the preview chosen as cover art, if one was
 );
 
+-- The recommended settings a model has that the generator has nowhere to keep: a
+-- checkpoint's positive and negative prompt and clip skip, a LoRA's negative and the
+-- weight range it works in. InvokeAI's default_settings is a fixed schema and A1111's
+-- sidecar needs the models folder mounted, so these live here whatever the backend,
+-- keyed like civitai_models by the generator's record. Steps, CFG, size and the rest
+-- stay on the generator, where its own UI reads them too.
+CREATE TABLE IF NOT EXISTS model_defaults (
+    model_key  TEXT PRIMARY KEY,
+    positive   TEXT NOT NULL DEFAULT '',
+    negative   TEXT NOT NULL DEFAULT '',
+    clip_skip  INTEGER NOT NULL DEFAULT 0,
+    weight_min REAL NOT NULL DEFAULT 0,
+    weight_max REAL NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL
+);
+
+-- A LoRA being trained on the trainer (trainer/ in the repo, its own container), from
+-- the first picture sent to the file installed in the generator. The trainer keeps
+-- its own record of the run while it lasts; this is what outlives it, and what the
+-- watcher in api/lora_training.go walks each step of the way so a run finishes and
+-- installs with no browser open. The name and trigger word are the LoRA's file name
+-- and prompt word, which are plaintext in the generator's models folder anyway;
+-- settings is the request, which names a collection or a tag, never a title.
+CREATE TABLE IF NOT EXISTS lora_trainings (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    name           TEXT NOT NULL,
+    trigger_word   TEXT NOT NULL DEFAULT '',
+    base_model     TEXT NOT NULL,
+    images         INTEGER NOT NULL DEFAULT 0,
+    settings       TEXT NOT NULL DEFAULT '{}',
+    status         TEXT NOT NULL,               -- preparing | queued | training | installing | done | failed | cancelled
+    error          TEXT NOT NULL DEFAULT '',
+    trainer_job    TEXT NOT NULL DEFAULT '',
+    install_source TEXT NOT NULL DEFAULT '',
+    model_key      TEXT NOT NULL DEFAULT '',
+    freed_gpu      INTEGER NOT NULL DEFAULT 0,  -- the generator was asked to let go of its checkpoint for this run
+    created_at     INTEGER NOT NULL,
+    updated_at     INTEGER NOT NULL,
+    finished_at    INTEGER NOT NULL DEFAULT 0
+);
+
 -- A model InvokeAI is downloading on our behalf, with what it should be told about
 -- itself once the file is in. InvokeAI's install job is the authority on progress;
 -- this row is only the promise to apply the catalogue's cover, description and

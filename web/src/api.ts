@@ -499,6 +499,11 @@ export interface Settings {
   /** Automatic1111's models folder as the server sees it; blank manages nothing. */
   imageGenModelsDir: string;
   imageGenEnabled: boolean;
+  /** The OppaiLib trainer LoRAs are trained on; blank hides training. The token is
+   *  write-only like the other secrets. */
+  trainerUrl: string;
+  trainerToken: string;
+  trainerTokenSet: boolean;
   civitaiApiUrl: string;
   civitaiApiKey: string;
   civitaiKeySet: boolean;
@@ -1427,6 +1432,32 @@ export interface GenModelDefaults {
   height?: number;
   vae?: string;
   vaePrecision?: "fp32" | "fp16";
+  /** Kept by OppaiLib, since neither generator has a field for them: a checkpoint's
+   *  quality prefix and clip skip, either kind's negative, a LoRA's weight range. */
+  positive?: string;
+  negative?: string;
+  clipSkip?: number;
+  weight?: number;
+  weightMin?: number;
+  weightMax?: number;
+}
+
+/** What a model's Civitai page recommends — read off its card and its showcase
+ *  pictures — for the editor to import. `sources` says, per field, which. */
+export interface CivitaiSuggestion {
+  triggerWords: string[];
+  positive?: string;
+  negative?: string;
+  steps?: number;
+  cfgScale?: number;
+  scheduler?: string;
+  clipSkip?: number;
+  width?: number;
+  height?: number;
+  weight?: number;
+  weightMin?: number;
+  weightMax?: number;
+  sources: Record<string, "description" | "examples">;
 }
 
 export interface GenLora {
@@ -1438,6 +1469,10 @@ export interface GenLora {
   base?: string;
   weight?: number;
   triggerPhrases?: string[];
+  /** Added to the negative prompt while the LoRA is on. */
+  negative?: string;
+  weightMin?: number;
+  weightMax?: number;
 }
 
 /** A standalone VAE. `key` is the selector value the generate call wants. */
@@ -1599,6 +1634,85 @@ export interface GenerateParams {
   };
 }
 
+/** What the trainer says about itself. */
+export interface TrainerHealth {
+  ok: boolean;
+  version: string;
+  sdScripts?: string;
+  busy: boolean;
+  queued: number;
+  modelsMounted: boolean;
+  gpu: string;
+  vramMB?: number;
+  vramUsedMB?: number;
+}
+
+/** Which pictures a LoRA is trained on: one of these. */
+export interface TrainSource {
+  collectionId?: number;
+  tag?: string;
+  mediaIds?: number[];
+}
+
+/** What starting a training run asks for. Zero numbers take the trainer's defaults. */
+export interface TrainRequest {
+  name: string;
+  trigger: string;
+  base: string;
+  source: TrainSource;
+  captions?: "tags" | "trigger";
+  leaveOut?: string[];
+  epochs?: number;
+  repeats?: number;
+  rank?: number;
+  resolution?: number;
+  learningRate?: number;
+  optimizer?: string;
+  clipSkip?: number;
+  lowVram?: boolean;
+  flip?: boolean;
+  freeGpu?: boolean;
+  samples?: boolean;
+}
+
+export type TrainingStatus = "preparing" | "queued" | "training" | "installing" | "done" | "failed" | "cancelled";
+
+/** One run, with its progress while the trainer has it. */
+export interface Training {
+  id: number;
+  name: string;
+  trigger: string;
+  baseModel: string;
+  images: number;
+  status: TrainingStatus;
+  error?: string;
+  modelKey?: string;
+  createdAt: number;
+  finishedAt?: number;
+  phase?: string;
+  step?: number;
+  total?: number;
+  epoch?: number;
+  epochs?: number;
+  loss?: number;
+  eta?: string;
+  elapsed?: string;
+  family?: string;
+  samples?: string[];
+  log?: string[];
+  request?: TrainRequest;
+}
+
+/** What a source would train on, before anything is sent. */
+export interface TrainPreview {
+  count: number;
+  mediaIds: number[];
+  commonTags: { name: string; count: number }[];
+  exampleCaption: string;
+  suggestedRepeats: number;
+  limit: number;
+}
+
 /** The full editable record of a model or LoRA, mirrored from InvokeAI. */
 export interface GenModelMeta {
   key: string;
@@ -1607,7 +1721,7 @@ export interface GenModelMeta {
   type: string;
   description?: string;
   triggerPhrases: string[];
-  defaults?: GenModelDefaults & { weight?: number };
+  defaults?: GenModelDefaults;
 }
 
 /** One InvokeAI gallery board. Board id "none" is the uncategorized pile. */
@@ -3112,6 +3226,32 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ key, versionId: versionId ?? 0 }),
     }, 70_000),
+  // ── LoRA training ──────────────────────────────────────────────────────────
+  // Runs on the trainer, followed by the server; see backend/internal/api/lora_training.go.
+
+  trainList: () =>
+    request<{ configured: boolean; trainer?: TrainerHealth; trainerError?: string; trainings: Training[] }>(
+      "/api/imagegen/train", {}, 20_000),
+  trainPreview: (body: { source: TrainSource; trigger: string; captions?: string; leaveOut?: string[] }) =>
+    request<TrainPreview>("/api/imagegen/train/preview", { method: "POST", body: JSON.stringify(body) }, 40_000),
+  trainStart: (body: TrainRequest) =>
+    request<Training>("/api/imagegen/train", { method: "POST", body: JSON.stringify(body) }, 40_000),
+  trainCancel: (id: number) =>
+    request<Training>(`/api/imagegen/train/${id}/cancel`, { method: "POST" }, 30_000),
+  trainDelete: (id: number) =>
+    request<void>(`/api/imagegen/train/${id}`, { method: "DELETE" }, 30_000),
+  trainSampleURL: (id: number, name: string) =>
+    `/api/imagegen/train/${id}/sample?name=${encodeURIComponent(name)}`,
+
+  /** What the model's Civitai page recommends: by its record once linked, or by
+   *  version. Nothing is saved; the editor imports what it is given. */
+  civitaiSuggest: (q: { key?: string; versionId?: number }) => {
+    const params = new URLSearchParams();
+    if (q.key) params.set("key", q.key);
+    if (q.versionId) params.set("versionId", String(q.versionId));
+    return request<{ suggestion: CivitaiSuggestion; modelName: string; keySet: boolean }>(
+      `/api/imagegen/civitai/suggest?${params}`, {}, 40_000);
+  },
   /** Make one of the catalogue's pictures the model's cover; the choice survives
    *  a later fetch of the same version. */
   civitaiCover: (key: string, url: string) =>

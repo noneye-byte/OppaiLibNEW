@@ -59,6 +59,10 @@ type invokeModelRecord struct {
 	Description     string                 `json:"description"`
 	TriggerPhrases  []string               `json:"trigger_phrases"`
 	DefaultSettings *invokeDefaultSettings `json:"default_settings"`
+	// Path is the file under InvokeAI's models folder (absolute for a model
+	// registered in place); FileSize is its size, on builds that report it.
+	Path     string `json:"path"`
+	FileSize int64  `json:"file_size"`
 }
 
 // invokeDefaultSettings is InvokeAI's per-model recommended settings blob. Every

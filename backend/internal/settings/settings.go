@@ -62,6 +62,12 @@ type Settings struct {
 	// mount when one is there and looks right, and otherwise lists and links models
 	// but changes none. InvokeAI ignores it. See imagegen/a1111_models.go.
 	ImageGenModelsDir string `json:"imageGenModelsDir"`
+	// TrainerURL is the OppaiLib trainer (trainer/ in the repo, its own container on
+	// a box with a GPU) that LoRAs are trained on; empty hides training. The token
+	// is the trainer's TRAINER_TOKEN, write-only like the other secrets.
+	TrainerURL      string `json:"trainerUrl"`
+	TrainerToken    string `json:"trainerToken"`
+	TrainerTokenSet bool   `json:"trainerTokenSet"`
 
 	// External catalogue APIs. Secret keys are write-only; the Set flags let the
 	// Settings screen distinguish "configured" from "blank" after redaction.
@@ -264,6 +270,8 @@ const (
 	keyItchNSFW            = "itch.nsfw"
 	keyImageGenURL         = "imagegen.url"
 	keyImageGenModelsDir   = "imagegen.models_dir"
+	keyTrainerURL          = "trainer.url"
+	keyTrainerToken        = "trainer.token"
 	keyCivitaiAPIURL       = "civitai.api_url"
 	keyCivitaiAPIKey       = "civitai.api_key"
 	keyRule34UserID        = "rule34.user_id"
@@ -431,6 +439,12 @@ func Merge(base Settings, stored map[string]string) Settings {
 	if v, ok := stored[keyImageGenModelsDir]; ok {
 		s.ImageGenModelsDir = v
 	}
+	if v, ok := stored[keyTrainerURL]; ok {
+		s.TrainerURL = v
+	}
+	if v, ok := stored[keyTrainerToken]; ok {
+		s.TrainerToken = v
+	}
 	if v, ok := stored[keyCivitaiAPIURL]; ok {
 		s.CivitaiAPIURL = v
 	}
@@ -588,6 +602,8 @@ func (s Settings) Map() map[string]string {
 		keyItchNSFW:            strconv.FormatBool(s.ItchNSFW),
 		keyImageGenURL:         s.ImageGenURL,
 		keyImageGenModelsDir:   s.ImageGenModelsDir,
+		keyTrainerURL:          s.TrainerURL,
+		keyTrainerToken:        s.TrainerToken,
 		keyCivitaiAPIURL:       s.CivitaiAPIURL,
 		keyCivitaiAPIKey:       s.CivitaiAPIKey,
 		keyRule34UserID:        s.Rule34UserID,
@@ -650,6 +666,8 @@ func (s Settings) Redacted() Settings {
 	s.ItchCookie = ""
 	s.CivitaiKeySet = s.CivitaiAPIKey != ""
 	s.CivitaiAPIKey = ""
+	s.TrainerTokenSet = s.TrainerToken != ""
+	s.TrainerToken = ""
 	s.Rule34APIKeySet = s.Rule34APIKey != ""
 	s.Rule34APIKey = ""
 	s.ChatAPIKeySet = s.ChatAPIKey != ""
@@ -696,6 +714,8 @@ func (s *Settings) Clamp() {
 		s.CivitaiAPIURL = "https://civitai.red/api/v1"
 	}
 	s.CivitaiAPIKey = strings.TrimSpace(s.CivitaiAPIKey)
+	s.TrainerURL = strings.TrimRight(strings.TrimSpace(s.TrainerURL), "/")
+	s.TrainerToken = strings.TrimSpace(s.TrainerToken)
 	s.F95Cookie = strings.TrimSpace(s.F95Cookie)
 	s.ItchCookie = strings.TrimSpace(s.ItchCookie)
 	s.Rule34UserID = strings.TrimSpace(s.Rule34UserID)

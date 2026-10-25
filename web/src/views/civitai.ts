@@ -189,7 +189,9 @@ export class OppaiCivitai extends LitElement {
       :host {
         position: fixed;
         inset: 0;
-        z-index: 65;
+        /* Above the studio's drawer, which on a phone is a sheet at 91 and is where
+           "Find more on Civitai" is clicked from. */
+        z-index: 95;
         display: block;
         background: var(--oppai-bg, #141218);
         color: var(--oppai-text);

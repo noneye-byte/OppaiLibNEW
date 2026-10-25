@@ -441,6 +441,34 @@ not used, and the status says which. InvokeAI ignores it.
 | POST | `/api/imagegen/check` | **admin only.** The Settings → Image generation Test: tries each link an install depends on and returns `{checks:[{id, label, ok, skipped?, detail}]}` — `generator`, and on A1111 `rescan` (POSTs `/sdapi/v1/refresh-loras`), `folder` (writes and removes a probe file), `match` (whether the models A1111 lists are at the same paths in the mounted folder, i.e. it is the folder A1111 reads); then `civitai`, `key` (`/me`) and `download`, which starts a real download with the key and reads only the headers |
 | GET | `/api/imagegen/tags?q=&limit=` | prompt completion for the tag being typed → `{items:[{tag, category, count, alias?}], suggestions, correction}`. The vocabulary is Danbooru's — every tag on at least 100 posts, with post counts and aliases — plus this library's own tags (`category` 100). Ranked: the tag itself, tags starting with `q`, an alias that does (`alias` says which), a tag a later word of which does, then near misses for a typo. `suggestions` is `items` as plain names and `correction` a "did you mean", the shape older apps read. `limit` defaults to 12, at most 50 |
 
+## LoRA training
+
+Training runs on the trainer — `trainer/`, its own image
+(`ghcr.io/noneye-byte/oppailib-trainer`) on the box with the GPU — set by
+`trainerUrl` and the write-only `trainerToken` in settings. The server picks and
+captions the pictures, sends them, and follows each run to the end with no client
+connected: when it starts it can ask the generator to unload its checkpoint
+(`freeGpu`); when it finishes the generator installs the file straight from the
+trainer, the LoRA is given its trigger word, a description and the sample as cover,
+and the generator gets its checkpoint back. A run is `preparing` (sending), `queued`,
+`training`, `installing`, then `done`, `failed` or `cancelled`.
+
+| Method | Path | Notes |
+|--------|------|-------|
+| GET | `/api/imagegen/train` | → `{configured, trainer?, trainerError?, trainings}`. `trainer` is the trainer's `/health` (`gpu`, `vramMB`, `busy`, `queued`, `modelsMounted`); each training has `id, name, trigger, baseModel, images, status, error?, modelKey?, createdAt, finishedAt?, request` and, while the trainer has it, `phase, step, total, epoch, epochs, loss, eta, elapsed, family, samples, log` |
+| POST | `/api/imagegen/train/preview` | `{source, trigger, captions?, leaveOut?}` → `{count, mediaIds, commonTags:[{name,count}], exampleCaption, suggestedRepeats, limit}`, what a run would train on. Nothing is sent |
+| POST | `/api/imagegen/train` | `{name, trigger, base, source:{collectionId\|tag\|mediaIds}, captions?, leaveOut?, epochs?, repeats?, rank?, resolution?, learningRate?, optimizer?, clipSkip?, lowVram?, flip?, freeGpu?, samples?}` → the training, `preparing`. `base` is a checkpoint as the studio names it; stills only (no GIFs or video), at most 400. Captions are the trigger word then the picture's tags (`captions:"trigger"` for the word alone), less `leaveOut`. 409 without a trainer |
+| POST | `/api/imagegen/train/{id}/cancel` | stops a run → the training. One on the trainer reads `cancelled` once the trainer has stopped it |
+| DELETE | `/api/imagegen/train/{id}` | forgets a finished run and the trainer's copy → 204; 409 while it is live |
+| GET | `/api/imagegen/train/{id}/sample?name=` | one of the run's sample pictures, from the trainer |
+
+The trainer's own API (`trainer/server.py`) is `GET /health`, `GET\|PUT /bases?key=&size=`
+(is a checkpoint here / upload one), `POST /jobs` (settings), `PUT /jobs/{id}/files/{name}`
+(each picture and caption), `POST /jobs/{id}/start`, `GET /jobs`, `GET /jobs/{id}`,
+`POST /jobs/{id}/cancel`, `GET /jobs/{id}/output?dl=` (the file, with the job's own
+download token), `GET /jobs/{id}/samples/{name}` and `DELETE /jobs/{id}`, all behind
+`Authorization: Bearer <TRAINER_TOKEN>`.
+
 ## Diagnostics
 
 | Method | Path | Notes |
@@ -670,7 +698,20 @@ falling back to A1111's short AutoV2 hash and a LoRA's AutoV3 until then.
 | POST | `/api/imagegen/civitai/sync` | `{key, versionId?}` → applies the catalogue's cover, description and trigger words to one installed model now, by hash or by the version given → the record, or `{}` when the file is not on Civitai. A cover chosen for the same version is kept |
 | POST | `/api/imagegen/civitai/cover` | `{key, url}` → 204. Makes one of the catalogue's pictures (a Civitai host only) the model's cover and remembers the choice; on an A1111 without its folder only the choice is kept, and the picker shows it |
 | POST | `/api/imagegen/civitai/update` | `{key, versionId?}` → InvokeAI's install job for that version (the newest when unsaid) of the model the record is linked to. Once the download completes and the new record is dressed, the old record is deleted, file included. 400 when the model is not linked or is already at that version |
-| DELETE | `/api/imagegen/model?key=` | removes a model or LoRA from the generator (its file too, when InvokeAI manages it; the file and its sidecars on A1111) and forgets its catalogue record → 204. A LoRA's display name is accepted for `key` |
+| DELETE | `/api/imagegen/model?key=` | removes a model or LoRA from the generator (its file too, when InvokeAI manages it; the file and its sidecars on A1111) and forgets its catalogue record and recommended settings → 204. A LoRA's display name is accepted for `key` |
+| GET | `/api/imagegen/civitai/suggest?key=\|versionId=` | what a model's page recommends → `{suggestion:{triggerWords, positive?, negative?, steps?, cfgScale?, scheduler?, clipSkip?, width?, height?, weight?, weightMin?, weightMax?, sources}, modelName, keySet}`. Read off the version's card and then the model's ("Steps: 15-30", "CFG scale: 5-7", a "Negative prompt" heading, "strength 0.6–0.8") and, with an API key, filled from the showcase pictures' settings (most common value; a LoRA's weight from the resources they list). `sources` says per field whether it came from the `description` or the `examples`. A `key` that was never linked is looked up by hash first. Nothing is saved; a fresh install applies it to every setting the model has none of |
+
+A model's recommended settings (`GET`/`PATCH /api/imagegen/model`, `defaults`) are
+split by where they can live. Steps, CFG, CFG rescale, scheduler, size, VAE and a
+LoRA's weight are the generator's (InvokeAI's `default_settings`, A1111's sidecar).
+`positive`, `negative`, `clipSkip`, `weightMin` and `weightMax` have no field on
+either and are kept by the server (`model_defaults`), laid over the record wherever
+it is read, including `/api/imagegen/status`'s models and LoRAs (a LoRA carries
+`negative`, `weightMin`, `weightMax`). A `PATCH` changes only the ones it names, so
+a client that does not know them never clears them. The studio puts a checkpoint's
+`positive` at the front of the prompt and its `negative` at the end of the negative
+when it is picked (and takes the previous model's out while still unedited), and
+adds a LoRA's `negative` while the LoRA is on.
 
 Model descriptions are HTML written by whoever uploaded the model. The server keeps
 paragraphs, headings, lists, emphasis, code and http(s) links and drops everything
