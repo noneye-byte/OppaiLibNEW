@@ -402,15 +402,18 @@ func (s *Server) deleteMediaByID(r *http.Request, id int64) error {
 	if err != nil {
 		return err
 	}
+	// The store is content-addressed, so a training set holding the same picture
+	// holds the same file — and so may another row's poster. Only a file nothing
+	// still holds is unlinked.
 	if blob != "" {
-		if err := s.store.Delete(blob); err != nil {
-			s.log.Warn("delete blob", "media", id, "path", blob, "err", err)
+		if held, err := s.db.BlobInUse(r.Context(), blob); err == nil && !held {
+			if err := s.store.Delete(blob); err != nil {
+				s.log.Warn("delete blob", "media", id, "path", blob, "err", err)
+			}
 		}
 	}
-	// Thumbs are content-addressed and may be shared; only unlink when no other
-	// row references this poster.
 	if thumb != "" && thumb != blob {
-		if n, err := s.db.CountByThumbPath(r.Context(), thumb); err == nil && n == 0 {
+		if held, err := s.db.BlobInUse(r.Context(), thumb); err == nil && !held {
 			_ = s.store.Delete(thumb)
 		}
 	}

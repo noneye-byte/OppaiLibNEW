@@ -375,15 +375,6 @@ func (d *DB) DeleteMedia(ctx context.Context, id int64) (blobPath, thumbPath str
 	return blobPath, thumb.String, nil
 }
 
-// CountByThumbPath reports how many rows still reference a thumbnail blob. Video
-// posters are content-addressed and can dedup-collide, so the caller checks this
-// before unlinking a thumb (blob_path is safe — sha256 is UNIQUE per row).
-func (d *DB) CountByThumbPath(ctx context.Context, rel string) (int, error) {
-	var n int
-	err := d.sql.QueryRowContext(ctx, `SELECT COUNT(*) FROM media WHERE thumb_path = ?`, rel).Scan(&n)
-	return n, err
-}
-
 // ListMedia returns rows filtered by kind (empty = all), newest first.
 //
 // The unfiltered, unsorted case, kept for the callers that want exactly that (the

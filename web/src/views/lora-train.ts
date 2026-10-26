@@ -12,6 +12,7 @@ import {
   type TrainPreview,
   type TrainPreviewItem,
   type TrainRequest,
+  type TrainSet,
   type TrainSource,
   type TrainTask,
 } from "../api.js";
@@ -25,7 +26,7 @@ import "./lora-gather.js";
 import "./lora-comparison.js";
 
 /**
- * Training a LoRA on the library's own pictures.
+ * Training a LoRA.
  *
  * The training runs on the trainer — its own container on the box with the GPU —
  * and the server follows it from start to installed (backend/internal/api/
@@ -34,8 +35,9 @@ import "./lora-comparison.js";
  *
  * Setting one up is four steps, in the order a first-timer needs to think about
  * them: what kind of LoRA it is (lora-presets.ts, which makes the technical choices
- * for each kind), which pictures — from the library, from this computer, or from an
- * X account (lora-gather.ts) — and which of those to drop, how they are captioned —
+ * for each kind), which pictures — a training set, kept apart from the library and
+ * filled from this computer, an X account (lora-gather.ts) or a copy out of the
+ * library — and which of those to drop, how they are captioned —
  * with the tagger offered for the ones that have no tags, and every picture's tags
  * editable — and finally the checkpoint and how long to train. Every step says what
  * it is for and warns about what will make a poor LoRA before the GPU is spent on it.
@@ -47,7 +49,7 @@ import "./lora-comparison.js";
  */
 
 type Tab = "new" | "runs" | "compare";
-type SourceKind = "collection" | "tag" | "upload" | "x";
+type AddMode = "upload" | "x" | "library";
 type Step = 1 | 2 | 3 | 4;
 
 const STEPS: { n: Step; title: string; icon: string }[] = [
@@ -57,12 +59,15 @@ const STEPS: { n: Step; title: string; icon: string }[] = [
   { n: 4, title: "Train", icon: "model_training" },
 ];
 
-const SOURCES: { id: SourceKind; title: string; icon: string }[] = [
-  { id: "collection", title: "A collection", icon: "collections" },
-  { id: "tag", title: "A library tag", icon: "label" },
+const ADD_MODES: { id: AddMode; title: string; icon: string }[] = [
   { id: "upload", title: "Upload", icon: "upload_file" },
   { id: "x", title: "An X account", icon: "public" },
+  { id: "library", title: "From the library", icon: "photo_library" },
 ];
+
+// The collections 0.61 made for a LoRA's imports, before sets existed: these are
+// offered to be moved out of the library rather than copied.
+const OLD_IMPORT = /^LoRA · /;
 
 @customElement("oppai-lora-train")
 export class OppaiLoraTrain extends LitElement {
@@ -90,13 +95,20 @@ export class OppaiLoraTrain extends LitElement {
   @state() private triggerTouched = false;
   @state() private base = "";
 
-  @state() private sourceKind: SourceKind = "collection";
-  @state() private collections: Collection[] = [];
-  @state() private collectionId = 0;
-  @state() private tag = "";
+  /** The training sets there are, and the one this LoRA trains on (0: none yet —
+      the first picture added makes one named after the LoRA). */
+  @state() private sets: TrainSet[] = [];
+  @state() private setId = 0;
+  @state() private addMode: AddMode = "upload";
   @state() private exclude: number[] = [];
-  /** The collection this setup has imported into, so a second batch joins the first. */
-  @state() private gatheredInto = 0;
+  /** Copying out of the library: a collection or a tag, and whether to move. */
+  @state() private collections: Collection[] = [];
+  @state() private libKind: "collection" | "tag" = "collection";
+  @state() private libCollection = 0;
+  @state() private libTag = "";
+  @state() private libMove = false;
+  @state() private copying = false;
+  @state() private copyNote = "";
 
   @state() private captions: "tags" | "trigger" = "tags";
   @state() private leaveOut: string[] = [];
@@ -238,6 +250,21 @@ export class OppaiLoraTrain extends LitElement {
 
       .advice { display: flex; flex-direction: column; gap: 6px; margin: 12px 0 0; }
       .advice .banner { margin: 0; }
+      .sets { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+      .settile {
+        display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 14px; text-align: left;
+        border: 1px solid var(--oppai-border-strong); background: transparent; color: var(--oppai-text); font: inherit; cursor: pointer;
+      }
+      .settile:hover { background: var(--oppai-surface-2); }
+      .settile.on { border-color: var(--oppai-primary); background: color-mix(in srgb, var(--oppai-primary) 10%, transparent); }
+      .settile .cover {
+        flex: none; width: 48px; height: 48px; border-radius: 10px; overflow: hidden; display: grid; place-items: center;
+        background: var(--oppai-surface-2); color: var(--oppai-text-dim);
+      }
+      .settile .cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+      .settile .t { min-width: 0; font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .settile .t small { display: block; font-weight: 400; font-size: 12px; color: var(--oppai-text-dim); overflow: hidden; text-overflow: ellipsis; }
+      .seg.small button { font-size: 12.5px; padding: 6px 12px; }
       .sethead { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 16px 0 10px; }
       .card > .sethead:first-child { margin-top: 0; }
       .sethead h4 { margin: 0; font-size: 14px; margin-right: auto; }
@@ -317,6 +344,7 @@ export class OppaiLoraTrain extends LitElement {
   connectedCallback() {
     super.connectedCallback();
     void this.refresh();
+    void this.loadSets();
     void this.loadCollections();
   }
 
@@ -338,15 +366,45 @@ export class OppaiLoraTrain extends LitElement {
     this.previewAbort?.abort();
   }
 
-  private async loadCollections(select = 0) {
+  private async loadCollections() {
     try {
       const r = await api.listCollections();
       this.collections = r.items;
-      if (select) this.collectionId = select;
-      else if (!this.collectionId && r.items.length) this.collectionId = r.items[0].id;
+      if (!r.items.some((c) => c.id === this.libCollection)) this.pickLibCollection(r.items[0]?.id ?? 0);
     } catch {
       /* the collection list stays as it was */
     }
+  }
+
+  private pickLibCollection(id: number) {
+    this.libCollection = id;
+    // A LoRA's old import collection is what wants moving out; anything else is the
+    // person's own collection, copied and left where it is.
+    this.libMove = OLD_IMPORT.test(this.collections.find((c) => c.id === id)?.name ?? "");
+  }
+
+  private async loadSets() {
+    try {
+      this.sets = (await api.trainSets()).sets;
+      if (this.setId && !this.sets.some((s) => s.id === this.setId)) this.useSet(0);
+    } catch {
+      /* the set list stays as it was */
+    }
+  }
+
+  /** The set this LoRA's name points at, once named: a second try at a LoRA trains on
+      the pictures the first gathered. */
+  private matchSetToName() {
+    if (this.setId) return;
+    const name = this.name.trim().toLowerCase();
+    const same = name && this.sets.find((s) => s.name.toLowerCase() === name);
+    if (same) this.useSet(same.id);
+  }
+
+  private useSet(id: number) {
+    if (id === this.setId) return;
+    this.setId = id;
+    this.sourceChanged();
   }
 
   /** Reads the runs, again in a few seconds while any is going. */
@@ -381,9 +439,11 @@ export class OppaiLoraTrain extends LitElement {
   // ── the set ───────────────────────────────────────────────────────────────
 
   private source(): TrainSource | null {
-    if (this.sourceKind === "tag") return this.tag.trim() ? { tag: this.tag.trim(), exclude: this.exclude } : null;
-    // Uploads and X imports land in a collection, which is what is trained on.
-    return this.collectionId > 0 ? { collectionId: this.collectionId, exclude: this.exclude } : null;
+    return this.setId > 0 ? { setId: this.setId, exclude: this.exclude } : null;
+  }
+
+  private thumb(id: number): string {
+    return api.trainPictureURL(this.setId, id, true);
   }
 
   /** A different set: nothing dropped, nothing struck, and a fresh look at it. */
@@ -394,7 +454,7 @@ export class OppaiLoraTrain extends LitElement {
     this.suggested = [];
     this.preview = null;
     this.tagNote = "";
-    this.schedulePreview(this.sourceKind === "tag" ? 450 : 0);
+    this.schedulePreview();
   }
 
   private schedulePreview(delay = 0) {
@@ -505,8 +565,7 @@ export class OppaiLoraTrain extends LitElement {
   private async removeTag(item: TrainPreviewItem, name: string) {
     this.editedItem(item.id, item.tags.filter((t) => t.name !== name));
     try {
-      // The library spells tags with underscores; either spelling is the same tag.
-      await api.updateMedia(item.id, { removeTags: [name, name.replace(/ /g, "_")] });
+      await api.trainPictureTags(this.setId, item.id, { removeTags: [name] });
     } catch (e) {
       this.error = (e as Error).message;
       this.editedItem(item.id, item.tags);
@@ -520,12 +579,32 @@ export class OppaiLoraTrain extends LitElement {
     const added = names.filter((n) => !have.has(tagKey(n)));
     this.newTag = "";
     if (!added.length) return;
-    this.editedItem(item.id, [...added.map((name) => ({ name: name.replace(/_/g, " "), manual: true })), ...item.tags]);
+    this.editedItem(item.id, [...added.map((name) => ({ name: name.replace(/_/g, " ").toLowerCase(), manual: true })), ...item.tags]);
     try {
-      await api.updateMedia(item.id, { addTags: added.map((n) => n.replace(/ /g, "_")) });
+      await api.trainPictureTags(this.setId, item.id, { addTags: added });
     } catch (e) {
       this.error = (e as Error).message;
       this.editedItem(item.id, item.tags);
+    }
+  }
+
+  /** Takes a picture out of the set for good, not only out of this LoRA. */
+  private async deletePicture(item: TrainPreviewItem) {
+    if (!confirm("Delete this picture from the training set? Dropping it only leaves it out of this LoRA; deleting removes it from the set.")) return;
+    const items = this.preview?.items ?? [];
+    const at = items.findIndex((i) => i.id === item.id);
+    const next = items[at + 1] ?? items[at - 1];
+    try {
+      await api.trainPictureDelete(this.setId, item.id);
+      if (this.preview) {
+        const left = this.preview.items.filter((i) => i.id !== item.id);
+        this.preview = { ...this.preview, items: left, count: left.length };
+      }
+      this.editing = next && next.id !== item.id ? next.id : 0;
+      this.schedulePreview(400);
+      void this.loadSets();
+    } catch (e) {
+      this.error = (e as Error).message;
     }
   }
 
@@ -576,7 +655,8 @@ export class OppaiLoraTrain extends LitElement {
   private goTo(step: Step) {
     if (!this.stepReady(step)) return;
     this.step = step;
-    if (step >= 2 && !this.preview && this.sourceKind !== "upload" && this.sourceKind !== "x") this.schedulePreview();
+    if (step >= 2) this.matchSetToName();
+    if (step >= 2 && !this.preview && this.setId) this.schedulePreview();
     this.renderRoot.querySelector(".wrap")?.scrollIntoView({ block: "start" });
     this.scrollTop = 0;
   }
@@ -617,6 +697,9 @@ export class OppaiLoraTrain extends LitElement {
       this.name = "";
       this.trigger = "";
       this.triggerTouched = false;
+      this.setId = 0;
+      this.exclude = [];
+      this.preview = null;
     } catch (e) {
       this.error = (e as Error).message;
     } finally {
@@ -633,14 +716,20 @@ export class OppaiLoraTrain extends LitElement {
     this.trigger = r.trigger;
     this.triggerTouched = true;
     if (this.models.some((m) => m.title === r.base)) this.base = r.base;
-    if (r.source.collectionId) {
-      this.sourceKind = "collection";
-      this.collectionId = r.source.collectionId;
-    } else if (r.source.tag) {
-      this.sourceKind = "tag";
-      this.tag = r.source.tag;
+    this.setId = r.source.setId ?? 0;
+    this.exclude = r.source.setId ? (r.source.exclude ?? []) : [];
+    if (!r.source.setId) {
+      // A run from before sets trained on the library; its pictures are offered to
+      // be copied into a set, which is what a run trains on now.
+      this.addMode = "library";
+      if (r.source.collectionId) {
+        this.libKind = "collection";
+        this.pickLibCollection(r.source.collectionId);
+      } else if (r.source.tag) {
+        this.libKind = "tag";
+        this.libTag = r.source.tag;
+      }
     }
-    this.exclude = r.source.exclude ?? [];
     this.captions = r.captions ?? "tags";
     this.leaveOut = r.leaveOut ?? [];
     this.leaveOutTouched = true;
@@ -847,18 +936,46 @@ export class OppaiLoraTrain extends LitElement {
 
   // Step 2 ------------------------------------------------------------------
 
-  private setSourceKind(kind: SourceKind) {
-    if (kind === this.sourceKind) return;
-    this.sourceKind = kind;
-    if (kind === "upload" || kind === "x") return;
-    this.sourceChanged();
+  private async gathered(setId: number) {
+    await this.loadSets();
+    if (setId === this.setId) this.schedulePreview();
+    else this.useSet(setId);
   }
 
-  private async gathered(collectionId: number) {
-    this.gatheredInto = collectionId;
-    await this.loadCollections(collectionId);
-    this.sourceKind = "collection";
-    this.sourceChanged();
+  /** Copies (or moves) library pictures into the set, making the set if need be. */
+  private async copyFromLibrary() {
+    if (this.copying) return;
+    const body = this.libKind === "tag"
+      ? { tag: this.libTag.trim(), move: this.libMove }
+      : { collectionId: this.libCollection, move: this.libMove };
+    if (("tag" in body && !body.tag) || ("collectionId" in body && !body.collectionId)) return;
+    this.copying = true;
+    this.copyNote = "";
+    try {
+      const target = this.setId || (await api.trainSetCreate(this.name.trim() || "Training set")).id;
+      const r = await api.trainSetFromLibrary(target, body);
+      this.copyNote = r.added || r.moved
+        ? `${r.added} picture${r.added === 1 ? "" : "s"} added to the set${r.moved ? `, ${r.moved} taken out of the library` : ""}.`
+        : "Those pictures are in the set already.";
+      if (r.moved) void this.loadCollections();
+      await this.gathered(target);
+    } catch (e) {
+      this.copyNote = (e as Error).message;
+    } finally {
+      this.copying = false;
+    }
+  }
+
+  private async deleteSet() {
+    const set = this.sets.find((s) => s.id === this.setId);
+    if (!set || !confirm(`Delete the training set “${set.name}” and its ${set.count} picture${set.count === 1 ? "" : "s"}? LoRAs already trained on it keep working.`)) return;
+    try {
+      await api.trainSetDelete(set.id);
+      this.useSet(0);
+      await this.loadSets();
+    } catch (e) {
+      this.error = (e as Error).message;
+    }
   }
 
   private renderPictures() {
@@ -867,56 +984,93 @@ export class OppaiLoraTrain extends LitElement {
     const advice = p
       ? datasetAdvice(preset, { count: p.count, untagged: p.untagged, small: this.smallCount(), captions: this.captions })
       : [];
+    const set = this.sets.find((s) => s.id === this.setId);
+    const newName = this.name.trim() || "Training set";
     return html`
       <div class="card">
-        <h3><span class="material-symbols-rounded">photo_library</span> Where are the pictures?</h3>
-        <p class="sub">Use pictures already in your library, or bring new ones in — they're added to your library in a collection for this LoRA, and only the ones you keep.</p>
-        <div class="seg">
-          ${SOURCES.map((s) => html`<button class=${this.sourceKind === s.id ? "on" : ""} @click=${() => this.setSourceKind(s.id)}>
-            <span class="material-symbols-rounded">${s.icon}</span>${s.title}
+        <h3><span class="material-symbols-rounded">photo_library</span> The training set</h3>
+        <p class="sub">A LoRA learns from a training set: pictures kept for it, apart from your library — they never show up in a grid or a search, and nothing tags them but you, here.</p>
+        <div class="sets">
+          <button class="settile ${this.setId === 0 ? "on" : ""}" @click=${() => this.useSet(0)}>
+            <span class="cover"><span class="material-symbols-rounded">add_photo_alternate</span></span>
+            <span class="t">New set<small>“${newName}”</small></span>
+          </button>
+          ${this.sets.map((s) => html`<button class="settile ${s.id === this.setId ? "on" : ""}" @click=${() => this.useSet(s.id)}>
+            <span class="cover">${s.coverId
+              ? html`<img src=${api.trainPictureURL(s.id, s.coverId, true)} alt="" loading="lazy" />`
+              : html`<span class="material-symbols-rounded">image</span>`}</span>
+            <span class="t" title=${s.name}>${s.name}<small>${s.count} picture${s.count === 1 ? "" : "s"}</small></span>
           </button>`)}
         </div>
-        <div style="margin-top:14px;">${this.renderSourcePicker()}</div>
       </div>
-      ${(this.sourceKind === "collection" || this.sourceKind === "tag") && (p || this.previewing)
+      <div class="card">
+        <h3><span class="material-symbols-rounded">add_photo_alternate</span> Add pictures${set ? html` to “${set.name}”` : nothing}</h3>
+        <div class="seg">
+          ${ADD_MODES.map((m) => html`<button class=${this.addMode === m.id ? "on" : ""} @click=${() => (this.addMode = m.id)}>
+            <span class="material-symbols-rounded">${m.icon}</span>${m.title}
+          </button>`)}
+        </div>
+        <div style="margin-top:14px;">${this.renderAdd(set?.name ?? newName)}</div>
+      </div>
+      ${this.setId && (p || this.previewing)
         ? html`<div class="card">
             <div class="sethead">
-              <h4>The set ${p ? html`· ${p.count} picture${p.count === 1 ? "" : "s"}${p.count >= p.limit ? html` <span class="muted">(the first ${p.limit})</span>` : nothing}` : nothing}</h4>
+              <h4>${set?.name ?? "The set"} ${p ? html`· ${p.count} picture${p.count === 1 ? "" : "s"}${p.count >= p.limit ? html` <span class="muted">(the first ${p.limit})</span>` : nothing}` : nothing}</h4>
               ${this.previewing ? html`<md-circular-progress indeterminate style="--md-circular-progress-size:22px;"></md-circular-progress>` : nothing}
               ${this.exclude.length
                 ? html`<button class="btn small ghost" @click=${() => this.bringBack()}><span class="material-symbols-rounded">undo</span> Bring back ${this.exclude.length} dropped</button>`
                 : nothing}
+              <button class="btn small ghost" title="Delete this set and its pictures" @click=${() => this.deleteSet()}><span class="material-symbols-rounded">delete</span> Delete set</button>
             </div>
             <div class="advice">${advice.map((a) => html`<div class="banner ${a.level === "good" ? "good" : a.level === "warn" ? "info" : ""}">
               <span class="material-symbols-rounded">${a.level === "good" ? "check_circle" : a.level === "warn" ? "info" : "error"}</span>${a.text}</div>`)}</div>
             ${p?.items.length
-              ? html`<div class="note">Drop anything that doesn't fit — blurry, cropped badly, or with someone else in it. Dropped pictures stay in your library.</div>
+              ? html`<div class="note">Drop anything that doesn't fit — blurry, cropped badly, or with someone else in it. A dropped picture stays in the set for the next LoRA.</div>
                   <div class="picks" style="margin-top:10px;">${p.items.map((i) => this.renderSetPicture(i))}</div>`
-              : nothing}
+              : html`<div class="note">Nothing in this set yet — add pictures above.</div>`}
           </div>`
         : nothing}
     `;
   }
 
-  private renderSourcePicker() {
-    const target = this.gatheredInto;
-    const collectionName = `LoRA · ${this.name.trim() || "training"}`;
-    switch (this.sourceKind) {
-      case "collection":
-        return this.collections.length
-          ? html`<select @change=${(e: Event) => { this.collectionId = Number((e.target as HTMLSelectElement).value); this.sourceChanged(); }}>
-              ${this.collections.map((c) => html`<option value=${String(c.id)} ?selected=${c.id === this.collectionId}>${c.name} (${c.count})</option>`)}
-            </select>`
-          : html`<div class="note">No collections yet — upload pictures or pick an X account, and one is made for you.</div>`;
-      case "tag":
-        return html`<input type="text" .value=${this.tag} placeholder="A tag in your library: a character's name, an artist, a style…"
-          @input=${(e: Event) => { this.tag = (e.target as HTMLInputElement).value; this.sourceChanged(); }} />`;
+  private renderAdd(setName: string) {
+    switch (this.addMode) {
       case "upload":
-        return html`<oppai-lora-gather mode="upload" .collectionId=${target} .collectionName=${collectionName}
-          @gathered=${(e: CustomEvent<{ collectionId: number }>) => this.gathered(e.detail.collectionId)}></oppai-lora-gather>`;
+        return html`<oppai-lora-gather mode="upload" .setId=${this.setId} .setName=${setName}
+          @gathered=${(e: CustomEvent<{ setId: number }>) => this.gathered(e.detail.setId)}></oppai-lora-gather>`;
       case "x":
-        return html`<oppai-lora-gather mode="x" .collectionId=${target} .collectionName=${this.name.trim() ? collectionName : ""}
-          @gathered=${(e: CustomEvent<{ collectionId: number }>) => this.gathered(e.detail.collectionId)}></oppai-lora-gather>`;
+        return html`<oppai-lora-gather mode="x" .setId=${this.setId} .setName=${this.setId || this.name.trim() ? setName : ""}
+          @gathered=${(e: CustomEvent<{ setId: number }>) => this.gathered(e.detail.setId)}></oppai-lora-gather>`;
+      case "library": {
+        const ready = this.libKind === "tag" ? !!this.libTag.trim() : !!this.libCollection;
+        return html`
+          <div class="seg small">
+            <button class=${this.libKind === "collection" ? "on" : ""} @click=${() => (this.libKind = "collection")}>A collection</button>
+            <button class=${this.libKind === "tag" ? "on" : ""} @click=${() => (this.libKind = "tag")}>Everything with a tag</button>
+          </div>
+          <div style="margin-top:10px;">
+            ${this.libKind === "collection"
+              ? this.collections.length
+                ? html`<select @change=${(e: Event) => this.pickLibCollection(Number((e.target as HTMLSelectElement).value))}>
+                    ${this.collections.map((c) => html`<option value=${String(c.id)} ?selected=${c.id === this.libCollection}>${c.name} (${c.count})</option>`)}
+                  </select>`
+                : html`<div class="note">Your library has no collections.</div>`
+              : html`<input type="text" .value=${this.libTag} placeholder="A tag in your library: a character's name, an artist, a style…"
+                  @input=${(e: Event) => (this.libTag = (e.target as HTMLInputElement).value)} />`}
+          </div>
+          <label class="check"><input type="checkbox" .checked=${this.libMove} @change=${(e: Event) => (this.libMove = (e.target as HTMLInputElement).checked)} />
+            Take them out of the library once they're in the set</label>
+          <div class="note">${this.libMove
+            ? "They move: the set keeps the pictures and their tags, and the library no longer lists them. For pictures that were only ever for this LoRA."
+            : "They're copied with their tags; the library keeps its own. A copy costs no space — it's the same file."}</div>
+          <div class="row" style="margin-top:10px;">
+            <button class="btn primary" style="flex:none;" ?disabled=${!ready || this.copying} @click=${() => this.copyFromLibrary()}>
+              <span class="material-symbols-rounded">${this.libMove ? "drive_file_move" : "content_copy"}</span>
+              ${this.copying ? "Working…" : this.libMove ? `Move into “${setName}”` : `Copy into “${setName}”`}
+            </button>
+          </div>
+          ${this.copyNote ? html`<div class="banner info"><span class="material-symbols-rounded">info</span>${this.copyNote}</div>` : nothing}`;
+      }
     }
   }
 
@@ -924,7 +1078,7 @@ export class OppaiLoraTrain extends LitElement {
     const min = minSideFor(this.baseFamily());
     const small = i.width && i.height && Math.min(i.width, i.height) < min;
     return html`<div class="pick on" style="outline-color:transparent;cursor:default;">
-      <img src=${api.thumbURL(i.id)} alt="" loading="lazy" />
+      <img src=${this.thumb(i.id)} alt="" loading="lazy" />
       <button class="drop" title="Drop from the set" @click=${() => this.dropPicture(i.id)}><span class="material-symbols-rounded">close</span></button>
       ${small ? html`<span class="badge">${i.width}×${i.height}</span>` : nothing}
     </div>`;
@@ -941,7 +1095,7 @@ export class OppaiLoraTrain extends LitElement {
       <div class="two">
         <div class="card">
           <h3><span class="material-symbols-rounded">auto_awesome</span> Auto-tag</h3>
-          <p class="sub">Every picture is captioned from its tags, so a picture with none teaches almost nothing. The tagger looks at each one and writes its tags into your library.</p>
+          <p class="sub">Every picture is captioned from its tags, so a picture with none teaches almost nothing. The tagger looks at each one and writes its tags onto the picture in the set.</p>
           ${!this.tagger
             ? html`<div class="banner info"><span class="material-symbols-rounded">info</span>The tagger is off. Turn on AI tagging under Settings → AI, or tag pictures by hand below${this.captions === "tags" ? ", or caption with the trigger word alone" : ""}.</div>`
             : task
@@ -991,7 +1145,7 @@ export class OppaiLoraTrain extends LitElement {
         <div class="picks captions-grid">${p.items.map((i) => {
           const cap = this.caption(i);
           return html`<button class="pick cap ${i.tags.length ? "" : "bare"}" @click=${() => { this.editing = i.id; this.newTag = ""; }}>
-            <img src=${api.thumbURL(i.id)} alt="" loading="lazy" />
+            <img src=${this.thumb(i.id)} alt="" loading="lazy" />
             <span class="c">${i.tags.length || this.captions === "trigger" ? cap : "No tags"}</span>
           </button>`;
         })}</div>
@@ -1014,7 +1168,7 @@ export class OppaiLoraTrain extends LitElement {
     return html`<div class="editor" @click=${(e: Event) => { if (e.target === e.currentTarget) this.closeEditor(); }}
       @keydown=${(e: KeyboardEvent) => { if (e.key === "Escape") this.closeEditor(); }}>
       <div class="panel">
-        <div class="pic"><img src=${api.streamURL(item.id)} alt="" /></div>
+        <div class="pic"><img src=${api.trainPictureURL(this.setId, item.id)} alt="" /></div>
         <div class="side">
           <div class="head">
             <b>Picture ${at + 1} of ${items.length}</b>
@@ -1039,10 +1193,13 @@ export class OppaiLoraTrain extends LitElement {
           </form>
           <label class="field">Caption</label>
           <div class="caption" style="margin:0;">${this.caption(item) || html`<span class="muted">empty</span>`}</div>
-          <div class="note">Tags are saved to the picture in your library as you change them.</div>
+          <div class="note">Tags are saved to the picture in the set as you change them.</div>
           <div style="margin-top:auto;display:flex;gap:8px;flex-wrap:wrap;">
-            <button class="btn danger" @click=${() => { const next = items[at + 1] ?? items[at - 1]; this.dropPicture(item.id); if (next && next.id !== item.id) this.editing = next.id; }}>
-              <span class="material-symbols-rounded">delete</span> Drop from the set
+            <button class="btn" @click=${() => { const next = items[at + 1] ?? items[at - 1]; this.dropPicture(item.id); if (next && next.id !== item.id) this.editing = next.id; }}>
+              <span class="material-symbols-rounded">remove_circle</span> Leave out of this LoRA
+            </button>
+            <button class="btn danger" @click=${() => this.deletePicture(item)}>
+              <span class="material-symbols-rounded">delete</span> Delete from the set
             </button>
           </div>
         </div>

@@ -67,9 +67,15 @@ type Client struct {
 	ModelsDir func() string
 	// HashCachePath is where the hashes of that folder's files are remembered.
 	HashCachePath string
+	// OutputsDir is the setting for Automatic1111's outputs folder, its gallery; ""
+	// looks for it on its own. See a1111_gallery.go.
+	OutputsDir func() string
+	// ThumbCacheDir keeps the thumbnails made of that folder's pictures.
+	ThumbCacheDir string
 
 	fileHashes *fileHashes
 	installs   *a1111Jobs
+	gallery    *a1111GalleryState
 }
 
 // New returns a Client. Generation is slow (tens of seconds on CPU), so the timeout
@@ -197,12 +203,17 @@ type Board struct {
 	Count int    `json:"count"`
 }
 
-// GalleryImage is one image InvokeAI keeps in its gallery.
+// GalleryImage is one image the generator keeps: InvokeAI's gallery, or a file in
+// A1111's outputs folder.
 type GalleryImage struct {
 	Name    string `json:"name"`
 	Width   int    `json:"width,omitempty"`
 	Height  int    `json:"height,omitempty"`
 	Created string `json:"created,omitempty"`
+	// Label is how to show an A1111 picture, whose name is an encoded path; Size is
+	// its file's bytes. InvokeAI's names read as they are and it reports no size.
+	Label string `json:"label,omitempty"`
+	Size  int64  `json:"size,omitempty"`
 }
 
 // GalleryPage is one page of a board's images, newest first.
@@ -533,16 +544,24 @@ func (c *Client) UpdateCover(ctx context.Context, base, name string, data []byte
 	return c.invokeUpdateCover(ctx, base, name, data, contentType)
 }
 
-// Boards lists the InvokeAI gallery's boards, with "none" (Uncategorized) first.
+// Boards lists the gallery's boards, with "none" first: InvokeAI's Uncategorized,
+// or every picture in A1111's outputs folder (a1111_gallery.go).
 func (c *Client) Boards(ctx context.Context, base string) ([]Board, error) {
-	if err := c.requireInvoke(ctx, base, "the generator gallery"); err != nil {
+	kind, err := c.Backend(ctx, base)
+	if err != nil {
 		return nil, err
+	}
+	if kind != KindInvokeAI {
+		return c.a1111Boards()
 	}
 	return c.invokeBoards(ctx, base)
 }
 
 // CreateBoard creates an InvokeAI gallery board and returns its server-assigned id.
 func (c *Client) CreateBoard(ctx context.Context, base, name string) (*Board, error) {
+	if kind, _ := c.Backend(ctx, base); kind == KindA1111 {
+		return nil, errA1111Boards
+	}
 	if err := c.requireInvoke(ctx, base, "creating gallery boards"); err != nil {
 		return nil, err
 	}
@@ -552,25 +571,38 @@ func (c *Client) CreateBoard(ctx context.Context, base, name string) (*Board, er
 // DeleteBoard removes a gallery board. Its images survive — InvokeAI returns them
 // to the uncategorized pile rather than deleting them.
 func (c *Client) DeleteBoard(ctx context.Context, base, boardID string) error {
+	if kind, _ := c.Backend(ctx, base); kind == KindA1111 {
+		return errA1111Boards
+	}
 	if err := c.requireInvoke(ctx, base, "deleting gallery boards"); err != nil {
 		return err
 	}
 	return c.invokeDeleteBoard(ctx, base, boardID)
 }
 
-// BoardImages lists one board's images, newest first. boardID "none" is the
-// uncategorized pile.
-func (c *Client) BoardImages(ctx context.Context, base, boardID string, offset, limit int) (*GalleryPage, error) {
-	if err := c.requireInvoke(ctx, base, "the generator gallery"); err != nil {
+// BoardImages lists one board's images in the order asked for (GallerySorts,
+// newest first by default). boardID "none" is the uncategorized pile, or on A1111
+// every picture. InvokeAI sorts by date alone, so "name" and "largest" read as
+// newest there.
+func (c *Client) BoardImages(ctx context.Context, base, boardID, order string, offset, limit int) (*GalleryPage, error) {
+	kind, err := c.Backend(ctx, base)
+	if err != nil {
 		return nil, err
 	}
-	return c.invokeBoardImages(ctx, base, boardID, offset, limit)
+	if kind != KindInvokeAI {
+		return c.a1111BoardImages(boardID, order, offset, limit)
+	}
+	return c.invokeBoardImages(ctx, base, boardID, order, offset, limit)
 }
 
-// GalleryImage streams one gallery image (the thumbnail or the full PNG).
+// GalleryImage streams one gallery image (the thumbnail or the full picture).
 func (c *Client) GalleryImage(ctx context.Context, base, name string, thumb bool) ([]byte, string, error) {
-	if err := c.requireInvoke(ctx, base, "the generator gallery"); err != nil {
+	kind, err := c.Backend(ctx, base)
+	if err != nil {
 		return nil, "", err
+	}
+	if kind != KindInvokeAI {
+		return c.a1111GalleryImage(name, thumb)
 	}
 	return c.invokeGalleryImage(ctx, base, name, thumb)
 }
@@ -578,32 +610,52 @@ func (c *Client) GalleryImage(ctx context.Context, base, name string, thumb bool
 // GalleryImagePrompt fetches the positive prompt recorded in an image's metadata,
 // best-effort — an image without metadata just yields "".
 func (c *Client) GalleryImagePrompt(ctx context.Context, base, name string) string {
-	if err := c.requireInvoke(ctx, base, "the generator gallery"); err != nil {
+	kind, err := c.Backend(ctx, base)
+	if err != nil {
+		return ""
+	}
+	if kind != KindInvokeAI {
+		if meta, err := c.a1111ImageMetadata(name); err == nil {
+			return meta.Prompt
+		}
 		return ""
 	}
 	return c.invokeImagePrompt(ctx, base, name)
 }
 
-// GalleryImageMetadata returns the generation settings InvokeAI stored with an image.
+// GalleryImageMetadata returns the generation settings stored with an image.
 func (c *Client) GalleryImageMetadata(ctx context.Context, base, name string) (*ImageMetadata, error) {
-	if err := c.requireInvoke(ctx, base, "gallery image metadata"); err != nil {
+	kind, err := c.Backend(ctx, base)
+	if err != nil {
 		return nil, err
+	}
+	if kind != KindInvokeAI {
+		return c.a1111ImageMetadata(name)
 	}
 	return c.invokeImageMetadata(ctx, base, name)
 }
 
-// DeleteGalleryImage removes one image from InvokeAI's gallery.
+// DeleteGalleryImage removes one image from the gallery.
 func (c *Client) DeleteGalleryImage(ctx context.Context, base, name string) error {
-	if err := c.requireInvoke(ctx, base, "the generator gallery"); err != nil {
+	kind, err := c.Backend(ctx, base)
+	if err != nil {
 		return err
+	}
+	if kind != KindInvokeAI {
+		return c.a1111DeleteImages([]string{name})
 	}
 	return c.invokeDeleteImage(ctx, base, name)
 }
 
-// DeleteGalleryImages removes several images in one call (InvokeAI's batch delete).
+// DeleteGalleryImages removes several images in one call (InvokeAI's batch delete,
+// or the files in A1111's outputs folder).
 func (c *Client) DeleteGalleryImages(ctx context.Context, base string, names []string) error {
-	if err := c.requireInvoke(ctx, base, "the generator gallery"); err != nil {
+	kind, err := c.Backend(ctx, base)
+	if err != nil {
 		return err
+	}
+	if kind != KindInvokeAI {
+		return c.a1111DeleteImages(names)
 	}
 	return c.invokeDeleteImages(ctx, base, names)
 }
@@ -611,6 +663,9 @@ func (c *Client) DeleteGalleryImages(ctx context.Context, base string, names []s
 // AddImagesToBoard moves the named images onto a board (boardID "none" clears the
 // board). InvokeAI's batch endpoint does the move in one request.
 func (c *Client) AddImagesToBoard(ctx context.Context, base, boardID string, names []string) error {
+	if kind, _ := c.Backend(ctx, base); kind == KindA1111 {
+		return errA1111Boards
+	}
 	if err := c.requireInvoke(ctx, base, "the generator gallery"); err != nil {
 		return err
 	}

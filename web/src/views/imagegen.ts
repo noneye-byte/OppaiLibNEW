@@ -80,6 +80,7 @@ import type { LibbyEmotion } from "../libby.js";
 import "./outfit-wardrobe.js";
 import { createZip, type ZipEntry } from "../zip.js";
 import "./imagegen-gallery.js";
+import { RESOLUTIONS, SCHEDULERS } from "../gen-options.js";
 import "./civitai.js";
 import "./lora-train.js";
 import type { PromptSettings } from "../civitai-prompt.js";
@@ -147,8 +148,6 @@ interface Shot extends GenPreview {
   workspaceY?: number;
 }
 
-// Resolution presets under the prompt's Options menu. SD 1.x models train at ~512,
-// SDXL at ~1024 — offering both families beats making people type pixel counts.
 type CreateTab = "models" | "loras" | "look" | "wildcards" | "templates" | "settings";
 
 /** The Create screen's drawers, down its rail in this order. */
@@ -159,36 +158,6 @@ const CREATE_TABS: { id: CreateTab; label: string; icon: string }[] = [
   { id: "wildcards", label: "Wildcards", icon: "category" },
   { id: "templates", label: "Styles", icon: "palette" },
   { id: "settings", label: "Settings", icon: "tune" },
-];
-
-const RESOLUTIONS: { label: string; hint: string; w: number; h: number }[] = [
-  { label: "Portrait", hint: "512×768", w: 512, h: 768 },
-  { label: "Square", hint: "512×512", w: 512, h: 512 },
-  { label: "Landscape", hint: "768×512", w: 768, h: 512 },
-  { label: "Tall", hint: "640×960", w: 640, h: 960 },
-  { label: "XL Portrait", hint: "832×1216", w: 832, h: 1216 },
-  { label: "XL Square", hint: "1024×1024", w: 1024, h: 1024 },
-  { label: "XL Landscape", hint: "1216×832", w: 1216, h: 832 },
-];
-
-// Schedulers offered under Model settings. The server maps A1111-style names onto
-// InvokeAI ids, so the same values work against either backend.
-const SCHEDULERS: { id: string; label: string }[] = [
-  { id: "", label: "Default (Euler a)" },
-  ...[
-    ["ddim", "DDIM"], ["ddpm", "DDPM"], ["deis", "DEIS"], ["deis_k", "DEIS Karras"],
-    ["dpmpp_2s", "DPM++ 2S"], ["dpmpp_2s_k", "DPM++ 2S Karras"],
-    ["dpmpp_2m", "DPM++ 2M"], ["dpmpp_2m_k", "DPM++ 2M Karras"],
-    ["dpmpp_2m_sde", "DPM++ 2M SDE"], ["dpmpp_2m_sde_k", "DPM++ 2M SDE Karras"],
-    ["dpmpp_3m", "DPM++ 3M"], ["dpmpp_3m_k", "DPM++ 3M Karras"],
-    ["dpmpp_sde", "DPM++ SDE"], ["dpmpp_sde_k", "DPM++ SDE Karras"],
-    ["er_sde", "ER-SDE"], ["euler", "Euler"], ["euler_k", "Euler Karras"],
-    ["euler_a", "Euler Ancestral"], ["heun", "Heun"], ["heun_k", "Heun Karras"],
-    ["kdpm_2", "KDPM 2"], ["kdpm_2_k", "KDPM 2 Karras"],
-    ["kdpm_2_a", "KDPM 2 Ancestral"], ["kdpm_2_a_k", "KDPM 2 Ancestral Karras"],
-    ["lcm", "LCM"], ["lms", "LMS"], ["lms_k", "LMS Karras"],
-    ["pndm", "PNDM"], ["tcd", "TCD"], ["unipc", "UniPC"], ["unipc_k", "UniPC Karras"],
-  ].map(([id, label]) => ({ id, label })),
 ];
 
 // ── outfit helper ──────────────────────────────────────────────────────────────
@@ -5299,13 +5268,15 @@ export class OppaiImageGen extends LitElement {
     }
 
     const invoke = st.backend === "invokeai";
+    // InvokeAI keeps a gallery; A1111's outputs folder is one once the server can see it.
+    const gallery = st.gallery ?? (invoke ? "invokeai" : undefined);
     const activeModel = (st.models ?? []).find((model) => model.title === this.checkpoint);
     const modelName = activeModel?.model_name || this.checkpoint || "Choose a model";
     if (this.studio) return this.renderStudio(st, invoke, modelName);
     const tab = this.createTab;
     return html`
       <div class="workspace create">
-        <div class="create-shell ${tab ? "drawer-open" : ""} ${invoke ? "with-gallery" : ""}">
+        <div class="create-shell ${tab ? "drawer-open" : ""} ${gallery ? "with-gallery" : ""}">
           ${this.renderCreateRail()}
           ${tab
             ? html`<div class="drawer-scrim" @click=${() => (this.createTab = "")}></div>
@@ -5322,11 +5293,11 @@ export class OppaiImageGen extends LitElement {
             </div>
             <div class="prompt-dock">${this.renderPrompt()}</div>
           </section>
-          ${invoke
+          ${gallery
             ? html`<aside class="right create-gallery">
-                <oppai-invoke-gallery workspace
+                <oppai-invoke-gallery workspace backend=${gallery}
                   @boards-changed=${() => this.loadStatus()}
-                  @board-changed=${(e: CustomEvent<{ board: string }>) => (this.board = e.detail.board)}
+                  @board-changed=${(e: CustomEvent<{ board: string }>) => { if (invoke) this.board = e.detail.board; }}
                   @cut-out=${(e: CustomEvent<{ url: string; name: string }>) =>
                     void this.openCutout(e.detail.url, e.detail.name)}
                   @reuse-generation=${(e: CustomEvent<GenInfo>) => this.reuseGenInfo(e.detail)}

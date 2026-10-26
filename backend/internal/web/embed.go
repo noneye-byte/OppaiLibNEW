@@ -72,6 +72,11 @@ func Handler(incognito func() bool) http.Handler {
 	}
 	fileServer := http.FileServer(http.FS(sub))
 	isAsset := func(p string) bool { return strings.HasPrefix(p, "/assets/") }
+	// A font asked for by its content hash (?v=, stamped into index.html at build) is
+	// as immutable as a hashed bundle: a changed font is a different URL.
+	isVersionedFont := func(r *http.Request) bool {
+		return strings.HasPrefix(r.URL.Path, "/fonts/") && r.URL.Query().Get("v") != ""
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hidden := incognito()
 		// An OppaiLib-branded file requested by name while disguised: answer with
@@ -110,7 +115,7 @@ func Handler(incognito func() bool) http.Handler {
 
 		// A real file exists here. Content-hash-named /assets/* are safe to cache
 		// forever; everything else (index.html, icons, manifest) must revalidate.
-		if isAsset(r.URL.Path) {
+		if isAsset(r.URL.Path) || isVersionedFont(r) {
 			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		} else {
 			w.Header().Set("Cache-Control", "no-cache")

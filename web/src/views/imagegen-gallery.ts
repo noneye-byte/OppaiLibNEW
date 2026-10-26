@@ -1,7 +1,7 @@
 import { LitElement, html, css, nothing } from "lit";
-import { customElement, state } from "lit/decorators.js";
+import { customElement, property, state } from "lit/decorators.js";
 import { iconStyles, motionStyles } from "../theme.js";
-import { api, mascotSay, type ChatCharacter, type GalleryBoard, type GalleryImage } from "../api.js";
+import { api, mascotSay, type ChatCharacter, type GalleryBoard, type GalleryImage, type GallerySort } from "../api.js";
 import { libbyReact, type LibbyItemFacts } from "../libby-voice.js";
 import { shareImageWithCharacter } from "../chat-share.js";
 import { openMenu } from "../context-menu.js";
@@ -12,17 +12,32 @@ import { profileUpdates } from "../ui-metrics.js";
 const PAGE = 40;
 
 /**
- * The InvokeAI gallery panel: every image the generator itself has kept, sorted
- * into its boards. InvokeAI stores each finished generation in its own gallery
- * regardless of what we do, so this surfaces that pile — browse it, expand an
- * image, copy one into the library, or delete it from the generator.
+ * The generator's gallery panel: every image the generator itself has kept. On
+ * InvokeAI that is its own gallery, sorted into boards; on Automatic1111 it is the
+ * outputs folder, read by the server (imagegen/a1111_gallery.go), with a board for
+ * each folder A1111 writes into. Browse it in any order, open a picture with its
+ * settings beside it and step through the rest, copy one into the library, or
+ * delete it from the generator. Boards can be made and filed into on InvokeAI only.
  *
  * The host view calls refresh() after a generation so new images appear without
  * a manual reload.
  */
+
+const SORTS: { id: GallerySort; label: string; a1111Only?: boolean }[] = [
+  { id: "newest", label: "Newest first" },
+  { id: "oldest", label: "Oldest first" },
+  { id: "name", label: "By name", a1111Only: true },
+  { id: "largest", label: "Largest first", a1111Only: true },
+];
 @customElement("oppai-invoke-gallery")
 export class OppaiInvokeGallery extends LitElement {
+  /** Whose gallery: InvokeAI's own, or A1111's outputs folder. */
+  @property() backend: "invokeai" | "a1111" = "invokeai";
   @state() private boards: GalleryBoard[] = [];
+  @state() private sort: GallerySort = "newest";
+  /** The open picture's settings, once read. */
+  @state() private info: GenInfo | null = null;
+  @state() private infoError = "";
   @state() private board = "none";
   @state() private items: GalleryImage[] = [];
   @state() private total = 0;
@@ -288,12 +303,54 @@ export class OppaiInvokeGallery extends LitElement {
         gap: 14px;
         padding: 20px;
       }
+      /* The picture fills its side of the viewer whatever its own size: a 512px
+         render shown at 512px leaves most of the screen to the scrim. */
       .overlay img {
-        max-width: min(96vw, 1400px);
-        max-height: 82vh;
+        width: 100%;
+        height: 78vh;
         object-fit: contain;
         border-radius: 10px;
       }
+      @media (max-width: 900px) { .overlay img { height: 60vh; } }
+      .viewer {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 320px;
+        gap: 16px;
+        width: min(96vw, 1500px);
+        align-items: center;
+      }
+      .viewer .stage { position: relative; display: grid; place-items: center; min-height: 0; }
+      .viewer .nav {
+        position: absolute; top: 50%; transform: translateY(-50%);
+        width: 44px; height: 44px; border-radius: 22px; border: none; cursor: pointer;
+        background: rgba(0, 0, 0, 0.55); color: #fff; display: grid; place-items: center;
+      }
+      .viewer .nav.prev { left: 6px; }
+      .viewer .nav.next { right: 6px; }
+      .viewer .nav:disabled { opacity: 0.3; cursor: default; }
+      .meta {
+        background: var(--oppai-surface); color: var(--oppai-text); border-radius: 14px; padding: 14px;
+        max-height: 78vh; overflow: auto; font-size: 12.5px; display: flex; flex-direction: column; gap: 10px;
+      }
+      .meta h4 { margin: 0; font-size: 13px; display: flex; align-items: center; gap: 6px; }
+      .meta h4 small { margin-left: auto; font-weight: 400; color: var(--oppai-text-muted); }
+      .meta .k { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--oppai-text-muted); margin-bottom: 3px; }
+      .meta .prompt { white-space: pre-wrap; word-break: break-word; line-height: 1.45; background: var(--oppai-surface-2); border-radius: 9px; padding: 8px 10px; }
+      .meta dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 12px; margin: 0; }
+      .meta dt { color: var(--oppai-text-muted); }
+      .meta dd { margin: 0; overflow-wrap: anywhere; }
+      .meta .acts { display: flex; gap: 6px; flex-wrap: wrap; }
+      .meta .acts button {
+        border: 1px solid var(--oppai-border-strong); background: transparent; color: var(--oppai-text); border-radius: 9px;
+        font: inherit; font-size: 12px; padding: 6px 10px; cursor: pointer; display: inline-flex; align-items: center; gap: 5px;
+      }
+      @media (max-width: 900px) {
+        .viewer { grid-template-columns: minmax(0, 1fr); }
+        .overlay { justify-content: flex-start; overflow-y: auto; }
+        .meta { max-height: none; }
+      }
+      .sort-row { display: flex; gap: 6px; }
+      .sort-row .board-select { flex: 1; min-width: 0; }
       .overlay-actions {
         display: flex;
         gap: 10px;
@@ -385,7 +442,62 @@ export class OppaiInvokeGallery extends LitElement {
   connectedCallback() {
     super.connectedCallback();
     profileUpdates(this, "generation gallery");
+    window.addEventListener("keydown", this.onKey);
     void this.refresh();
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    window.removeEventListener("keydown", this.onKey);
+  }
+
+  /** Arrow keys step through the open picture's board; Escape closes it. */
+  private onKey = (e: KeyboardEvent) => {
+    if (!this.expanded) return;
+    if (e.key === "ArrowLeft") this.step(-1);
+    else if (e.key === "ArrowRight") this.step(1);
+    else if (e.key === "Escape") this.expanded = null;
+    else return;
+    e.preventDefault();
+  };
+
+  private get a1111(): boolean {
+    return this.backend === "a1111";
+  }
+
+  private labelOf(img: GalleryImage): string {
+    return img.label || img.name;
+  }
+
+  /** Opens a picture and reads its settings for the side panel. */
+  private open(img: GalleryImage) {
+    this.expanded = img;
+    this.info = this.metadata.get(img.name) ?? null;
+    this.infoError = "";
+    if (this.info) return;
+    void this.imageInfo(img).then(
+      (info) => { if (this.expanded?.name === img.name) this.info = info; },
+      (e) => { if (this.expanded?.name === img.name) this.infoError = (e as Error).message; },
+    );
+  }
+
+  /** The next or previous picture, reading the next page when the end is reached. */
+  private async step(d: number) {
+    const at = this.items.findIndex((i) => i.name === this.expanded?.name);
+    if (at < 0) return;
+    let next = this.items[at + d];
+    if (!next && d > 0 && this.items.length < this.total) {
+      await this.loadPage(false);
+      next = this.items[at + d];
+    }
+    if (next) this.open(next);
+  }
+
+  private pickSort(sort: GallerySort) {
+    if (sort === this.sort) return;
+    this.sort = sort;
+    this.items = [];
+    void this.loadPage(true);
   }
 
   /** The board on screen. New generations are filed here — see the host view. */
@@ -424,7 +536,7 @@ export class OppaiInvokeGallery extends LitElement {
     this.loading = true;
     try {
       const offset = reset ? 0 : this.items.length;
-      const page = await api.galleryImages(this.board, offset, PAGE);
+      const page = await api.galleryImages(this.board, offset, PAGE, this.sort);
       this.items = reset ? page.items : [...this.items, ...page.items];
       this.total = page.total;
     } catch (e) {
@@ -560,7 +672,7 @@ export class OppaiInvokeGallery extends LitElement {
     openMenu({
       x: e.clientX,
       y: e.clientY,
-      title: img.name,
+      title: this.labelOf(img),
       items: [
         { label: "Copy generation metadata", icon: "content_copy", run: () => void this.copyMetadata(img) },
         { label: "Use same generation parameters", icon: "replay", run: () => void this.reuseMetadata(img) },
@@ -587,6 +699,8 @@ export class OppaiInvokeGallery extends LitElement {
         bubbles: true,
         composed: true,
       }));
+      // The settings are on their way to the form; the form is what's wanted next.
+      this.expanded = null;
     } catch (e) {
       mascotSay((e as Error).message || "Couldn't load generation metadata.", "error");
     }
@@ -595,7 +709,7 @@ export class OppaiInvokeGallery extends LitElement {
   private async exportImage(img: GalleryImage) {
     try {
       const info = await this.imageInfo(img);
-      const base = img.name.replace(/\.[a-z0-9]+$/i, "") || "generated-image";
+      const base = this.labelOf(img).replace(/\.[a-z0-9]+$/i, "") || "generated-image";
       await downloadGenerationPNG(
         api.galleryFullURL(img.name),
         `${base}-civitai.png`,
@@ -610,7 +724,7 @@ export class OppaiInvokeGallery extends LitElement {
 
   private async share(img: GalleryImage, character: ChatCharacter) {
     try {
-      await shareImageWithCharacter(api.galleryFullURL(img.name), character.id, img.name);
+      await shareImageWithCharacter(api.galleryFullURL(img.name), character.id, this.labelOf(img));
       // Only leave the generator once the bytes are in hand, so a failed read does
       // not strand the user in Chat with nothing to show.
       this.expanded = null;
@@ -683,7 +797,7 @@ export class OppaiInvokeGallery extends LitElement {
       <div class="panel">
         <div class="head">
           <span class="material-symbols-rounded" style="font-size:18px;">photo_library</span>
-          Invoke gallery
+          ${this.a1111 ? "A1111 outputs" : "Invoke gallery"}
           <span class="count">${current ? `${this.total || current.count} images` : ""}</span>
           ${this.items.length
             ? html`<button class="sel-toggle ${this.selecting ? "on" : ""}"
@@ -695,7 +809,7 @@ export class OppaiInvokeGallery extends LitElement {
         ${this.selecting
           ? html`<div class="sel-bar">
               <span class="sel-count">${this.selected.size} selected</span>
-              <select class="sel-move" aria-label="Move to gallery" .value=${""}
+              ${this.a1111 ? nothing : html`<select class="sel-move" aria-label="Move to gallery" .value=${""}
                 ?disabled=${this.busy || !this.selected.size}
                 @change=${(e: Event) => {
                   const el = e.target as HTMLSelectElement;
@@ -706,7 +820,7 @@ export class OppaiInvokeGallery extends LitElement {
                 ${this.boards
                   .filter((b) => b.id !== this.board)
                   .map((b) => html`<option value=${b.id}>${b.name}</option>`)}
-              </select>
+              </select>`}
               <button class="sel-del" ?disabled=${this.busy || !this.selected.size}
                 @click=${() => this.deleteSelected()}>
                 <span class="material-symbols-rounded" style="font-size:15px; vertical-align:-3px;">delete</span>
@@ -716,17 +830,23 @@ export class OppaiInvokeGallery extends LitElement {
           : nothing}
         ${this.boards.length
           ? html`
-              <select class="board-select" aria-label="Gallery" .value=${this.board}
-                @change=${(e: Event) => this.pickBoard((e.target as HTMLSelectElement).value)}>
-                ${this.boards.map((b) => html`<option value=${b.id}>${b.name}${b.count ? ` · ${b.count}` : ""}</option>`)}
-              </select>
+              <div class="sort-row">
+                <select class="board-select" aria-label="Gallery" .value=${this.board}
+                  @change=${(e: Event) => this.pickBoard((e.target as HTMLSelectElement).value)}>
+                  ${this.boards.map((b) => html`<option value=${b.id} ?selected=${b.id === this.board}>${b.name}${b.count ? ` · ${b.count}` : ""}</option>`)}
+                </select>
+                <select class="board-select" aria-label="Order" style="flex:none;width:auto;"
+                  @change=${(e: Event) => this.pickSort((e.target as HTMLSelectElement).value as GallerySort)}>
+                  ${SORTS.filter((s) => this.a1111 || !s.a1111Only).map((s) => html`<option value=${s.id} ?selected=${s.id === this.sort}>${s.label}</option>`)}
+                </select>
+              </div>
               ${this.boards.length <= 6 ? html`<div class="boards">
                 ${this.boards.map(
                   (b) => html`<button class="board ${b.id === this.board ? "on" : ""}"
                     @click=${() => this.pickBoard(b.id)}>${b.name}${b.count ? ` · ${b.count}` : ""}</button>`,
                 )}
               </div>` : nothing}
-              ${this.board !== "none"
+              ${this.board !== "none" && !this.a1111
                 ? html`<button class="board-del" ?disabled=${this.busy}
                     title="Delete this gallery (its images move to Uncategorized)"
                     @click=${() => this.deleteBoard()}>
@@ -736,13 +856,15 @@ export class OppaiInvokeGallery extends LitElement {
                 : nothing}
             `
           : nothing}
-        <div class="note">New generations are filed into ${current?.name ?? "this gallery"}.</div>
-        <div class="new-board">
-          <input maxlength="300" placeholder="New Invoke gallery" .value=${this.newBoard}
-            @input=${(e: Event) => (this.newBoard = (e.target as HTMLInputElement).value)}
-            @keydown=${(e: KeyboardEvent) => { if (e.key === "Enter") void this.createBoard(); }} />
-          <button ?disabled=${this.busy || !this.newBoard.trim()} @click=${() => this.createBoard()}>Create</button>
-        </div>
+        ${this.a1111
+          ? html`<div class="note">What Automatic1111 saved to its outputs folder — each folder it writes into is a board.</div>`
+          : html`<div class="note">New generations are filed into ${current?.name ?? "this gallery"}.</div>
+            <div class="new-board">
+              <input maxlength="300" placeholder="New Invoke gallery" .value=${this.newBoard}
+                @input=${(e: Event) => (this.newBoard = (e.target as HTMLInputElement).value)}
+                @keydown=${(e: KeyboardEvent) => { if (e.key === "Enter") void this.createBoard(); }} />
+              <button ?disabled=${this.busy || !this.newBoard.trim()} @click=${() => this.createBoard()}>Create</button>
+            </div>`}
         ${this.error ? html`<div class="err">${this.error}</div>` : nothing}
         ${this.items.length
           ? html`<div class="grid">
@@ -751,14 +873,14 @@ export class OppaiInvokeGallery extends LitElement {
                 return html`
                   <button
                     class="tile ${this.selecting ? "selectable" : ""} ${picked ? "picked" : ""}"
-                    title=${img.name}
+                    title=${this.labelOf(img)}
                     @contextmenu=${(e: MouseEvent) => {
                       if (this.selecting) return;
                       e.preventDefault();
                       this.openImageMenu(img, e);
                     }}
                     @click=${() =>
-                      this.selecting ? this.toggleSelected(img.name) : (this.expanded = img)}
+                      this.selecting ? this.toggleSelected(img.name) : this.open(img)}
                   >
                     <img src=${api.galleryThumbURL(img.name)} alt="Generated image" loading="lazy" />
                     ${this.selecting
@@ -770,7 +892,7 @@ export class OppaiInvokeGallery extends LitElement {
                       : html`<span
                           class="del"
                           role="button"
-                          title="Delete from InvokeAI"
+                          title=${this.a1111 ? "Delete from the outputs folder" : "Delete from InvokeAI"}
                           @click=${(e: Event) => {
                             e.stopPropagation();
                             void this.deleteImage(img);
@@ -784,7 +906,7 @@ export class OppaiInvokeGallery extends LitElement {
             </div>`
           : this.loading
             ? nothing
-            : html`<div class="note">Nothing here yet — generated images land in this gallery.</div>`}
+            : html`<div class="note">${this.a1111 ? "No pictures in this folder." : "Nothing here yet — generated images land in this gallery."}</div>`}
         ${this.loading ? html`<div class="note">Loading…</div>` : nothing}
         ${!this.loading && this.items.length < this.total
           ? html`<button class="more" @click=${() => this.loadPage(false)}>
@@ -798,10 +920,21 @@ export class OppaiInvokeGallery extends LitElement {
 
   private renderExpanded(img: GalleryImage) {
     const saved = this.savedNames.has(img.name);
+    const at = this.items.findIndex((i) => i.name === img.name);
+    const hasNext = at + 1 < this.items.length || this.items.length < this.total;
     return html`
       <div class="overlay" @click=${(e: Event) => { if (e.target === e.currentTarget) this.expanded = null; }}>
-        <img src=${api.galleryFullURL(img.name)} alt="Generated image"
-          @contextmenu=${(e: MouseEvent) => this.openImageMenu(img, e)} />
+        <div class="viewer">
+          <div class="stage">
+            <img src=${api.galleryFullURL(img.name)} alt="Generated image"
+              @contextmenu=${(e: MouseEvent) => this.openImageMenu(img, e)} />
+            <button class="nav prev" title="Previous (←)" ?disabled=${at <= 0} @click=${() => this.step(-1)}>
+              <span class="material-symbols-rounded">chevron_left</span></button>
+            <button class="nav next" title="Next (→)" ?disabled=${!hasNext} @click=${() => this.step(1)}>
+              <span class="material-symbols-rounded">chevron_right</span></button>
+          </div>
+          ${this.renderInfo(img, at)}
+        </div>
         <div class="overlay-actions">
           <button class="obtn primary" ?disabled=${this.busy || saved} @click=${() => this.saveToLibrary(img)}>
             <span class="material-symbols-rounded" style="font-size:17px;">${saved ? "check" : "save"}</span>
@@ -828,6 +961,39 @@ export class OppaiInvokeGallery extends LitElement {
         </div>
       </div>
     `;
+  }
+
+  /** The open picture's settings, read from the generator's record of it. */
+  private renderInfo(img: GalleryImage, at: number) {
+    const i = this.info;
+    const size = img.width && img.height ? `${img.width}×${img.height}` : i?.width ? `${i.width}×${i.height}` : "";
+    const when = img.created ? new Date(img.created).toLocaleString() : "";
+    return html`<div class="meta">
+      <h4>${this.labelOf(img)}<small>${at + 1} of ${this.total}</small></h4>
+      ${!i
+        ? html`<div class="note">${this.infoError || "Reading its settings…"}</div>`
+        : html`
+            ${i.prompt ? html`<div><div class="k">Prompt</div><div class="prompt">${i.prompt}</div></div>` : html`<div class="note">No generation settings were saved with this picture.</div>`}
+            ${i.negativePrompt ? html`<div><div class="k">Negative</div><div class="prompt">${i.negativePrompt}</div></div>` : nothing}
+            <dl>
+              ${i.model ? html`<dt>Model</dt><dd>${i.model}</dd>` : nothing}
+              ${i.seed ? html`<dt>Seed</dt><dd>${i.seed}</dd>` : nothing}
+              ${i.steps ? html`<dt>Steps</dt><dd>${i.steps}</dd>` : nothing}
+              ${i.cfgScale ? html`<dt>CFG</dt><dd>${i.cfgScale}</dd>` : nothing}
+              ${i.sampler ? html`<dt>Sampler</dt><dd>${i.sampler}</dd>` : nothing}
+              ${i.clipSkip ? html`<dt>Clip skip</dt><dd>${i.clipSkip}</dd>` : nothing}
+              ${i.loras.length ? html`<dt>LoRAs</dt><dd>${i.loras.map((l) => `${l.name} ${l.weight}`).join(", ")}</dd>` : nothing}
+              ${size ? html`<dt>Size</dt><dd>${size}</dd>` : nothing}
+              ${img.size ? html`<dt>File</dt><dd>${img.size < 1048576 ? `${Math.max(1, Math.round(img.size / 1024))} KB` : `${(img.size / 1048576).toFixed(1)} MB`}</dd>` : nothing}
+              ${when ? html`<dt>Made</dt><dd>${when}</dd>` : nothing}
+            </dl>
+            ${i.prompt
+              ? html`<div class="acts">
+                  <button @click=${() => void this.reuseMetadata(img)}><span class="material-symbols-rounded" style="font-size:15px;">replay</span> Use these settings</button>
+                  <button @click=${() => void this.copyMetadata(img)}><span class="material-symbols-rounded" style="font-size:15px;">content_copy</span> Copy</button>
+                </div>`
+              : nothing}`}
+    </div>`;
   }
 }
 

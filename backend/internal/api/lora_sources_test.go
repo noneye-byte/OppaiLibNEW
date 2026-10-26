@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/youruser/oppailib/internal/db"
 	"github.com/youruser/oppailib/internal/imagegen"
 )
 
@@ -88,10 +89,10 @@ func pictureHost(t *testing.T) *httptest.Server {
 	return srv
 }
 
-func TestKeptPicturesAreImportedIntoANewCollectionAndAMissingOneIsCounted(t *testing.T) {
+func TestKeptPicturesAreImportedIntoATrainingSetNotTheLibrary(t *testing.T) {
 	host := pictureHost(t)
 	s, token := newTestServer(t)
-	body := fmt.Sprintf(`{"collectionName":"LoRA: ink","items":[
+	body := fmt.Sprintf(`{"setName":"ink","items":[
 		{"url":"%[1]s/a.png","source":"https://x.com/ink/status/1","title":"first"},
 		{"url":"%[1]s/bb.png","source":"https://x.com/ink/status/2"},
 		{"url":"%[1]s/a.png"},
@@ -103,20 +104,31 @@ func TestKeptPicturesAreImportedIntoANewCollectionAndAMissingOneIsCounted(t *tes
 	}
 	var task trainTask
 	_ = json.Unmarshal(rec.Body.Bytes(), &task)
-	if task.Total != 3 || task.CollectionID == 0 {
+	if task.Total != 3 || task.SetID == 0 {
 		t.Fatalf("the duplicate and the non-web link are dropped before it starts: %+v", task)
 	}
 	task = waitTask(t, s, token, task.ID)
-	if task.Done != 2 || task.Failed != 1 || task.Error != "" || len(task.MediaIDs) != 2 {
+	if task.Done != 2 || task.Failed != 1 || task.Error != "" || len(task.PictureIDs) != 2 {
 		t.Fatalf("finished task = %+v", task)
 	}
-	ids, err := s.db.CollectionMediaIDs(context.Background(), task.CollectionID, 10, 0)
-	if err != nil || len(ids) != 2 {
-		t.Fatalf("collection holds %v (%v)", ids, err)
+	ctx := context.Background()
+	set, ok, _ := s.db.GetTrainSet(ctx, task.SetID)
+	if !ok || set.Name != "ink" || set.Count != 2 {
+		t.Fatalf("set = %+v", set)
 	}
-	c, _ := s.db.GetCollection(context.Background(), task.CollectionID)
-	if c == nil || c.Name != "LoRA: ink" {
-		t.Errorf("collection = %+v", c)
+	if n, _ := s.db.CountMedia(ctx, db.MediaFilter{}); n != 0 {
+		t.Fatalf("the library has %d items; a training picture must not be one", n)
+	}
+	pics, _ := s.db.TrainPictures(ctx, set.ID)
+	if len(pics) != 2 || len(pics[0].Tags) != 0 || pics[0].ThumbPath == "" || pics[0].Width != 8 {
+		t.Fatalf("pictures = %+v", pics)
+	}
+	sources := map[string]bool{}
+	for _, p := range pics {
+		sources[s.decrypt(p.SourceEnc, "source")] = true
+	}
+	if !sources["https://x.com/ink/status/1"] || !sources["https://x.com/ink/status/2"] {
+		t.Errorf("sources = %v", sources)
 	}
 }
 
@@ -155,22 +167,22 @@ func TestAnXAccountThatIsNotOneIsRefusedBeforeAnythingIsFetched(t *testing.T) {
 	}
 }
 
-func TestASecondImportForTheSameLoraJoinsItsCollection(t *testing.T) {
+func TestASecondImportForTheSameLoraJoinsItsSet(t *testing.T) {
 	host := pictureHost(t)
 	s, token := newTestServer(t)
-	existing, err := s.db.CreateCollection(context.Background(), "LoRA: ink")
+	existing, err := s.db.CreateTrainSet(context.Background(), "Ink")
 	if err != nil {
 		t.Fatal(err)
 	}
 	rec := do(t, s.Handler(), token, http.MethodPost, "/api/imagegen/train/import",
-		fmt.Sprintf(`{"collectionName":"lora: INK","items":[{"url":"%s/c.png"}]}`, host.URL))
+		fmt.Sprintf(`{"setName":"INK","items":[{"url":"%s/c.png"}]}`, host.URL))
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("import: %d %s", rec.Code, rec.Body)
 	}
 	var task trainTask
 	_ = json.Unmarshal(rec.Body.Bytes(), &task)
-	if task.CollectionID != existing {
-		t.Fatalf("went into collection %d, want the existing %d", task.CollectionID, existing)
+	if task.SetID != existing.ID {
+		t.Fatalf("went into set %d, want the existing %d", task.SetID, existing.ID)
 	}
 	waitTask(t, s, token, task.ID)
 }

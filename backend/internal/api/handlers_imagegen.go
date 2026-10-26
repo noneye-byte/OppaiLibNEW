@@ -187,7 +187,13 @@ func (s *Server) handleImageGenStatus(w http.ResponseWriter, r *http.Request) {
 		if boards, err := s.imagegen.Boards(ctx, set.ImageGenURL); err == nil {
 			out["boards"] = boards
 		}
+		out["gallery"] = "invokeai"
+	} else if s.imagegen.A1111OutputsDir() != "" {
+		// A1111 keeps no gallery of its own; its outputs folder, when this process can
+		// see it, is one (imagegen/a1111_gallery.go).
+		out["gallery"] = "a1111"
 	}
+	out["gallerySorts"] = imagegen.GallerySorts
 	out["detailerAvailable"] = s.imagegen.SupportsADetailer(ctx, set.ImageGenURL)
 	// What the studio can do to the generator's models: browse Civitai and link by
 	// hash always; install, edit, re-cover and delete where the generator lets it —
@@ -838,7 +844,7 @@ func (s *Server) handleGalleryImages(w http.ResponseWriter, r *http.Request) {
 	limit := clampInt(atoiDefault(q.Get("limit"), 60), 1, 200)
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
-	page, err := s.imagegen.BoardImages(ctx, base, q.Get("board"), offset, limit)
+	page, err := s.imagegen.BoardImages(ctx, base, q.Get("board"), q.Get("sort"), offset, limit)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return

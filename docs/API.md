@@ -433,11 +433,15 @@ their usual names in any case — `Stable-diffusion` or `checkpoints`, `Lora` or
 is missing, holds neither `Stable-diffusion` nor `Lora`, or is mounted read-only is
 not used, and the status says which. InvokeAI ignores it.
 
+`imageGenOutputsDir` is Automatic1111's `outputs` folder, which is its gallery — A1111
+has no API that lists what it made. Blank means `/a1111-outputs` when mounted, else
+`outputs` beside the models folder. Deleting from the gallery deletes the file.
+
 ## Image generation
 
 | Method | Path | Notes |
 |--------|------|-------|
-| GET | `/api/imagegen/status` | → `{enabled, reachable, backend, models, loras, vaes, templates, boards?, detailerAvailable, civitai, manageModels, modelsDirSet?, modelsDir?, modelsDirProblem?}`. `backend` is `invokeai` or `a1111`. `manageModels` says models can be installed, edited, re-covered and deleted from here — always on InvokeAI, on A1111 once `imageGenModelsDir` (or the `/a1111-models` mount) is a writable models folder; A1111 only: `modelsDirSet` tells "not set" from "set but wrong", `modelsDir` is the folder in use and `modelsDirProblem` says what is wrong with the one that is set. Models and LoRAs carry `key`: InvokeAI's record key, or an A1111 file's path under its models folder (`Lora/ink.safetensors`), which is what the Civitai records are kept by. An A1111 LoRA's `triggerPhrases` and `weight` come from its sidecar, else from its Civitai link. `templates` are InvokeAI's style presets or A1111's saved styles |
+| GET | `/api/imagegen/status` | → `{enabled, reachable, backend, models, loras, vaes, templates, boards?, detailerAvailable, civitai, manageModels, modelsDirSet?, modelsDir?, modelsDirProblem?}`. `backend` is `invokeai` or `a1111`. `manageModels` says models can be installed, edited, re-covered and deleted from here — always on InvokeAI, on A1111 once `imageGenModelsDir` (or the `/a1111-models` mount) is a writable models folder; A1111 only: `modelsDirSet` tells "not set" from "set but wrong", `modelsDir` is the folder in use and `modelsDirProblem` says what is wrong with the one that is set. Models and LoRAs carry `key`: InvokeAI's record key, or an A1111 file's path under its models folder (`Lora/ink.safetensors`), which is what the Civitai records are kept by. An A1111 LoRA's `triggerPhrases` and `weight` come from its sidecar, else from its Civitai link. `templates` are InvokeAI's style presets or A1111's saved styles. `gallery` is `invokeai`, `a1111` (once the outputs folder is visible) or absent, and `gallerySorts` the orders a gallery listing takes |
 | POST | `/api/imagegen/check` | **admin only.** The Settings → Image generation Test: tries each link an install depends on and returns `{checks:[{id, label, ok, skipped?, detail}]}` — `generator`, and on A1111 `rescan` (POSTs `/sdapi/v1/refresh-loras`), `folder` (writes and removes a probe file), `match` (whether the models A1111 lists are at the same paths in the mounted folder, i.e. it is the folder A1111 reads); then `civitai`, `key` (`/me`) and `download`, which starts a real download with the key and reads only the headers |
 | GET | `/api/imagegen/tags?q=&limit=` | prompt completion for the tag being typed → `{items:[{tag, category, count, alias?}], suggestions, correction}`. The vocabulary is Danbooru's — every tag on at least 100 posts, with post counts and aliases — plus this library's own tags (`category` 100). Ranked: the tag itself, tags starting with `q`, an alias that does (`alias` says which), a tag a later word of which does, then near misses for a typo. `suggestions` is `items` as plain names and `correction` a "did you mean", the shape older apps read. `limit` defaults to 12, at most 50 |
 
@@ -457,14 +461,39 @@ and the generator gets its checkpoint back. A run is `preparing` (sending), `que
 |--------|------|-------|
 | GET | `/api/imagegen/train` | → `{configured, tagger, trainer?, trainerError?, trainings}`. `tagger` is whether AI tagging is on, for the screen's auto-tag. `trainer` is the trainer's `/health` (`gpu`, `vramMB`, `busy`, `queued`, `modelsMounted`); each training has `id, name, trigger, baseModel, images, status, error?, modelKey?, createdAt, finishedAt?, request` and, while the trainer has it, `phase, step, total, epoch, epochs, loss, eta, elapsed, family, samples, log` |
 | POST | `/api/imagegen/train/preview` | `{source, trigger, captions?, leaveOut?}` → `{count, mediaIds, items:[{id, caption, tags:[{name, manual?}], width?, height?}], commonTags:[{name,count}], exampleCaption, suggestedRepeats, untagged, limit}`, what a run would train on: every picture with its caption, and how many have no content tags. Nothing is sent |
-| POST | `/api/imagegen/train` | `{name, trigger, base, source:{collectionId\|tag\|mediaIds, exclude?}, captions?, leaveOut?, preset?, epochs?, repeats?, rank?, alpha?, resolution?, learningRate?, textEncoderLr?, optimizer?, noiseOffset?, clipSkip?, lowVram?, flip?, freeGpu?, samples?}` → the training, `preparing`. `base` is a checkpoint as the studio names it; stills only (no GIFs or video), at most 400. Captions are the trigger word then the picture's tags (`captions:"trigger"` for the word alone), less `leaveOut`. 409 without a trainer |
+| POST | `/api/imagegen/train` | `{name, trigger, base, source:{setId\|collectionId\|tag\|mediaIds, exclude?}, captions?, leaveOut?, preset?, epochs?, repeats?, rank?, alpha?, resolution?, learningRate?, textEncoderLr?, optimizer?, noiseOffset?, clipSkip?, lowVram?, flip?, freeGpu?, samples?}` → the training, `preparing`. `base` is a checkpoint as the studio names it; stills only (no GIFs or video), at most 400. Captions are the trigger word then the picture's tags (`captions:"trigger"` for the word alone), less `leaveOut`. 409 without a trainer |
 | POST | `/api/imagegen/train/{id}/cancel` | stops a run → the training. One on the trainer reads `cancelled` once the trainer has stopped it |
 | DELETE | `/api/imagegen/train/{id}` | forgets a finished run and the trainer's copy → 204; 409 while it is live |
 | GET | `/api/imagegen/train/{id}/sample?name=` | one of the run's sample pictures, from the trainer |
 | GET | `/api/imagegen/train/twitter?user=&cursor=` | one page of an X account's pictures, read from the fxtwitter mirror's profile feed (no X account needed) → `{account?:{name, screenName, avatar, mediaCount, protected}, pictures:[{id, url, thumb, tweetUrl, text, width, height, repost, sensitive, created}], cursor?}`. `account` is on the first page only; no `cursor` is the last page. Stills only. `user` is `@name`, `name` or a link; 400 for anything else, 404 for no such account, 502 when the mirror does not answer |
-| POST | `/api/imagegen/train/import` | `{items:[{url, source?, title?}], collectionId? \| collectionName?}` → 202 and a task. Downloads the kept pictures into the library and the collection, in the background; a collection by that name (any capitals) is joined rather than doubled. At most 400 |
-| POST | `/api/imagegen/train/autotag` | `{source, redo?}` → 202 and a task. Runs the tagger over the set's pictures with no content tags, or every one with `redo` (the tagger's earlier tags are replaced, typed ones kept). 409 with the tagger off |
-| GET | `/api/imagegen/train-tasks/{id}` | an import or tagging task → `{id, kind, total, done, failed, finished, error?, collectionId?, mediaIds?}`. Tasks live in memory for an hour after they finish |
+| POST | `/api/imagegen/train/import` | `{items:[{url, source?, title?}], setId? \| setName?}` → 202 and a task. Downloads the kept pictures into a training set (never the library), in the background; a set by that name (any capitals) is joined rather than doubled. At most 400 |
+| POST | `/api/imagegen/train/autotag` | `{source, redo?}` → 202 and a task. A training set's pictures are tagged in the set, the library untouched. Runs the tagger over the set's pictures with no content tags, or every one with `redo` (the tagger's earlier tags are replaced, typed ones kept). 409 with the tagger off |
+| GET | `/api/imagegen/train-tasks/{id}` | an import or tagging task → `{id, kind, total, done, failed, finished, error?, setId?, pictureIds?}`. Tasks live in memory for an hour after they finish |
+| GET | `/api/imagegen/train-sets` | the training sets → `{sets:[{id, name, count, coverId?, createdAt, updatedAt}]}`. A set holds a LoRA's pictures apart from the library: no grid, search, Libby pick or auto-tagger sees them |
+| POST | `/api/imagegen/train-sets` | `{name}` → the set by that name (any capitals), made if there is none |
+| PATCH | `/api/imagegen/train-sets/{id}` | `{name}` renames it |
+| DELETE | `/api/imagegen/train-sets/{id}` | with its pictures → 204. A file the library also holds stays |
+| POST | `/api/imagegen/train-sets/{id}/pictures` | multipart `file` (+ `source`) → `{id, existed}`, 201 or 200 for a picture already in the set. Stills only (JPEG, PNG, WebP, BMP), 40 MB, 400 a set |
+| POST | `/api/imagegen/train-sets/{id}/from-library` | `{collectionId\|tag\|mediaIds, move?}` → `{added, moved, set}`. Copies library pictures and their tags in (the same stored file); `move` deletes them from the library after, and an emptied collection with them |
+| GET | `/api/imagegen/train-sets/{id}/pictures/{pic}?thumb=1` | the picture, or its 320px tile |
+| PATCH | `/api/imagegen/train-sets/{id}/pictures/{pic}` | `{addTags?, removeTags?}` → `{id, tags}`. Typed tags are lower-cased and replace the tagger's same tag |
+| DELETE | `/api/imagegen/train-sets/{id}/pictures/{pic}` | takes it out of the set → 204 |
+
+### The generator's gallery
+
+InvokeAI's own gallery, or on Automatic1111 the outputs folder (each folder inside it a
+board; `none` is every picture, and an image's name is its path, base64url'd).
+
+| Method | Path | Notes |
+|--------|------|-------|
+| GET | `/api/imagegen/gallery/boards` | → `{boards:[{id, name, count}]}` |
+| POST, DELETE | `/api/imagegen/gallery/boards[/{id}]` | make or delete an InvokeAI board; refused on A1111 |
+| GET | `/api/imagegen/gallery/images?board=&offset=&limit=&sort=` | → `{items:[{name, width?, height?, created?, label?, size?}], total}`. `sort` is `newest` (default), `oldest`, `name` or `largest`; InvokeAI takes the first two |
+| GET | `/api/imagegen/gallery/image/{name}[/thumb]` | the picture, or its thumbnail (made once and kept, on A1111) |
+| GET | `/api/imagegen/gallery/image/{name}/metadata` | the generation settings: InvokeAI's record, or the PNG's A1111 `parameters` text read into the same shape |
+| DELETE | `/api/imagegen/gallery/image/{name}`, POST `/api/imagegen/gallery/delete` `{names}` | deletes from the generator (on A1111 the file and its `.txt`) |
+| POST | `/api/imagegen/gallery/board` `{board, names}` | files pictures on an InvokeAI board |
+| POST | `/api/imagegen/gallery/save` `{name, title?, tags?}` | copies one into the library |
 
 The trainer's own API (`trainer/server.py`) is `GET /health`, `GET\|PUT /bases?key=&size=`
 (is a checkpoint here / upload one), `POST /jobs` (settings), `PUT /jobs/{id}/files/{name}`

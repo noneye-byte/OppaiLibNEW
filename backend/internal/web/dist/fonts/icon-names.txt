@@ -81,6 +81,7 @@ done
 download
 downloading
 drag_indicator
+drive_file_move
 edit
 edit_note
 edit_square
@@ -189,6 +190,7 @@ record_voice_over
 redo
 refresh
 remove
+remove_circle
 replay
 reply
 resize
@@ -235,6 +237,7 @@ theaters
 timeline
 title
 toast
+toolbar
 travel_explore
 tune
 undo

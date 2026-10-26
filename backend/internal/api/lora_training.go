@@ -24,7 +24,8 @@ import (
 //
 // The training happens on the trainer (trainer/, a container of its own with the
 // GPU); this side does everything around it. Starting a run picks the pictures — a
-// collection, or everything with a tag — captions them from their tags
+// training set (lora_sets.go), or from the library a collection or everything with
+// a tag — captions them from their tags
 // (lora_dataset.go), makes sure the trainer has the checkpoint to train against
 // (sending it from A1111's models folder when the trainer cannot see it), and hands
 // the pictures over one at a time. From there a watcher follows the run, here and
@@ -75,11 +76,12 @@ func (s *Server) trainState() *trainRunner {
 	return s.train
 }
 
-// trainSource is which pictures a run is trained on: one of the first three, less
-// the ones dropped from the set on the Train screen. Dropping is kept here rather
-// than done to the collection, so a picture left out of one LoRA stays in the
-// collection and in the library.
+// trainSource is which pictures a run is trained on: a training set, or one of the
+// library's three, less the ones dropped on the Train screen. Dropping is kept here
+// rather than done to the set or the collection, so a picture left out of one LoRA
+// is still there for the next.
 type trainSource struct {
+	SetID        int64   `json:"setId,omitempty"`
 	CollectionID int64   `json:"collectionId,omitempty"`
 	Tag          string  `json:"tag,omitempty"`
 	MediaIDs     []int64 `json:"mediaIds,omitempty"`
@@ -312,29 +314,22 @@ func (s *Server) handleTrainPreview(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	rows, err := s.trainPictureRows(ctx, req.Source)
+	pics, err := s.trainPics(ctx, req.Source)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	ids := make([]int64, 0, len(rows))
-	for _, row := range rows {
-		ids = append(ids, row.ID)
-	}
-	tagsByID, err := s.db.TagsForMediaBatch(ctx, ids)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	sets := make([][]models.Tag, 0, len(ids))
-	for _, id := range ids {
-		sets = append(sets, tagsByID[id])
+	ids := make([]int64, 0, len(pics))
+	sets := make([][]models.Tag, 0, len(pics))
+	for _, p := range pics {
+		ids = append(ids, p.ID)
+		sets = append(sets, p.Tags)
 	}
 	leaveOut := loraLeaveOut(req.LeaveOut)
-	items := make([]trainPreviewItem, 0, len(rows))
+	items := make([]trainPreviewItem, 0, len(pics))
 	untagged := 0
-	for _, row := range rows {
-		content := loraContentTags(tagsByID[row.ID])
+	for _, p := range pics {
+		content := loraContentTags(p.Tags)
 		if len(content) == 0 {
 			untagged++
 		}
@@ -343,8 +338,8 @@ func (s *Server) handleTrainPreview(w http.ResponseWriter, r *http.Request) {
 			tags = append(tags, trainItemTag{Name: loraCaptionTag(t.Name), Manual: t.Source == "manual"})
 		}
 		items = append(items, trainPreviewItem{
-			ID: row.ID, Caption: loraCaption(req.Trigger, tagsByID[row.ID], leaveOut, req.Captions),
-			Tags: tags, Width: row.Width.Int64, Height: row.Height.Int64,
+			ID: p.ID, Caption: loraCaption(req.Trigger, p.Tags, leaveOut, req.Captions),
+			Tags: tags, Width: p.Width, Height: p.Height,
 		})
 	}
 	example := ""
@@ -397,18 +392,18 @@ func (s *Server) handleTrainStart(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	rows, err := s.trainPictureRows(ctx, req.Source)
+	pics, err := s.trainPics(ctx, req.Source)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if len(rows) == 0 {
+	if len(pics) == 0 {
 		writeErr(w, http.StatusBadRequest, "there are no pictures there to train on (GIFs and videos are left out)")
 		return
 	}
 	settingsJSON, _ := json.Marshal(req)
 	t, err := s.db.InsertLoraTraining(ctx, db.LoraTraining{
-		Name: req.Name, Trigger: req.Trigger, BaseModel: s.trainBaseName(ctx, set.ImageGenURL, req.Base), Images: len(rows),
+		Name: req.Name, Trigger: req.Trigger, BaseModel: s.trainBaseName(ctx, set.ImageGenURL, req.Base), Images: len(pics),
 		Settings: string(settingsJSON), Status: "preparing",
 	})
 	if err != nil {
@@ -419,7 +414,7 @@ func (s *Server) handleTrainStart(w http.ResponseWriter, r *http.Request) {
 	st.mu.Lock()
 	st.preparing[t.ID] = true
 	st.mu.Unlock()
-	go s.trainPrepare(t, req, ckpt, rows)
+	go s.trainPrepare(t, req, ckpt, pics)
 	s.trainWatch()
 	writeJSON(w, http.StatusOK, trainingOutOf(t, nil))
 }
@@ -440,7 +435,7 @@ func (s *Server) trainBaseName(ctx context.Context, genBase, selector string) st
 
 // trainPrepare makes sure the trainer has the checkpoint and sends it the pictures.
 // It runs in the background: a checkpoint is gigabytes.
-func (s *Server) trainPrepare(t db.LoraTraining, req trainRequest, ckpt imagegen.CheckpointFile, rows []*db.MediaRow) {
+func (s *Server) trainPrepare(t db.LoraTraining, req trainRequest, ckpt imagegen.CheckpointFile, pics []trainPic) {
 	st := s.trainState()
 	defer func() {
 		st.mu.Lock()
@@ -485,24 +480,15 @@ func (s *Server) trainPrepare(t db.LoraTraining, req trainRequest, ckpt imagegen
 		return
 	}
 
-	ids := make([]int64, 0, len(rows))
-	for _, row := range rows {
-		ids = append(ids, row.ID)
-	}
-	tagsByID, err := s.db.TagsForMediaBatch(ctx, ids)
-	if err != nil {
-		fail(err)
-		return
-	}
 	leaveOut := loraLeaveOut(req.LeaveOut)
 	sent, i := 0, 0
 	next := func() (trainer.Picture, bool, error) {
-		for i < len(rows) {
-			row := rows[i]
+		for i < len(pics) {
+			p := pics[i]
 			i++
-			data, err := s.trainReadPicture(row)
+			data, err := s.trainReadPicture(p)
 			if err != nil {
-				s.log.Warn("train: skip a picture", "media", row.ID, "err", err)
+				s.log.Warn("train: skip a picture", "picture", p.ID, "err", err)
 				continue
 			}
 			ext := loraPictureExt(data)
@@ -510,14 +496,18 @@ func (s *Server) trainPrepare(t db.LoraTraining, req trainRequest, ckpt imagegen
 				continue
 			}
 			sent++
-			return trainer.Picture{Ext: ext, Data: data, Caption: loraCaption(req.Trigger, tagsByID[row.ID], leaveOut, req.Captions)}, true, nil
+			return trainer.Picture{Ext: ext, Data: data, Caption: loraCaption(req.Trigger, p.Tags, leaveOut, req.Captions)}, true, nil
 		}
 		if sent == 0 {
 			return trainer.Picture{}, false, errors.New("none of the pictures could be read")
 		}
 		return trainer.Picture{}, false, nil
 	}
-	job, err := s.trainer.Submit(ctx, base, token, s.trainSpec(ctx, req, ckpt, sets(tagsByID, ids), len(rows)), next)
+	tagSets := make([][]models.Tag, 0, len(pics))
+	for _, p := range pics {
+		tagSets = append(tagSets, p.Tags)
+	}
+	job, err := s.trainer.Submit(ctx, base, token, s.trainSpec(ctx, req, ckpt, tagSets, len(pics)), next)
 	if err != nil {
 		fail(err)
 		return
@@ -534,21 +524,13 @@ func (s *Server) trainPrepare(t db.LoraTraining, req trainRequest, ckpt imagegen
 	s.trainWatch()
 }
 
-func sets(tagsByID map[int64][]models.Tag, ids []int64) [][]models.Tag {
-	out := make([][]models.Tag, 0, len(ids))
-	for _, id := range ids {
-		out = append(out, tagsByID[id])
-	}
-	return out
-}
-
 // trainReadPicture decrypts one picture into memory. It never touches the disk on
 // this side; the trainer deletes its copy when the run ends.
-func (s *Server) trainReadPicture(row *db.MediaRow) ([]byte, error) {
-	if row.Size > trainMaxPictureBytes {
-		return nil, fmt.Errorf("%d MB is too large to train on", row.Size>>20)
+func (s *Server) trainReadPicture(p trainPic) ([]byte, error) {
+	if p.Size > trainMaxPictureBytes {
+		return nil, fmt.Errorf("%d MB is too large to train on", p.Size>>20)
 	}
-	rc, err := s.store.Open(row.BlobPath)
+	rc, err := s.store.Open(p.BlobPath)
 	if err != nil {
 		return nil, err
 	}

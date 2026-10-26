@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -17,20 +18,18 @@ import (
 	"github.com/youruser/oppailib/internal/scraper"
 )
 
-// Filling a training set from outside the library, and tagging it.
+// Filling a training set from an X account, and tagging a set.
 //
-// The training set is always pictures in the library — a run reads them from the
-// store like any other — so bringing pictures in from elsewhere means importing
-// them, and the import puts them in a collection the Train screen then trains on.
-// Uploads need nothing here: the browser shows the files it was given, sends the
-// ones kept through the ordinary upload, and adds them to the collection itself.
-// An X account is different: the browser cannot see x.com, so the server lists the
-// account's pictures (scraper/twitter_user.go), the browser shows them through the
-// image proxy, and only the ones kept are downloaded and imported.
+// Pictures from outside go into a training set (lora_sets.go), never the library.
+// Uploads need nothing here: the browser shows the files it was given and sends the
+// ones kept to the set itself. An X account is different: the browser cannot see
+// x.com, so the server lists the account's pictures (scraper/twitter_user.go), the
+// browser shows them through the image proxy, and only the ones kept are downloaded
+// into the set.
 //
 // Importing a few hundred pictures, or tagging them, takes minutes, so both run in
 // the background as a task the screen polls. A task lives in memory: it is a
-// progress bar, not a record, and what it did is in the library either way.
+// progress bar, not a record, and what it did is in the set either way.
 
 // trainImportMax bounds one import, at the size of a training set.
 const trainImportMax = trainMaxPictures
@@ -46,9 +45,9 @@ type trainTask struct {
 	Failed   int    `json:"failed"`
 	Finished bool   `json:"finished"`
 	Error    string `json:"error,omitempty"`
-	// CollectionID is where an import put the pictures.
-	CollectionID int64   `json:"collectionId,omitempty"`
-	MediaIDs     []int64 `json:"mediaIds,omitempty"`
+	// SetID is the training set an import put the pictures in; PictureIDs are them.
+	SetID      int64   `json:"setId,omitempty"`
+	PictureIDs []int64 `json:"pictureIds,omitempty"`
 	ended        time.Time
 }
 
@@ -100,7 +99,7 @@ func (ts *trainTasks) get(id string) (trainTask, bool) {
 		return trainTask{}, false
 	}
 	out := *t
-	out.MediaIDs = append([]int64(nil), t.MediaIDs...)
+	out.PictureIDs = append([]int64(nil), t.PictureIDs...)
 	return out, true
 }
 
@@ -150,13 +149,13 @@ type trainImportItem struct {
 
 type trainImportReq struct {
 	Items []trainImportItem `json:"items"`
-	// CollectionID adds to a collection there is; otherwise one is made by this name.
-	CollectionID   int64  `json:"collectionId"`
-	CollectionName string `json:"collectionName"`
+	// SetID adds to a set there is; otherwise the set by this name, made if need be.
+	SetID   int64  `json:"setId"`
+	SetName string `json:"setName"`
 }
 
-// handleTrainImport downloads the kept pictures into the library and a collection,
-// in the background, and answers with the task to watch.
+// handleTrainImport downloads the kept pictures into a training set, in the
+// background, and answers with the task to watch.
 func (s *Server) handleTrainImport(w http.ResponseWriter, r *http.Request) {
 	var req trainImportReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -182,46 +181,20 @@ func (s *Server) handleTrainImport(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, fmt.Sprintf("that's more than %d pictures — a LoRA trains no better on more", trainImportMax))
 		return
 	}
-	collID, err := s.trainCollection(r.Context(), req.CollectionID, req.CollectionName)
+	set, err := s.trainSetFor(r.Context(), req.SetID, req.SetName)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	tasks := s.trainTaskList()
 	task := tasks.start("import", len(items))
-	task.CollectionID = collID
-	go s.trainImport(tasks, task, collID, items)
+	task.SetID = set.ID
+	go s.trainImport(tasks, task, set.ID, items)
 	out, _ := tasks.get(task.ID)
 	writeJSON(w, http.StatusAccepted, out)
 }
 
-// trainCollection is the collection an import goes into: the one named by id, or a
-// new one by name. Names are unique, so a collection an earlier try at the same LoRA
-// left behind — whatever its capitals — is joined rather than refused or doubled.
-func (s *Server) trainCollection(ctx context.Context, id int64, name string) (int64, error) {
-	if id > 0 {
-		if _, err := s.db.GetCollection(ctx, id); err != nil {
-			return 0, errors.New("that collection is gone")
-		}
-		return id, nil
-	}
-	name = strings.TrimSpace(name)
-	if name == "" {
-		name = "LoRA training"
-	}
-	all, err := s.db.ListCollections(ctx)
-	if err != nil {
-		return 0, err
-	}
-	for _, c := range all {
-		if strings.EqualFold(c.Name, name) {
-			return c.ID, nil
-		}
-	}
-	return s.db.CreateCollection(ctx, name)
-}
-
-func (s *Server) trainImport(tasks *trainTasks, task *trainTask, collID int64, items []trainImportItem) {
+func (s *Server) trainImport(tasks *trainTasks, task *trainTask, setID int64, items []trainImportItem) {
 	ctx, cancel := context.WithTimeout(context.Background(), importTimeout)
 	defer cancel()
 	sem := make(chan struct{}, maxImportConcurrency)
@@ -232,11 +205,8 @@ func (s *Server) trainImport(tasks *trainTasks, task *trainTask, collID int64, i
 		go func(it trainImportItem) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			id, err := s.trainImportOne(ctx, it)
-			if err == nil {
-				// One at a time, as they land: an import cut short keeps what it got.
-				_, err = s.db.AddToCollection(ctx, collID, []int64{id})
-			}
+			// One at a time, as they land: an import cut short keeps what it got.
+			id, err := s.trainImportOne(ctx, setID, it)
 			tasks.update(task, func(t *trainTask) {
 				if err != nil {
 					s.log.Warn("train import: skip a picture", "url", it.URL, "err", err)
@@ -244,7 +214,7 @@ func (s *Server) trainImport(tasks *trainTasks, task *trainTask, collID int64, i
 					return
 				}
 				t.Done++
-				t.MediaIDs = append(t.MediaIDs, id)
+				t.PictureIDs = append(t.PictureIDs, id)
 			})
 		}(it)
 	}
@@ -257,10 +227,10 @@ func (s *Server) trainImport(tasks *trainTasks, task *trainTask, collID int64, i
 	})
 }
 
-// trainImportOne downloads one picture into the library. It skips the scraper's
+// trainImportOne downloads one picture into a set. It skips the scraper's
 // politeness delay, as the image proxy does: these are a CDN's pictures the person
 // has just looked at, and the import already bounds how many go at once.
-func (s *Server) trainImportOne(ctx context.Context, it trainImportItem) (int64, error) {
+func (s *Server) trainImportOne(ctx context.Context, setID int64, it trainImportItem) (int64, error) {
 	dl, err := s.scraper.FetchImage(ctx, it.URL)
 	if err != nil {
 		return 0, err
@@ -269,18 +239,12 @@ func (s *Server) trainImportOne(ctx context.Context, it trainImportItem) (int64,
 	if ct := strings.ToLower(dl.ContentType); ct != "" && !strings.HasPrefix(ct, "image/") {
 		return 0, fmt.Errorf("%s is not a picture", ct)
 	}
-	title := strings.TrimSpace(it.Title)
-	if len(title) > 200 {
-		title = strings.TrimSpace(title[:200]) + "…"
-	}
-	res, err := s.ingestBlob(ctx, dl.Body, ingestMeta{Filename: dl.Filename, Title: title, Source: it.Source})
+	data, err := io.ReadAll(io.LimitReader(dl.Body, trainMaxPictureBytes+1))
 	if err != nil {
 		return 0, err
 	}
-	if res.Kind != string(models.KindImage) {
-		return 0, fmt.Errorf("it came in as a %s, not a still", res.Kind)
-	}
-	return res.ID, nil
+	pic, _, err := s.addTrainPicture(ctx, setID, data, it.Source)
+	return pic.ID, err
 }
 
 // ── tagging a set ───────────────────────────────────────────────────────────
@@ -309,33 +273,23 @@ func (s *Server) handleTrainAutotag(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	rows, err := s.trainPictureRows(ctx, req.Source)
+	pics, err := s.trainPics(ctx, req.Source)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	ids := make([]int64, 0, len(rows))
-	for _, row := range rows {
-		ids = append(ids, row.ID)
-	}
-	tagsByID, err := s.db.TagsForMediaBatch(ctx, ids)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
 	type job struct {
-		id        int64
-		blob      string
+		pic       trainPic
 		staleTags []string
 	}
 	var jobs []job
-	for _, row := range rows {
-		tags := tagsByID[row.ID]
+	for _, p := range pics {
+		tags := p.Tags
 		if !req.Redo && len(loraContentTags(tags)) > 0 {
 			continue
 		}
-		j := job{id: row.ID, blob: row.BlobPath}
-		if req.Redo {
+		j := job{pic: p}
+		if req.Redo && req.Source.SetID == 0 {
 			for _, t := range tags {
 				if t.Source == "ai" {
 					j.staleTags = append(j.staleTags, t.Name)
@@ -357,15 +311,21 @@ func (s *Server) handleTrainAutotag(w http.ResponseWriter, r *http.Request) {
 			go func(j job) {
 				defer wg.Done()
 				defer func() { <-sem }()
-				// What the tagger said last time goes first, so a picture it now sees
-				// differently does not keep both answers. Tags typed by hand stay.
-				for _, name := range j.staleTags {
-					_ = s.db.RemoveTag(ctx, j.id, name)
+				var err error
+				if setID := req.Source.SetID; setID > 0 {
+					// A set's picture is tagged in the set; the library never sees it.
+					err = s.tagTrainPicture(ctx, setID, j.pic)
+				} else {
+					// What the tagger said last time goes first, so a picture it now sees
+					// differently does not keep both answers. Tags typed by hand stay.
+					for _, name := range j.staleTags {
+						_ = s.db.RemoveTag(ctx, j.pic.ID, name)
+					}
+					err = s.ai.TagMedia(ctx, j.pic.ID, j.pic.BlobPath, string(models.KindImage))
 				}
-				err := s.ai.TagMedia(ctx, j.id, j.blob, string(models.KindImage))
 				tasks.update(task, func(t *trainTask) {
 					if err != nil {
-						s.log.Warn("train autotag", "media", j.id, "err", err)
+						s.log.Warn("train autotag", "picture", j.pic.ID, "err", err)
 						t.Failed++
 						return
 					}
@@ -375,7 +335,9 @@ func (s *Server) handleTrainAutotag(w http.ResponseWriter, r *http.Request) {
 		}
 		wg.Wait()
 		tasks.update(task, func(t *trainTask) { t.Finished = true })
-		s.touchLibraryIndex()
+		if req.Source.SetID == 0 {
+			s.touchLibraryIndex()
+		}
 	}()
 	out, _ := tasks.get(task.ID)
 	writeJSON(w, http.StatusAccepted, out)

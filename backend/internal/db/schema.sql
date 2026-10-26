@@ -411,6 +411,42 @@ CREATE TABLE IF NOT EXISTS lora_trainings (
     finished_at    INTEGER NOT NULL DEFAULT 0
 );
 
+-- The pictures a LoRA is trained on, when they are not the library's. Deliberately
+-- not rows in media, for the reason game_saves are not: a training set is a pile of
+-- someone else's pictures — a whole X account, a folder of references — kept to
+-- teach a model, and in the library they would turn up in every grid, every search,
+-- Libby's picks and the auto-tagger's queue, which tagged them on arrival. Here they
+-- are seen only by the Train screen.
+--
+-- The blob is in the same encrypted store, so a picture also in the library shares
+-- its file (the store is content-addressed): deleting either side checks the other
+-- before unlinking it. tags is a JSON list [{name, category, source}] — a set's tags
+-- are edited a picture at a time and only ever read whole — and plaintext like the
+-- library's tags table; source_enc is sealed like a media item's source.
+CREATE TABLE IF NOT EXISTS train_sets (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS train_pictures (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    set_id     INTEGER NOT NULL REFERENCES train_sets(id) ON DELETE CASCADE,
+    sha256     TEXT NOT NULL,
+    size       INTEGER NOT NULL,
+    blob_path  TEXT NOT NULL,
+    thumb_path TEXT NOT NULL DEFAULT '',
+    source_enc BLOB,
+    width      INTEGER NOT NULL DEFAULT 0,
+    height     INTEGER NOT NULL DEFAULT 0,
+    tags       TEXT NOT NULL DEFAULT '[]',
+    created_at INTEGER NOT NULL,
+    UNIQUE(set_id, sha256)
+);
+CREATE INDEX IF NOT EXISTS idx_train_pictures_blob ON train_pictures(blob_path);
+CREATE INDEX IF NOT EXISTS idx_train_pictures_thumb ON train_pictures(thumb_path);
+
 -- A model InvokeAI is downloading on our behalf, with what it should be told about
 -- itself once the file is in. InvokeAI's install job is the authority on progress;
 -- this row is only the promise to apply the catalogue's cover, description and

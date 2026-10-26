@@ -5,13 +5,14 @@ import { api, type TrainTask, type TwitterMediaPage, type TwitterPicture } from 
 import { loraStyles } from "./lora-styles.js";
 
 /**
- * Bringing pictures into a training set from outside the library: files from this
- * computer, or an X account's pictures. Either way the person sees every candidate
- * first and keeps what they want, and only what is kept is stored — uploaded through
- * the ordinary upload, or downloaded by the server (lora_sources.go) — into the
- * library and the collection the set trains from.
+ * Bringing pictures into a training set: files from this computer, or an X
+ * account's pictures. Either way the person sees every candidate first and keeps
+ * what they want, and only what is kept is stored — uploaded to the set, or
+ * downloaded into it by the server (lora_sources.go). A set is not the library
+ * (lora_sets.go): nothing kept here turns up in a grid or gets tagged behind the
+ * Train screen's back.
  *
- * Dispatches "gathered" with the collection's id once the pictures are in.
+ * Dispatches "gathered" with the set's id once the pictures are in.
  */
 
 type Mode = "upload" | "x";
@@ -33,9 +34,9 @@ const UPLOADS_AT_ONCE = 3;
 @customElement("oppai-lora-gather")
 export class OppaiLoraGather extends LitElement {
   @property() mode: Mode = "upload";
-  /** The collection to add to; 0 makes a new one named collectionName. */
-  @property({ type: Number }) collectionId = 0;
-  @property() collectionName = "";
+  /** The training set to add to; 0 makes (or joins) the one named setName. */
+  @property({ type: Number }) setId = 0;
+  @property() setName = "";
 
   @state() private files: LocalFile[] = [];
   @state() private dragging = false;
@@ -129,21 +130,13 @@ export class OppaiLoraGather extends LitElement {
     this.error = "";
   }
 
-  /** The collection the pictures go into, made now when there isn't one. Names are
-   *  unique, so one left by an earlier try at the same LoRA is joined, not refused. */
+  /** The set the pictures go into, made now when there isn't one. The server joins
+   *  a set by the same name, so an earlier try at the same LoRA is added to. */
   private async target(): Promise<number> {
-    if (this.collectionId > 0) return this.collectionId;
-    const name = this.collectionName.trim() || "LoRA training";
-    let id: number;
-    try {
-      id = (await api.createCollection(name)).id;
-    } catch (e) {
-      const same = (await api.listCollections()).items.find((c) => c.name.toLowerCase() === name.toLowerCase());
-      if (!same) throw e;
-      id = same.id;
-    }
-    this.collectionId = id;
-    return id;
+    if (this.setId > 0) return this.setId;
+    const set = await api.trainSetCreate(this.setName.trim() || "Training set");
+    this.setId = set.id;
+    return set.id;
   }
 
   private async uploadKept() {
@@ -152,28 +145,27 @@ export class OppaiLoraGather extends LitElement {
     this.error = "";
     this.progress = { done: 0, total: kept.length, failed: 0 };
     try {
-      const collection = await this.target();
-      const ids: number[] = [];
+      const set = await this.target();
       let next = 0;
+      let lastError = "";
       const worker = async () => {
         while (next < kept.length) {
           const f = kept[next++];
           try {
-            const r = await api.upload(f.file);
-            ids.push(r.id);
+            await api.trainSetUpload(set, f.file);
             this.progress = { ...this.progress!, done: this.progress!.done + 1 };
-          } catch {
+          } catch (e) {
+            lastError = (e as Error).message;
             this.progress = { ...this.progress!, failed: this.progress!.failed + 1 };
           }
         }
       };
       await Promise.all(Array.from({ length: Math.min(UPLOADS_AT_ONCE, kept.length) }, worker));
-      for (let i = 0; i < ids.length; i += 50) await api.addToCollection(collection, ids.slice(i, i + 50));
-      if (!ids.length) throw new Error("None of the pictures could be uploaded.");
+      if (!this.progress.done) throw new Error(lastError || "None of the pictures could be uploaded.");
       const failed = this.progress.failed;
       this.clearFiles();
-      if (failed) this.error = `${failed} picture${failed === 1 ? "" : "s"} couldn't be uploaded.`;
-      this.dispatchEvent(new CustomEvent("gathered", { detail: { collectionId: collection } }));
+      if (failed) this.error = `${failed} picture${failed === 1 ? "" : "s"} couldn't be added (${lastError}).`;
+      this.dispatchEvent(new CustomEvent("gathered", { detail: { setId: set } }));
     } catch (e) {
       this.error = (e as Error).message;
     } finally {
@@ -223,7 +215,7 @@ export class OppaiLoraGather extends LitElement {
               ${this.progress
                 ? html`<div class="what">Uploading ${this.progress.done + this.progress.failed} of ${this.progress.total}…</div>
                     <div class="bar"><div style="width:${((this.progress.done + this.progress.failed) / this.progress.total) * 100}%"></div></div>`
-                : html`<div class="what">Kept pictures are added to your library${this.collectionId ? "" : html`, in a new collection <b>${this.collectionName || "LoRA training"}</b>`}.</div>
+                : html`<div class="what">Kept pictures go into the training set <b>${this.setName || "Training set"}</b>, not your library.</div>
                     <button class="btn primary" ?disabled=${!kept} @click=${() => this.uploadKept()}>
                       <span class="material-symbols-rounded">upload</span> Add ${kept} to the set
                     </button>`}
@@ -306,8 +298,8 @@ export class OppaiLoraGather extends LitElement {
           source: p.tweetUrl,
           title: `@${handle}${p.text ? ` — ${p.text.split("\n")[0]}` : ""}`,
         })),
-        collectionId: this.collectionId || undefined,
-        collectionName: this.collectionName || `@${handle}`,
+        setId: this.setId || undefined,
+        setName: this.setName || `@${handle}`,
       });
       this.task = task;
       while (!task.finished) {
@@ -318,10 +310,10 @@ export class OppaiLoraGather extends LitElement {
       }
       if (task.error) throw new Error(task.error);
       if (task.failed) this.error = `${task.failed} picture${task.failed === 1 ? "" : "s"} couldn't be downloaded and ${task.failed === 1 ? "was" : "were"} skipped.`;
-      this.collectionId = task.collectionId ?? this.collectionId;
+      this.setId = task.setId ?? this.setId;
       this.pictures = [];
       this.page = null;
-      this.dispatchEvent(new CustomEvent("gathered", { detail: { collectionId: task.collectionId } }));
+      this.dispatchEvent(new CustomEvent("gathered", { detail: { setId: task.setId } }));
     } catch (e) {
       this.error = (e as Error).message;
     } finally {
@@ -382,7 +374,7 @@ export class OppaiLoraGather extends LitElement {
               ${this.task
                 ? html`<div class="what">Downloading ${this.task.done + this.task.failed} of ${this.task.total}…</div>
                     <div class="bar"><div style="width:${this.task.total ? ((this.task.done + this.task.failed) / this.task.total) * 100 : 0}%"></div></div>`
-                : html`<div class="what">Kept pictures are added to your library${this.collectionId ? "" : html`, in a new collection <b>${this.collectionName || `@${acct?.screenName ?? ""}`}</b>`}.</div>
+                : html`<div class="what">Kept pictures go into the training set <b>${this.setName || `@${acct?.screenName ?? ""}`}</b>, not your library.</div>
                     <button class="btn primary" ?disabled=${!kept} @click=${() => this.importKept()}>
                       <span class="material-symbols-rounded">download</span> Keep ${kept}
                     </button>`}

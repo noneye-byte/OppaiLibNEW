@@ -290,6 +290,13 @@ func NewServer(cfg *config.Config, database *db.DB, store *storage.Store, sc *sc
 		return s.settings.Get().ImageGenModelsDir
 	}
 	s.imagegen.HashCachePath = filepath.Join(cfg.ConfigDir, "a1111-hashes.json")
+	s.imagegen.OutputsDir = func() string {
+		if s.settings == nil {
+			return ""
+		}
+		return s.settings.Get().ImageGenOutputsDir
+	}
+	s.imagegen.ThumbCacheDir = filepath.Join(cfg.CacheDir, "a1111-thumbs")
 	s.games = gamesites.New(base, cfg.ScrapeUserAgent)
 	// F95zone checks every visitor for a person at a real browser, so the server reads
 	// it through Launchy's, which has one. The scraper reads it the same way, so a
@@ -588,6 +595,16 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/imagegen/train/import", s.requireAuth(s.handleTrainImport))
 	mux.HandleFunc("POST /api/imagegen/train/autotag", s.requireAuth(s.handleTrainAutotag))
 	mux.HandleFunc("GET /api/imagegen/train-tasks/{id}", s.requireAuth(s.handleTrainTask))
+	// Training sets: a LoRA's pictures, kept out of the library (lora_sets.go).
+	mux.HandleFunc("GET /api/imagegen/train-sets", s.requireAuth(s.handleTrainSets))
+	mux.HandleFunc("POST /api/imagegen/train-sets", s.requireAuth(s.handleTrainSetCreate))
+	mux.HandleFunc("PATCH /api/imagegen/train-sets/{id}", s.requireAuth(s.handleTrainSetRename))
+	mux.HandleFunc("DELETE /api/imagegen/train-sets/{id}", s.requireAuth(s.handleTrainSetDelete))
+	mux.HandleFunc("POST /api/imagegen/train-sets/{id}/pictures", s.requireAuth(s.handleTrainSetUpload))
+	mux.HandleFunc("POST /api/imagegen/train-sets/{id}/from-library", s.requireAuth(s.handleTrainSetFromLibrary))
+	mux.HandleFunc("GET /api/imagegen/train-sets/{id}/pictures/{pic}", s.requireAuth(s.handleTrainPicture))
+	mux.HandleFunc("PATCH /api/imagegen/train-sets/{id}/pictures/{pic}", s.requireAuth(s.handleTrainPictureEdit))
+	mux.HandleFunc("DELETE /api/imagegen/train-sets/{id}/pictures/{pic}", s.requireAuth(s.handleTrainPictureDelete))
 	mux.HandleFunc("POST /api/imagegen/civitai/cover", s.requireAuth(s.handleCivitaiCover))
 	mux.HandleFunc("POST /api/imagegen/civitai/update", s.requireAuth(s.handleCivitaiUpdate))
 	mux.HandleFunc("GET /api/imagegen/civitai/posts", s.requireAuth(s.handleCivitaiPosts))

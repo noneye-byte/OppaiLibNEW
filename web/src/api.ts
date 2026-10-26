@@ -498,6 +498,8 @@ export interface Settings {
   imageGenUrl: string;
   /** Automatic1111's models folder as the server sees it; blank manages nothing. */
   imageGenModelsDir: string;
+  /** Automatic1111's outputs folder, its gallery; blank looks beside the models folder. */
+  imageGenOutputsDir: string;
   imageGenEnabled: boolean;
   /** The OppaiLib trainer LoRAs are trained on; blank hides training. The token is
    *  write-only like the other secrets. */
@@ -1545,6 +1547,9 @@ export interface ImageGenStatus {
   vaes?: GenVae[];
   templates?: GenTemplate[];
   boards?: GalleryBoard[];
+  /** Whose gallery the studio can show: InvokeAI's own, A1111's outputs folder
+      (once the server can see it), or none. */
+  gallery?: "invokeai" | "a1111";
   detailerAvailable?: boolean;
   /** The Civitai browser works against this generator (it does against both). */
   civitai?: boolean;
@@ -1647,13 +1652,25 @@ export interface TrainerHealth {
   vramUsedMB?: number;
 }
 
-/** Which pictures a LoRA is trained on: one of these. */
+/** Which pictures a LoRA is trained on: a training set, or one of the library's. */
 export interface TrainSource {
+  setId?: number;
   collectionId?: number;
   tag?: string;
   mediaIds?: number[];
-  /** Pictures dropped from the set on the Train screen; they stay in the library. */
+  /** Pictures dropped on the Train screen; they stay in the set (or the library). */
   exclude?: number[];
+}
+
+/** A pile of pictures a LoRA learns from, kept apart from the library. */
+export interface TrainSet {
+  id: number;
+  name: string;
+  count: number;
+  /** The newest picture, for the set's tile. */
+  coverId?: number;
+  createdAt: number;
+  updatedAt: number;
 }
 
 /** What starting a training run asks for. Zero numbers take the trainer's defaults. */
@@ -1742,8 +1759,9 @@ export interface TrainTask {
   failed: number;
   finished: boolean;
   error?: string;
-  collectionId?: number;
-  mediaIds?: number[];
+  /** The training set an import put its pictures in, and the pictures. */
+  setId?: number;
+  pictureIds?: number[];
 }
 
 /** One page of an X account's pictures; cursor is absent on the last. */
@@ -1777,7 +1795,8 @@ export interface GenModelMeta {
   defaults?: GenModelDefaults;
 }
 
-/** One InvokeAI gallery board. Board id "none" is the uncategorized pile. */
+/** One gallery board: InvokeAI's, or a folder of A1111's outputs. Board id "none"
+    is InvokeAI's uncategorized pile, or every A1111 picture. */
 export interface GalleryBoard {
   id: string;
   name: string;
@@ -1789,7 +1808,14 @@ export interface GalleryImage {
   width?: number;
   height?: number;
   created?: string;
+  /** How to show an A1111 picture, whose name is an encoded path. */
+  label?: string;
+  /** The file's bytes (A1111 only). */
+  size?: number;
 }
+
+/** The orders a gallery page can come back in. InvokeAI sorts by date alone. */
+export type GallerySort = "newest" | "oldest" | "name" | "largest";
 
 export interface GalleryPage {
   items: GalleryImage[];
@@ -3170,9 +3196,9 @@ export const api = {
     request<{ status: string }>(`/api/imagegen/gallery/boards/${encodeURIComponent(id)}`, {
       method: "DELETE",
     }, 20_000),
-  galleryImages: (board: string, offset = 0, limit = 60) =>
+  galleryImages: (board: string, offset = 0, limit = 60, sort: GallerySort = "newest") =>
     request<GalleryPage>(
-      `/api/imagegen/gallery/images?board=${encodeURIComponent(board)}&offset=${offset}&limit=${limit}`,
+      `/api/imagegen/gallery/images?board=${encodeURIComponent(board)}&offset=${offset}&limit=${limit}&sort=${sort}`,
       {},
       20_000,
     ),
@@ -3292,12 +3318,35 @@ export const api = {
     request<TwitterMediaPage>(
       `/api/imagegen/train/twitter?user=${encodeURIComponent(user)}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`,
       {}, 60_000),
-  /** Downloads the kept pictures into the library and a collection, in the background. */
+  /** Downloads the kept pictures into a training set, in the background. */
   trainImport: (body: {
     items: { url: string; source?: string; title?: string }[];
-    collectionId?: number;
-    collectionName?: string;
+    setId?: number;
+    setName?: string;
   }) => request<TrainTask>("/api/imagegen/train/import", { method: "POST", body: JSON.stringify(body) }, 30_000),
+  // Training sets: a LoRA's pictures, kept out of the library (api/lora_sets.go).
+  trainSets: () => request<{ sets: TrainSet[] }>("/api/imagegen/train-sets", {}, 20_000),
+  /** The set by that name, made if there is none. */
+  trainSetCreate: (name: string) =>
+    request<TrainSet>("/api/imagegen/train-sets", { method: "POST", body: JSON.stringify({ name }) }, 20_000),
+  trainSetRename: (id: number, name: string) =>
+    request<TrainSet>(`/api/imagegen/train-sets/${id}`, { method: "PATCH", body: JSON.stringify({ name }) }, 20_000),
+  trainSetDelete: (id: number) => request<void>(`/api/imagegen/train-sets/${id}`, { method: "DELETE" }, 60_000),
+  trainSetUpload: (id: number, file: File) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    return request<{ id: number; existed: boolean }>(`/api/imagegen/train-sets/${id}/pictures`, { method: "POST", body: fd }, 120_000);
+  },
+  /** Copies library pictures into a set; with move, takes them out of the library. */
+  trainSetFromLibrary: (id: number, body: { collectionId?: number; tag?: string; mediaIds?: number[]; move?: boolean }) =>
+    request<{ added: number; moved: number; set: TrainSet }>(
+      `/api/imagegen/train-sets/${id}/from-library`, { method: "POST", body: JSON.stringify(body) }, 150_000),
+  trainPictureURL: (setId: number, id: number, thumb = false) =>
+    `/api/imagegen/train-sets/${setId}/pictures/${id}${thumb ? "?thumb=1" : ""}`,
+  trainPictureTags: (setId: number, id: number, body: { addTags?: string[]; removeTags?: string[] }) =>
+    request<{ id: number }>(`/api/imagegen/train-sets/${setId}/pictures/${id}`, { method: "PATCH", body: JSON.stringify(body) }, 20_000),
+  trainPictureDelete: (setId: number, id: number) =>
+    request<void>(`/api/imagegen/train-sets/${setId}/pictures/${id}`, { method: "DELETE" }, 20_000),
   /** Tags a set's untagged pictures (or every one, with redo) in the background. */
   trainAutotag: (body: { source: TrainSource; redo?: boolean }) =>
     request<TrainTask>("/api/imagegen/train/autotag", { method: "POST", body: JSON.stringify(body) }, 40_000),

@@ -1,4 +1,4 @@
-import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an as U,ao as G,ap as F,aq as A,ar as K,x as W,as as V,at as H,au as j,av as q,aw as Y,ax as J,ay as Q,az as X,aA as Z,aB as C,v as z}from"./index-L68MogQH.js";import{r as ee,p as se}from"./passkeys-C74U8nTa.js";import{l as te,a as ie,s as k,b as S,D as ae,d as oe}from"./launchy-xyl1VS8H.js";const re=160,ne=220;function le(e){var u;const s=e.trim();if(s.length<=re)return s?[s]:[];const t=((u=s.match(/[^.!?…\n]+(?:[.!?…]+["”')]*|\n|$)/g))==null?void 0:u.map(y=>y.trim()).filter(Boolean))??[s],[o,...r]=t,a=[o];let n="";for(const y of r)n&&n.length+y.length+1>ne&&(a.push(n),n=""),n=n?`${n} ${y}`:y;return n&&a.push(n),a}const O="oppai_libby_speak";function Ae(){try{return localStorage.getItem(O)==="1"}catch{return!1}}function Ce(e){try{localStorage.setItem(O,e?"1":"0")}catch{}e||_(),window.dispatchEvent(new CustomEvent("oppai-libby-speak",{detail:{on:e}}))}let $=null,P=0;async function D(e=!1){if(!e&&$&&Date.now()-P<6e4)return $;try{const s=await fetch("/api/tts/status",{credentials:"same-origin"});if(!s.ok)throw new Error(String(s.status));$=await s.json(),P=Date.now()}catch{$=null}return $}const x=[];let m=null,L=!1,w=0,E=Promise.resolve();function de(e,s=0){const t=le(e);if(!t.length)return Promise.resolve();const o=w,r=t.map(a=>new Promise(n=>{const u=E.then(()=>o===w?he(a,s):null);E=u.catch(()=>null),x.push({text:a,heat:s,audio:u,done:n})}));return ce(),Promise.all(r).then(()=>{})}function _(){var e;w++,E=Promise.resolve();for(const s of x.splice(0))s.done();m&&(m.pause(),m.src="",m=null);try{(e=window.speechSynthesis)==null||e.cancel()}catch{}}async function ce(){if(!L){L=!0;try{for(;x.length;){const e=x.shift(),s=w;try{await pe(e,s)}catch{}finally{e.done()}}}finally{L=!1}}}async function pe(e,s){const t=await e.audio.catch(()=>null);if(s===w){if(t){await ue(t,s);return}await ve(e.text,s)}}async function he(e,s){const t=await D();if(t&&!t.engine)return null;try{const o=await fetch("/api/tts/speak",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify({text:e,heat:s||void 0})});return o.status===503?($=null,null):o.ok?await o.blob():null}catch{return null}}function ue(e,s){return new Promise(t=>{const o=URL.createObjectURL(e),r=new Audio(o);m=r;const a=()=>{m===r&&(m=null),URL.revokeObjectURL(o),t()};r.addEventListener("ended",a,{once:!0}),r.addEventListener("error",a,{once:!0}),r.play().catch(()=>{a()}),s!==w&&a()})}function ve(e,s){const t=window.speechSynthesis;return!t||typeof SpeechSynthesisUtterance>"u"?Promise.resolve():new Promise(o=>{const r=new SpeechSynthesisUtterance(e),a=ge(t.getVoices());if(a&&(r.voice=a),r.rate=1.02,r.pitch=1.05,r.onend=()=>o(),r.onerror=()=>o(),s!==w){o();return}t.speak(r)})}function ge(e){const s=e.filter(r=>/^en/i.test(r.lang)),t=s.length?s:e,o=r=>{let a=0;const n=r.name.toLowerCase();return/natural|neural|premium|enhanced/.test(n)&&(a+=4),/female|woman|aria|jenny|samantha|zira|karen|moira|tessa|fiona|libby|sonia|ava|allison|susan|emma/.test(n)&&(a+=3),/google/.test(n)&&(a+=1),r.default&&(a+=1),a};return[...t].sort((r,a)=>o(a)-o(r))[0]}var be=Object.defineProperty,fe=Object.getOwnPropertyDescriptor,f=(e,s,t,o)=>{for(var r=o>1?void 0:o?fe(s,t):s,a=e.length-1,n;a>=0;a--)(n=e[a])&&(r=(o?n(s,t,r):n(r))||r);return o&&r&&be(s,t,r),r};const ye={itch:"itch.io",f95:"F95zone"},me=4e3;let v=class extends I{constructor(){super(...arguments),this.status=null,this.keys=null,this.loadError="",this.link="",this.linkExpires=0,this.linking=!1,this.busy={},this.timer=null,this.linkIssuedAt=0}connectedCallback(){super.connectedCallback(),this.refresh(),this.loadKeys(),this.timer=window.setInterval(()=>void this.refresh(),me)}disconnectedCallback(){super.disconnectedCallback(),this.timer!=null&&clearInterval(this.timer),this.timer=null}async refresh(){try{this.status=await h.launchyStatus(),this.loadError=""}catch(e){this.loadError=e.message}if(this.link)if(Date.now()/1e3>this.linkExpires)this.link="";else{await this.loadKeys();const e=(this.keys??[]).find(s=>s.createdAt>=this.linkIssuedAt);e&&(this.link="",g(`Launchy on ${e.name} is linked.`))}}async loadKeys(){try{this.keys=(await h.launchyKeys()).items}catch(e){this.loadError=e.message}}async makeLink(){this.linking=!0;try{const{code:e,expiresAt:s}=await h.launchyPairing();this.linkIssuedAt=Math.floor(Date.now()/1e3)-5,this.link=te(location.origin,e),this.linkExpires=s,window.location.assign(this.link)}catch(e){g(e.message,"error")}finally{this.linking=!1}}async copyLink(e){var t;const s=(t=e.currentTarget.parentElement)==null?void 0:t.querySelector("input");try{await navigator.clipboard.writeText(this.link),g("Copied the link.")}catch{s==null||s.select(),g("Press Ctrl+C to copy the selected link.")}}async revoke(e){if(confirm(`Unlink Launchy on ${e.name}? It stops syncing until it is linked again.`))try{await h.revokeLaunchyKey(e.id),await this.loadKeys()}catch(s){g(s.message,"error")}}async run(e,s,t){this.busy={...this.busy,[e]:!0};try{const o=await h.launchyRequest(s),r=await ie(h.launchyRequestStatus,o.id,{timeout:s.action==="sync"?18e4:6e4});r.status==="done"?g(r.message||t):g(r.error||"Launchy could not do that.","error")}catch(o){g(o.message,"error")}finally{this.busy={...this.busy,[e]:!1},this.refresh()}}render(){return i`
+import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an as U,ao as G,ap as F,aq as E,ar as K,x as W,as as V,at as H,au as j,av as q,aw as Y,ax as J,ay as Q,az as X,aA as Z,aB as C,v as z}from"./index-C6DXTUOe.js";import{r as ee,p as te}from"./passkeys-DuSBHt0h.js";import{l as se,a as ie,s as k,b as S,D as ae,d as oe}from"./launchy-xyl1VS8H.js";const re=160,ne=220;function le(e){var u;const t=e.trim();if(t.length<=re)return t?[t]:[];const s=((u=t.match(/[^.!?…\n]+(?:[.!?…]+["”')]*|\n|$)/g))==null?void 0:u.map(y=>y.trim()).filter(Boolean))??[t],[o,...r]=s,a=[o];let n="";for(const y of r)n&&n.length+y.length+1>ne&&(a.push(n),n=""),n=n?`${n} ${y}`:y;return n&&a.push(n),a}const O="oppai_libby_speak";function Ee(){try{return localStorage.getItem(O)==="1"}catch{return!1}}function Ce(e){try{localStorage.setItem(O,e?"1":"0")}catch{}e||_(),window.dispatchEvent(new CustomEvent("oppai-libby-speak",{detail:{on:e}}))}let $=null,P=0;async function D(e=!1){if(!e&&$&&Date.now()-P<6e4)return $;try{const t=await fetch("/api/tts/status",{credentials:"same-origin"});if(!t.ok)throw new Error(String(t.status));$=await t.json(),P=Date.now()}catch{$=null}return $}const x=[];let m=null,L=!1,w=0,A=Promise.resolve();function de(e,t=0){const s=le(e);if(!s.length)return Promise.resolve();const o=w,r=s.map(a=>new Promise(n=>{const u=A.then(()=>o===w?he(a,t):null);A=u.catch(()=>null),x.push({text:a,heat:t,audio:u,done:n})}));return ce(),Promise.all(r).then(()=>{})}function _(){var e;w++,A=Promise.resolve();for(const t of x.splice(0))t.done();m&&(m.pause(),m.src="",m=null);try{(e=window.speechSynthesis)==null||e.cancel()}catch{}}async function ce(){if(!L){L=!0;try{for(;x.length;){const e=x.shift(),t=w;try{await pe(e,t)}catch{}finally{e.done()}}}finally{L=!1}}}async function pe(e,t){const s=await e.audio.catch(()=>null);if(t===w){if(s){await ue(s,t);return}await ve(e.text,t)}}async function he(e,t){const s=await D();if(s&&!s.engine)return null;try{const o=await fetch("/api/tts/speak",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify({text:e,heat:t||void 0})});return o.status===503?($=null,null):o.ok?await o.blob():null}catch{return null}}function ue(e,t){return new Promise(s=>{const o=URL.createObjectURL(e),r=new Audio(o);m=r;const a=()=>{m===r&&(m=null),URL.revokeObjectURL(o),s()};r.addEventListener("ended",a,{once:!0}),r.addEventListener("error",a,{once:!0}),r.play().catch(()=>{a()}),t!==w&&a()})}function ve(e,t){const s=window.speechSynthesis;return!s||typeof SpeechSynthesisUtterance>"u"?Promise.resolve():new Promise(o=>{const r=new SpeechSynthesisUtterance(e),a=ge(s.getVoices());if(a&&(r.voice=a),r.rate=1.02,r.pitch=1.05,r.onend=()=>o(),r.onerror=()=>o(),t!==w){o();return}s.speak(r)})}function ge(e){const t=e.filter(r=>/^en/i.test(r.lang)),s=t.length?t:e,o=r=>{let a=0;const n=r.name.toLowerCase();return/natural|neural|premium|enhanced/.test(n)&&(a+=4),/female|woman|aria|jenny|samantha|zira|karen|moira|tessa|fiona|libby|sonia|ava|allison|susan|emma/.test(n)&&(a+=3),/google/.test(n)&&(a+=1),r.default&&(a+=1),a};return[...s].sort((r,a)=>o(a)-o(r))[0]}var be=Object.defineProperty,fe=Object.getOwnPropertyDescriptor,f=(e,t,s,o)=>{for(var r=o>1?void 0:o?fe(t,s):t,a=e.length-1,n;a>=0;a--)(n=e[a])&&(r=(o?n(t,s,r):n(r))||r);return o&&r&&be(t,s,r),r};const ye={itch:"itch.io",f95:"F95zone"},me=4e3;let v=class extends I{constructor(){super(...arguments),this.status=null,this.keys=null,this.loadError="",this.link="",this.linkExpires=0,this.linking=!1,this.busy={},this.timer=null,this.linkIssuedAt=0}connectedCallback(){super.connectedCallback(),this.refresh(),this.loadKeys(),this.timer=window.setInterval(()=>void this.refresh(),me)}disconnectedCallback(){super.disconnectedCallback(),this.timer!=null&&clearInterval(this.timer),this.timer=null}async refresh(){try{this.status=await h.launchyStatus(),this.loadError=""}catch(e){this.loadError=e.message}if(this.link)if(Date.now()/1e3>this.linkExpires)this.link="";else{await this.loadKeys();const e=(this.keys??[]).find(t=>t.createdAt>=this.linkIssuedAt);e&&(this.link="",g(`Launchy on ${e.name} is linked.`))}}async loadKeys(){try{this.keys=(await h.launchyKeys()).items}catch(e){this.loadError=e.message}}async makeLink(){this.linking=!0;try{const{code:e,expiresAt:t}=await h.launchyPairing();this.linkIssuedAt=Math.floor(Date.now()/1e3)-5,this.link=se(location.origin,e),this.linkExpires=t,window.location.assign(this.link)}catch(e){g(e.message,"error")}finally{this.linking=!1}}async copyLink(e){var s;const t=(s=e.currentTarget.parentElement)==null?void 0:s.querySelector("input");try{await navigator.clipboard.writeText(this.link),g("Copied the link.")}catch{t==null||t.select(),g("Press Ctrl+C to copy the selected link.")}}async revoke(e){if(confirm(`Unlink Launchy on ${e.name}? It stops syncing until it is linked again.`))try{await h.revokeLaunchyKey(e.id),await this.loadKeys()}catch(t){g(t.message,"error")}}async run(e,t,s){this.busy={...this.busy,[e]:!0};try{const o=await h.launchyRequest(t),r=await ie(h.launchyRequestStatus,o.id,{timeout:t.action==="sync"?18e4:6e4});r.status==="done"?g(r.message||s):g(r.error||"Launchy could not do that.","error")}catch(o){g(o.message,"error")}finally{this.busy={...this.busy,[e]:!1},this.refresh()}}render(){return i`
       ${this.loadError?i`<div class="banner error"><span class="material-symbols-rounded" style="font-size:18px;">error</span>${this.loadError}</div>`:l}
       ${this.renderLink()}
       ${this.renderPC()}
@@ -24,9 +24,9 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
           </button>
         </div>
         ${this.link?i`<div class="linkbox">
-              <input readonly .value=${this.link} @focus=${s=>s.target.select()} />
+              <input readonly .value=${this.link} @focus=${t=>t.target.select()} />
               <a class="btn-inline" href=${this.link}><span class="material-symbols-rounded">open_in_new</span>Open Launchy</a>
-              <button class="btn-inline" @click=${s=>void this.copyLink(s)}>
+              <button class="btn-inline" @click=${t=>void this.copyLink(t)}>
                 <span class="material-symbols-rounded">content_copy</span>Copy
               </button>
               <div class="help" style="flex-basis:100%;">
@@ -34,21 +34,21 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
                 into Launchy under Settings → OppaiLib.
               </div>
             </div>`:l}
-        ${e.map(s=>i`<div class="row">
+        ${e.map(t=>i`<div class="row">
             <span class="material-symbols-rounded" style="font-size:18px; color:var(--oppai-text-muted);">key</span>
             <div class="grow">
-              <div class="label">${s.name}</div>
+              <div class="label">${t.name}</div>
               <div class="help">
-                Key …${s.hint} · linked ${new Date(s.createdAt*1e3).toLocaleDateString()} ·
-                ${s.lastUsedAt?`last used ${k(s.lastUsedAt)}`:"not used yet"}
+                Key …${t.hint} · linked ${new Date(t.createdAt*1e3).toLocaleDateString()} ·
+                ${t.lastUsedAt?`last used ${k(t.lastUsedAt)}`:"not used yet"}
               </div>
             </div>
-            <button class="btn-inline" @click=${()=>void this.revoke(s)}>
+            <button class="btn-inline" @click=${()=>void this.revoke(t)}>
               <span class="material-symbols-rounded">link_off</span>Unlink
             </button>
           </div>`)}
       </section>
-    `}renderPC(){var t,o,r,a;const e=this.status;if(!e)return l;const s=!!e.reportedAt;return i`
+    `}renderPC(){var s,o,r,a;const e=this.status;if(!e)return l;const t=!!e.reportedAt;return i`
       <section class="card">
         <h3><span class="material-symbols-rounded">sports_esports</span>The PC</h3>
         <div class="row">
@@ -57,10 +57,10 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
             <div class="label">${e.connected?`Launchy is running on ${e.name||"the PC"}`:"Launchy is offline"}</div>
             <div class="help">
               ${e.version?`Version ${e.version} · `:""}last checked in ${k(e.lastSeen)}
-              ${e.connected&&!s?i` · <span class="warn">an older Launchy — update it to control it from here</span>`:l}
+              ${e.connected&&!t?i` · <span class="warn">an older Launchy — update it to control it from here</span>`:l}
             </div>
           </div>
-          ${S(e,"sync")?i`<button class="btn-inline" ?disabled=${this.busy.sync||((t=e.sync)==null?void 0:t.running)}
+          ${S(e,"sync")?i`<button class="btn-inline" ?disabled=${this.busy.sync||((s=e.sync)==null?void 0:s.running)}
                 @click=${()=>void this.run("sync",{action:"sync"},"Synced.")}>
                 <span class="material-symbols-rounded">sync</span>${this.busy.sync||(o=e.sync)!=null&&o.running?"Syncing…":"Sync now"}
               </button>`:l}
@@ -82,33 +82,33 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
             </div>
           </div>`)}
       </section>
-    `}renderRunning(){const e=this.status;if(!(e!=null&&e.connected)||!e.reportedAt)return l;const s=e.sessions??[];return i`
+    `}renderRunning(){const e=this.status;if(!(e!=null&&e.connected)||!e.reportedAt)return l;const t=e.sessions??[];return i`
       <section class="card">
         <h3><span class="material-symbols-rounded">play_arrow</span>Running</h3>
-        ${s.length===0?i`<div class="empty">Nothing is running on the PC.</div>`:l}
-        ${s.map(t=>{const o=`stop:${t.gameId}`;return i`<div class="row">
+        ${t.length===0?i`<div class="empty">Nothing is running on the PC.</div>`:l}
+        ${t.map(s=>{const o=`stop:${s.gameId}`;return i`<div class="row">
             <div class="grow">
-              <div class="label">${t.title||"A game"}</div>
-              <div class="help">Started ${k(t.startedAt)}</div>
+              <div class="label">${s.title||"A game"}</div>
+              <div class="help">Started ${k(s.startedAt)}</div>
             </div>
             ${S(e,"stop")?i`<button class="btn-inline" ?disabled=${this.busy[o]}
-                  @click=${()=>{confirm(`Close ${t.title||"this game"} on the PC? Anything unsaved in it is lost.`)&&this.run(o,{action:"stop",gameId:t.gameId},"Closed.")}}>
+                  @click=${()=>{confirm(`Close ${s.title||"this game"} on the PC? Anything unsaved in it is lost.`)&&this.run(o,{action:"stop",gameId:s.gameId},"Closed.")}}>
                   <span class="material-symbols-rounded">stop_circle</span>${this.busy[o]?"Closing…":"Close"}
                 </button>`:l}
           </div>`})}
       </section>
-    `}renderDownloads(){const e=this.status;if(!(e!=null&&e.connected)||!e.reportedAt)return l;const s=e.downloads??[];return s.length?i`
+    `}renderDownloads(){const e=this.status;if(!(e!=null&&e.connected)||!e.reportedAt)return l;const t=e.downloads??[];return t.length?i`
       <section class="card">
         <h3><span class="material-symbols-rounded">download</span>Downloads on the PC</h3>
-        ${s.map(t=>{const o=`cancel:${t.id}`;return i`<div class="row">
+        ${t.map(s=>{const o=`cancel:${s.id}`;return i`<div class="row">
             <div class="grow">
-              <div class="label">${t.title}${t.label?i` <span class="help">· ${t.label}</span>`:l}</div>
+              <div class="label">${s.title}${s.label?i` <span class="help">· ${s.label}</span>`:l}</div>
               <div class="help">
-                ${ae[t.status]??t.status}${t.message?` — ${t.message}`:""}
+                ${ae[s.status]??s.status}${s.message?` — ${s.message}`:""}
               </div>
             </div>
-            ${oe(t)&&S(e,"download")?i`<button class="btn-inline" ?disabled=${this.busy[o]}
-                  @click=${()=>void this.run(o,{action:"cancel-download",downloadId:t.id},"Cancelled.")}>
+            ${oe(s)&&S(e,"download")?i`<button class="btn-inline" ?disabled=${this.busy[o]}
+                  @click=${()=>void this.run(o,{action:"cancel-download",downloadId:s.id},"Cancelled.")}>
                   <span class="material-symbols-rounded">close</span>Cancel
                 </button>`:l}
           </div>`})}
@@ -176,22 +176,22 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
       .banner.error { background: color-mix(in srgb, var(--oppai-fav) 18%, transparent); color: var(--oppai-fav); }
       .banner.info { background: var(--oppai-surface-2); color: var(--oppai-text-dim); }
       .empty { font-size: 13px; color: var(--oppai-text-muted); padding: 6px 0 10px; }
-    `];f([d()],v.prototype,"status",2);f([d()],v.prototype,"keys",2);f([d()],v.prototype,"loadError",2);f([d()],v.prototype,"link",2);f([d()],v.prototype,"linkExpires",2);f([d()],v.prototype,"linking",2);f([d()],v.prototype,"busy",2);v=f([N("oppai-launchy-panel")],v);var we=Object.defineProperty,$e=Object.getOwnPropertyDescriptor,p=(e,s,t,o)=>{for(var r=o>1?void 0:o?$e(s,t):s,a=e.length-1,n;a>=0;a--)(n=e[a])&&(r=(o?n(s,t,r):n(r))||r);return o&&r&&we(s,t,r),r};const ke=[{id:"appearance",label:"Appearance",icon:"palette",group:"You"},{id:"account",label:"Account",icon:"account_circle",group:"You"},{id:"library",label:"Library",icon:"inventory_2",group:"Library"},{id:"scraping",label:"Import & scraping",icon:"travel_explore",group:"Library",server:!0},{id:"ai",label:"Tagging & descriptions",icon:"smart_toy",group:"AI",server:!0},{id:"imagegen",label:"Image generation",icon:"auto_awesome",group:"AI",server:!0},{id:"android",label:"Android app",icon:"android",group:"Apps"},{id:"launchy",label:"Launchy",icon:"sports_esports",group:"Apps"},{id:"storage",label:"Storage",icon:"hard_drive",group:"Server"},{id:"privacy",label:"Privacy",icon:"visibility_off",group:"Server",server:!0,adminOnly:!0},{id:"diagnostics",label:"Diagnostics",icon:"speed",group:"Server",adminOnly:!0},{id:"about",label:"About",icon:"info",group:"Server"}];let c=class extends I{constructor(){super(...arguments),this.only="",this.tab="appearance",this.settings=null,this.info=null,this.stats=null,this.apk=null,this.loadError="",this.passkeyList=null,this.passkeyBusy=!1,this.passkeyError="",this.passkeyMsg="",this.passkeyName="",this.passkeyRenaming=null,this.passkeyRevoking=null,this.passkeyPassword="",this.diag=null,this.uiDiag=null,this.storage=null,this.storageBusy=!1,this.storageErr="",this.diagBusy=!1,this.diagErr="",this.dirty=!1,this.saving=!1,this.saved=!1,this.theme=U(),this.fit=G(),this.hideLibby=F(),this.genModels=[],this.genLoras=[],this.genLoraTriggers={},this.genBoards=[],this.genError="",this.genStatus=null,this.genChecks=null,this.genCheckBusy=!1,this.genCheckErr="",this.pwCurrent="",this.pwNew="",this.pwConfirm="",this.pwBusy=!1,this.pwMsg="",this.pwErr="",this.refs=null,this.refStamp=Date.now(),this.refNote="",this.tts=void 0,this.describe=null,this.describeBusy=!1,this.describeNote="",this.ttsErrors={},this.addPasskey=async()=>{this.passkeyBusy=!0,this.passkeyError="",this.passkeyMsg="";try{const e=await ee(this.passkeyName.trim());this.passkeyName="",this.passkeyMsg=`Added “${e.name}”. You can sign in with it now.`,await this.loadPasskeys()}catch(e){const s=se(e);s&&(this.passkeyError=s)}finally{this.passkeyBusy=!1}},this.cancelRevoke=()=>{this.passkeyRevoking=null,this.passkeyPassword=""},this.loadStorage=async()=>{this.storageBusy=!0,this.storageErr="";try{this.storage=await h.storage()}catch(e){this.storageErr=e.message}finally{this.storageBusy=!1}},this.runCleanup=async()=>{this.storageBusy=!0,this.storageErr="";try{const e=await h.cleanupStorage(["uploads","temp"]);this.storage=e.storage,g(`Reclaimed ${e.freedHuman}.`,"success")}catch(e){this.storageErr=e.message}finally{this.storageBusy=!1}},this.loadDiagnostics=async()=>{this.diagBusy=!0,this.diagErr="";try{this.diag=await h.diagnostics(),this.uiDiag=A()}catch(e){this.diagErr=e.message}finally{this.diagBusy=!1}},this.resetDiagnostics=async()=>{this.diagBusy=!0,this.diagErr="";try{K(),await h.resetDiagnostics(),this.diag=await h.diagnostics(),this.uiDiag=A()}catch(e){this.diagErr=e.message}finally{this.diagBusy=!1}}}connectedCallback(){super.connectedCallback(),W(this,"settings"),this.load(),this.loadGenLists(),this.loadTTS(),this.loadDescribe(),this.loadReferences()}async loadReferences(){try{this.refs=await h.libbyReferences()}catch{this.refs=null}}async setReference(e,s){var r;const t=(r=s.files)==null?void 0:r[0];if(s.value="",!t)return;const o=await new Promise((a,n)=>{const u=new FileReader;u.onload=()=>a(String(u.result)),u.onerror=()=>n(u.error),u.readAsDataURL(t)});try{await h.setLibbyReference(e,o),this.refNote="",this.refStamp=Date.now(),await this.loadReferences()}catch(a){this.refNote=a.message}}async clearReference(e){try{await h.deleteLibbyReference(e),this.refNote="",await this.loadReferences()}catch(s){this.refNote=s.message}}referenceTile(e,s){var o;const t=!!((o=this.refs)!=null&&o[e]);return i`<div style="display:flex;flex-direction:column;gap:6px;align-items:center;width:132px;">
+    `];f([d()],v.prototype,"status",2);f([d()],v.prototype,"keys",2);f([d()],v.prototype,"loadError",2);f([d()],v.prototype,"link",2);f([d()],v.prototype,"linkExpires",2);f([d()],v.prototype,"linking",2);f([d()],v.prototype,"busy",2);v=f([N("oppai-launchy-panel")],v);var we=Object.defineProperty,$e=Object.getOwnPropertyDescriptor,p=(e,t,s,o)=>{for(var r=o>1?void 0:o?$e(t,s):t,a=e.length-1,n;a>=0;a--)(n=e[a])&&(r=(o?n(t,s,r):n(r))||r);return o&&r&&we(t,s,r),r};const ke=[{id:"appearance",label:"Appearance",icon:"palette",group:"You"},{id:"account",label:"Account",icon:"account_circle",group:"You"},{id:"library",label:"Library",icon:"inventory_2",group:"Library"},{id:"scraping",label:"Import & scraping",icon:"travel_explore",group:"Library",server:!0},{id:"ai",label:"Tagging & descriptions",icon:"smart_toy",group:"AI",server:!0},{id:"imagegen",label:"Image generation",icon:"auto_awesome",group:"AI",server:!0},{id:"android",label:"Android app",icon:"android",group:"Apps"},{id:"launchy",label:"Launchy",icon:"sports_esports",group:"Apps"},{id:"storage",label:"Storage",icon:"hard_drive",group:"Server"},{id:"privacy",label:"Privacy",icon:"visibility_off",group:"Server",server:!0,adminOnly:!0},{id:"diagnostics",label:"Diagnostics",icon:"speed",group:"Server",adminOnly:!0},{id:"about",label:"About",icon:"info",group:"Server"}];let c=class extends I{constructor(){super(...arguments),this.only="",this.tab="appearance",this.settings=null,this.info=null,this.stats=null,this.apk=null,this.loadError="",this.passkeyList=null,this.passkeyBusy=!1,this.passkeyError="",this.passkeyMsg="",this.passkeyName="",this.passkeyRenaming=null,this.passkeyRevoking=null,this.passkeyPassword="",this.diag=null,this.uiDiag=null,this.storage=null,this.storageBusy=!1,this.storageErr="",this.diagBusy=!1,this.diagErr="",this.dirty=!1,this.saving=!1,this.saved=!1,this.theme=U(),this.fit=G(),this.hideLibby=F(),this.genModels=[],this.genLoras=[],this.genLoraTriggers={},this.genBoards=[],this.genError="",this.genStatus=null,this.genChecks=null,this.genCheckBusy=!1,this.genCheckErr="",this.pwCurrent="",this.pwNew="",this.pwConfirm="",this.pwBusy=!1,this.pwMsg="",this.pwErr="",this.refs=null,this.refStamp=Date.now(),this.refNote="",this.tts=void 0,this.describe=null,this.describeBusy=!1,this.describeNote="",this.ttsErrors={},this.addPasskey=async()=>{this.passkeyBusy=!0,this.passkeyError="",this.passkeyMsg="";try{const e=await ee(this.passkeyName.trim());this.passkeyName="",this.passkeyMsg=`Added “${e.name}”. You can sign in with it now.`,await this.loadPasskeys()}catch(e){const t=te(e);t&&(this.passkeyError=t)}finally{this.passkeyBusy=!1}},this.cancelRevoke=()=>{this.passkeyRevoking=null,this.passkeyPassword=""},this.loadStorage=async()=>{this.storageBusy=!0,this.storageErr="";try{this.storage=await h.storage()}catch(e){this.storageErr=e.message}finally{this.storageBusy=!1}},this.runCleanup=async()=>{this.storageBusy=!0,this.storageErr="";try{const e=await h.cleanupStorage(["uploads","temp"]);this.storage=e.storage,g(`Reclaimed ${e.freedHuman}.`,"success")}catch(e){this.storageErr=e.message}finally{this.storageBusy=!1}},this.loadDiagnostics=async()=>{this.diagBusy=!0,this.diagErr="";try{this.diag=await h.diagnostics(),this.uiDiag=E()}catch(e){this.diagErr=e.message}finally{this.diagBusy=!1}},this.resetDiagnostics=async()=>{this.diagBusy=!0,this.diagErr="";try{K(),await h.resetDiagnostics(),this.diag=await h.diagnostics(),this.uiDiag=E()}catch(e){this.diagErr=e.message}finally{this.diagBusy=!1}}}connectedCallback(){super.connectedCallback(),W(this,"settings"),this.load(),this.loadGenLists(),this.loadTTS(),this.loadDescribe(),this.loadReferences()}async loadReferences(){try{this.refs=await h.libbyReferences()}catch{this.refs=null}}async setReference(e,t){var r;const s=(r=t.files)==null?void 0:r[0];if(t.value="",!s)return;const o=await new Promise((a,n)=>{const u=new FileReader;u.onload=()=>a(String(u.result)),u.onerror=()=>n(u.error),u.readAsDataURL(s)});try{await h.setLibbyReference(e,o),this.refNote="",this.refStamp=Date.now(),await this.loadReferences()}catch(a){this.refNote=a.message}}async clearReference(e){try{await h.deleteLibbyReference(e),this.refNote="",await this.loadReferences()}catch(t){this.refNote=t.message}}referenceTile(e,t){var o;const s=!!((o=this.refs)!=null&&o[e]);return i`<div style="display:flex;flex-direction:column;gap:6px;align-items:center;width:132px;">
       <div style="width:132px;height:176px;border-radius:12px;overflow:hidden;display:grid;place-items:center;
         background:var(--md-sys-color-surface-container-highest);color:var(--md-sys-color-on-surface-variant);font-size:12px;text-align:center;">
-        ${t?i`<img src=${h.libbyReferenceURL(e,this.refStamp)} alt=${`Libby, ${s.toLowerCase()}`} style="width:100%;height:100%;object-fit:cover;"/>`:i`<span>No picture</span>`}
+        ${s?i`<img src=${h.libbyReferenceURL(e,this.refStamp)} alt=${`Libby, ${t.toLowerCase()}`} style="width:100%;height:100%;object-fit:cover;"/>`:i`<span>No picture</span>`}
       </div>
-      <strong style="font-size:12px;">${s}</strong>
+      <strong style="font-size:12px;">${t}</strong>
       <div style="display:flex;gap:6px;">
         <label class="btn-inline">
-          ${t?"Replace":"Upload"}
+          ${s?"Replace":"Upload"}
           <input type="file" accept="image/*" hidden ?disabled=${!this.canEdit}
             @change=${r=>void this.setReference(e,r.target)}/>
         </label>
-        ${t?i`<button class="btn-inline" ?disabled=${!this.canEdit}
+        ${s?i`<button class="btn-inline" ?disabled=${!this.canEdit}
           @click=${()=>void this.clearReference(e)}>Remove</button>`:l}
       </div>
-    </div>`}async load(){try{const[e,s]=await Promise.all([h.getSettings(),h.stats()]);this.settings=e.settings,this.info=e.readOnly,this.stats=s}catch(e){this.loadError=e.message}try{this.apk=await h.apkInfo()}catch{this.apk={available:!1}}}get canEdit(){var e;return!!((e=this.user)!=null&&e.isAdmin)}openTab(e){V(()=>{this.tab=e}),e==="diagnostics"&&!this.diag&&!this.diagBusy&&this.loadDiagnostics(),e==="storage"&&!this.storage&&!this.storageBusy&&this.loadStorage(),e==="account"&&!this.passkeyList&&this.loadPasskeys()}editLora(e,s){var o;const t=[...((o=this.settings)==null?void 0:o.libbyGenLoras)??[]];t[e]&&(t[e]={...t[e],...s},this.edit({libbyGenLoras:t}))}editCameraLora(e,s){var r;const t=[...((r=this.settings)==null?void 0:r.libbyCameraLoras)??[]];if(!t[e])return;const o={...t[e],...s};s.name&&!t[e].trigger&&(o.trigger=this.genLoraTriggers[s.name]??""),t[e]=o,this.edit({libbyCameraLoras:t})}edit(e){!this.settings||!this.canEdit||(this.settings={...this.settings,...e},this.dirty=!0,this.saved=!1)}async save(){if(this.settings){this.saving=!0;try{const e=await h.saveSettings(this.settings);this.settings=e.settings,this.info=e.readOnly,this.dirty=!1,this.saved=!0,H(!!e.settings.incognito),this.loadTTS(!0),this.loadDescribe(),this.loadGenLists()}catch(e){this.loadError=e.message}finally{this.saving=!1}}}pickTheme(e){this.theme=e,j(e),q(e)}pickFit(e){this.fit=e,Y(e)}async changePassword(){if(this.pwMsg="",this.pwErr="",this.pwNew!==this.pwConfirm){this.pwErr="The new passwords don't match.";return}if(this.pwNew.length<8){this.pwErr="Use at least 8 characters.";return}this.pwBusy=!0;try{await h.changePassword(this.pwCurrent,this.pwNew),this.pwMsg="Password changed.",this.pwCurrent=this.pwNew=this.pwConfirm=""}catch(e){this.pwErr=e.message}finally{this.pwBusy=!1}}render(){if(this.only)return this.renderOnly(this.only);const e=ke.filter(r=>!r.adminOnly||this.canEdit),s=e.find(r=>r.id===this.tab)??e[0],t=this.dirty||this.saved;let o="";return i`
+    </div>`}async load(){try{const[e,t]=await Promise.all([h.getSettings(),h.stats()]);this.settings=e.settings,this.info=e.readOnly,this.stats=t}catch(e){this.loadError=e.message}try{this.apk=await h.apkInfo()}catch{this.apk={available:!1}}}get canEdit(){var e;return!!((e=this.user)!=null&&e.isAdmin)}openTab(e){V(()=>{this.tab=e}),e==="diagnostics"&&!this.diag&&!this.diagBusy&&this.loadDiagnostics(),e==="storage"&&!this.storage&&!this.storageBusy&&this.loadStorage(),e==="account"&&!this.passkeyList&&this.loadPasskeys()}editLora(e,t){var o;const s=[...((o=this.settings)==null?void 0:o.libbyGenLoras)??[]];s[e]&&(s[e]={...s[e],...t},this.edit({libbyGenLoras:s}))}editCameraLora(e,t){var r;const s=[...((r=this.settings)==null?void 0:r.libbyCameraLoras)??[]];if(!s[e])return;const o={...s[e],...t};t.name&&!s[e].trigger&&(o.trigger=this.genLoraTriggers[t.name]??""),s[e]=o,this.edit({libbyCameraLoras:s})}edit(e){!this.settings||!this.canEdit||(this.settings={...this.settings,...e},this.dirty=!0,this.saved=!1)}async save(){if(this.settings){this.saving=!0;try{const e=await h.saveSettings(this.settings);this.settings=e.settings,this.info=e.readOnly,this.dirty=!1,this.saved=!0,H(!!e.settings.incognito),this.loadTTS(!0),this.loadDescribe(),this.loadGenLists()}catch(e){this.loadError=e.message}finally{this.saving=!1}}}pickTheme(e){this.theme=e,j(e),q(e)}pickFit(e){this.fit=e,Y(e)}async changePassword(){if(this.pwMsg="",this.pwErr="",this.pwNew!==this.pwConfirm){this.pwErr="The new passwords don't match.";return}if(this.pwNew.length<8){this.pwErr="Use at least 8 characters.";return}this.pwBusy=!0;try{await h.changePassword(this.pwCurrent,this.pwNew),this.pwMsg="Password changed.",this.pwCurrent=this.pwNew=this.pwConfirm=""}catch(e){this.pwErr=e.message}finally{this.pwBusy=!1}}render(){if(this.only)return this.renderOnly(this.only);const e=ke.filter(r=>!r.adminOnly||this.canEdit),t=e.find(r=>r.id===this.tab)??e[0],s=this.dirty||this.saved;let o="";return i`
       <div class="shell">
         <nav class="cat-rail" aria-label="Settings categories">
           ${e.map(r=>{const a=r.group===o?l:i`<div class="cat-head">${r.group}</div>`;return o=r.group,i`${a}
@@ -211,23 +211,23 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
         </nav>
 
         <div class="panel-col">
-          <h2 class="panel-title">${s.label}</h2>
+          <h2 class="panel-title">${t.label}</h2>
           ${this.loadError?i`<div class="banner error">
                 <span class="material-symbols-rounded" style="font-size:18px;">error</span>
                 ${this.loadError}
               </div>`:l}
-          ${!this.canEdit&&this.settings&&s.server?i`<div class="banner info">
+          ${!this.canEdit&&this.settings&&t.server?i`<div class="banner info">
                 <span class="material-symbols-rounded" style="font-size:18px;">lock</span>
                 Server settings are read-only — only an admin can change them.
               </div>`:l}
           ${this.renderTab()}
-          ${t?this.renderSaveBar():l}
+          ${s?this.renderSaveBar():l}
         </div>
       </div>
-    `}renderOnly(e){const s={"libby-general":()=>this.renderLibby(),"libby-model":()=>this.renderLibbyModel(),"libby-voice":()=>this.renderLibbyVoice(),"libby-pictures":()=>i`${this.renderLibbyImageGen()}${this.renderLibbyReferences()}`}[e];return i`<div class="embedded">
+    `}renderOnly(e){const t={"libby-general":()=>this.renderLibby(),"libby-model":()=>this.renderLibbyModel(),"libby-voice":()=>this.renderLibbyVoice(),"libby-pictures":()=>i`${this.renderLibbyImageGen()}${this.renderLibbyReferences()}`}[e];return i`<div class="embedded">
       ${this.loadError?i`<div class="banner error"><span class="material-symbols-rounded" style="font-size:18px;">error</span>${this.loadError}</div>`:l}
       ${!this.canEdit&&this.settings&&e!=="libby-general"?i`<div class="banner info"><span class="material-symbols-rounded" style="font-size:18px;">lock</span>Server settings are read-only — only an admin can change them.</div>`:l}
-      ${s()}
+      ${t()}
       ${this.dirty||this.saved?this.renderSaveBar():l}
     </div>`}renderTab(){switch(this.tab){case"appearance":return this.renderAppearance();case"ai":return this.renderAI();case"scraping":return this.renderScraping();case"imagegen":return this.renderImageGen();case"library":return this.renderLibrary();case"android":return this.renderAndroid();case"launchy":return i`<oppai-launchy-panel></oppai-launchy-panel>`;case"account":return this.renderAccount();case"storage":return this.renderStorage();case"diagnostics":return this.renderDiagnostics();case"privacy":return this.renderPrivacy();default:return this.renderAbout()}}renderSaveBar(){return i`
       <div class="savebar">
@@ -298,11 +298,11 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
             <div class="field-help">"System" follows your OS light/dark setting.</div>
           </div>
           <div class="field-control seg">
-            ${[["dark","Dark","dark_mode"],["light","Light","light_mode"],["system","System","contrast"]].map(([e,s,t])=>i`<button
+            ${[["dark","Dark","dark_mode"],["light","Light","light_mode"],["system","System","contrast"]].map(([e,t,s])=>i`<button
                 class=${this.theme===e?"on":""}
                 @click=${()=>this.pickTheme(e)}
               >
-                <span class="material-symbols-rounded" style="font-size:18px;">${t}</span>${s}
+                <span class="material-symbols-rounded" style="font-size:18px;">${s}</span>${t}
               </button>`)}
           </div>
         </div>
@@ -316,16 +316,16 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
             </div>
           </div>
           <div class="field-control seg">
-            ${[["page","Fit page","fit_screen"],["width","Fit width","fit_width"]].map(([e,s,t])=>i`<button
+            ${[["page","Fit page","fit_screen"],["width","Fit width","fit_width"]].map(([e,t,s])=>i`<button
                 class=${this.fit===e?"on":""}
                 @click=${()=>this.pickFit(e)}
               >
-                <span class="material-symbols-rounded" style="font-size:18px;">${t}</span>${s}
+                <span class="material-symbols-rounded" style="font-size:18px;">${s}</span>${t}
               </button>`)}
           </div>
         </div>
       </section>
-    `}renderPrivacy(){const e=this.settings,s=!!(e!=null&&e.incognito);return i`
+    `}renderPrivacy(){const e=this.settings,t=!!(e!=null&&e.incognito);return i`
       <section class="card">
         <h3><span class="material-symbols-rounded">visibility_off</span>Incognito</h3>
         <p class="card-sub">Server-wide — every browser and device sees it.</p>
@@ -345,12 +345,12 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
           </div>
           <div class="field-control">
             <button
-              class="switch ${s?"on":""}"
+              class="switch ${t?"on":""}"
               role="switch"
-              aria-checked=${s?"true":"false"}
+              aria-checked=${t?"true":"false"}
               aria-label="Appear as a Nextcloud instance"
               ?disabled=${!e||!this.canEdit}
-              @click=${()=>this.edit({incognito:!s})}
+              @click=${()=>this.edit({incognito:!t})}
             ></button>
           </div>
         </div>
@@ -426,10 +426,10 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
           </div>
         </div>
       </section>
-    `}renderLibbyVoice(){const e=this.settings;if(!e)return l;const s=this.tts,t=(s==null?void 0:s.voices)??[],o=t.filter(n=>n.installed),r=t.filter(n=>!n.installed),a=new Set((s==null?void 0:s.downloading)??[]);return i`<section class="card">
+    `}renderLibbyVoice(){const e=this.settings;if(!e)return l;const t=this.tts,s=(t==null?void 0:t.voices)??[],o=s.filter(n=>n.installed),r=s.filter(n=>!n.installed),a=new Set((t==null?void 0:t.downloading)??[]);return i`<section class="card">
       <h3><span class="material-symbols-rounded">record_voice_over</span>Libby’s voice</h3>
       <p class="card-sub">
-        ${s===void 0?"Checking the server…":s?s.engine==="kokoro"&&s.ready?i`Speaking with <strong>Kokoro</strong>, the natural voice, on the server’s CPU. Turn playback on per device with the speaker button in Chat.`:s.engine==="piper"&&s.ready?i`Speaking with <strong>piper</strong> on the server’s CPU. Turn playback on per device with the speaker button in Chat.`:s.engine==="openai"&&s.ready?i`Speaking through the speech server at <code>${e.ttsUrl}</code>.`:i`Not speaking from the server${s.detail?i` — ${s.detail}`:l}. Devices fall back to their own voices.`:"The server did not answer about speech."}
+        ${t===void 0?"Checking the server…":t?t.engine==="kokoro"&&t.ready?i`Speaking with <strong>Kokoro</strong>, the natural voice, on the server’s CPU. Turn playback on per device with the speaker button in Chat.`:t.engine==="piper"&&t.ready?i`Speaking with <strong>piper</strong> on the server’s CPU. Turn playback on per device with the speaker button in Chat.`:t.engine==="openai"&&t.ready?i`Speaking through the speech server at <code>${e.ttsUrl}</code>.`:i`Not speaking from the server${t.detail?i` — ${t.detail}`:l}. Devices fall back to their own voices.`:"The server did not answer about speech."}
       </p>
 
       <div class="field">
@@ -439,7 +439,7 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
         </div>
         <div class="field-control">
           <select ?disabled=${!this.canEdit} @change=${n=>this.edit({ttsEngine:n.target.value})}>
-            ${[["auto","Auto"],["kokoro",`Kokoro — natural${s&&!s.kokoroInstalled?" (not installed)":""}`],["piper",`Piper — light${s&&!s.piperInstalled?" (not installed)":""}`],["openai","Speech server"],["off","Off"]].map(([n,u])=>i`<option value=${n} ?selected=${e.ttsEngine===n}>${u}</option>`)}
+            ${[["auto","Auto"],["kokoro",`Kokoro — natural${t&&!t.kokoroInstalled?" (not installed)":""}`],["piper",`Piper — light${t&&!t.piperInstalled?" (not installed)":""}`],["openai","Speech server"],["off","Off"]].map(([n,u])=>i`<option value=${n} ?selected=${e.ttsEngine===n}>${u}</option>`)}
           </select>
         </div>
       </div>
@@ -455,7 +455,7 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
             ${o.map(n=>i`<option value=${n.id} ?selected=${n.id===e.ttsVoice}>${n.label}${n.bundled?" · bundled":""}</option>`)}
             ${e.ttsVoice&&!o.some(n=>n.id===e.ttsVoice)?i`<option value=${e.ttsVoice} selected>${e.ttsVoice} (not installed)</option>`:l}
           </select>
-          <button class="btn" ?disabled=${!(s!=null&&s.ready)} title="Hear the current voice" @click=${()=>void this.testVoice()}>Test</button>
+          <button class="btn" ?disabled=${!(t!=null&&t.ready)} title="Hear the current voice" @click=${()=>void this.testVoice()}>Test</button>
         </div>
       </div>
 
@@ -470,7 +470,7 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
         </div>
       </div>
 
-      ${s!=null&&s.piperInstalled&&s.engine!=="kokoro"?i`<div class="field stack">
+      ${t!=null&&t.piperInstalled&&t.engine!=="kokoro"?i`<div class="field stack">
         <div class="field-text">
           <div class="field-label">Piper voices</div>
           <div class="field-help">A curated handful from piper’s voice set, fetched from Hugging Face onto the server (20–110 MB each). Any other piper voice dropped into <code>/config/tts</code> is listed too.</div>
@@ -505,7 +505,7 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
             @change=${n=>this.edit({ttsApiKey:n.target.value})} />
         </div>
       </div>
-    </section>`}async loadTTS(e=!1){var s,t;this.tts=await D(e);try{this.ttsErrors=await h.ttsVoiceErrors()}catch{}(t=(s=this.tts)==null?void 0:s.downloading)!=null&&t.length&&window.setTimeout(()=>void this.loadTTS(!0),4e3)}async loadDescribe(){try{this.describe=await h.describeStatus()}catch{this.describe=null}}async probeVision(){this.describeBusy=!0,this.describeNote="";try{const e=await h.describeProbe();this.describeNote=`The model answered: “${e.description}”`}catch(e){this.describeNote=e.message}finally{this.describeBusy=!1}}async toggleBackfill(){var e;this.describeBusy=!0;try{(e=this.describe)!=null&&e.backfilling?await h.describeBackfillStop():await h.describeBackfill(),await this.loadDescribe()}catch(s){this.describeNote=s.message}finally{this.describeBusy=!1}}async testVoice(){_(),await de("Hi. This is what I sound like. Saved to your library, by the way — nice pick.")}async downloadVoice(e){try{await h.downloadTTSVoice(e),await this.loadTTS(!0)}catch(s){this.loadError=s.message}}async deleteVoice(e){if(confirm(`Remove the ${e} voice from the server?`))try{await h.deleteTTSVoice(e),await this.loadTTS(!0)}catch(s){this.loadError=s.message}}renderLibbyModel(){const e=this.settings;return i`
+    </section>`}async loadTTS(e=!1){var t,s;this.tts=await D(e);try{this.ttsErrors=await h.ttsVoiceErrors()}catch{}(s=(t=this.tts)==null?void 0:t.downloading)!=null&&s.length&&window.setTimeout(()=>void this.loadTTS(!0),4e3)}async loadDescribe(){try{this.describe=await h.describeStatus()}catch{this.describe=null}}async probeVision(){this.describeBusy=!0,this.describeNote="";try{const e=await h.describeProbe();this.describeNote=`The model answered: “${e.description}”`}catch(e){this.describeNote=e.message}finally{this.describeBusy=!1}}async toggleBackfill(){var e;this.describeBusy=!0;try{(e=this.describe)!=null&&e.backfilling?await h.describeBackfillStop():await h.describeBackfill(),await this.loadDescribe()}catch(t){this.describeNote=t.message}finally{this.describeBusy=!1}}async testVoice(){_(),await de("Hi. This is what I sound like. Saved to your library, by the way — nice pick.")}async downloadVoice(e){try{await h.downloadTTSVoice(e),await this.loadTTS(!0)}catch(t){this.loadError=t.message}}async deleteVoice(e){if(confirm(`Remove the ${e} voice from the server?`))try{await h.deleteTTSVoice(e),await this.loadTTS(!0)}catch(t){this.loadError=t.message}}renderLibbyModel(){const e=this.settings;return i`
       <section class="card">
         <h3><span class="material-symbols-rounded">memory</span>Her model</h3>
         <p class="card-sub">The chat backend every character talks through. Saved for the whole server.</p>
@@ -527,7 +527,7 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
                     placeholder="http://host:5000/v1"
                     .value=${e.chatUrl}
                     ?disabled=${!this.canEdit}
-                    @change=${s=>this.edit({chatUrl:s.target.value})}
+                    @change=${t=>this.edit({chatUrl:t.target.value})}
                   />
                 </div>
                 <div class="field-control">
@@ -537,7 +537,7 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
                     placeholder="Optional fallback model name"
                     .value=${e.chatModel}
                     ?disabled=${!this.canEdit}
-                    @change=${s=>this.edit({chatModel:s.target.value})}
+                    @change=${t=>this.edit({chatModel:t.target.value})}
                   />
                 </div>
                 <div class="field-control">
@@ -547,7 +547,7 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
                     placeholder=${e.chatApiKeySet?"API key saved — enter to replace":"API key (optional)"}
                     .value=${e.chatApiKey}
                     ?disabled=${!this.canEdit}
-                    @change=${s=>this.edit({chatApiKey:s.target.value})}
+                    @change=${t=>this.edit({chatApiKey:t.target.value})}
                   />
                 </div>
               </div>
@@ -576,7 +576,7 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
                     step="1024"
                     .value=${String(e.chatContextTokens)}
                     ?disabled=${!this.canEdit}
-                    @change=${s=>this.edit({chatContextTokens:Number(s.target.value)})}
+                    @change=${t=>this.edit({chatContextTokens:Number(t.target.value)})}
                   />
                 </div>
               </div>
@@ -594,8 +594,8 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
                 </div>
                 <div class="field-control">
                   <select ?disabled=${!this.canEdit}
-                    @change=${s=>this.edit({chatModelTier:s.target.value})}>
-                    ${[["","Auto (from the model name)"],["small","Small — 7B to 13B"],["large","Large — 24B and up"]].map(([s,t])=>i`<option value=${s} ?selected=${e.chatModelTier===s}>${t}</option>`)}
+                    @change=${t=>this.edit({chatModelTier:t.target.value})}>
+                    ${[["","Auto (from the model name)"],["small","Small — 7B to 13B"],["large","Large — 24B and up"]].map(([t,s])=>i`<option value=${t} ?selected=${e.chatModelTier===t}>${s}</option>`)}
                   </select>
                 </div>
               </div>
@@ -617,7 +617,7 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
                     step="1"
                     .value=${String(e.gpuMemoryGb??0)}
                     ?disabled=${!this.canEdit}
-                    @change=${s=>this.edit({gpuMemoryGb:Number(s.target.value)})}
+                    @change=${t=>this.edit({gpuMemoryGb:Number(t.target.value)})}
                   />
                 </div>
               </div>
@@ -636,8 +636,8 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
                 </div>
                 <div class="field-control">
                   <select ?disabled=${!this.canEdit}
-                    @change=${s=>this.edit({chatVision:s.target.value})}>
-                    ${[["","Auto (from the model name)"],["on","On — her model can see"],["off","Off — tags only"]].map(([s,t])=>i`<option value=${s} ?selected=${(e.chatVision??"")===s}>${t}</option>`)}
+                    @change=${t=>this.edit({chatVision:t.target.value})}>
+                    ${[["","Auto (from the model name)"],["on","On — her model can see"],["off","Off — tags only"]].map(([t,s])=>i`<option value=${t} ?selected=${(e.chatVision??"")===t}>${s}</option>`)}
                   </select>
                 </div>
               </div>
@@ -655,8 +655,8 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
                 </div>
                 <div class="field-control">
                   <select ?disabled=${!this.canEdit}
-                    @change=${s=>this.edit({gpuShare:s.target.value})}>
-                    ${[["","Both loaded"],["swap","Swap for pictures"]].map(([s,t])=>i`<option value=${s} ?selected=${(e.gpuShare??"")===s}>${t}</option>`)}
+                    @change=${t=>this.edit({gpuShare:t.target.value})}>
+                    ${[["","Both loaded"],["swap","Swap for pictures"]].map(([t,s])=>i`<option value=${t} ?selected=${(e.gpuShare??"")===t}>${s}</option>`)}
                   </select>
                 </div>
               </div>
@@ -673,8 +673,8 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
                 </div>
                 <div class="field-control">
                   <select ?disabled=${!this.canEdit}
-                    @change=${s=>this.edit({chatToolMode:s.target.value})}>
-                    ${[["","Auto"],["native","Native tool calls"],["json","JSON answers"]].map(([s,t])=>i`<option value=${s} ?selected=${(e.chatToolMode??"")===s}>${t}</option>`)}
+                    @change=${t=>this.edit({chatToolMode:t.target.value})}>
+                    ${[["","Auto"],["native","Native tool calls"],["json","JSON answers"]].map(([t,s])=>i`<option value=${t} ?selected=${(e.chatToolMode??"")===t}>${s}</option>`)}
                   </select>
                 </div>
               </div>
@@ -699,7 +699,7 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
                     placeholder="/models"
                     .value=${e.chatModelDir}
                     ?disabled=${!this.canEdit}
-                    @change=${s=>this.edit({chatModelDir:s.target.value})}
+                    @change=${t=>this.edit({chatModelDir:t.target.value})}
                   />
                 </div>
               </div>
@@ -733,7 +733,7 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
           pictures for you in chat. She always asks first — nothing is generated or saved until
           you press Allow.
         </p>
-      </section>`;const s=this.genModels,t=this.genLoras,o=e.libbyGenLoras??[],r=this.genBoards;return i`<section class="card">
+      </section>`;const t=this.genModels,s=this.genLoras,o=e.libbyGenLoras??[],r=this.genBoards;return i`<section class="card">
       <h3><span class="material-symbols-rounded">auto_awesome</span>Libby’s image generation</h3>
       <p class="card-sub">
         What she uses when she offers to make you a picture. She always asks first — nothing is
@@ -748,10 +748,10 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
             generator’s default to use whatever it loads.</div>
         </div>
         <div class="field-control">
-          ${s.length?i`<select ?disabled=${!this.canEdit}
+          ${t.length?i`<select ?disabled=${!this.canEdit}
                 @change=${a=>this.edit({libbyGenModel:a.target.value})}>
                 <option value="" ?selected=${!e.libbyGenModel}>Generator’s default</option>
-                ${s.map(a=>i`<option value=${a} ?selected=${a===e.libbyGenModel}>${a}</option>`)}
+                ${t.map(a=>i`<option value=${a} ?selected=${a===e.libbyGenModel}>${a}</option>`)}
               </select>`:i`<input type="text" autocomplete="off" placeholder="Generator’s default"
                 .value=${e.libbyGenModel} ?disabled=${!this.canEdit}
                 @change=${a=>this.edit({libbyGenModel:a.target.value})} />`}
@@ -767,10 +767,10 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
         </div>
         <div class="field-control" style="display:flex; flex-direction:column; gap:8px; align-items:stretch;">
           ${o.map((a,n)=>i`<div style="display:flex; gap:8px; align-items:center;">
-            ${t.length?i`<select style="flex:1; min-width:0;" ?disabled=${!this.canEdit}
+            ${s.length?i`<select style="flex:1; min-width:0;" ?disabled=${!this.canEdit}
                   aria-label="LoRA ${n+1}"
                   @change=${u=>this.editLora(n,{name:u.target.value})}>
-                  ${(t.includes(a.name)?t:[a.name,...t]).map(u=>i`<option value=${u} ?selected=${u===a.name}>${u}</option>`)}
+                  ${(s.includes(a.name)?s:[a.name,...s]).map(u=>i`<option value=${u} ?selected=${u===a.name}>${u}</option>`)}
                 </select>`:i`<input type="text" autocomplete="off" placeholder="LoRA name" style="flex:1; min-width:0;"
                   aria-label="LoRA ${n+1}"
                   .value=${a.name} ?disabled=${!this.canEdit}
@@ -786,7 +786,7 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
           </div>`)}
           <button class="btn-inline" style="align-self:flex-start; display:inline-flex; align-items:center; gap:6px;"
             ?disabled=${!this.canEdit||o.length>=8}
-            @click=${()=>this.edit({libbyGenLoras:[...o,{name:t.find(a=>!o.some(n=>n.name===a))??"",weight:1}]})}>
+            @click=${()=>this.edit({libbyGenLoras:[...o,{name:s.find(a=>!o.some(n=>n.name===a))??"",weight:1}]})}>
             <span class="material-symbols-rounded" style="font-size:18px;">add</span>
             ${o.length?"Add another LoRA":"Add a LoRA"}
           </button>
@@ -959,7 +959,7 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
           ></button>
         </div>
       </div>
-    </section>`}async loadGenLists(){this.genError="";try{const e=await h.imageGenStatus();if(this.genStatus=e,!e.enabled||!e.reachable){e.enabled&&(this.genError=e.error||"The image generator isn't reachable.");return}this.genModels=(e.models??[]).map(s=>s.title||s.model_name).filter(Boolean),this.genLoras=(e.loras??[]).map(s=>s.name).filter(Boolean),this.genLoraTriggers=Object.fromEntries((e.loras??[]).map(s=>[s.name,(s.triggerPhrases??[]).join(", ")])),this.genBoards=(e.boards??[]).map(s=>s.name).filter(Boolean)}catch(e){this.genStatus=null,this.genError=e.message}}renderCameraLoras(e){const s=this.genLoras,t=e.libbyCameraLoras??[];return i`<div class="field stack">
+    </section>`}async loadGenLists(){this.genError="";try{const e=await h.imageGenStatus();if(this.genStatus=e,!e.enabled||!e.reachable){e.enabled&&(this.genError=e.error||"The image generator isn't reachable.");return}this.genModels=(e.models??[]).map(t=>t.title||t.model_name).filter(Boolean),this.genLoras=(e.loras??[]).map(t=>t.name).filter(Boolean),this.genLoraTriggers=Object.fromEntries((e.loras??[]).map(t=>[t.name,(t.triggerPhrases??[]).join(", ")])),this.genBoards=(e.boards??[]).map(t=>t.name).filter(Boolean)}catch(e){this.genStatus=null,this.genError=e.message}}renderCameraLoras(e){const t=this.genLoras,s=e.libbyCameraLoras??[];return i`<div class="field stack">
       <div class="field-text">
         <div class="field-label">LoRAs she can choose</div>
         <div class="field-help">
@@ -969,11 +969,11 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
         </div>
       </div>
       <div class="field-control" style="display:flex; flex-direction:column; gap:12px; align-items:stretch;">
-        ${t.map((o,r)=>i`<div style="display:flex; flex-direction:column; gap:6px;">
+        ${s.map((o,r)=>i`<div style="display:flex; flex-direction:column; gap:6px;">
           <div style="display:flex; gap:8px; align-items:center;">
-            ${s.length?i`<select style="flex:1; min-width:0;" ?disabled=${!this.canEdit} aria-label="Optional LoRA ${r+1}"
+            ${t.length?i`<select style="flex:1; min-width:0;" ?disabled=${!this.canEdit} aria-label="Optional LoRA ${r+1}"
                   @change=${a=>this.editCameraLora(r,{name:a.target.value})}>
-                  ${(s.includes(o.name)?s:[o.name,...s]).map(a=>i`<option value=${a} ?selected=${a===o.name}>${a}</option>`)}
+                  ${(t.includes(o.name)?t:[o.name,...t]).map(a=>i`<option value=${a} ?selected=${a===o.name}>${a}</option>`)}
                 </select>`:i`<input type="text" autocomplete="off" placeholder="LoRA name" style="flex:1; min-width:0;"
                   aria-label="Optional LoRA ${r+1}" .value=${o.name} ?disabled=${!this.canEdit}
                   @change=${a=>this.editCameraLora(r,{name:a.target.value})} />`}
@@ -981,7 +981,7 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
               aria-label="Optional LoRA ${r+1} strength" .value=${String(o.weight)} ?disabled=${!this.canEdit}
               @change=${a=>this.editCameraLora(r,{weight:Number(a.target.value)})} />
             <button class="btn-inline" title="Remove" aria-label="Remove optional LoRA ${r+1}" ?disabled=${!this.canEdit}
-              @click=${()=>this.edit({libbyCameraLoras:t.filter((a,n)=>n!==r)})}>
+              @click=${()=>this.edit({libbyCameraLoras:s.filter((a,n)=>n!==r)})}>
               <span class="material-symbols-rounded" style="font-size:18px;">delete</span>
             </button>
           </div>
@@ -993,13 +993,13 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
             @change=${a=>this.editCameraLora(r,{trigger:a.target.value})} />
         </div>`)}
         <button class="btn-inline" style="align-self:flex-start; display:inline-flex; align-items:center; gap:6px;"
-          ?disabled=${!this.canEdit||t.length>=12}
-          @click=${()=>{const o=s.find(r=>!t.some(a=>a.name===r))??"";this.edit({libbyCameraLoras:[...t,{name:o,weight:1,when:"",trigger:this.genLoraTriggers[o]??""}]})}}>
+          ?disabled=${!this.canEdit||s.length>=12}
+          @click=${()=>{const o=t.find(r=>!s.some(a=>a.name===r))??"";this.edit({libbyCameraLoras:[...s,{name:o,weight:1,when:"",trigger:this.genLoraTriggers[o]??""}]})}}>
           <span class="material-symbols-rounded" style="font-size:18px;">add</span>
-          ${t.length?"Add another":"Add one she can choose"}
+          ${s.length?"Add another":"Add one she can choose"}
         </button>
       </div>
-    </div>`}renderAI(){const e=this.settings,s=this.info;return i`
+    </div>`}renderAI(){const e=this.settings,t=this.info;return i`
       <section class="card">
         <h3><span class="material-symbols-rounded">auto_awesome</span>AI auto-tagging</h3>
         <p class="card-sub">
@@ -1008,8 +1008,8 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
         </p>
 
         ${e?i`
-              ${this.switchField("Enable auto-tagging","Master switch. Off means no tagging at all, including the ✨ button.",e.aiEnabled,t=>this.edit({aiEnabled:t}))}
-              ${this.switchField("Tag on import","Tag new uploads and imports automatically. With this off, tagging only happens when you ask for it.",e.aiAutoTag,t=>this.edit({aiAutoTag:t}),!e.aiEnabled)}
+              ${this.switchField("Enable auto-tagging","Master switch. Off means no tagging at all, including the ✨ button.",e.aiEnabled,s=>this.edit({aiEnabled:s}))}
+              ${this.switchField("Tag on import","Tag new uploads and imports automatically. With this off, tagging only happens when you ask for it.",e.aiAutoTag,s=>this.edit({aiAutoTag:s}),!e.aiEnabled)}
 
               <div class="field">
                 <div class="field-text">
@@ -1024,7 +1024,7 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
                     step="0.05"
                     .value=${String(e.aiMinScore)}
                     ?disabled=${!this.canEdit||!e.aiEnabled}
-                    @input=${t=>this.edit({aiMinScore:Number(t.target.value)})}
+                    @input=${s=>this.edit({aiMinScore:Number(s.target.value)})}
                   />
                   <span class="value">${e.aiMinScore.toFixed(2)}</span>
                 </div>
@@ -1042,20 +1042,20 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
                     max="100"
                     .value=${String(e.aiMaxTags)}
                     ?disabled=${!this.canEdit||!e.aiEnabled}
-                    @change=${t=>this.edit({aiMaxTags:Number(t.target.value)})}
+                    @change=${s=>this.edit({aiMaxTags:Number(s.target.value)})}
                   />
                 </div>
               </div>
 
-              ${s?i`
-                    ${this.readOnlyField("Active tagger","Chosen at startup.",s.aiTagger)}
-                    ${this.readOnlyField("Inference device","OPPAI_AI_DEVICE — needs a restart to change.",s.aiDevice)}
-                    ${this.readOnlyField("Model directory","OPPAI_AI_MODEL_DIR — needs a restart to change.",s.aiModelDir)}
+              ${t?i`
+                    ${this.readOnlyField("Active tagger","Chosen at startup.",t.aiTagger)}
+                    ${this.readOnlyField("Inference device","OPPAI_AI_DEVICE — needs a restart to change.",t.aiDevice)}
+                    ${this.readOnlyField("Model directory","OPPAI_AI_MODEL_DIR — needs a restart to change.",t.aiModelDir)}
                   `:l}
             `:i`<div class="field-help">Loading…</div>`}
       </section>
       ${this.renderVision()}
-    `}renderVision(){const e=this.settings,s=this.describe;return i`
+    `}renderVision(){const e=this.settings,t=this.describe;return i`
       <section class="card">
         <h3><span class="material-symbols-rounded">description</span>Describing pictures</h3>
         <p class="card-sub">
@@ -1076,21 +1076,21 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
                 <div class="field-control">
                   <input type="text" autocomplete="off" placeholder="http://host:11434/v1" .value=${e.visionUrl}
                     ?disabled=${!this.canEdit}
-                    @change=${t=>this.edit({visionUrl:t.target.value})} />
+                    @change=${s=>this.edit({visionUrl:s.target.value})} />
                 </div>
                 <div class="field-control">
                   <input type="text" autocomplete="off" placeholder="Model name, e.g. qwen2.5vl:7b or llava" .value=${e.visionModel}
                     ?disabled=${!this.canEdit}
-                    @change=${t=>this.edit({visionModel:t.target.value})} />
+                    @change=${s=>this.edit({visionModel:s.target.value})} />
                 </div>
                 <div class="field-control">
                   <input type="password" autocomplete="new-password"
                     placeholder=${e.visionApiKeySet?"API key saved — enter to replace":"API key (optional)"}
                     .value=${e.visionApiKey} ?disabled=${!this.canEdit}
-                    @change=${t=>this.edit({visionApiKey:t.target.value})} />
+                    @change=${s=>this.edit({visionApiKey:s.target.value})} />
                 </div>
               </div>
-              ${this.switchField("Describe on import","Describe every new picture and clip once it has been tagged; the tags steer the model. Off means only when you ask, from the viewer.",e.visionAuto,t=>this.edit({visionAuto:t}),!e.visionUrl)}
+              ${this.switchField("Describe on import","Describe every new picture and clip once it has been tagged; the tags steer the model. Off means only when you ask, from the viewer.",e.visionAuto,s=>this.edit({visionAuto:s}),!e.visionUrl)}
               <div class="field">
                 <div class="field-text">
                   <div class="field-label">Check the model</div>
@@ -1109,14 +1109,14 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
                 <div class="field-text">
                   <div class="field-label">Describe what has none</div>
                   <div class="field-help">
-                    ${s?s.undescribed?`${s.undescribed.toLocaleString()} ${s.undescribed===1?"item has":"items have"} no description yet.${s.backfilling?" Working through them, one at a time.":""}`:"Everything that can be described has been.":"Loading…"}
+                    ${t?t.undescribed?`${t.undescribed.toLocaleString()} ${t.undescribed===1?"item has":"items have"} no description yet.${t.backfilling?" Working through them, one at a time.":""}`:"Everything that can be described has been.":"Loading…"}
                     Runs in the background, one item at a time; leave this page and it carries on.
                   </div>
                 </div>
                 <div class="field-control" style="display:flex; gap:8px; align-items:center;">
-                  <button class="btn" ?disabled=${!e.visionEnabled||this.describeBusy||!s||!s.undescribed&&!s.backfilling}
+                  <button class="btn" ?disabled=${!e.visionEnabled||this.describeBusy||!t||!t.undescribed&&!t.backfilling}
                     @click=${()=>void this.toggleBackfill()}>
-                    ${s!=null&&s.backfilling?"Stop":"Start"}
+                    ${t!=null&&t.backfilling?"Stop":"Start"}
                   </button>
                   <button class="btn" title="Refresh the count" @click=${()=>void this.loadDescribe()}>
                     <span class="material-symbols-rounded" style="font-size:18px;">refresh</span>
@@ -1131,7 +1131,7 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
         <p class="card-sub">How OppaiLib behaves toward the sites you import from.</p>
 
         ${e?i`
-              ${this.switchField("Respect robots.txt","Skip URLs a site asks crawlers not to fetch.",e.scrapeRespectRobots,s=>this.edit({scrapeRespectRobots:s}))}
+              ${this.switchField("Respect robots.txt","Skip URLs a site asks crawlers not to fetch.",e.scrapeRespectRobots,t=>this.edit({scrapeRespectRobots:t}))}
 
               <div class="field">
                 <div class="field-text">
@@ -1148,7 +1148,7 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
                     step="250"
                     .value=${String(e.scrapeDelayMs)}
                     ?disabled=${!this.canEdit}
-                    @change=${s=>this.edit({scrapeDelayMs:Number(s.target.value)})}
+                    @change=${t=>this.edit({scrapeDelayMs:Number(t.target.value)})}
                   />
                   <span class="value">ms</span>
                 </div>
@@ -1167,7 +1167,7 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
                     type="text"
                     .value=${e.scrapeUserAgent}
                     ?disabled=${!this.canEdit}
-                    @change=${s=>this.edit({scrapeUserAgent:s.target.value})}
+                    @change=${t=>this.edit({scrapeUserAgent:t.target.value})}
                   />
                 </div>
               </div>
@@ -1184,13 +1184,13 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
                 <div class="field-control">
                   <input type="text" inputmode="numeric" autocomplete="off" placeholder="Rule34 user id"
                     .value=${e.rule34UserId} ?disabled=${!this.canEdit}
-                    @change=${s=>this.edit({rule34UserId:s.target.value})} />
+                    @change=${t=>this.edit({rule34UserId:t.target.value})} />
                 </div>
                 <div class="field-control">
                   <input type="password" autocomplete="new-password"
                     placeholder=${e.rule34ApiKeySet?"•••••••• (unchanged)":"Rule34 API key"}
                     ?disabled=${!this.canEdit}
-                    @change=${s=>this.edit({rule34ApiKey:s.target.value})} />
+                    @change=${t=>this.edit({rule34ApiKey:t.target.value})} />
                 </div>
                 ${e.rule34ApiKeySet?i`<div class="field-control">
                   <button type="button" class="btn-inline" ?disabled=${!this.canEdit}
@@ -1236,7 +1236,7 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
                 <div class="field-control">
                   <input type="text" autocomplete="off" placeholder="http://host:7860"
                     .value=${e.imageGenUrl} ?disabled=${!this.canEdit}
-                    @change=${s=>this.edit({imageGenUrl:s.target.value})} />
+                    @change=${t=>this.edit({imageGenUrl:t.target.value})} />
                 </div>
               </div>
 
@@ -1258,7 +1258,26 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
                 <div class="field-control">
                   <input type="text" autocomplete="off" placeholder="/a1111-models"
                     .value=${e.imageGenModelsDir??""} ?disabled=${!this.canEdit}
-                    @change=${s=>this.edit({imageGenModelsDir:s.target.value})} />
+                    @change=${t=>this.edit({imageGenModelsDir:t.target.value})} />
+                </div>
+              </div>
+
+              <div class="field stack">
+                <div class="field-text">
+                  <div class="field-label">Automatic1111 outputs folder</div>
+                  <div class="field-help">
+                    Automatic1111 has no gallery API: what it made is the pictures it saved in its
+                    <code>outputs</code> folder, so Create's gallery reads that folder. Map it into this
+                    container at <code>/a1111-outputs</code>, or map A1111's whole folder so
+                    <code>outputs</code> sits beside <code>models</code>, and it is found by itself; give a
+                    path here only if you mapped it somewhere else. Deleting from the gallery deletes the
+                    file, so the mapping must be read/write for that.
+                  </div>
+                </div>
+                <div class="field-control">
+                  <input type="text" autocomplete="off" placeholder="/a1111-outputs"
+                    .value=${e.imageGenOutputsDir??""} ?disabled=${!this.canEdit}
+                    @change=${t=>this.edit({imageGenOutputsDir:t.target.value})} />
                 </div>
               </div>
 
@@ -1283,13 +1302,13 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
                 <div class="field-control">
                   <input type="text" autocomplete="off" placeholder="https://civitai.red/api/v1"
                     .value=${e.civitaiApiUrl} ?disabled=${!this.canEdit}
-                    @change=${s=>this.edit({civitaiApiUrl:s.target.value})} />
+                    @change=${t=>this.edit({civitaiApiUrl:t.target.value})} />
                 </div>
                 <div class="field-control">
                   <input type="password" autocomplete="new-password"
                     placeholder=${e.civitaiKeySet?"•••••••• (unchanged)":"Civitai API key (optional)"}
                     ?disabled=${!this.canEdit}
-                    @change=${s=>this.edit({civitaiApiKey:s.target.value})} />
+                    @change=${t=>this.edit({civitaiApiKey:t.target.value})} />
                 </div>
                 ${e.civitaiKeySet?i`<div class="field-control">
                   <button type="button" class="btn-inline" ?disabled=${!this.canEdit}
@@ -1319,13 +1338,13 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
                 <div class="field-control">
                   <input type="text" autocomplete="off" placeholder="http://trainer:7870"
                     .value=${e.trainerUrl??""} ?disabled=${!this.canEdit}
-                    @change=${s=>this.edit({trainerUrl:s.target.value})} />
+                    @change=${t=>this.edit({trainerUrl:t.target.value})} />
                 </div>
                 <div class="field-control">
                   <input type="password" autocomplete="new-password"
                     placeholder=${e.trainerTokenSet?"•••••••• (unchanged)":"Trainer token"}
                     ?disabled=${!this.canEdit}
-                    @change=${s=>this.edit({trainerToken:s.target.value})} />
+                    @change=${t=>this.edit({trainerToken:t.target.value})} />
                 </div>
                 ${e.trainerTokenSet?i`<div class="field-control">
                   <button type="button" class="btn-inline" ?disabled=${!this.canEdit}
@@ -1355,9 +1374,9 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
               <span><strong>${e.label}</strong> — ${e.detail}</span>
             </li>`)}
           </ul>`:l}
-    </div>`}genStatusLine(e){const s=this.genStatus;if(!e.imageGenUrl.trim())return l;let t,o=!1;if(this.dirty)t="Save to check it.";else if(s)if(!s.reachable)t=`Not reachable${s.error?`: ${s.error}`:"."}`,o=!0;else{const r=s.backend==="invokeai"?"InvokeAI":"Automatic1111",a=(s.models??[]).length,n=(s.loras??[]).length;t=`Connected to ${r} — ${a} ${a===1?"model":"models"}, ${n} ${n===1?"LoRA":"LoRAs"}.`}else{if(!this.genError)return i`<div class="field-status">Checking…</div>`;t=this.genError,o=!0}return i`<div class="field-status ${o?"bad":""}">${t}</div>`}modelsFolderLine(e){const s=this.genStatus;if(this.dirty)return i`<div class="field-status">Save to check it.</div>`;if(!(s!=null&&s.reachable))return l;if(s.backend==="invokeai")return i`<div class="field-status">Not needed: InvokeAI installs and edits models itself.</div>`;if(s.manageModels){const t=!(e.imageGenModelsDir??"").trim();return i`<div class="field-status ok">
-        Using <code>${s.modelsDir}</code>${t?" — found mounted, so there is nothing to set":""}. Models can be installed, edited and deleted.
-      </div>`}return s.modelsDirProblem?i`<div class="field-status bad">${s.modelsDirProblem}.</div>`:i`<div class="field-status">Nothing is mounted at <code>/a1111-models</code> and no path is set.</div>`}renderLibrary(){const e=this.stats;if(!e)return l;const s=new Map(e.kinds.map(t=>[t.kind,t]));return i`
+    </div>`}genStatusLine(e){const t=this.genStatus;if(!e.imageGenUrl.trim())return l;let s,o=!1;if(this.dirty)s="Save to check it.";else if(t)if(!t.reachable)s=`Not reachable${t.error?`: ${t.error}`:"."}`,o=!0;else{const r=t.backend==="invokeai"?"InvokeAI":"Automatic1111",a=(t.models??[]).length,n=(t.loras??[]).length;s=`Connected to ${r} — ${a} ${a===1?"model":"models"}, ${n} ${n===1?"LoRA":"LoRAs"}.`}else{if(!this.genError)return i`<div class="field-status">Checking…</div>`;s=this.genError,o=!0}return i`<div class="field-status ${o?"bad":""}">${s}</div>`}modelsFolderLine(e){const t=this.genStatus;if(this.dirty)return i`<div class="field-status">Save to check it.</div>`;if(!(t!=null&&t.reachable))return l;if(t.backend==="invokeai")return i`<div class="field-status">Not needed: InvokeAI installs and edits models itself.</div>`;if(t.manageModels){const s=!(e.imageGenModelsDir??"").trim();return i`<div class="field-status ok">
+        Using <code>${t.modelsDir}</code>${s?" — found mounted, so there is nothing to set":""}. Models can be installed, edited and deleted.
+      </div>`}return t.modelsDirProblem?i`<div class="field-status bad">${t.modelsDirProblem}.</div>`:i`<div class="field-status">Nothing is mounted at <code>/a1111-models</code> and no path is set.</div>`}renderLibrary(){const e=this.stats;if(!e)return l;const t=new Map(e.kinds.map(s=>[s.kind,s]));return i`
       <section class="card">
         <h3><span class="material-symbols-rounded">inventory_2</span>Library</h3>
         <p class="card-sub">
@@ -1365,9 +1384,9 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
           ${e.tags} ${e.tags===1?"tag":"tags"}
         </p>
         <div class="stat-grid">
-          ${Object.keys(C).map(t=>{const o=s.get(t);return i`<div class="stat">
+          ${Object.keys(C).map(s=>{const o=t.get(s);return i`<div class="stat">
               <div class="stat-num">${(o==null?void 0:o.count)??0}</div>
-              <div class="stat-label">${C[t].label} · ${b((o==null?void 0:o.bytes)??0)}</div>
+              <div class="stat-label">${C[s].label} · ${b((o==null?void 0:o.bytes)??0)}</div>
             </div>`})}
         </div>
       </section>
@@ -1397,7 +1416,7 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
                 get back in if you lose a device.
               </p>`:i`
                 <div class="pk-list">
-                  ${e.passkeys.map(s=>this.renderPasskeyRow(s))}
+                  ${e.passkeys.map(t=>this.renderPasskeyRow(t))}
                 </div>
               `}
 
@@ -1408,7 +1427,7 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
                   placeholder="Name this device — e.g. “Work laptop”"
                   .value=${this.passkeyName}
                   ?disabled=${this.passkeyBusy}
-                  @input=${s=>this.passkeyName=s.target.value}
+                  @input=${t=>this.passkeyName=t.target.value}
                 />
                 <button class="btn-primary" ?disabled=${this.passkeyBusy} @click=${this.addPasskey}>
                   <span class="material-symbols-rounded" style="font-size:20px;">add</span>
@@ -1423,11 +1442,11 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
               offer them, so add one per address you actually use.
             </p>`:l}
       </section>
-    `}renderPasskeyRow(e){const s=this.passkeyRenaming===e.id,t=this.passkeyRevoking===e.id;return i`
+    `}renderPasskeyRow(e){const t=this.passkeyRenaming===e.id,s=this.passkeyRevoking===e.id;return i`
       <div class="pk-row">
         <span class="material-symbols-rounded pk-icon">${e.synced?"cloud_sync":"key"}</span>
         <div class="pk-body">
-          ${s?i`<div class="pk-rename">
+          ${t?i`<div class="pk-rename">
                 <input
                   type="text"
                   .value=${this.passkeyName}
@@ -1441,7 +1460,7 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
             · added ${T(e.createdAt)}
             · ${e.lastUsedAt?`last used ${T(e.lastUsedAt)}`:"never used"}
           </div>
-          ${t?i`<div class="pk-revoke">
+          ${s?i`<div class="pk-revoke">
                 <p class="field-help">
                   Confirm with your password. A signed-in browser isn't proof of who's at
                   the keyboard, and this is the first thing someone taking over an account
@@ -1463,7 +1482,7 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
                 </div>
               </div>`:l}
         </div>
-        ${s||t?l:i`<div class="pk-actions">
+        ${t||s?l:i`<div class="pk-actions">
               <button title="Rename" @click=${()=>this.startRename(e)}>
                 <span class="material-symbols-rounded" style="font-size:18px;">edit</span>
               </button>
@@ -1472,12 +1491,12 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
               </button>
             </div>`}
       </div>
-    `}async loadPasskeys(){try{this.passkeyList=await h.passkeys()}catch(e){this.passkeyError=e.message}}startRename(e){this.passkeyRenaming=e.id,this.passkeyRevoking=null,this.passkeyName=e.name}async savePasskeyName(e){const s=this.passkeyName.trim();if(s)try{await h.renamePasskey(e.id,s),this.passkeyRenaming=null,this.passkeyName="",await this.loadPasskeys()}catch(t){this.passkeyError=t.message}}startRevoke(e){this.passkeyRevoking=e.id,this.passkeyRenaming=null,this.passkeyPassword="",this.passkeyError=""}async revokePasskey(e){this.passkeyBusy=!0,this.passkeyError="";try{await h.revokePasskey(e.id,this.passkeyPassword),this.passkeyRevoking=null,this.passkeyPassword="",this.passkeyMsg=`Removed “${e.name}”.`,await this.loadPasskeys()}catch(s){this.passkeyError=s.message}finally{this.passkeyBusy=!1}}renderAccount(){var e,s;return i`
+    `}async loadPasskeys(){try{this.passkeyList=await h.passkeys()}catch(e){this.passkeyError=e.message}}startRename(e){this.passkeyRenaming=e.id,this.passkeyRevoking=null,this.passkeyName=e.name}async savePasskeyName(e){const t=this.passkeyName.trim();if(t)try{await h.renamePasskey(e.id,t),this.passkeyRenaming=null,this.passkeyName="",await this.loadPasskeys()}catch(s){this.passkeyError=s.message}}startRevoke(e){this.passkeyRevoking=e.id,this.passkeyRenaming=null,this.passkeyPassword="",this.passkeyError=""}async revokePasskey(e){this.passkeyBusy=!0,this.passkeyError="";try{await h.revokePasskey(e.id,this.passkeyPassword),this.passkeyRevoking=null,this.passkeyPassword="",this.passkeyMsg=`Removed “${e.name}”.`,await this.loadPasskeys()}catch(t){this.passkeyError=t.message}finally{this.passkeyBusy=!1}}renderAccount(){var e,t;return i`
       ${this.renderPasskeys()}
       <section class="card">
         <h3><span class="material-symbols-rounded">account_circle</span>Account</h3>
         <p class="card-sub">
-          Signed in as <strong>${(e=this.user)==null?void 0:e.username}</strong>${(s=this.user)!=null&&s.isAdmin?" (admin)":""}.
+          Signed in as <strong>${(e=this.user)==null?void 0:e.username}</strong>${(t=this.user)!=null&&t.isAdmin?" (admin)":""}.
         </p>
 
         ${this.pwErr?i`<div class="banner error">
@@ -1493,21 +1512,21 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
             placeholder="Current password"
             autocomplete="current-password"
             .value=${this.pwCurrent}
-            @input=${t=>this.pwCurrent=t.target.value}
+            @input=${s=>this.pwCurrent=s.target.value}
           />
           <input
             type="password"
             placeholder="New password (8+ characters)"
             autocomplete="new-password"
             .value=${this.pwNew}
-            @input=${t=>this.pwNew=t.target.value}
+            @input=${s=>this.pwNew=s.target.value}
           />
           <input
             type="password"
             placeholder="Confirm new password"
             autocomplete="new-password"
             .value=${this.pwConfirm}
-            @input=${t=>this.pwConfirm=t.target.value}
+            @input=${s=>this.pwConfirm=s.target.value}
           />
           <div>
             <button
@@ -1521,7 +1540,7 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
           </div>
         </div>
       </section>
-    `}renderStorage(){var s;const e=this.storage;return i`
+    `}renderStorage(){var t;const e=this.storage;return i`
       <section class="card">
         <h3><span class="material-symbols-rounded">hard_drive</span>Storage</h3>
         <p class="card-sub">
@@ -1534,8 +1553,8 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
               <span class="material-symbols-rounded" style="font-size:18px;">error</span>${this.storageErr}
             </div>`:l}
 
-        ${((e==null?void 0:e.warnings)??[]).map(t=>i`<div class="banner error">
-          <span class="material-symbols-rounded" style="font-size:18px;">warning</span>${t}
+        ${((e==null?void 0:e.warnings)??[]).map(s=>i`<div class="banner error">
+          <span class="material-symbols-rounded" style="font-size:18px;">warning</span>${s}
         </div>`)}
 
         <div class="diag-actions">
@@ -1543,7 +1562,7 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
             <span class="material-symbols-rounded" style="font-size:20px;">refresh</span>
             ${this.storageBusy?"Reading…":"Refresh"}
           </button>
-          ${(s=this.user)!=null&&s.isAdmin?i`<button ?disabled=${this.storageBusy} @click=${this.runCleanup}>
+          ${(t=this.user)!=null&&t.isAdmin?i`<button ?disabled=${this.storageBusy} @click=${this.runCleanup}>
                 <span class="material-symbols-rounded" style="font-size:20px;">mop</span>
                 Reclaim space
               </button>`:l}
@@ -1558,14 +1577,14 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
               ${e.pendingBytes>0?i`<p class="field-help">
                     Uploads in progress still need about ${b(e.pendingBytes)}.
                   </p>`:l}
-              ${e.mappings.map(t=>this.renderMapping(t))}
+              ${e.mappings.map(s=>this.renderMapping(s))}
               <h4 style="margin:18px 0 6px;">Reclaimable now</h4>
-              ${e.reclaimable.map(t=>i`<p class="field-help">
-                ${t.label}: <strong>${b(t.bytes)}</strong>${t.note?i` — ${t.note}`:l}
+              ${e.reclaimable.map(s=>i`<p class="field-help">
+                ${s.label}: <strong>${b(s.bytes)}</strong>${s.note?i` — ${s.note}`:l}
               </p>`)}
             `:i`<p class="field-help">${this.storageBusy?"Reading…":"No reading yet."}</p>`}
       </section>
-    `}renderMapping(e){const s=e.totalBytes>0?Math.round(e.usedBytes/e.totalBytes*100):0;return i`
+    `}renderMapping(e){const t=e.totalBytes>0?Math.round(e.usedBytes/e.totalBytes*100):0;return i`
       <div class="setting-row" style="display:block;">
         <div style="display:flex; align-items:baseline; gap:8px; flex-wrap:wrap;">
           <strong>${e.label}</strong>
@@ -1574,15 +1593,15 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
           ${e.exists&&!e.writable?i`<span class="field-help" style="color:var(--oppai-error);">read-only</span>`:l}
         </div>
         <div style="height:6px; border-radius:999px; background:var(--oppai-surface-2); overflow:hidden; margin:6px 0;">
-          <span style="display:block; height:100%; width:${s}%; background:${s>=90?"var(--oppai-error)":"var(--oppai-primary)"};"></span>
+          <span style="display:block; height:100%; width:${t}%; background:${t>=90?"var(--oppai-error)":"var(--oppai-primary)"};"></span>
         </div>
         <p class="field-help">
-          ${e.error?e.error:i`${b(e.freeBytes)} free of ${b(e.totalBytes)} (${s}% used)`}
-          ${(e.contents??[]).map(t=>i` · ${t.label}: ${b(t.bytes)}${t.count?i` (${t.count})`:l}`)}
+          ${e.error?e.error:i`${b(e.freeBytes)} free of ${b(e.totalBytes)} (${t}% used)`}
+          ${(e.contents??[]).map(s=>i` · ${s.label}: ${b(s.bytes)}${s.count?i` (${s.count})`:l}`)}
         </p>
         <p class="field-help">${e.purpose} Set with <code>${e.env}</code>.</p>
       </div>
-    `}renderDiagnostics(){const e=this.diag,s=this.uiDiag;return i`
+    `}renderDiagnostics(){const e=this.diag,t=this.uiDiag;return i`
       <section class="card">
         <h3><span class="material-symbols-rounded">speed</span>Performance</h3>
         <p class="card-sub">
@@ -1641,12 +1660,12 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
                           </tr>
                         </thead>
                         <tbody>
-                          ${e.metrics.timings.slice(0,25).map(t=>i`<tr>
-                              <td class="diag-name">${t.name}</td>
-                              <td>${t.count}</td>
-                              <td>${t.avgMs} ms</td>
-                              <td>${t.p95Ms} ms</td>
-                              <td class=${t.maxMs>=3e3?"diag-bad":""}>${t.maxMs} ms</td>
+                          ${e.metrics.timings.slice(0,25).map(s=>i`<tr>
+                              <td class="diag-name">${s.name}</td>
+                              <td>${s.count}</td>
+                              <td>${s.avgMs} ms</td>
+                              <td>${s.p95Ms} ms</td>
+                              <td class=${s.maxMs>=3e3?"diag-bad":""}>${s.maxMs} ms</td>
                             </tr>`)}
                         </tbody>
                       </table>
@@ -1661,27 +1680,27 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
                 A slow update takes over one 16 ms frame. Long tasks are browser main-thread
                 stalls over 50 ms; layout shift excludes movement caused by your input.
               </p>
-              ${s?i`
+              ${t?i`
                     <div class="stat-grid">
-                      ${this.diagStat("UI updates",String(s.updates))}
-                      ${this.diagStat("Slow updates",String(s.slowUpdates))}
-                      ${this.diagStat("Long tasks",`${s.longTasks} · ${Math.round(s.longTaskMs)} ms`)}
-                      ${this.diagStat("Layout shift",`${s.layoutShifts} · ${s.layoutShiftScore}`)}
+                      ${this.diagStat("UI updates",String(t.updates))}
+                      ${this.diagStat("Slow updates",String(t.slowUpdates))}
+                      ${this.diagStat("Long tasks",`${t.longTasks} · ${Math.round(t.longTaskMs)} ms`)}
+                      ${this.diagStat("Layout shift",`${t.layoutShifts} · ${t.layoutShiftScore}`)}
                     </div>
-                    ${s.timings.length===0?i`<p class="field-help">No profiled component has updated in this window yet.</p>`:i`
+                    ${t.timings.length===0?i`<p class="field-help">No profiled component has updated in this window yet.</p>`:i`
                           <div class="diag-scroll">
                             <table class="diag-table">
                               <thead>
                                 <tr><th>Component</th><th>Updates</th><th>Avg</th><th>p95</th><th>Slow</th><th>Worst</th></tr>
                               </thead>
                               <tbody>
-                                ${s.timings.map(t=>i`<tr>
-                                  <td class="diag-name">${t.name}</td>
-                                  <td>${t.count}</td>
-                                  <td>${t.avgMs} ms</td>
-                                  <td>${t.p95Ms} ms</td>
-                                  <td class=${t.slow?"diag-bad":""}>${t.slow}</td>
-                                  <td class=${t.maxMs>16?"diag-bad":""}>${t.maxMs} ms</td>
+                                ${t.timings.map(s=>i`<tr>
+                                  <td class="diag-name">${s.name}</td>
+                                  <td>${s.count}</td>
+                                  <td>${s.avgMs} ms</td>
+                                  <td>${s.p95Ms} ms</td>
+                                  <td class=${s.slow?"diag-bad":""}>${s.slow}</td>
+                                  <td class=${s.maxMs>16?"diag-bad":""}>${s.maxMs} ms</td>
                                 </tr>`)}
                               </tbody>
                             </table>
@@ -1690,11 +1709,11 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
                   `:i`<p class="field-help">Refresh to read browser timings.</p>`}
             `:i`<p class="field-help">${this.diagBusy?"Reading…":"No snapshot yet."}</p>`}
       </section>
-    `}renderFetchHealth(e){const s=e.metrics.counters,t=[["Fetches completed",s["scrape.fetch.ok"]??0,"Pages and listings fetched successfully."],["Retried",s["scrape.fetch.retry"]??0,"A site failed transiently and we tried again."],["Gave up",s["scrape.fetch.exhausted"]??0,"Still failing after every retry."],["Queued behind another request",s["scrape.host_queued"]??0,"A steady number here means we're fanning out wider than the site allows."],["Asked to back off",s["scrape.fetch.backoff_too_long"]??0,"A site asked for a longer wait than we'll hold a click open for."]];return t.every(([,o])=>o===0)?l:i`
+    `}renderFetchHealth(e){const t=e.metrics.counters,s=[["Fetches completed",t["scrape.fetch.ok"]??0,"Pages and listings fetched successfully."],["Retried",t["scrape.fetch.retry"]??0,"A site failed transiently and we tried again."],["Gave up",t["scrape.fetch.exhausted"]??0,"Still failing after every retry."],["Queued behind another request",t["scrape.host_queued"]??0,"A steady number here means we're fanning out wider than the site allows."],["Asked to back off",t["scrape.fetch.backoff_too_long"]??0,"A site asked for a longer wait than we'll hold a click open for."]];return s.every(([,o])=>o===0)?l:i`
       <h4 class="diag-head">Outbound fetches</h4>
-      ${t.map(([o,r,a])=>r===0?l:i`<div class="diag-row"><strong>${r}</strong> ${o} <span class="field-help">— ${a}</span></div>`)}
-    `}diagStat(e,s){return i`<div class="stat">
-      <div class="stat-num diag-stat-num">${s}</div>
+      ${s.map(([o,r,a])=>r===0?l:i`<div class="diag-row"><strong>${r}</strong> ${o} <span class="field-help">— ${a}</span></div>`)}
+    `}diagStat(e,t){return i`<div class="stat">
+      <div class="stat-num diag-stat-num">${t}</div>
       <div class="stat-label">${e}</div>
     </div>`}renderAbout(){const e=this.info;return e?i`
       <section class="card">
@@ -1707,30 +1726,30 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
         ${this.readOnlyField("Database","SQLite metadata store.",e.dbPath)}
         ${this.readOnlyField("Session length","How long a login stays valid.",`${e.sessionHours} hours`)}
       </section>
-    `:l}switchField(e,s,t,o,r=!1){const a=!this.canEdit||r;return i`
+    `:l}switchField(e,t,s,o,r=!1){const a=!this.canEdit||r;return i`
       <div class="field">
         <div class="field-text">
           <div class="field-label">${e}</div>
-          <div class="field-help">${s}</div>
+          <div class="field-help">${t}</div>
         </div>
         <div class="field-control">
           <button
-            class="switch ${t?"on":""}"
+            class="switch ${s?"on":""}"
             role="switch"
-            aria-checked=${t?"true":"false"}
+            aria-checked=${s?"true":"false"}
             aria-label=${e}
             ?disabled=${a}
-            @click=${()=>o(!t)}
+            @click=${()=>o(!s)}
           ></button>
         </div>
       </div>
-    `}readOnlyField(e,s,t){return i`
+    `}readOnlyField(e,t,s){return i`
       <div class="field">
         <div class="field-text">
           <div class="field-label">${e}</div>
-          <div class="field-help">${s}</div>
+          <div class="field-help">${t}</div>
         </div>
-        <div class="field-control"><span class="ro">${t}</span></div>
+        <div class="field-control"><span class="ro">${s}</span></div>
       </div>
     `}};c.styles=[M,R,B`
       :host {
@@ -2274,4 +2293,4 @@ import{z as M,q as R,i as B,u as d,a as I,e as h,m as g,A as l,b as i,t as N,an 
         gap: 12px;
         max-width: 360px;
       }
-    `];p([z({attribute:!1})],c.prototype,"user",2);p([z({attribute:!1})],c.prototype,"only",2);p([d()],c.prototype,"tab",2);p([d()],c.prototype,"settings",2);p([d()],c.prototype,"info",2);p([d()],c.prototype,"stats",2);p([d()],c.prototype,"apk",2);p([d()],c.prototype,"loadError",2);p([d()],c.prototype,"passkeyList",2);p([d()],c.prototype,"passkeyBusy",2);p([d()],c.prototype,"passkeyError",2);p([d()],c.prototype,"passkeyMsg",2);p([d()],c.prototype,"passkeyName",2);p([d()],c.prototype,"passkeyRenaming",2);p([d()],c.prototype,"passkeyRevoking",2);p([d()],c.prototype,"passkeyPassword",2);p([d()],c.prototype,"diag",2);p([d()],c.prototype,"uiDiag",2);p([d()],c.prototype,"storage",2);p([d()],c.prototype,"storageBusy",2);p([d()],c.prototype,"storageErr",2);p([d()],c.prototype,"diagBusy",2);p([d()],c.prototype,"diagErr",2);p([d()],c.prototype,"dirty",2);p([d()],c.prototype,"saving",2);p([d()],c.prototype,"saved",2);p([d()],c.prototype,"theme",2);p([d()],c.prototype,"fit",2);p([d()],c.prototype,"hideLibby",2);p([d()],c.prototype,"genModels",2);p([d()],c.prototype,"genLoras",2);p([d()],c.prototype,"genLoraTriggers",2);p([d()],c.prototype,"genBoards",2);p([d()],c.prototype,"genError",2);p([d()],c.prototype,"genStatus",2);p([d()],c.prototype,"genChecks",2);p([d()],c.prototype,"genCheckBusy",2);p([d()],c.prototype,"genCheckErr",2);p([d()],c.prototype,"pwCurrent",2);p([d()],c.prototype,"pwNew",2);p([d()],c.prototype,"pwConfirm",2);p([d()],c.prototype,"pwBusy",2);p([d()],c.prototype,"pwMsg",2);p([d()],c.prototype,"pwErr",2);p([d()],c.prototype,"refs",2);p([d()],c.prototype,"refStamp",2);p([d()],c.prototype,"refNote",2);p([d()],c.prototype,"tts",2);p([d()],c.prototype,"describe",2);p([d()],c.prototype,"describeBusy",2);p([d()],c.prototype,"describeNote",2);p([d()],c.prototype,"ttsErrors",2);c=p([N("oppai-settings")],c);function T(e){if(!e)return"never";const s=Math.max(0,(Date.now()-e)/1e3);if(s<90)return"just now";const t=Math.round(s/60);if(t<60)return`${t} min ago`;const o=Math.round(t/60);if(o<24)return`${o}h ago`;const r=Math.round(o/24);return r<=30?`${r} day${r===1?"":"s"} ago`:new Date(e).toLocaleDateString()}function xe(e){const s=Math.max(0,Math.floor(e)),t=Math.floor(s/86400),o=Math.floor(s%86400/3600),r=Math.floor(s%3600/60);return t>0?`${t}d ${o}h`:o>0?`${o}h ${r}m`:r>0?`${r}m ${s%60}s`:`${s}s`}function b(e){if(!e)return"0 B";const s=["B","KB","MB","GB","TB"];let t=e,o=0;for(;t>=1024&&o<s.length-1;)t/=1024,o++;return`${t<10&&o>0?t.toFixed(1):Math.round(t)} ${s[o]}`}const Pe=Object.freeze(Object.defineProperty({__proto__:null,get OppaiSettings(){return c}},Symbol.toStringTag,{value:"Module"}));export{Ce as a,_ as b,Pe as c,Ae as l,de as s};
+    `];p([z({attribute:!1})],c.prototype,"user",2);p([z({attribute:!1})],c.prototype,"only",2);p([d()],c.prototype,"tab",2);p([d()],c.prototype,"settings",2);p([d()],c.prototype,"info",2);p([d()],c.prototype,"stats",2);p([d()],c.prototype,"apk",2);p([d()],c.prototype,"loadError",2);p([d()],c.prototype,"passkeyList",2);p([d()],c.prototype,"passkeyBusy",2);p([d()],c.prototype,"passkeyError",2);p([d()],c.prototype,"passkeyMsg",2);p([d()],c.prototype,"passkeyName",2);p([d()],c.prototype,"passkeyRenaming",2);p([d()],c.prototype,"passkeyRevoking",2);p([d()],c.prototype,"passkeyPassword",2);p([d()],c.prototype,"diag",2);p([d()],c.prototype,"uiDiag",2);p([d()],c.prototype,"storage",2);p([d()],c.prototype,"storageBusy",2);p([d()],c.prototype,"storageErr",2);p([d()],c.prototype,"diagBusy",2);p([d()],c.prototype,"diagErr",2);p([d()],c.prototype,"dirty",2);p([d()],c.prototype,"saving",2);p([d()],c.prototype,"saved",2);p([d()],c.prototype,"theme",2);p([d()],c.prototype,"fit",2);p([d()],c.prototype,"hideLibby",2);p([d()],c.prototype,"genModels",2);p([d()],c.prototype,"genLoras",2);p([d()],c.prototype,"genLoraTriggers",2);p([d()],c.prototype,"genBoards",2);p([d()],c.prototype,"genError",2);p([d()],c.prototype,"genStatus",2);p([d()],c.prototype,"genChecks",2);p([d()],c.prototype,"genCheckBusy",2);p([d()],c.prototype,"genCheckErr",2);p([d()],c.prototype,"pwCurrent",2);p([d()],c.prototype,"pwNew",2);p([d()],c.prototype,"pwConfirm",2);p([d()],c.prototype,"pwBusy",2);p([d()],c.prototype,"pwMsg",2);p([d()],c.prototype,"pwErr",2);p([d()],c.prototype,"refs",2);p([d()],c.prototype,"refStamp",2);p([d()],c.prototype,"refNote",2);p([d()],c.prototype,"tts",2);p([d()],c.prototype,"describe",2);p([d()],c.prototype,"describeBusy",2);p([d()],c.prototype,"describeNote",2);p([d()],c.prototype,"ttsErrors",2);c=p([N("oppai-settings")],c);function T(e){if(!e)return"never";const t=Math.max(0,(Date.now()-e)/1e3);if(t<90)return"just now";const s=Math.round(t/60);if(s<60)return`${s} min ago`;const o=Math.round(s/60);if(o<24)return`${o}h ago`;const r=Math.round(o/24);return r<=30?`${r} day${r===1?"":"s"} ago`:new Date(e).toLocaleDateString()}function xe(e){const t=Math.max(0,Math.floor(e)),s=Math.floor(t/86400),o=Math.floor(t%86400/3600),r=Math.floor(t%3600/60);return s>0?`${s}d ${o}h`:o>0?`${o}h ${r}m`:r>0?`${r}m ${t%60}s`:`${t}s`}function b(e){if(!e)return"0 B";const t=["B","KB","MB","GB","TB"];let s=e,o=0;for(;s>=1024&&o<t.length-1;)s/=1024,o++;return`${s<10&&o>0?s.toFixed(1):Math.round(s)} ${t[o]}`}const Pe=Object.freeze(Object.defineProperty({__proto__:null,get OppaiSettings(){return c}},Symbol.toStringTag,{value:"Module"}));export{Ce as a,_ as b,Pe as c,Ee as l,de as s};

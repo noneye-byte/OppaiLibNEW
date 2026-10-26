@@ -461,12 +461,16 @@ func (c *Client) invokeUncategorizedNames(ctx context.Context, base string) ([]s
 	return names, nil
 }
 
-func (c *Client) invokeBoardImages(ctx context.Context, base, boardID string, offset, limit int) (*GalleryPage, error) {
+func (c *Client) invokeBoardImages(ctx context.Context, base, boardID, order string, offset, limit int) (*GalleryPage, error) {
 	if boardID == "" {
 		boardID = "none"
 	}
-	u := fmt.Sprintf("%s/api/v1/images/?board_id=%s&offset=%d&limit=%d&is_intermediate=false",
-		base, url.QueryEscape(boardID), offset, limit)
+	dir := "DESC"
+	if order == "oldest" {
+		dir = "ASC"
+	}
+	u := fmt.Sprintf("%s/api/v1/images/?board_id=%s&offset=%d&limit=%d&is_intermediate=false&order_dir=%s",
+		base, url.QueryEscape(boardID), offset, limit, dir)
 	var out struct {
 		Items []struct {
 			ImageName string `json:"image_name"`
