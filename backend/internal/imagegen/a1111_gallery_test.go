@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/binary"
+	"errors"
 	"hash/crc32"
 	"image"
 	"image/color"
@@ -13,6 +14,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -241,5 +243,74 @@ func TestDeletingAGalleryPictureTakesItsSettingsFileToo(t *testing.T) {
 	}
 	if _, err := c.CreateBoard(ctx, base, "x"); err == nil {
 		t.Fatal("a board was made in a folder gallery")
+	}
+}
+
+func TestTheWebuiFolderGivenByHandOpensItsOutputsFolder(t *testing.T) {
+	webui := t.TempDir()
+	outputs := filepath.Join(webui, "outputs")
+	if err := os.MkdirAll(filepath.Join(outputs, "txt2img-images"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	c := New()
+	c.ModelsDir = func() string { return "" }
+	c.OutputsDir = func() string { return webui }
+	if got := c.A1111OutputsDir(); got != outputs {
+		t.Fatalf("outputs = %q, want %q", got, outputs)
+	}
+	// The outputs folder itself is taken as it is, not looked inside again.
+	c.OutputsDir = func() string { return outputs }
+	if got := c.A1111OutputsDir(); got != outputs {
+		t.Fatalf("outputs = %q, want %q", got, outputs)
+	}
+}
+
+func TestAnOutputsFolderMountedUnderAnyNameIsFound(t *testing.T) {
+	t.Cleanup(func() {
+		a1111MountInfo = "/proc/self/mountinfo"
+		notModelMounts = []string{"/proc", "/sys", "/dev", "/etc", "/run", "/usr", "/tmp", "/var", "/opt", "/config", "/media", "/db", "/cache"}
+		discoveredOutputs.at = time.Time{}
+	})
+	mounted := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(mounted, "img2img-images"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	notModelMounts = []string{"/config"}
+	info := filepath.Join(t.TempDir(), "mountinfo")
+	lines := "22 1 0:21 / / rw - overlay overlay rw\n" +
+		"31 22 0:41 / " + filepath.ToSlash(mounted) + " rw - fuse.shfs shfs rw\n"
+	if err := os.WriteFile(info, []byte(lines), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a1111MountInfo = info
+	discoveredOutputs.at = time.Time{}
+	c := New()
+	c.ModelsDir = func() string { return "" }
+	if got := c.A1111OutputsDir(); got != mounted && got != filepath.ToSlash(mounted) {
+		t.Fatalf("outputs = %q, want %q", got, mounted)
+	}
+}
+
+func TestAnOutputsSettingThatIsNotThereSaysWhichPath(t *testing.T) {
+	t.Cleanup(func() { a1111MountInfo = "/proc/self/mountinfo"; discoveredOutputs.at = time.Time{} })
+	a1111MountInfo = filepath.Join(t.TempDir(), "no-mountinfo")
+	discoveredOutputs.at = time.Time{}
+	c := New()
+	c.ModelsDir = func() string { return "" }
+	c.OutputsDir = func() string { return "/mnt/user/appdata/a1111/outputs" }
+	if dir := c.A1111OutputsDir(); dir != "" {
+		t.Fatalf("outputs = %q, want none", dir)
+	}
+	if p := c.A1111OutputsProblem(); !strings.Contains(p, "/mnt/user/appdata/a1111/outputs") {
+		t.Fatalf("problem = %q", p)
+	}
+	_, err := c.a1111Outputs()
+	if !errors.Is(err, ErrNoOutputsDir) {
+		t.Fatalf("err = %v, want ErrNoOutputsDir", err)
+	}
+	// Nothing set and nothing found is the plain instruction.
+	c.OutputsDir = func() string { return "" }
+	if p := c.A1111OutputsProblem(); p != ErrNoOutputsDir.Error() {
+		t.Fatalf("problem = %q", p)
 	}
 }

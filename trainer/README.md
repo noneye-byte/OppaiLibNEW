@@ -136,6 +136,14 @@ wget -O /boot/config/plugins/dockerMan/templates-user/my-OppaiLib-Trainer.xml \
   https://raw.githubusercontent.com/noneye-byte/OppaiLibNEW/main/unraid/oppailib-trainer.xml
 ```
 
+## Showing some pictures more than others
+
+A picture uploaded with `PUT /jobs/<id>/files/<name>?repeats=N` (its caption with the
+same `N`) goes into a dataset folder of its own, `N_<trigger>`, beside the job's — sd-scripts
+reads each folder at its own repeats. OppaiLib uses it to play a tag down: the pictures
+with it are shown less often than the rest. `/health` lists `repeats-per-file` under
+`features` (version 2 on), and OppaiLib checks for it before relying on it.
+
 ## What it keeps
 
 `/data/jobs/<id>/` holds a run: its settings, its log, the pictures while it trains —

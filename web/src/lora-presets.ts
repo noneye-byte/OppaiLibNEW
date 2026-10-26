@@ -1,3 +1,5 @@
+import type { PlayDown, PlayDownShare } from "./api.js";
+
 /**
  * The kinds of LoRA the Train screen offers, and the advice it gives about a set.
  *
@@ -237,14 +239,23 @@ export function tagKey(name: string): string {
  * A picture's caption as the server writes it (lora_dataset.go's loraCaption): the
  * trigger word, then its tags strongest first, less the struck ones and repeats, at
  * most forty. Worked out here too so striking a tag or retyping the trigger shows at
- * once, without asking the server for the whole set again.
+ * once, without asking the server for the whole set again. Played-down tags (`named`)
+ * the picture has come straight after the trigger, struck or not, in either mode.
  */
-export function captionOf(trigger: string, tags: string[], leaveOut: string[], mode: "tags" | "trigger"): string {
+export function captionOf(trigger: string, tags: string[], leaveOut: string[], mode: "tags" | "trigger", named: string[] = []): string {
   const t = trigger.trim();
   const parts = t ? [t] : [];
+  const seen = new Set([tagKey(t)]);
+  const always = new Set(named.map(tagKey));
+  for (const tag of tags) {
+    const k = tagKey(tag);
+    if (always.has(k) && !seen.has(k)) {
+      seen.add(k);
+      parts.push(tag);
+    }
+  }
   if (mode === "trigger") return parts.join(", ");
   const out = new Set(leaveOut.map(tagKey));
-  const seen = new Set([tagKey(t)]);
   for (const tag of tags) {
     const k = tagKey(tag);
     if (!k || seen.has(k) || out.has(k)) continue;
@@ -264,4 +275,61 @@ export function minSideFor(base: string | undefined): number {
 export function wantsLowVram(vramMB: number | undefined, base: string | undefined): boolean {
   if (!vramMB) return false;
   return minSideFor(base) > 448 ? vramMB < 12 * 1024 : vramMB < 6 * 1024;
+}
+
+// ── playing a tag down ──────────────────────────────────────────────────────
+//
+// A tag on most of a set's pictures — glasses on a style's, say — is learnt as part of
+// the LoRA and then turns up in everything it draws. Striking it makes that worse (the
+// trigger word takes it in). Playing it down keeps it named in every caption that has
+// it and trains its pictures less often than the rest, so it comes when asked for and
+// less often when not. The repeats are worked out by the server (lora_dataset.go's
+// loraPlayDownRepeats), which also says what share of training each tag comes to.
+
+/** How much of a tag's share of training to keep, in words. */
+export const KEEP_STEPS: { keep: number; label: string }[] = [
+  { keep: 0.66, label: "A bit less" },
+  { keep: 0.5, label: "Half as often" },
+  { keep: 0.25, label: "Rarely" },
+];
+
+/** A tag newly played down keeps half its share: noticeable, and still learnable. */
+export const DEFAULT_KEEP = 0.5;
+
+export function isPlayedDown(list: PlayDown[], tag: string): boolean {
+  const k = tagKey(tag);
+  return list.some((p) => tagKey(p.tag) === k);
+}
+
+/** Plays a tag down, or stops playing it down. */
+export function togglePlayDown(list: PlayDown[], tag: string): PlayDown[] {
+  const k = tagKey(tag);
+  return isPlayedDown(list, tag) ? list.filter((p) => tagKey(p.tag) !== k) : [...list, { tag, keep: DEFAULT_KEEP }];
+}
+
+export function setKeep(list: PlayDown[], tag: string, keep: number): PlayDown[] {
+  const k = tagKey(tag);
+  return list.map((p) => (tagKey(p.tag) === k ? { ...p, keep } : p));
+}
+
+/** The tags a played-down list names in every caption. */
+export function playDownNames(list: PlayDown[]): string[] {
+  return list.map((p) => p.tag);
+}
+
+function percent(v: number): string {
+  return `${Math.round(v * 100)}%`;
+}
+
+/** What playing a tag down comes to, in a line for under its chip. */
+export function shareLine(share: PlayDownShare | undefined, total: number): string {
+  if (!share || total <= 0) return "";
+  if (share.pictures === 0) return "No picture has this tag any more.";
+  if (share.pictures >= total) {
+    return `Every picture has it, so there is nothing to show more often instead — it is named in the captions, but can't be made rarer. Add pictures without it.`;
+  }
+  const before = percent(share.before);
+  const after = percent(share.after);
+  if (after === before) return `${share.pictures} of ${total} pictures (${before}) — too few repeats to shift; it is still named in their captions.`;
+  return `${share.pictures} of ${total} pictures (${before}) — trained as about ${after}, and named in their captions.`;
 }

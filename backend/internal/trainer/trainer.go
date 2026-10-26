@@ -16,6 +16,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -51,6 +52,13 @@ type Health struct {
 	GPU           string `json:"gpu"`
 	VRAMMB        int    `json:"vramMB,omitempty"`
 	VRAMUsedMB    int    `json:"vramUsedMB,omitempty"`
+	// Features are what the trainer can do beyond the first protocol.
+	Features []string `json:"features,omitempty"`
+}
+
+// Has says whether the trainer has a feature.
+func (h *Health) Has(feature string) bool {
+	return h != nil && slices.Contains(h.Features, feature)
 }
 
 // Job is one training run as the trainer reports it.
@@ -126,7 +134,14 @@ type Picture struct {
 	Ext     string // ".png", ".jpg", ".webp" …
 	Data    []byte
 	Caption string
+	// Repeats shows this picture so many times an epoch instead of the job's number;
+	// 0 is the job's. Needs a trainer with FeatureRepeatsPerFile.
+	Repeats int
 }
+
+// FeatureRepeatsPerFile is a trainer that takes a picture's own repeats. One
+// without it puts every picture in the one folder, so a tag played down is not.
+const FeatureRepeatsPerFile = "repeats-per-file"
 
 // ErrNotFound is a job the trainer does not have.
 var ErrNotFound = errors.New("the trainer has no such job")
@@ -215,8 +230,12 @@ func (c *Client) Submit(ctx context.Context, base, token string, spec Spec, next
 	if err := c.do(ctx, c.hc, http.MethodPost, base, token, "/jobs", bytes.NewReader(cfg), int64(len(cfg)), "application/json", &job); err != nil {
 		return nil, err
 	}
-	put := func(name string, data []byte) error {
-		return c.do(ctx, c.upload, http.MethodPut, base, token, "/jobs/"+url.PathEscape(job.ID)+"/files/"+name,
+	put := func(name string, data []byte, repeats int) error {
+		path := "/jobs/" + url.PathEscape(job.ID) + "/files/" + name
+		if repeats > 0 && repeats != spec.Repeats {
+			path += "?repeats=" + strconv.Itoa(repeats)
+		}
+		return c.do(ctx, c.upload, http.MethodPut, base, token, path,
 			bytes.NewReader(data), int64(len(data)), "application/octet-stream", nil)
 	}
 	send := func() error {
@@ -229,10 +248,11 @@ func (c *Client) Submit(ctx context.Context, base, token string, spec Spec, next
 				return nil
 			}
 			stem := fmt.Sprintf("%04d", i)
-			if err := put(stem+pic.Ext, pic.Data); err != nil {
+			if err := put(stem+pic.Ext, pic.Data, pic.Repeats); err != nil {
 				return err
 			}
-			if err := put(stem+".txt", []byte(pic.Caption)); err != nil {
+			// The caption goes with the same repeats: it is read from beside its picture.
+			if err := put(stem+".txt", []byte(pic.Caption), pic.Repeats); err != nil {
 				return err
 			}
 		}

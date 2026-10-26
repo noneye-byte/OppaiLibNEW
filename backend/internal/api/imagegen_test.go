@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/youruser/oppailib/internal/imagegen"
 )
 
 // a 1×1 PNG, the smallest thing a stub generator can hand back that decodes as a real
@@ -286,5 +288,30 @@ func TestImageGenPromptEndpoint(t *testing.T) {
 	}
 	if strings.Contains(strings.ToLower(out.Prompt), "draw me") {
 		t.Errorf("prompt kept the spoken framing: %q", out.Prompt)
+	}
+}
+
+func TestAMaskOrAFacePassWithoutAPictureIsTheClientsMistake(t *testing.T) {
+	var gen imagegen.GenerateRequest
+	if err := decodeGenerateImages(&generateReq{Mask: "data:image/png;base64," + onePixelPNG}, &gen); err == nil {
+		t.Fatal("a mask with nothing to paint on was accepted")
+	}
+	if err := decodeGenerateImages(&generateReq{DetailOnly: true}, &gen); err == nil {
+		t.Fatal("a face pass with no picture was accepted")
+	}
+	req := generateReq{InitImage: onePixelPNG, DetailOnly: true}
+	if err := decodeGenerateImages(&req, &gen); err == nil || !strings.Contains(err.Error(), "detailer") {
+		t.Fatalf("a face pass with the detailer off: %v", err)
+	}
+	req = generateReq{InitImage: "data:image/png;base64," + onePixelPNG, Mask: onePixelPNG, MaskBlur: 500, Denoise: 0.7}
+	gen = imagegen.GenerateRequest{}
+	if err := decodeGenerateImages(&req, &gen); err != nil {
+		t.Fatal(err)
+	}
+	if len(gen.InitImage) == 0 || len(gen.Mask) == 0 || gen.MaskBlur != 64 || gen.Denoise != 0.7 {
+		t.Fatalf("gen = init %d mask %d blur %d denoise %v", len(gen.InitImage), len(gen.Mask), gen.MaskBlur, gen.Denoise)
+	}
+	if err := decodeGenerateImages(&generateReq{InitImage: "bm90IGFuIGltYWdl"}, &gen); err == nil {
+		t.Fatal("text passed as the picture was accepted")
 	}
 }

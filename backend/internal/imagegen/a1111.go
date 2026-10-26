@@ -52,6 +52,16 @@ type txt2imgPayload struct {
 	// off a txt2img call altogether.
 	InitImages        []string `json:"init_images,omitempty"`
 	DenoisingStrength float64  `json:"denoising_strength,omitempty"`
+	// Inpainting: img2img with a mask. Fill 1 starts the masked area from the
+	// picture's own pixels ("original"), and full-res draws only the masked area,
+	// padded, at the whole output size before pasting it back — A1111's "only
+	// masked", which is what touching up a face or a hand wants.
+	Mask                  string `json:"mask,omitempty"`
+	MaskBlur              int    `json:"mask_blur,omitempty"`
+	InpaintingFill        int    `json:"inpainting_fill,omitempty"`
+	InpaintFullRes        bool   `json:"inpaint_full_res,omitempty"`
+	InpaintFullResPadding int    `json:"inpaint_full_res_padding,omitempty"`
+	SaveImages            bool   `json:"save_images,omitempty"`
 }
 
 // txt2imgResponse is the relevant slice of the API's reply. Info is a JSON *string*
@@ -86,14 +96,17 @@ func (c *Client) a1111Generate(ctx context.Context, base string, req GenerateReq
 		NIter:          req.Count,
 		BatchSize:      1,
 		RestoreAfter:   true,
+		SaveImages:     req.SaveOutputs,
 	}
 	if req.Detailer.Enabled {
 		model := strings.TrimSpace(req.Detailer.Model)
 		if model == "" {
 			model = "face_yolov8n.pt"
 		}
+		// The second argument is ADetailer's "skip img2img": the img2img pass is run
+		// at one step and thrown away, and the detailer works on the init image.
 		payload.AlwaysOnScripts = map[string]any{
-			"ADetailer": map[string]any{"args": []any{true, false, map[string]any{
+			"ADetailer": map[string]any{"args": []any{true, req.DetailOnly && len(req.InitImage) > 0, map[string]any{
 				"ad_model": model, "ad_tab_enable": true,
 				"ad_prompt": req.Detailer.Prompt, "ad_negative_prompt": req.Detailer.NegativePrompt,
 				"ad_confidence": req.Detailer.Confidence, "ad_denoising_strength": req.Detailer.Denoise,
@@ -106,6 +119,13 @@ func (c *Client) a1111Generate(ctx context.Context, base string, req GenerateReq
 		endpoint = "/sdapi/v1/img2img"
 		payload.InitImages = []string{base64.StdEncoding.EncodeToString(req.InitImage)}
 		payload.DenoisingStrength = clampDenoise(req.Denoise)
+		if len(req.Mask) > 0 {
+			payload.Mask = base64.StdEncoding.EncodeToString(req.Mask)
+			payload.MaskBlur = max(0, min(req.MaskBlur, 64))
+			payload.InpaintingFill = 1
+			payload.InpaintFullRes = true
+			payload.InpaintFullResPadding = 32
+		}
 	}
 	if len(req.Controls) > 0 {
 		if payload.AlwaysOnScripts == nil {

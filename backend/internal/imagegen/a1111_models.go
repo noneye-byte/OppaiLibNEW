@@ -347,6 +347,16 @@ func unescapeMount(s string) string {
 // notModelMounts are mounts that are the system's or OppaiLib's own, never A1111's.
 var notModelMounts = []string{"/proc", "/sys", "/dev", "/etc", "/run", "/usr", "/tmp", "/var", "/opt", "/config", "/media", "/db", "/cache"}
 
+// systemMount says whether a mount point is one of notModelMounts or inside one.
+func systemMount(mp string) bool {
+	for _, sys := range notModelMounts {
+		if mp == sys || strings.HasPrefix(mp, sys+"/") {
+			return true
+		}
+	}
+	return false
+}
+
 var discovered = struct {
 	sync.Mutex
 	dir string
@@ -374,14 +384,7 @@ func discoverA1111Mount() string {
 		if mp == "/" || mp == "" {
 			continue
 		}
-		skip := false
-		for _, sys := range notModelMounts {
-			if mp == sys || strings.HasPrefix(mp, sys+"/") {
-				skip = true
-				break
-			}
-		}
-		if skip {
+		if systemMount(mp) {
 			continue
 		}
 		dir, _ := resolveA1111ModelsDir(mp)

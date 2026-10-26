@@ -76,32 +76,126 @@ type a1111GalleryState struct {
 	last *a1111Listing
 }
 
+// a1111OutputFolders are the folders A1111 writes into inside outputs, by which an
+// outputs folder is recognised when it was mounted under some other name.
+var a1111OutputFolders = a1111Folder{"outputs", "txt2img-images", []string{"txt2img-images", "img2img-images", "txt2img-grids", "img2img-grids", "extras-images"}}
+
+// a1111OutputsFolder is the outputs folder inside the webui's own folder.
+var a1111OutputsFolder = a1111Folder{"outputs", "outputs", []string{"outputs"}}
+
 // A1111OutputsDir is the outputs folder this process can read, "" when there is
-// none. The setting wins, then the mount, then outputs beside the models folder.
+// none. The setting wins, then the mount, then outputs beside the models folder,
+// then any folder mounted into the container that A1111 has written into.
 func (c *Client) A1111OutputsDir() string {
-	var candidates []string
+	dir, _ := c.locateOutputs()
+	return dir
+}
+
+// A1111OutputsProblem is why there is no gallery, in words for the operator: the
+// folder that is set and is not there, or that nothing was set or found.
+func (c *Client) A1111OutputsProblem() string {
+	if dir, problem := c.locateOutputs(); dir == "" {
+		return problem
+	}
+	return ""
+}
+
+func (c *Client) locateOutputs() (dir, problem string) {
+	setting := ""
 	if c.OutputsDir != nil {
-		if p := strings.TrimSpace(c.OutputsDir()); p != "" {
-			candidates = append(candidates, p)
+		setting = strings.TrimSpace(c.OutputsDir())
+	}
+	if setting != "" {
+		if dir = resolveOutputsDir(setting); dir != "" {
+			return dir, ""
+		}
+		problem = fmt.Sprintf("the outputs folder set under Settings → Image generation, %s, is not a folder this container can see — it is the path inside the container, not the host's", setting)
+	}
+	if dir = resolveOutputsDir(a1111OutputsMount); dir != "" {
+		return dir, ""
+	}
+	if models := c.modelsDir(); models != "" {
+		if dir = resolveOutputsDir(filepath.Join(filepath.Dir(models), "outputs")); dir != "" {
+			return dir, ""
 		}
 	}
-	candidates = append(candidates, a1111OutputsMount)
-	if models := c.modelsDir(); models != "" {
-		candidates = append(candidates, filepath.Join(filepath.Dir(models), "outputs"))
+	if dir = discoverOutputsMount(); dir != "" {
+		return dir, ""
 	}
-	for _, p := range candidates {
-		if info, err := os.Stat(p); err == nil && info.IsDir() {
-			return p
+	if problem == "" {
+		problem = ErrNoOutputsDir.Error()
+	}
+	return "", problem
+}
+
+// resolveOutputsDir is the outputs folder a path stands for, "" when it is not a
+// folder: the path itself, or the outputs folder inside it when it is the webui's
+// own folder — the one an operator who mapped "the A1111 folder" would type.
+func resolveOutputsDir(p string) string {
+	info, err := os.Stat(p)
+	if err != nil || !info.IsDir() {
+		return ""
+	}
+	if inner, ok := findSubfolder(p, a1111OutputsFolder); ok && !holdsOutputFolders(p) {
+		return inner
+	}
+	return p
+}
+
+// holdsOutputFolders says whether A1111 has written into this folder as an outputs
+// folder: one of its txt2img-images and the like is directly inside.
+func holdsOutputFolders(p string) bool {
+	_, ok := findSubfolder(p, a1111OutputFolders)
+	return ok
+}
+
+var discoveredOutputs = struct {
+	sync.Mutex
+	dir string
+	at  time.Time
+}{}
+
+// discoverOutputsMount looks through the container's mounts for A1111's outputs
+// folder, for the operator who mapped it somewhere other than /a1111-outputs and
+// left the setting blank: a mount that A1111 has written into, or a webui folder
+// with such an outputs folder inside.
+func discoverOutputsMount() string {
+	discoveredOutputs.Lock()
+	defer discoveredOutputs.Unlock()
+	if time.Since(discoveredOutputs.at) < 30*time.Second {
+		return discoveredOutputs.dir
+	}
+	discoveredOutputs.at = time.Now()
+	discoveredOutputs.dir = ""
+	data, err := os.ReadFile(a1111MountInfo)
+	if err != nil {
+		return ""
+	}
+	for _, mp := range mountPoints(string(data)) {
+		if mp == "/" || mp == "" || systemMount(mp) {
+			continue
+		}
+		if holdsOutputFolders(mp) {
+			discoveredOutputs.dir = mp
+			return mp
+		}
+		if inner, ok := findSubfolder(mp, a1111OutputsFolder); ok && holdsOutputFolders(inner) {
+			discoveredOutputs.dir = inner
+			return inner
 		}
 	}
 	return ""
 }
 
 func (c *Client) a1111Outputs() (string, error) {
-	if dir := c.A1111OutputsDir(); dir != "" {
+	dir, problem := c.locateOutputs()
+	if dir != "" {
 		return dir, nil
 	}
-	return "", ErrNoOutputsDir
+	if problem == ErrNoOutputsDir.Error() {
+		return "", ErrNoOutputsDir
+	}
+	return "", fmt.Errorf("%w (%s)", ErrNoOutputsDir, problem)
 }
 
 // outputFiles walks the outputs folder, or answers from the last walk while it is fresh.

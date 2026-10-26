@@ -8,7 +8,8 @@ training runs here, in a companion container, and OppaiLib drives it over HTTP:
     GET    /bases?key=&size=       whether a base checkpoint is already here
     PUT    /bases?key=&size=       upload one into the cache (OppaiLib sends it)
     POST   /jobs                   a job's settings (JSON); it waits for its pictures
-    PUT    /jobs/<id>/files/<f>    one picture (0001.png) or caption (0001.txt)
+    PUT    /jobs/<id>/files/<f>    one picture (0001.png) or caption (0001.txt);
+                                   ?repeats=N shows it N times an epoch, not the job's
     POST   /jobs/<id>/start        queue it once every picture is in
     GET    /jobs                   every job, newest first
     GET    /jobs/<id>              one job's state and progress
@@ -49,7 +50,11 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-VERSION = "1"
+VERSION = "2"
+# What this trainer can do beyond version 1's protocol, for OppaiLib to check before
+# it relies on one: "repeats-per-file" is a picture shown more or less often than the
+# rest, which is how a tag the pictures have too much of is played down.
+FEATURES = ["repeats-per-file"]
 
 DATA = os.environ.get("TRAINER_DATA", "/data")
 MODELS = os.environ.get("TRAINER_MODELS", "/models")
@@ -466,21 +471,41 @@ def create_job(cfg) -> dict:
     return job
 
 
-def dataset_folder(job_id: str) -> str | None:
+def dataset_folder(job_id: str, repeats: int | None = None) -> str | None:
+    """The folder a dataset file goes in: the job's own concept folder, or one beside
+    it for pictures shown a different number of times an epoch. sd-scripts reads
+    every "N_word" folder under the dataset, each at its own repeats."""
     root = job_path(job_id, "dataset")
     try:
-        names = os.listdir(root)
-    except OSError:
+        with open(job_path(job_id, "job.json"), encoding="utf-8") as f:
+            cfg = json.load(f)
+    except (OSError, ValueError):
         return None
-    return os.path.join(root, names[0]) if names else None
+    if not os.path.isdir(root):
+        return None
+    if repeats is not None:
+        cfg = {**cfg, "repeats": repeats}
+    folder = os.path.join(root, concept_folder(cfg))
+    os.makedirs(folder, exist_ok=True)
+    return folder
 
 
-def receive_file(job: dict, name: str, stream, length: int) -> None:
-    """Writes one picture or caption into a receiving job's dataset."""
+def dataset_images(job_id: str) -> int:
+    """How many pictures a job's dataset holds, across all its folders."""
+    root = job_path(job_id, "dataset")
+    count = 0
+    for _, _, files in os.walk(root):
+        count += sum(1 for f in files if os.path.splitext(f)[1].lower() in IMAGE_EXTS)
+    return count
+
+
+def receive_file(job: dict, name: str, stream, length: int, repeats: int | None = None) -> None:
+    """Writes one picture or caption into a receiving job's dataset. A caption has to
+    be sent with the same repeats as its picture, so the two share a folder."""
     if job.get("state") != "receiving":
         raise ValueError("the job is not taking files any more")
     safe = safe_file(name)
-    folder = dataset_folder(job["id"])
+    folder = dataset_folder(job["id"], repeats)
     if safe is None or folder is None:
         raise ValueError(f"not a dataset file name: {name}")
     dest = os.path.join(folder, safe)
@@ -501,12 +526,16 @@ def start_job(job: dict) -> dict:
     """Queues a job whose pictures have all arrived."""
     if job.get("state") != "receiving":
         raise ValueError("the job has already started")
-    folder = dataset_folder(job["id"])
-    images = 0
-    if folder:
-        images = sum(1 for f in os.listdir(folder) if os.path.splitext(f)[1].lower() in IMAGE_EXTS)
+    images = dataset_images(job["id"])
     if images == 0:
         raise ValueError("the job has no pictures")
+    # The job's own folder is made up front and stays empty when every picture came
+    # with repeats of its own; sd-scripts is not handed a subset with nothing in it.
+    dataset = job_path(job["id"], "dataset")
+    for name in os.listdir(dataset):
+        folder = os.path.join(dataset, name)
+        if os.path.isdir(folder) and not os.listdir(folder):
+            os.rmdir(folder)
     job.update(state="queued", phase="waiting", images=images)
     save_job(job)
     return job
@@ -759,7 +788,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.fail(401, "wrong trainer token")
             jobs = all_jobs()
             return self.send_json(200, {
-                "ok": True, "version": VERSION, "sdScripts": SD_SCRIPTS_VERSION,
+                "ok": True, "version": VERSION, "features": FEATURES, "sdScripts": SD_SCRIPTS_VERSION,
                 "busy": any(j["state"] == "running" for j in jobs),
                 "queued": sum(1 for j in jobs if j["state"] == "queued"),
                 "modelsMounted": os.path.isdir(MODELS) and bool(os.listdir(MODELS)),
@@ -820,7 +849,8 @@ class Handler(BaseHTTPRequestHandler):
             if not job:
                 return self.fail(404, "no such job")
             try:
-                receive_file(job, parts[3], self.rfile, int(self.headers.get("Content-Length", "0") or 0))
+                repeats = int(q["repeats"]) if q.get("repeats") else None
+                receive_file(job, parts[3], self.rfile, int(self.headers.get("Content-Length", "0") or 0), repeats)
             except (ValueError, OSError) as e:
                 return self.fail(400, str(e))
             self.send_response(204)

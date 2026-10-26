@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  PRESETS, autoRepeats, captionOf, datasetAdvice, epochsFor, estimateSteps, minSideFor, presetById, suggestLeaveOut, tagKey, wantsLowVram,
+  PRESETS, autoRepeats, captionOf, datasetAdvice, epochsFor, estimateSteps, isPlayedDown, minSideFor, presetById, setKeep, shareLine,
+  suggestLeaveOut, tagKey, togglePlayDown, wantsLowVram,
 } from "./lora-presets.ts";
 
 const character = presetById("character");
@@ -114,4 +115,29 @@ test("a caption is the trigger, then the tags not struck out, as the server writ
 test("a tag key ignores case, spacing and underscores, but not an emoticon's", () => {
   assert.equal(tagKey(" Long_Hair "), "long hair");
   assert.equal(tagKey("^_^"), "^_^");
+});
+
+test("a tag is played down at half its share, and clicked again it is not", () => {
+  let list = togglePlayDown([], "glasses");
+  assert.deepEqual(list, [{ tag: "glasses", keep: 0.5 }]);
+  assert.equal(isPlayedDown(list, "Glasses"), true);
+  list = setKeep(list, "glasses", 0.25);
+  assert.equal(list[0].keep, 0.25);
+  assert.deepEqual(togglePlayDown(list, "GLASSES"), []);
+});
+
+test("a played-down tag leads the caption, struck or not, in either caption mode", () => {
+  const tags = ["1girl", "smile", "glasses"];
+  assert.equal(captionOf("ohwx", tags, ["glasses"], "tags", ["glasses"]), "ohwx, glasses, 1girl, smile");
+  assert.equal(captionOf("ohwx", tags, [], "trigger", ["glasses"]), "ohwx, glasses");
+  assert.equal(captionOf("ohwx", ["1girl"], [], "trigger", ["glasses"]), "ohwx");
+});
+
+test("the share line says what the tag comes to, or why it cannot move", () => {
+  assert.equal(
+    shareLine({ tag: "glasses", pictures: 14, before: 0.7, after: 0.3465 }, 20),
+    "14 of 20 pictures (70%) — trained as about 35%, and named in their captions.",
+  );
+  assert.match(shareLine({ tag: "1girl", pictures: 20, before: 1, after: 1 }, 20), /can't be made rarer/);
+  assert.equal(shareLine(undefined, 20), "");
 });

@@ -236,6 +236,21 @@ class ApiTest(unittest.TestCase):
         # And a job with no pictures does not start.
         self.assertEqual(self.call("POST", f"/jobs/{job_id}/start")[0], 400)
 
+    def test_a_picture_sent_with_its_own_repeats_lands_in_a_folder_of_its_own(self):
+        code, body = self.call("POST", "/jobs", json.dumps({"name": "x", "trigger": "ohwx", "repeats": 10, "base": {"key": "k"}}).encode())
+        job_id = json.loads(body)["id"]
+        for path in ["0001.png?repeats=22", "0001.txt?repeats=22", "0002.png?repeats=3", "0002.txt?repeats=3"]:
+            self.assertEqual(self.call("PUT", f"/jobs/{job_id}/files/{path}", b"x")[0], 204, path)
+        dataset = server.job_path(job_id, "dataset")
+        self.assertEqual(sorted(os.listdir(os.path.join(dataset, "22_ohwx"))), ["0001.png", "0001.txt"])
+        self.assertEqual(sorted(os.listdir(os.path.join(dataset, "3_ohwx"))), ["0002.png", "0002.txt"])
+        code, body = self.call("POST", f"/jobs/{job_id}/start")
+        self.assertEqual((code, json.loads(body)["images"]), (200, 2))
+        # The job's own 10_ohwx, which no picture went into, is not left for sd-scripts.
+        self.assertEqual(sorted(os.listdir(dataset)), ["22_ohwx", "3_ohwx"])
+        self.call("POST", f"/jobs/{job_id}/cancel")
+        self.assertIn("repeats-per-file", json.loads(self.call("GET", "/health")[1])["features"])
+
     def test_a_job_with_a_bad_name_is_refused(self):
         self.assertEqual(self.call("POST", "/jobs", json.dumps({"name": "../x", "base": {"key": "k"}}).encode())[0], 400)
 

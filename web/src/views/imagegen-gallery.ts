@@ -20,8 +20,18 @@ const PAGE = 40;
  * delete it from the generator. Boards can be made and filed into on InvokeAI only.
  *
  * The host view calls refresh() after a generation so new images appear without
- * a manual reload.
+ * a manual reload. A picture can go back to the studio as the one to start from
+ * ("use-picture": image to image, paint to fix, or its faces redone).
  */
+
+/** How a gallery picture is sent back to the studio to be started from. */
+export type UsePictureMode = "img2img" | "inpaint" | "faces";
+
+export interface UsePicture {
+  url: string;
+  name: string;
+  mode: UsePictureMode;
+}
 
 const SORTS: { id: GallerySort; label: string; a1111Only?: boolean }[] = [
   { id: "newest", label: "Newest first" },
@@ -33,6 +43,13 @@ const SORTS: { id: GallerySort; label: string; a1111Only?: boolean }[] = [
 export class OppaiInvokeGallery extends LitElement {
   /** Whose gallery: InvokeAI's own, or A1111's outputs folder. */
   @property() backend: "invokeai" | "a1111" = "invokeai";
+  /** Why the gallery can't be read (A1111 with no outputs folder in sight): the
+      panel says how to map it instead of listing pictures. */
+  @property() problem = "";
+  /** The generator can repaint part of a picture (A1111), and redo its faces
+      (A1111 with ADetailer). */
+  @property({ type: Boolean }) canPaint = false;
+  @property({ type: Boolean }) canFixFaces = false;
   @state() private boards: GalleryBoard[] = [];
   @state() private sort: GallerySort = "newest";
   /** The open picture's settings, once read. */
@@ -340,6 +357,18 @@ export class OppaiInvokeGallery extends LitElement {
       .meta dt { color: var(--oppai-text-muted); }
       .meta dd { margin: 0; overflow-wrap: anywhere; }
       .meta .acts { display: flex; gap: 6px; flex-wrap: wrap; }
+      .meta .k { display: flex; align-items: center; gap: 6px; }
+      .meta .copy-k {
+        margin-left: auto; border: none; background: none; color: var(--oppai-primary); font: inherit; font-size: 11px;
+        text-transform: none; letter-spacing: 0; cursor: pointer; display: inline-flex; align-items: center; gap: 3px; padding: 2px 4px;
+        border-radius: 6px;
+      }
+      .meta .copy-k:hover { background: var(--oppai-surface-2); }
+      .meta .copy-k .material-symbols-rounded { font-size: 14px; }
+      .setup { display: flex; flex-direction: column; gap: 8px; padding: 6px 2px; font-size: 13px; line-height: 1.45; }
+      .setup > .material-symbols-rounded { font-size: 32px; color: var(--oppai-text-muted); }
+      .setup p { margin: 0; color: var(--oppai-text-dim); overflow-wrap: anywhere; }
+      .setup code { font-size: 12px; }
       .meta .acts button {
         border: 1px solid var(--oppai-border-strong); background: transparent; color: var(--oppai-text); border-radius: 9px;
         font: inherit; font-size: 12px; padding: 6px 10px; cursor: pointer; display: inline-flex; align-items: center; gap: 5px;
@@ -443,7 +472,12 @@ export class OppaiInvokeGallery extends LitElement {
     super.connectedCallback();
     profileUpdates(this, "generation gallery");
     window.addEventListener("keydown", this.onKey);
-    void this.refresh();
+    if (!this.problem) void this.refresh();
+  }
+
+  protected updated(changed: Map<string, unknown>) {
+    // The folder was mapped and the host looked again: there is a gallery now.
+    if (changed.has("problem") && !this.problem && changed.get("problem")) void this.refresh();
   }
 
   disconnectedCallback() {
@@ -674,8 +708,12 @@ export class OppaiInvokeGallery extends LitElement {
       y: e.clientY,
       title: this.labelOf(img),
       items: [
+        { label: "Copy prompt", icon: "content_copy", run: () => void this.copyField(img, "prompt") },
         { label: "Copy generation metadata", icon: "content_copy", run: () => void this.copyMetadata(img) },
         { label: "Use same generation parameters", icon: "replay", run: () => void this.reuseMetadata(img) },
+        { label: "Start from this picture", icon: "add_photo_alternate", run: () => this.usePicture(img, "img2img") },
+        ...(this.canPaint ? [{ label: "Paint to fix", icon: "brush", run: () => this.usePicture(img, "inpaint") }] : []),
+        ...(this.canFixFaces ? [{ label: "Fix faces", icon: "face_retouching_natural", run: () => this.usePicture(img, "faces") }] : []),
         { label: "Export PNG for Civitai", icon: "download", run: () => void this.exportImage(img) },
         { label: "Send to chat", icon: "forum", run: () => void this.openShareMenu(img, e.clientX, e.clientY) },
       ],
@@ -689,6 +727,28 @@ export class OppaiInvokeGallery extends LitElement {
     } catch (e) {
       mascotSay((e as Error).message || "Couldn't copy generation metadata.", "error");
     }
+  }
+
+  /** Copies the prompt or the negative alone — what is wanted far more often than
+      the whole record, to paste into a prompt box here or anywhere. */
+  private async copyField(img: GalleryImage, field: "prompt" | "negativePrompt") {
+    try {
+      const text = (await this.imageInfo(img))[field];
+      if (!text) throw new Error(field === "prompt" ? "This picture has no prompt saved with it." : "This picture has no negative prompt.");
+      if (!await copyText(text)) throw new Error("Clipboard permission was denied.");
+      mascotSay(field === "prompt" ? "Prompt copied." : "Negative prompt copied.", "success");
+    } catch (e) {
+      mascotSay((e as Error).message || "Couldn't copy that.", "error");
+    }
+  }
+
+  /** Hands a picture to the studio to start the next run from. */
+  private usePicture(img: GalleryImage, mode: UsePictureMode) {
+    this.dispatchEvent(new CustomEvent<UsePicture>("use-picture", {
+      detail: { url: api.galleryFullURL(img.name), name: this.labelOf(img), mode },
+      bubbles: true, composed: true,
+    }));
+    this.expanded = null;
   }
 
   private async reuseMetadata(img: GalleryImage) {
@@ -791,7 +851,30 @@ export class OppaiInvokeGallery extends LitElement {
     }
   }
 
+  /** No outputs folder in sight: what to map, and a way to look again once it is. */
+  private renderSetup() {
+    return html`<div class="panel">
+      <div class="head">
+        <span class="material-symbols-rounded" style="font-size:18px;">photo_library</span>
+        A1111 outputs
+      </div>
+      <div class="setup">
+        <span class="material-symbols-rounded">folder</span>
+        <b>The gallery needs A1111's outputs folder</b>
+        <p>${this.problem}</p>
+        <p class="note">On Unraid, edit the OppaiLib container and fill in <b>Automatic1111 outputs</b> with the
+          host folder that holds <code>txt2img-images</code> (it is under the template's advanced paths), or add a
+          path to <code>/a1111-outputs</code> yourself. Once it is there, pictures made here are saved into it
+          and show up in this panel with their prompts.</p>
+        <button class="more" @click=${() => this.dispatchEvent(new CustomEvent("recheck", { bubbles: true, composed: true }))}>
+          <span class="material-symbols-rounded" style="font-size:16px;vertical-align:-3px;">refresh</span> Look again
+        </button>
+      </div>
+    </div>`;
+  }
+
   render() {
+    if (this.problem) return this.renderSetup();
     const current = this.boards.find((b) => b.id === this.board);
     return html`
       <div class="panel">
@@ -944,6 +1027,15 @@ export class OppaiInvokeGallery extends LitElement {
             @click=${(e: MouseEvent) => void this.openShareMenu(img, e.clientX, e.clientY)}>
             <span class="material-symbols-rounded" style="font-size:17px;">forum</span> Send to chat
           </button>
+          <button class="obtn" title="Start the next picture from this one" @click=${() => this.usePicture(img, "img2img")}>
+            <span class="material-symbols-rounded" style="font-size:17px;">add_photo_alternate</span> Start from
+          </button>
+          ${this.canPaint ? html`<button class="obtn" title="Paint over a part to redo it" @click=${() => this.usePicture(img, "inpaint")}>
+            <span class="material-symbols-rounded" style="font-size:17px;">brush</span> Paint to fix
+          </button>` : nothing}
+          ${this.canFixFaces ? html`<button class="obtn" title="Redo its faces with ADetailer, and nothing else" @click=${() => this.usePicture(img, "faces")}>
+            <span class="material-symbols-rounded" style="font-size:17px;">face_retouching_natural</span> Fix faces
+          </button>` : nothing}
           <button class="obtn" @click=${() => this.dispatchEvent(new CustomEvent("cut-out", {
             detail: { url: api.galleryFullURL(img.name), name: img.name }, bubbles: true, composed: true,
           }))}>
@@ -963,6 +1055,13 @@ export class OppaiInvokeGallery extends LitElement {
     `;
   }
 
+  private copyButton(img: GalleryImage, field: "prompt" | "negativePrompt") {
+    return html`<button class="copy-k" title=${field === "prompt" ? "Copy the prompt" : "Copy the negative prompt"}
+      @click=${() => void this.copyField(img, field)}>
+      <span class="material-symbols-rounded">content_copy</span> Copy
+    </button>`;
+  }
+
   /** The open picture's settings, read from the generator's record of it. */
   private renderInfo(img: GalleryImage, at: number) {
     const i = this.info;
@@ -973,8 +1072,8 @@ export class OppaiInvokeGallery extends LitElement {
       ${!i
         ? html`<div class="note">${this.infoError || "Reading its settings…"}</div>`
         : html`
-            ${i.prompt ? html`<div><div class="k">Prompt</div><div class="prompt">${i.prompt}</div></div>` : html`<div class="note">No generation settings were saved with this picture.</div>`}
-            ${i.negativePrompt ? html`<div><div class="k">Negative</div><div class="prompt">${i.negativePrompt}</div></div>` : nothing}
+            ${i.prompt ? html`<div><div class="k">Prompt ${this.copyButton(img, "prompt")}</div><div class="prompt">${i.prompt}</div></div>` : html`<div class="note">No generation settings were saved with this picture.</div>`}
+            ${i.negativePrompt ? html`<div><div class="k">Negative ${this.copyButton(img, "negativePrompt")}</div><div class="prompt">${i.negativePrompt}</div></div>` : nothing}
             <dl>
               ${i.model ? html`<dt>Model</dt><dd>${i.model}</dd>` : nothing}
               ${i.seed ? html`<dt>Seed</dt><dd>${i.seed}</dd>` : nothing}
@@ -990,7 +1089,7 @@ export class OppaiInvokeGallery extends LitElement {
             ${i.prompt
               ? html`<div class="acts">
                   <button @click=${() => void this.reuseMetadata(img)}><span class="material-symbols-rounded" style="font-size:15px;">replay</span> Use these settings</button>
-                  <button @click=${() => void this.copyMetadata(img)}><span class="material-symbols-rounded" style="font-size:15px;">content_copy</span> Copy</button>
+                  <button title="Copy everything, as A1111 writes it" @click=${() => void this.copyMetadata(img)}><span class="material-symbols-rounded" style="font-size:15px;">content_copy</span> Copy all</button>
                 </div>`
               : nothing}`}
     </div>`;

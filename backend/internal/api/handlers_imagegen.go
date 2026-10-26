@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -188,10 +189,15 @@ func (s *Server) handleImageGenStatus(w http.ResponseWriter, r *http.Request) {
 			out["boards"] = boards
 		}
 		out["gallery"] = "invokeai"
-	} else if s.imagegen.A1111OutputsDir() != "" {
-		// A1111 keeps no gallery of its own; its outputs folder, when this process can
-		// see it, is one (imagegen/a1111_gallery.go).
+	} else {
+		// A1111 keeps no gallery of its own; its outputs folder is one once this
+		// process can see it (imagegen/a1111_gallery.go). The panel is there either
+		// way: without the folder it says how to map it, where it used to be missing
+		// with nothing to say why.
 		out["gallery"] = "a1111"
+		if problem := s.imagegen.A1111OutputsProblem(); problem != "" {
+			out["galleryProblem"] = problem
+		}
 	}
 	out["gallerySorts"] = imagegen.GallerySorts
 	out["detailerAvailable"] = s.imagegen.SupportsADetailer(ctx, set.ImageGenURL)
@@ -258,6 +264,15 @@ type generateReq struct {
 	Count          int         `json:"count"`
 	Loras          []loraReq   `json:"loras"`
 	Detailer       detailerReq `json:"detailer"`
+	// InitImage starts the picture from this one instead of from noise (a data URL
+	// or bare base64): image to image, with Denoise saying how far it may move.
+	InitImage string  `json:"initImage"`
+	Denoise   float64 `json:"denoise"`
+	// Mask, with InitImage, repaints only its white (paint to fix); MaskBlur softens
+	// its edge into the rest. DetailOnly runs the detailer over InitImage alone.
+	Mask       string `json:"mask"`
+	MaskBlur   int    `json:"maskBlur"`
+	DetailOnly bool   `json:"detailOnly"`
 }
 
 type detailerReq struct {
@@ -282,7 +297,8 @@ func (s *Server) handleImageGenGenerate(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var req generateReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	// A picture to start from rides in the body, so the cap is a large PNG's worth.
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<20)).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid body")
 		return
 	}
@@ -291,6 +307,15 @@ func (s *Server) handleImageGenGenerate(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	gen, promptRecord, rolled := s.prepareGenerate(&req)
+	if err := decodeGenerateImages(&req, &gen); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	// The studio's A1111 pictures go into its outputs folder, as its own UI's do,
+	// when that folder is the gallery on screen — so what was made here is there to
+	// browse, copy the prompt of and start again from. Libby's camera never comes
+	// through here.
+	gen.SaveOutputs = s.imagegen.A1111OutputsDir() != ""
 	ctx := r.Context()
 	if genJobIDPattern.MatchString(req.JobID) {
 		var job *genJob
@@ -307,6 +332,10 @@ func (s *Server) handleImageGenGenerate(w http.ResponseWriter, r *http.Request) 
 		if ctx.Err() != nil && r.Context().Err() == nil {
 			// Stopped from the studio, not failed: the cancel endpoint ended it.
 			writeErr(w, http.StatusConflict, "generation cancelled")
+			return
+		}
+		if errors.Is(err, imagegen.ErrInpaintUnsupported) {
+			writeErr(w, http.StatusConflict, err.Error())
 			return
 		}
 		s.log.Warn("image generate", "err", err)
@@ -343,6 +372,37 @@ func (s *Server) handleImageGenGenerate(w http.ResponseWriter, r *http.Request) 
 		"negative": req.NegativePrompt,
 		"rolled":   rolled,
 	})
+}
+
+// decodeGenerateImages reads a request's picture to start from and its mask. A mask
+// or a detailer-only pass without a picture is a client mistake, said as one rather
+// than quietly drawn from noise.
+func decodeGenerateImages(req *generateReq, gen *imagegen.GenerateRequest) error {
+	if req.InitImage == "" {
+		if req.Mask != "" || req.DetailOnly {
+			return errors.New("painting to fix and fixing faces need a picture to start from")
+		}
+		return nil
+	}
+	init, err := decodeDataImage(req.InitImage)
+	if err != nil || !strings.HasPrefix(http.DetectContentType(init), "image/") {
+		return errors.New("the picture to start from isn't an image")
+	}
+	gen.InitImage, gen.Denoise = init, req.Denoise
+	if req.Mask != "" {
+		mask, err := decodeDataImage(req.Mask)
+		if err != nil || http.DetectContentType(mask) != "image/png" {
+			return errors.New("the painted mask must be a PNG")
+		}
+		gen.Mask, gen.MaskBlur = mask, clampInt(req.MaskBlur, 0, 64)
+	}
+	if req.DetailOnly {
+		if !req.Detailer.Enabled {
+			return errors.New("fixing faces needs the detailer switched on")
+		}
+		gen.DetailOnly = true
+	}
+	return nil
 }
 
 // prepareGenerate turns a studio-shaped request into the generator's, filling defaults,

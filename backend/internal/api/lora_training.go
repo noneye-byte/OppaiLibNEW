@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -95,9 +96,12 @@ type trainRequest struct {
 	Base    string      `json:"base"`
 	Source  trainSource `json:"source"`
 	// Captions is "tags" (the default) or "trigger" (the trigger word alone).
-	Captions     string   `json:"captions,omitempty"`
-	LeaveOut     []string `json:"leaveOut,omitempty"`
-	Epochs       int      `json:"epochs,omitempty"`
+	Captions string   `json:"captions,omitempty"`
+	LeaveOut []string `json:"leaveOut,omitempty"`
+	// PlayDown are tags the pictures have more of than the LoRA should; see
+	// lora_dataset.go.
+	PlayDown     []loraPlayDown `json:"playDown,omitempty"`
+	Epochs       int            `json:"epochs,omitempty"`
 	Repeats      int      `json:"repeats,omitempty"`
 	Rank         int      `json:"rank,omitempty"`
 	Resolution   int      `json:"resolution,omitempty"`
@@ -280,10 +284,12 @@ func (s *Server) trainSourceRows(ctx context.Context, src trainSource) ([]*db.Me
 }
 
 type trainPreviewReq struct {
-	Source   trainSource `json:"source"`
-	Trigger  string      `json:"trigger"`
-	Captions string      `json:"captions"`
-	LeaveOut []string    `json:"leaveOut"`
+	Source   trainSource    `json:"source"`
+	Trigger  string         `json:"trigger"`
+	Captions string         `json:"captions"`
+	LeaveOut []string       `json:"leaveOut"`
+	PlayDown []loraPlayDown `json:"playDown"`
+	Repeats  int            `json:"repeats"`
 }
 
 // trainPreviewItem is one picture of a set as it would be trained: its caption, and
@@ -325,7 +331,7 @@ func (s *Server) handleTrainPreview(w http.ResponseWriter, r *http.Request) {
 		ids = append(ids, p.ID)
 		sets = append(sets, p.Tags)
 	}
-	leaveOut := loraLeaveOut(req.LeaveOut)
+	leaveOut, named := loraLeaveOut(req.LeaveOut), loraPlayDownNamed(req.PlayDown)
 	items := make([]trainPreviewItem, 0, len(pics))
 	untagged := 0
 	for _, p := range pics {
@@ -338,7 +344,7 @@ func (s *Server) handleTrainPreview(w http.ResponseWriter, r *http.Request) {
 			tags = append(tags, trainItemTag{Name: loraCaptionTag(t.Name), Manual: t.Source == "manual"})
 		}
 		items = append(items, trainPreviewItem{
-			ID: p.ID, Caption: loraCaption(req.Trigger, p.Tags, leaveOut, req.Captions),
+			ID: p.ID, Caption: loraCaption(req.Trigger, p.Tags, leaveOut, named, req.Captions),
 			Tags: tags, Width: p.Width, Height: p.Height,
 		})
 	}
@@ -346,10 +352,15 @@ func (s *Server) handleTrainPreview(w http.ResponseWriter, r *http.Request) {
 	if len(items) > 0 {
 		example = items[0].Caption
 	}
+	repeats := req.Repeats
+	if repeats <= 0 {
+		repeats = loraRepeats(len(ids))
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"count": len(ids), "mediaIds": ids, "items": items, "commonTags": loraCommonTags(sets, 60),
 		"exampleCaption": example, "suggestedRepeats": loraRepeats(len(ids)),
 		"untagged": untagged, "limit": trainMaxPictures,
+		"playDown": loraPlayDownShares(sets, req.PlayDown, loraPlayDownRepeats(sets, req.PlayDown, repeats)),
 	})
 }
 
@@ -480,11 +491,32 @@ func (s *Server) trainPrepare(t db.LoraTraining, req trainRequest, ckpt imagegen
 		return
 	}
 
-	leaveOut := loraLeaveOut(req.LeaveOut)
+	tagSets := make([][]models.Tag, 0, len(pics))
+	for _, p := range pics {
+		tagSets = append(tagSets, p.Tags)
+	}
+	baseRepeats := req.Repeats
+	if baseRepeats <= 0 {
+		baseRepeats = loraRepeats(len(pics))
+	}
+	perPicture := loraPlayDownRepeats(tagSets, req.PlayDown, baseRepeats)
+	if slices.ContainsFunc(perPicture, func(r int) bool { return r != baseRepeats }) {
+		// An older trainer would put every picture in the one folder and train the
+		// tag as strongly as ever; better to say so than to run it.
+		if h, err := s.trainer.Health(ctx, base, token); err != nil {
+			fail(err)
+			return
+		} else if !h.Has(trainer.FeatureRepeatsPerFile) {
+			fail(errors.New("playing tags down needs a newer trainer — update the oppailib-trainer container, or train without them"))
+			return
+		}
+	}
+
+	leaveOut, named := loraLeaveOut(req.LeaveOut), loraPlayDownNamed(req.PlayDown)
 	sent, i := 0, 0
 	next := func() (trainer.Picture, bool, error) {
 		for i < len(pics) {
-			p := pics[i]
+			p, repeats := pics[i], perPicture[i]
 			i++
 			data, err := s.trainReadPicture(p)
 			if err != nil {
@@ -496,16 +528,12 @@ func (s *Server) trainPrepare(t db.LoraTraining, req trainRequest, ckpt imagegen
 				continue
 			}
 			sent++
-			return trainer.Picture{Ext: ext, Data: data, Caption: loraCaption(req.Trigger, p.Tags, leaveOut, req.Captions)}, true, nil
+			return trainer.Picture{Ext: ext, Data: data, Caption: loraCaption(req.Trigger, p.Tags, leaveOut, named, req.Captions), Repeats: repeats}, true, nil
 		}
 		if sent == 0 {
 			return trainer.Picture{}, false, errors.New("none of the pictures could be read")
 		}
 		return trainer.Picture{}, false, nil
-	}
-	tagSets := make([][]models.Tag, 0, len(pics))
-	for _, p := range pics {
-		tagSets = append(tagSets, p.Tags)
 	}
 	job, err := s.trainer.Submit(ctx, base, token, s.trainSpec(ctx, req, ckpt, tagSets, len(pics)), next)
 	if err != nil {
@@ -562,9 +590,11 @@ func (s *Server) trainSpec(ctx context.Context, req trainRequest, ckpt imagegen.
 		if req.Trigger != "" {
 			words = append(words, req.Trigger)
 		}
-		leaveOut := loraLeaveOut(req.LeaveOut)
+		// Nor the tags played down: the sample is the LoRA unasked, which is where a
+		// played-down tag should be missing.
+		leaveOut, named := loraLeaveOut(req.LeaveOut), loraPlayDownNamed(req.PlayDown)
 		for _, t := range loraCommonTags(tagSets, 12) {
-			if !leaveOut[loraTagKey(t.Name)] && len(words) < 10 {
+			if k := loraTagKey(t.Name); !leaveOut[k] && !named[k] && len(words) < 10 {
 				words = append(words, t.Name)
 			}
 		}

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"math"
 	"net/http"
 	"regexp"
 	"sort"
@@ -58,18 +59,27 @@ func loraLeaveOut(list []string) map[string]bool {
 
 // loraCaption is one picture's caption. Mode "trigger" captions with the trigger
 // word alone, for a style trained on what the pictures have in common rather than
-// what is in each.
-func loraCaption(trigger string, tags []models.Tag, leaveOut map[string]bool, mode string) string {
+// what is in each. A played-down tag the picture has is named whatever the mode or
+// the leave-out list say, straight after the trigger word so the forty-tag cut never
+// takes it: a trait the caption names is learnt as that word, one it does not name
+// is learnt as the LoRA — and comes with it unasked.
+func loraCaption(trigger string, tags []models.Tag, leaveOut, named map[string]bool, mode string) string {
 	trigger = strings.TrimSpace(trigger)
 	parts := []string{}
 	if trigger != "" {
 		parts = append(parts, trigger)
 	}
+	sorted := loraContentTags(tags)
+	seen := map[string]bool{loraTagKey(trigger): true}
+	for _, t := range sorted {
+		if k := loraTagKey(t.Name); named[k] && !seen[k] {
+			seen[k] = true
+			parts = append(parts, loraCaptionTag(t.Name))
+		}
+	}
 	if mode == "trigger" {
 		return strings.Join(parts, ", ")
 	}
-	sorted := loraContentTags(tags)
-	seen := map[string]bool{loraTagKey(trigger): true}
 	for _, t := range sorted {
 		k := loraTagKey(t.Name)
 		if k == "" || seen[k] || leaveOut[k] {
@@ -180,4 +190,139 @@ func loraRepeats(images int) int {
 	}
 	r := (200 + images/2) / images
 	return max(1, min(r, 40))
+}
+
+// ── playing a tag down ──────────────────────────────────────────────────────
+//
+// A tag the pictures have more of than the LoRA should — glasses on most of the
+// pictures of a style that is wanted without them — is played down two ways. It is
+// named in every caption that has it (loraCaption), so the model ties it to the word
+// rather than to the LoRA; and the pictures with it are shown less often an epoch and
+// the rest more, so it is rarer in what is learnt. Neither removes it: asked for, it
+// still comes, and some of it still comes unasked.
+
+// loraPlayDown is one tag to play down and how much of its share of training to
+// keep: 0.5 trains as if half as many pictures had it.
+type loraPlayDown struct {
+	Tag  string  `json:"tag"`
+	Keep float64 `json:"keep"`
+}
+
+// loraPlayDownNamed is the played-down tags, as the keys a caption names.
+func loraPlayDownNamed(list []loraPlayDown) map[string]bool {
+	out := map[string]bool{}
+	for _, p := range list {
+		if k := loraTagKey(p.Tag); k != "" {
+			out[k] = true
+		}
+	}
+	return out
+}
+
+// loraPictureKeys is each picture's content tags as keys.
+func loraPictureKeys(tagSets [][]models.Tag) []map[string]bool {
+	out := make([]map[string]bool, len(tagSets))
+	for i, tags := range tagSets {
+		out[i] = map[string]bool{}
+		for _, t := range loraContentTags(tags) {
+			out[i][loraTagKey(t.Name)] = true
+		}
+	}
+	return out
+}
+
+// loraPlayDownRepeats is how many times an epoch each picture is shown. A tag on w
+// of n pictures has a share of w/n; keeping a fraction of it means a weight m on its
+// pictures such that w·m / (w·m + n − w) is that fraction of w/n. A picture with two
+// played-down tags takes the smaller weight. The weights are then scaled so an epoch
+// is as long as it was — the pictures without the tag are shown more, those with it
+// less — because the run's length was chosen for the set, not for this. A tag on
+// every picture, or on none, has nothing to be weighed against and changes nothing.
+func loraPlayDownRepeats(tagSets [][]models.Tag, playDown []loraPlayDown, repeats int) []int {
+	n := len(tagSets)
+	out := make([]int, n)
+	for i := range out {
+		out[i] = repeats
+	}
+	if n == 0 || len(playDown) == 0 {
+		return out
+	}
+	keys := loraPictureKeys(tagSets)
+	weights := make([]float64, n)
+	for i := range weights {
+		weights[i] = 1
+	}
+	changed := false
+	for _, p := range playDown {
+		k := loraTagKey(p.Tag)
+		keep := math.Max(0.05, math.Min(p.Keep, 1))
+		if k == "" || keep >= 1 {
+			continue
+		}
+		with := 0
+		for _, have := range keys {
+			if have[k] {
+				with++
+			}
+		}
+		if with == 0 || with == n {
+			continue
+		}
+		share := float64(with) / float64(n) * keep
+		m := share * float64(n-with) / ((1 - share) * float64(with))
+		for i, have := range keys {
+			if have[k] && m < weights[i] {
+				weights[i], changed = m, true
+			}
+		}
+	}
+	if !changed {
+		return out
+	}
+	sum := 0.0
+	for _, w := range weights {
+		sum += w
+	}
+	scale := float64(repeats*n) / sum
+	for i, w := range weights {
+		// The trainer takes 1 to 100 a picture.
+		out[i] = max(1, min(int(math.Round(scale*w)), 100))
+	}
+	return out
+}
+
+// loraTagShare is what playing a tag down comes to: how many pictures have it, the
+// share of training they had, and the share they have with the repeats as set.
+type loraTagShare struct {
+	Tag      string  `json:"tag"`
+	Pictures int     `json:"pictures"`
+	Before   float64 `json:"before"`
+	After    float64 `json:"after"`
+}
+
+// loraPlayDownShares says what each played-down tag comes to with these repeats.
+func loraPlayDownShares(tagSets [][]models.Tag, playDown []loraPlayDown, repeats []int) []loraTagShare {
+	keys := loraPictureKeys(tagSets)
+	total := 0
+	for _, r := range repeats {
+		total += r
+	}
+	out := make([]loraTagShare, 0, len(playDown))
+	for _, p := range playDown {
+		k := loraTagKey(p.Tag)
+		sh := loraTagShare{Tag: p.Tag}
+		shown := 0
+		for i, have := range keys {
+			if have[k] {
+				sh.Pictures++
+				shown += repeats[i]
+			}
+		}
+		if len(keys) > 0 && total > 0 {
+			sh.Before = float64(sh.Pictures) / float64(len(keys))
+			sh.After = float64(shown) / float64(total)
+		}
+		out = append(out, sh)
+	}
+	return out
 }

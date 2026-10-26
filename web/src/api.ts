@@ -1550,6 +1550,9 @@ export interface ImageGenStatus {
   /** Whose gallery the studio can show: InvokeAI's own, A1111's outputs folder
       (once the server can see it), or none. */
   gallery?: "invokeai" | "a1111";
+  /** A1111 only: why its outputs folder, the gallery, can't be read — set, the
+      panel says how to map it instead of listing pictures. */
+  galleryProblem?: string;
   detailerAvailable?: boolean;
   /** The Civitai browser works against this generator (it does against both). */
   civitai?: boolean;
@@ -1637,6 +1640,15 @@ export interface GenerateParams {
     denoise?: number;
     maskBlur?: number;
   };
+  /** A picture to start from instead of noise, as a data URL: image to image. */
+  initImage?: string;
+  /** How far the run may move from initImage, 0–1. */
+  denoise?: number;
+  /** With initImage, a PNG whose white is repainted and the rest kept (A1111). */
+  mask?: string;
+  maskBlur?: number;
+  /** With initImage and the detailer on: redo its faces and nothing else (A1111). */
+  detailOnly?: boolean;
 }
 
 /** What the trainer says about itself. */
@@ -1681,6 +1693,8 @@ export interface TrainRequest {
   source: TrainSource;
   captions?: "tags" | "trigger";
   leaveOut?: string[];
+  /** Tags the pictures have more of than the LoRA should; see lora-playdown.ts. */
+  playDown?: PlayDown[];
   epochs?: number;
   repeats?: number;
   rank?: number;
@@ -1739,6 +1753,22 @@ export interface TrainPreview {
   /** How many pictures have no content tags at all. */
   untagged: number;
   limit: number;
+  /** What each played-down tag comes to with the repeats asked about. */
+  playDown?: PlayDownShare[];
+}
+
+/** A tag to play down, and how much of its share of training to keep (0.5 halves it). */
+export interface PlayDown {
+  tag: string;
+  keep: number;
+}
+
+/** A played-down tag's pictures, and their share of training before and after. */
+export interface PlayDownShare {
+  tag: string;
+  pictures: number;
+  before: number;
+  after: number;
 }
 
 export interface TrainPreviewItem {
@@ -3311,7 +3341,7 @@ export const api = {
   trainList: () =>
     request<{ configured: boolean; tagger?: boolean; trainer?: TrainerHealth; trainerError?: string; trainings: Training[] }>(
       "/api/imagegen/train", {}, 20_000),
-  trainPreview: (body: { source: TrainSource; trigger: string; captions?: string; leaveOut?: string[] }, signal?: AbortSignal) =>
+  trainPreview: (body: { source: TrainSource; trigger: string; captions?: string; leaveOut?: string[]; playDown?: PlayDown[]; repeats?: number }, signal?: AbortSignal) =>
     request<TrainPreview>("/api/imagegen/train/preview", { method: "POST", body: JSON.stringify(body), signal }, 40_000),
   /** One page of an X account's pictures, to pick a set from. */
   trainTwitter: (user: string, cursor = "") =>

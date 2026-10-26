@@ -316,6 +316,20 @@ type GenerateRequest struct {
 	// txt2img on the same seed changes everything the prompt did not pin down.
 	InitImage []byte
 	Denoise   float64
+	// Mask, with InitImage, repaints only the white of it and keeps the rest pixel
+	// for pixel: the studio's paint-to-fix. The masked area is drawn at the full
+	// output size and pasted back, so a small face gets a whole canvas of detail.
+	// Automatic1111 only; InvokeAI fails with ErrInpaintUnsupported.
+	Mask     []byte
+	MaskBlur int
+	// DetailOnly, with InitImage and Detailer, runs the detailer over the picture
+	// and nothing else — ADetailer's "skip img2img" — so a finished picture's faces
+	// and hands are redone without the rest of it moving. Automatic1111 only.
+	DetailOnly bool
+	// SaveOutputs asks Automatic1111 to write the pictures into its outputs folder as
+	// its own UI does, which is where the studio's A1111 gallery reads them back from.
+	// Off for anything that is not the studio: Libby's pictures are hers.
+	SaveOutputs bool
 	// Controls are pictures that steer the run without being started from: a pose to
 	// copy, a face to keep. Automatic1111 and Forge apply them through the ControlNet
 	// extension; a backend that cannot fails with ErrControlUnsupported so the caller
@@ -344,6 +358,10 @@ type ControlUnit struct {
 // A1111 without the ControlNet extension rejects the field. Distinguished so a picture
 // can be retaken without the pose or face lock instead of not being taken.
 var ErrControlUnsupported = errors.New("this generator cannot apply pose or face references")
+
+// ErrInpaintUnsupported is a mask or a detailer-only pass sent to InvokeAI, whose
+// inpainting graph needs canvas nodes this client does not build.
+var ErrInpaintUnsupported = errors.New("painting a picture to fix it, and fixing faces on a finished one, need Automatic1111 — InvokeAI can start from a picture but not repaint part of one here")
 
 // Detailer configures either the ADetailer Automatic1111 extension or InvokeAI's
 // adetailer node. The shared fields deliberately map to both APIs.
@@ -782,6 +800,9 @@ func (c *Client) Generate(ctx context.Context, base string, req GenerateRequest)
 		return nil, err
 	}
 	if kind == KindInvokeAI {
+		if len(req.Mask) > 0 || req.DetailOnly {
+			return nil, ErrInpaintUnsupported
+		}
 		res, err := c.invokeGenerate(ctx, base, req)
 		return rejectBlackGeneration(res, err)
 	}

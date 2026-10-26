@@ -96,7 +96,10 @@ import {
   type LocalSources,
   type PromptToken,
 } from "../prompt-complete.js";
-import type { OppaiInvokeGallery } from "./imagegen-gallery.js";
+import type { OppaiInvokeGallery, UsePicture, UsePictureMode } from "./imagegen-gallery.js";
+import "./imagegen-paint.js";
+import type { PaintResult } from "./imagegen-paint.js";
+import { sourceSize, type PaintStroke } from "../paint-mask.js";
 
 // ── Web Speech typings ─────────────────────────────────────────────────────────
 // The Speech Recognition API isn't in the standard DOM lib, and it's still vendor-
@@ -149,6 +152,18 @@ interface Shot extends GenPreview {
 }
 
 type CreateTab = "models" | "loras" | "look" | "wildcards" | "templates" | "settings";
+
+/** A picture a run starts from instead of noise: the whole of it (image to image),
+    the painted part of it (paint to fix), or only its faces (the detailer alone). */
+interface StartPicture {
+  url: string;
+  name: string;
+  width: number;
+  height: number;
+  mode: UsePictureMode;
+  /** Made from a file on this computer, and released when it is let go. */
+  objectURL?: boolean;
+}
 
 /** The Create screen's drawers, down its rail in this order. */
 const CREATE_TABS: { id: CreateTab; label: string; icon: string }[] = [
@@ -469,6 +484,20 @@ export class OppaiImageGen extends LitElement {
    */
   @property({ type: Number }) editMedia = 0;
   @state() private editing: { id: number; title: string; tags: string[] } | null = null;
+  /**
+   * The picture the next run starts from — a result on the canvas, a gallery picture
+   * or one from this computer — and how far the run may move from it. Kept out of the
+   * draft: it is a picture's worth of bytes, and rarely still wanted after a reload.
+   */
+  @state() private source: StartPicture | null = null;
+  @state() private sourceDenoise = 0.55;
+  @state() private paintOpen = false;
+  /** The strokes painted over the source, and the mask they make (paint-mask.ts). */
+  private sourceStrokes: PaintStroke[] = [];
+  private sourceMask = "";
+  /** The source's bytes as a data URL, read once and sent with every run from it. */
+  private sourceData = "";
+  @query("input.source-file") private sourceFile?: HTMLInputElement;
 
   // Which sidebar sections are unfolded. Models start open — it's the choice that
   // shapes everything else; the rest unfold on demand.
@@ -1157,6 +1186,21 @@ export class OppaiImageGen extends LitElement {
       }
       .editing-bar .editing-copy { flex: 1; min-width: 0; }
       .editing-bar strong { color: var(--oppai-text); }
+      .source-bar {
+        display: flex; align-items: center; gap: 10px; margin-bottom: 10px; padding: 8px 10px;
+        border-radius: 12px; border: 1px solid var(--oppai-border-strong);
+        background: color-mix(in srgb, var(--oppai-primary) 10%, var(--oppai-surface-2));
+        font-size: 12.5px; color: var(--oppai-text-dim); flex-wrap: wrap;
+      }
+      .source-bar > img { width: 52px; height: 52px; object-fit: cover; border-radius: 8px; flex: none; }
+      .source-copy { flex: 1; min-width: 200px; display: flex; flex-direction: column; gap: 3px; }
+      .source-copy strong { color: var(--oppai-text); overflow-wrap: anywhere; }
+      .source-strength { display: inline-flex; align-items: center; gap: 6px; }
+      .source-strength input { width: 140px; }
+      .source-strength b { color: var(--oppai-text); font-weight: 600; min-width: 3ch; }
+      .source-hint { font-size: 11.5px; }
+      .source-acts { display: flex; gap: 6px; flex-wrap: wrap; }
+      .source-acts .chip { display: inline-flex; align-items: center; gap: 4px; }
 
       .banner {
         background: var(--oppai-surface-2);
@@ -4111,9 +4155,26 @@ export class OppaiImageGen extends LitElement {
     </div>`;
   }
 
-  /** Makes one request using a snapshot of the selected outfit square. */
-  private async generateOne(appendOutfit: boolean): Promise<number> {
-    const { prompt, negative } = this.assemblePrompts();
+  /** The detailer as the Settings drawer has it, for a run that asks for it. */
+  private detailerParams(): NonNullable<GenerateParams["detailer"]> {
+    return {
+      enabled: true,
+      model: this.detailerModel,
+      prompt: this.detailerPrompt || undefined,
+      negativePrompt: this.detailerNegative || undefined,
+      confidence: this.detailerConfidence,
+      denoise: this.detailerDenoise,
+      maskBlur: this.detailerMaskBlur,
+    };
+  }
+
+  /** Makes one request using a snapshot of the selected outfit square. `from` is a
+      picture to start from other than the composer's own (a face pass, run at once). */
+  private async generateOne(appendOutfit: boolean, from?: StartPicture): Promise<number> {
+    const src = from ?? this.source;
+    let { prompt, negative } = this.assemblePrompts();
+    // A face pass needs no prompt of its own: the faces are already there.
+    if (!prompt.trim() && src?.mode === "faces") prompt = "detailed face, best quality";
     const capturedOutfitText = this.outfitText.trim();
     const outfit = this.outfitOn ? this.outfitSlot() : undefined;
     const capturedOutfitConfig = outfit ? this.outfitConfigKey() : undefined;
@@ -4147,18 +4208,24 @@ export class OppaiImageGen extends LitElement {
         count: this.outfitOn ? 1 : this.count,
         seed: this.seed,
         loras: Object.entries(this.selectedLoras).map(([name, weight]) => ({ name, weight })),
-        detailer: this.status?.detailerAvailable && this.detailerEnabled
-          ? {
-              enabled: true,
-              model: this.detailerModel,
-              prompt: this.detailerPrompt || undefined,
-              negativePrompt: this.detailerNegative || undefined,
-              confidence: this.detailerConfidence,
-              denoise: this.detailerDenoise,
-              maskBlur: this.detailerMaskBlur,
-            }
-          : undefined,
+        detailer: this.status?.detailerAvailable && this.detailerEnabled ? this.detailerParams() : undefined,
     };
+    if (src) {
+      // A run from a picture comes out the picture's shape, not the size controls'.
+      Object.assign(params, sourceSize(src.width, src.height));
+      params.initImage = await this.sourceDataURL(src);
+      if (src.mode === "faces") {
+        params.detailOnly = true;
+        params.count = 1;
+        params.detailer = this.detailerParams();
+      } else {
+        params.denoise = this.sourceDenoise;
+        if (src.mode === "inpaint" && this.sourceMask) {
+          params.mask = this.sourceMask;
+          params.maskBlur = 8;
+        }
+      }
+    }
     // Named, so the overlay can watch the picture form and the user can stop it.
     params.jobId = newJobId();
     this.startProgressWatch(params.jobId, params.count ?? 1);
@@ -4202,6 +4269,7 @@ export class OppaiImageGen extends LitElement {
             .filter(Boolean),
           outfit: this.outfitOn ? capturedOutfitText : "",
           controlImage: this.cutout?.name,
+          startedFrom: src ? { name: src.name, mode: src.mode === "inpaint" && !params.mask ? "img2img" : src.mode } : undefined,
           seconds,
         }),
       }));
@@ -4304,6 +4372,125 @@ export class OppaiImageGen extends LitElement {
       // keystroke: the output history is the part of the draft it would hurt to lose.
       this.persistDraft();
     }
+  }
+
+  // ── starting from a picture ───────────────────────────────────────────────
+  //
+  // Image to image, paint to fix and the face pass all start from a picture rather
+  // than from noise. The picture comes from the canvas, the gallery or this computer;
+  // the bytes go to the generator with the run (initImage), the painted mask with it.
+
+  /** Makes a picture the one the next run starts from. A face pass runs at once. */
+  private async usePicture(url: string, name: string, mode: UsePictureMode, objectURL = false) {
+    let img: HTMLImageElement;
+    try {
+      img = await loadImage(url);
+    } catch (e) {
+      this.showToast((e as Error).message);
+      return;
+    }
+    const pic: StartPicture = { url, name, width: img.naturalWidth, height: img.naturalHeight, mode, objectURL };
+    if (mode === "faces") {
+      void this.fixFaces(pic);
+      return;
+    }
+    this.setSource(pic);
+    if (mode === "inpaint") this.paintOpen = true;
+  }
+
+  private setSource(pic: StartPicture | null) {
+    if (this.source?.objectURL && this.source.url !== pic?.url) URL.revokeObjectURL(this.source.url);
+    this.source = pic;
+    this.sourceStrokes = [];
+    this.sourceMask = "";
+    this.sourceData = "";
+    this.paintOpen = false;
+  }
+
+  private async sourceDataURL(pic: StartPicture): Promise<string> {
+    const current = pic.url === this.source?.url;
+    if (current && this.sourceData) return this.sourceData;
+    const res = await fetch(pic.url, { credentials: "same-origin" });
+    if (!res.ok) throw new Error("Couldn't read the picture to start from — a result on the canvas expires after a while; pick it again.");
+    const data = await blobToDataURL(await res.blob());
+    if (current) this.sourceData = data;
+    return data;
+  }
+
+  private onSourceFile(e: Event) {
+    const input = e.target as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = "";
+    if (file) void this.usePicture(URL.createObjectURL(file), file.name, "img2img", true);
+  }
+
+  private onPainted(r: PaintResult) {
+    this.sourceStrokes = r.strokes;
+    this.sourceMask = r.mask;
+    this.sourceDenoise = r.denoise;
+    if (this.source) this.source = { ...this.source, mode: "inpaint" };
+    this.paintOpen = false;
+    if (r.generate) void this.generate();
+  }
+
+  /** The painter shut without a mask: what is left is the whole picture to start from. */
+  private closePainter() {
+    this.paintOpen = false;
+    if (this.source && !this.sourceMask) this.source = { ...this.source, mode: "img2img" };
+  }
+
+  /** Redoes a picture's faces with the detailer and nothing else (A1111 + ADetailer). */
+  private async fixFaces(pic: StartPicture) {
+    if (this.generating) return;
+    this.generating = true;
+    this.error = "";
+    try {
+      await this.generateOne(false, { ...pic, mode: "faces" });
+    } catch (e) {
+      if (/cancelled/i.test((e as Error).message)) this.showToast("Generation cancelled.");
+      else this.error = (e as Error).message;
+    } finally {
+      this.generating = false;
+      this.persistDraft();
+    }
+  }
+
+  /** The strip over the prompt while a run starts from a picture. */
+  private renderSourceBar() {
+    const src = this.source;
+    if (!src) return nothing;
+    const a1111 = this.status?.backend !== "invokeai";
+    const painted = src.mode === "inpaint" && !!this.sourceMask;
+    const size = sourceSize(src.width, src.height);
+    return html`<div class="source-bar">
+      <img src=${src.url} alt="" />
+      <div class="source-copy">
+        <span>${painted ? "Repainting the painted part of" : "Starting from"} <strong>${src.name}</strong> · ${size.width}×${size.height}</span>
+        <label class="source-strength" title=${painted ? "How far the painted part may change" : "Low keeps the picture; high lets the prompt take over"}>
+          Change
+          <input type="range" min="0.05" max="1" step="0.05" .value=${String(this.sourceDenoise)}
+            @input=${(e: Event) => (this.sourceDenoise = Number((e.target as HTMLInputElement).value))} />
+          <b>${Math.round(this.sourceDenoise * 100)}%</b>
+        </label>
+        <span class="source-hint">${painted
+          ? "The prompt says what goes in the painted part; the rest stays exactly as it is."
+          : "The prompt is applied to the whole picture."}</span>
+      </div>
+      <div class="source-acts">
+        ${a1111 ? html`<button class="chip" title="Paint over a part to redo only that" @click=${() => (this.paintOpen = true)}>
+          <span class="material-symbols-rounded" style="font-size:16px;">brush</span>${painted ? "Edit painting" : "Paint a part"}</button>` : nothing}
+        ${painted ? html`<button class="chip" title="Start from the whole picture again" @click=${() => {
+          this.sourceStrokes = [];
+          this.sourceMask = "";
+          this.source = { ...src, mode: "img2img" };
+        }}>Whole picture</button>` : nothing}
+        ${a1111 && this.status?.detailerAvailable ? html`<button class="chip" title="Redo its faces with ADetailer, and nothing else"
+          ?disabled=${this.generating} @click=${() => void this.fixFaces(src)}>
+          <span class="material-symbols-rounded" style="font-size:16px;">face_retouching_natural</span>Fix faces</button>` : nothing}
+        <button class="chip" title="Draw from noise again" @click=${() => this.setSource(null)}>
+          <span class="material-symbols-rounded" style="font-size:16px;">close</span>Remove</button>
+      </div>
+    </div>`;
   }
 
   /** Generates the selected wardrobe square and moves the selector only after the
@@ -4552,6 +4739,13 @@ export class OppaiImageGen extends LitElement {
           run: () => { if (shot.info) this.reuseGenInfo(shot.info); } },
         { label: "Export PNG for Civitai", icon: "download", disabled: !shot.info,
           run: () => void this.exportShot(shot) },
+        { label: "Start from this picture", icon: "add_photo_alternate",
+          run: () => void this.usePicture(this.previewURL(shot), `seed ${shot.seed}`, "img2img") },
+        ...(this.status?.backend !== "invokeai" ? [{ label: "Paint to fix", icon: "brush",
+          run: () => void this.usePicture(this.previewURL(shot), `seed ${shot.seed}`, "inpaint") }] : []),
+        ...(this.status?.backend !== "invokeai" && this.status?.detailerAvailable ? [{ label: "Fix faces", icon: "face_retouching_natural",
+          disabled: this.generating,
+          run: () => void this.usePicture(this.previewURL(shot), `seed ${shot.seed}`, "faces") }] : []),
         { label: "Use as a Libby background", icon: "wallpaper",
           run: () => void this.useAsBackground(shot) },
         { label: "Save as a pose…", icon: "accessibility_new",
@@ -5296,6 +5490,11 @@ export class OppaiImageGen extends LitElement {
           ${gallery
             ? html`<aside class="right create-gallery">
                 <oppai-invoke-gallery workspace backend=${gallery}
+                  .problem=${st.galleryProblem ?? ""}
+                  .canPaint=${!invoke}
+                  .canFixFaces=${!invoke && !!st.detailerAvailable}
+                  @recheck=${() => this.loadStatus()}
+                  @use-picture=${(e: CustomEvent<UsePicture>) => void this.usePicture(e.detail.url, e.detail.name, e.detail.mode)}
                   @boards-changed=${() => this.loadStatus()}
                   @board-changed=${(e: CustomEvent<{ board: string }>) => { if (invoke) this.board = e.detail.board; }}
                   @cut-out=${(e: CustomEvent<{ url: string; name: string }>) =>
@@ -5306,6 +5505,13 @@ export class OppaiImageGen extends LitElement {
             : nothing}
         </div>
       </div>
+      ${this.paintOpen && this.source
+        ? html`<oppai-paint-mask .src=${this.source.url} .name=${this.source.name}
+            .width=${this.source.width} .height=${this.source.height}
+            .strokes=${this.sourceStrokes} .denoise=${Math.max(0.2, this.sourceDenoise)}
+            @apply=${(e: CustomEvent<PaintResult>) => this.onPainted(e.detail)}
+            @close=${() => this.closePainter()}></oppai-paint-mask>`
+        : nothing}
       ${this.civitaiOpen
         ? html`<oppai-civitai backend=${this.status?.backend ?? "invokeai"} .canManage=${!!this.status?.manageModels}
             .manageNote=${manageModelsNote(this.status)}
@@ -6321,7 +6527,12 @@ export class OppaiImageGen extends LitElement {
                 @input=${(e: Event) => (this.detailerMaskBlur = clampNum((e.target as HTMLInputElement).value, 0, 64, 4))} />
             </div>
           ` : nothing}
-        ` : nothing}
+        ` : invoke ? nothing : html`<div class="full manage-note">
+          <span class="material-symbols-rounded">face_retouching_natural</span>
+          <span>The face and hand pass (ADetailer) shows up here once the ADetailer extension is installed in
+            Automatic1111 — Extensions → Available → ADetailer, then restart it. It also lets a finished picture's
+            faces be redone on their own.</span>
+        </div>`}
       </div>
     `;
     return this.section("settings", "Model settings", `${this.steps} steps`, body);
@@ -7274,6 +7485,7 @@ export class OppaiImageGen extends LitElement {
             Generate, then Save to keep it beside the original, or right-click a result to replace it.</span>
           <button class="chip" @click=${() => (this.editing = null)}>Done</button>
         </div>` : nothing}
+        ${this.renderSourceBar()}
 
         <div class="composer-fields">
           <div class="prompt-field positive">
@@ -7322,6 +7534,11 @@ export class OppaiImageGen extends LitElement {
         </div>` : nothing}
 
         <div class="composer-bar">
+          <button class="mic" title="Start from a picture on this computer" @click=${() => this.sourceFile?.click()}>
+            <span class="material-symbols-rounded">add_photo_alternate</span>
+          </button>
+          <input class="source-file" type="file" accept="image/png,image/jpeg,image/webp" hidden
+            @change=${(e: Event) => this.onSourceFile(e)} />
           ${this.speechSupported
             ? html`<button
                 class="mic ${this.listening ? "live" : ""}"
@@ -7337,7 +7554,7 @@ export class OppaiImageGen extends LitElement {
                 ${[1, 2, 3, 4].map((n) => html`<button class=${outputCount === n ? "on" : ""} ?disabled=${this.outfitOn}
                   aria-pressed=${outputCount === n ? "true" : "false"} @click=${() => (this.count = n)}>${n}</button>`)}
               </div>
-              <span class="prompt-summary">${outputCount} picture${outputCount === 1 ? "" : "s"} · ${this.width}×${this.height}</span>`}
+              <span class="prompt-summary">${outputCount} picture${outputCount === 1 ? "" : "s"} · ${this.sizeLabel()}</span>`}
           ${this.generating
             ? html`<button class="generate cancel" type="button" ?disabled=${this.progress?.cancelled} title="Stop this generation" @click=${() => void this.cancelGeneration()}>
                 <span class="material-symbols-rounded" style="font-size:19px;">close</span>
@@ -7345,11 +7562,18 @@ export class OppaiImageGen extends LitElement {
               </button>`
             : html`<button class="generate" title="Generate (Ctrl+Enter)" ?disabled=${!this.assemblePrompts().prompt.trim()} @click=${() => this.generate()}>
                 <span class="material-symbols-rounded" style="font-size:20px;">auto_awesome</span>
-                ${this.status?.backend === "invokeai" ? "Invoke" : "Generate"}
+                ${this.source?.mode === "inpaint" && this.sourceMask ? "Repaint" : this.status?.backend === "invokeai" ? "Invoke" : "Generate"}
               </button>`}
         </div>
       </div>
     `;
+  }
+
+  /** The size the next run comes out at: the source picture's, when there is one. */
+  private sizeLabel(): string {
+    if (!this.source) return `${this.width}×${this.height}`;
+    const size = sourceSize(this.source.width, this.source.height);
+    return `${size.width}×${size.height}, as the picture`;
   }
 
   /** The trigger phrases of the LoRAs that are switched on. */
@@ -7972,6 +8196,14 @@ export class OppaiImageGen extends LitElement {
                   title="Use as this model's cover" @click=${() => this.useAsModelThumb(shot)}>
                   <span class="material-symbols-rounded" style="font-size:16px;">photo_camera</span>
                 </button>` : nothing}
+                ${shot.outfitSlot ? nothing : html`<button class="act" title="Start the next picture from this one"
+                  @click=${() => void this.usePicture(this.previewURL(shot), `seed ${shot.seed}`, "img2img")}>
+                  <span class="material-symbols-rounded" style="font-size:16px;">add_photo_alternate</span>
+                </button>`}
+                ${shot.outfitSlot || this.status?.backend === "invokeai" ? nothing : html`<button class="act" title="Paint over a part to redo it"
+                  @click=${() => void this.usePicture(this.previewURL(shot), `seed ${shot.seed}`, "inpaint")}>
+                  <span class="material-symbols-rounded" style="font-size:16px;">brush</span>
+                </button>`}
                 <button class="act" title="Copy this image's generation data"
                   @click=${() => (this.infoFor = this.infoFor === shot.id ? null : shot.id)}>
                   <span class="material-symbols-rounded" style="font-size:16px;">content_copy</span>

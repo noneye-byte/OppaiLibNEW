@@ -8,6 +8,7 @@ import {
   type GenLora,
   type GenModel,
   type TrainerHealth,
+  type PlayDown,
   type Training,
   type TrainPreview,
   type TrainPreviewItem,
@@ -18,8 +19,8 @@ import {
 } from "../api.js";
 import { toggleTag, trainingActive, trainingFraction, trainingLine, triggerFrom } from "../train-progress.js";
 import {
-  EFFORTS, PRESETS, captionOf, datasetAdvice, epochsFor, estimateSteps, minSideFor, presetById, suggestLeaveOut, tagKey,
-  wantsLowVram, type Effort, type PresetId,
+  EFFORTS, KEEP_STEPS, PRESETS, captionOf, datasetAdvice, epochsFor, estimateSteps, isPlayedDown, minSideFor, playDownNames,
+  presetById, setKeep, shareLine, suggestLeaveOut, tagKey, togglePlayDown, wantsLowVram, type Effort, type PresetId,
 } from "../lora-presets.js";
 import { loraStyles } from "./lora-styles.js";
 import "./lora-gather.js";
@@ -113,6 +114,8 @@ export class OppaiLoraTrain extends LitElement {
   @state() private captions: "tags" | "trigger" = "tags";
   @state() private leaveOut: string[] = [];
   @state() private leaveOutTouched = false;
+  /** Tags the pictures have more of than the LoRA should; see lora-presets.ts. */
+  @state() private playDown: PlayDown[] = [];
   @state() private suggested: string[] = [];
   @state() private preview: TrainPreview | null = null;
   @state() private previewing = false;
@@ -337,6 +340,10 @@ export class OppaiLoraTrain extends LitElement {
       .editor .side .head b { margin-right: auto; font-size: 14px; }
       .editor .chip .x { border: none; background: none; color: inherit; padding: 0; cursor: pointer; display: inline-flex; }
       .editor form { display: flex; gap: 8px; }
+      .playdown { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--oppai-border); }
+      .playdown-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+      .playdown-head b { font-size: 14px; min-width: 80px; }
+      .playdown .note { margin-top: 6px; }
       .editor form input { flex: 1; }
     `,
   ];
@@ -451,6 +458,7 @@ export class OppaiLoraTrain extends LitElement {
     this.exclude = [];
     this.leaveOutTouched = false;
     this.leaveOut = [];
+    this.playDown = [];
     this.suggested = [];
     this.preview = null;
     this.tagNote = "";
@@ -473,7 +481,10 @@ export class OppaiLoraTrain extends LitElement {
     this.previewAbort = abort;
     this.previewing = true;
     try {
-      const p = await api.trainPreview({ source, trigger: this.trigger, captions: this.captions, leaveOut: this.leaveOut }, abort.signal);
+      const p = await api.trainPreview({
+        source, trigger: this.trigger, captions: this.captions, leaveOut: this.leaveOut,
+        playDown: this.playDown, repeats: this.repeats || undefined,
+      }, abort.signal);
       if (abort.signal.aborted) return;
       this.preview = p;
       this.error = "";
@@ -491,7 +502,8 @@ export class OppaiLoraTrain extends LitElement {
   private applySuggestions() {
     const p = this.preview;
     if (!p || !this.preset) return;
-    this.suggested = suggestLeaveOut(presetById(this.preset), p.commonTags, p.count);
+    // A tag being played down is not struck: struck, the trigger word takes it in.
+    this.suggested = suggestLeaveOut(presetById(this.preset), p.commonTags, p.count).filter((t) => !isPlayedDown(this.playDown, t));
     this.leaveOut = [...this.suggested];
   }
 
@@ -512,7 +524,7 @@ export class OppaiLoraTrain extends LitElement {
   }
 
   private caption(item: TrainPreviewItem): string {
-    return captionOf(this.trigger, item.tags.map((t) => t.name), this.leaveOut, this.captions);
+    return captionOf(this.trigger, item.tags.map((t) => t.name), this.leaveOut, this.captions, playDownNames(this.playDown));
   }
 
   private smallCount(): number {
@@ -673,6 +685,7 @@ export class OppaiLoraTrain extends LitElement {
       source,
       captions: this.captions,
       leaveOut: this.leaveOut,
+      playDown: this.playDown.length ? this.playDown : undefined,
       preset: this.preset || undefined,
       epochs: this.epochs || undefined,
       repeats: this.repeats || undefined,
@@ -733,6 +746,7 @@ export class OppaiLoraTrain extends LitElement {
     this.captions = r.captions ?? "tags";
     this.leaveOut = r.leaveOut ?? [];
     this.leaveOutTouched = true;
+    this.playDown = r.playDown ?? [];
     this.suggested = [];
     this.epochs = r.epochs ?? 10;
     this.repeats = r.repeats ?? 0;
@@ -846,7 +860,10 @@ export class OppaiLoraTrain extends LitElement {
     const subs: Record<Step, string> = {
       1: this.preset ? presetById(this.preset).title : "What it learns",
       2: p ? `${p.count} picture${p.count === 1 ? "" : "s"}` : "What it learns from",
-      3: this.captions === "trigger" ? "Trigger word only" : this.leaveOut.length ? `${this.leaveOut.length} struck` : "Captions",
+      3: [
+        this.captions === "trigger" ? "Trigger word only" : this.leaveOut.length ? `${this.leaveOut.length} struck` : "Captions",
+        this.playDown.length ? `${this.playDown.length} played down` : "",
+      ].filter(Boolean).join(" · "),
       4: "Checkpoint and length",
     };
     return html`
@@ -1134,11 +1151,12 @@ export class OppaiLoraTrain extends LitElement {
               : nothing}
             <div class="chips" style="margin-top:8px;">${p.commonTags.map((t) => {
               const out = this.leaveOut.some((x) => tagKey(x) === tagKey(t.name));
-              return html`<button class="chip ${out ? "out" : ""}" @click=${() => { this.leaveOut = toggleTag(this.leaveOut, t.name); this.leaveOutTouched = true; }}>
+              return html`<button class="chip ${out ? "out" : ""}" @click=${() => this.toggleLeaveOut(t.name)}>
                 ${t.name} <b>${t.count}</b></button>`;
             })}</div>
           </div>`
         : nothing}
+      ${p.commonTags.length ? this.renderPlayDown(p) : nothing}
       <div class="card">
         <h3><span class="material-symbols-rounded">edit_note</span> Every picture</h3>
         <p class="sub">Each caption as it will be written. Click a picture to fix its tags or drop it from the set.</p>
@@ -1151,6 +1169,61 @@ export class OppaiLoraTrain extends LitElement {
         })}</div>
       </div>
     `;
+  }
+
+  /**
+   * The tags to show less often: picked from what the set shares, each with how
+   * much of it to keep and what that comes to. The server says what share of
+   * training each one ends up with, so the line under it is the real number.
+   */
+  private renderPlayDown(p: TrainPreview) {
+    const offered = p.commonTags.filter((t) => t.count < p.count || isPlayedDown(this.playDown, t.name)).slice(0, 30);
+    return html`<div class="card">
+      <h3><span class="material-symbols-rounded">visibility_off</span> Show less often</h3>
+      <p class="sub">A tag on more of these pictures than you want in the LoRA — glasses, a hat, one background — ends up in everything it draws. Pick it here and it is played down, not removed: it stays in the captions, so it still comes when you prompt for it, and the pictures with it are trained less often than the ones without, so it comes less when you don't.</p>
+      <div class="chips">${offered.map((t) => {
+        const on = isPlayedDown(this.playDown, t.name);
+        return html`<button class="chip ${on ? "manual" : ""}" aria-pressed=${on ? "true" : "false"} @click=${() => this.togglePlayDown(t.name)}>
+          ${on ? html`<span class="material-symbols-rounded">visibility_off</span>` : nothing}${t.name} <b>${t.count}</b></button>`;
+      })}</div>
+      ${this.playDown.map((d) => html`<div class="playdown">
+        <div class="playdown-head">
+          <b>${d.tag}</b>
+          <div class="seg">${KEEP_STEPS.map((k) => html`<button class=${Math.abs(d.keep - k.keep) < 0.01 ? "on" : ""}
+            @click=${() => this.setPlayDown(setKeep(this.playDown, d.tag, k.keep))}>${k.label}</button>`)}</div>
+          <button class="btn small ghost" title="Stop playing this down" @click=${() => this.togglePlayDown(d.tag)}>
+            <span class="material-symbols-rounded">close</span></button>
+        </div>
+        <div class="note">${this.previewing && !p.playDown?.some((x) => tagKey(x.tag) === tagKey(d.tag))
+          ? "Working it out…"
+          : shareLine(p.playDown?.find((x) => tagKey(x.tag) === tagKey(d.tag)), p.count)}</div>
+      </div>`)}
+    </div>`;
+  }
+
+  private toggleLeaveOut(tag: string) {
+    this.leaveOut = toggleTag(this.leaveOut, tag);
+    this.leaveOutTouched = true;
+    if (isPlayedDown(this.playDown, tag) && this.leaveOut.some((x) => tagKey(x) === tagKey(tag))) {
+      this.setPlayDown(togglePlayDown(this.playDown, tag));
+    }
+  }
+
+  private togglePlayDown(tag: string) {
+    const next = togglePlayDown(this.playDown, tag);
+    if (isPlayedDown(next, tag) && this.leaveOut.some((x) => tagKey(x) === tagKey(tag))) {
+      // Struck, the trigger word would take it in — the opposite of playing it down.
+      this.leaveOut = this.leaveOut.filter((x) => tagKey(x) !== tagKey(tag));
+      this.leaveOutTouched = true;
+    }
+    this.setPlayDown(next);
+  }
+
+  private setPlayDown(next: PlayDown[]) {
+    this.playDown = next;
+    // The share each one comes to is the server's arithmetic; ask again once the
+    // clicking stops.
+    this.schedulePreview(350);
   }
 
   private renderEditor() {

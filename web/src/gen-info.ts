@@ -62,6 +62,11 @@ export interface GenInfo {
   outfit?: string;
   /** A control input: the cutout reference image in play, by name. */
   controlImage?: string;
+  /** The picture the run started from instead of noise, by name, and how: from the
+      whole of it, repainting a painted area, or redoing only its faces. */
+  startedFrom?: { name: string; mode: "img2img" | "inpaint" | "faces" };
+  /** How far an image-to-image run was let move from its picture (0–1). */
+  denoise?: number;
   /** The face/detail refiner pass, when enabled. */
   refiner?: {
     model: string;
@@ -96,6 +101,7 @@ export function buildGenInfo(
     poses?: string[];
     outfit?: string;
     controlImage?: string;
+    startedFrom?: GenInfo["startedFrom"];
     seconds?: number;
   },
 ): GenInfo {
@@ -129,6 +135,8 @@ export function buildGenInfo(
     poses: extra.poses?.length ? extra.poses : undefined,
     outfit: extra.outfit || undefined,
     controlImage: extra.controlImage || undefined,
+    startedFrom: params.initImage ? extra.startedFrom : undefined,
+    denoise: params.initImage && !params.detailOnly ? params.denoise : undefined,
     refiner:
       params.detailer?.enabled
         ? {
@@ -204,6 +212,8 @@ export function toInfotext(info: GenInfo): string {
   if (info.triggers.length) kv.push(`Trigger phrases: ${info.triggers.join(" ")}`);
   if (info.characters.length) kv.push(`Characters: ${info.characters.join(", ")}`);
   if (info.controlImage) kv.push(`Control image: ${info.controlImage}`);
+  if (info.denoise !== undefined) kv.push(`Denoising strength: ${info.denoise}`);
+  if (info.startedFrom) kv.push(`Started from: ${info.startedFrom.name} (${info.startedFrom.mode})`);
   if (info.board) kv.push(`Board: ${info.board}`);
   kv.push(`Backend: ${info.backend}`);
   if (info.seconds !== undefined) kv.push(`Generation time: ${info.seconds.toFixed(1)}s`);

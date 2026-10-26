@@ -112,6 +112,7 @@ func (s *Server) a1111Checks(ctx context.Context, base string, add func(genCheck
 
 	dir := s.imagegen.A1111ModelsDir()
 	add(folderCheck(dir))
+	add(s.outputsCheck())
 	if dir.Dir == "" {
 		return
 	}
@@ -232,3 +233,16 @@ func civitaiDownloadCheck(ctx context.Context, source, key string) genCheck {
 // civitaiDownloadHTTP has no overall timeout — the request's context bounds it, and
 // the body is never read.
 var civitaiDownloadHTTP = &http.Client{}
+
+// outputsCheck is the gallery's folder: A1111's outputs, which the studio reads
+// because A1111 has no API that lists what it made.
+func (s *Server) outputsCheck() genCheck {
+	c := genCheck{ID: "outputs", Label: "Outputs folder (gallery)"}
+	if dir := s.imagegen.A1111OutputsDir(); dir != "" {
+		c.OK = true
+		c.Detail = fmt.Sprintf("%s is the gallery, and pictures made in Create are saved into it.", dir)
+		return c
+	}
+	c.Detail = s.imagegen.A1111OutputsProblem() + "."
+	return c
+}
