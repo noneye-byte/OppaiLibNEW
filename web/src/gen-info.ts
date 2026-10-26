@@ -135,8 +135,8 @@ export function buildGenInfo(
     poses: extra.poses?.length ? extra.poses : undefined,
     outfit: extra.outfit || undefined,
     controlImage: extra.controlImage || undefined,
-    startedFrom: params.initImage ? extra.startedFrom : undefined,
-    denoise: params.initImage && !params.detailOnly ? params.denoise : undefined,
+    startedFrom: params.initImage || params.initGallery ? extra.startedFrom : undefined,
+    denoise: (params.initImage || params.initGallery) && !params.detailOnly ? params.denoise : undefined,
     refiner:
       params.detailer?.enabled
         ? {

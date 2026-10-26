@@ -433,21 +433,13 @@ their usual names in any case — `Stable-diffusion` or `checkpoints`, `Lora` or
 is missing, holds neither `Stable-diffusion` nor `Lora`, or is mounted read-only is
 not used, and the status says which. InvokeAI ignores it.
 
-`imageGenOutputsDir` is Automatic1111's `outputs` folder, which is its gallery — A1111
-has no API that lists what it made. Blank means `/a1111-outputs` when mounted, else
-`outputs` beside the models folder, else any mounted folder A1111 has written into
-(one holding `txt2img-images` and the like, or a webui folder with such an `outputs`);
-the webui's own folder given here is taken to mean its `outputs`. Deleting from the
-gallery deletes the file. While the folder is visible, pictures made in Create are
-saved into it (`save_images`), as A1111's own UI saves them; Libby's never are.
-
 ## Image generation
 
 | Method | Path | Notes |
 |--------|------|-------|
-| GET | `/api/imagegen/status` | → `{enabled, reachable, backend, models, loras, vaes, templates, boards?, detailerAvailable, civitai, manageModels, modelsDirSet?, modelsDir?, modelsDirProblem?}`. `backend` is `invokeai` or `a1111`. `manageModels` says models can be installed, edited, re-covered and deleted from here — always on InvokeAI, on A1111 once `imageGenModelsDir` (or the `/a1111-models` mount) is a writable models folder; A1111 only: `modelsDirSet` tells "not set" from "set but wrong", `modelsDir` is the folder in use and `modelsDirProblem` says what is wrong with the one that is set. Models and LoRAs carry `key`: InvokeAI's record key, or an A1111 file's path under its models folder (`Lora/ink.safetensors`), which is what the Civitai records are kept by. An A1111 LoRA's `triggerPhrases` and `weight` come from its sidecar, else from its Civitai link. `templates` are InvokeAI's style presets or A1111's saved styles. `gallery` is `invokeai` or `a1111` — on A1111 always, with `galleryProblem` saying why while its outputs folder can't be read — and `gallerySorts` the orders a gallery listing takes |
-| POST | `/api/imagegen/check` | **admin only.** The Settings → Image generation Test: tries each link an install depends on and returns `{checks:[{id, label, ok, skipped?, detail}]}` — `generator`, and on A1111 `rescan` (POSTs `/sdapi/v1/refresh-loras`), `folder` (writes and removes a probe file), `match` (whether the models A1111 lists are at the same paths in the mounted folder, i.e. it is the folder A1111 reads); then `civitai`, `key` (`/me`) and `download`, which starts a real download with the key and reads only the headers; and on A1111 `outputs`, the gallery's folder |
-| POST | `/api/imagegen/generate` | `{prompt, negativePrompt?, checkpoint?, vae?, sampler?, steps?, width?, height?, cfgScale?, clipSkip?, seed?, count?, loras?, detailer?:{enabled, model?, prompt?, negativePrompt?, confidence?, denoise?, maskBlur?}, jobId?, initImage?, denoise?, mask?, maskBlur?, detailOnly?}` → `{images:[{id, seed}], prompt, positive, negative, rolled}`; each id streams from `/api/imagegen/preview/{id}`. `initImage` (a data URL) starts from a picture instead of noise, moving `denoise` (0–1) away from it; `mask` (a PNG data URL, with `initImage`) repaints only its white, drawn at the full size and pasted back ("only masked", original fill); `detailOnly` (with `initImage` and the detailer on) redoes the picture's faces with ADetailer and nothing else. `mask` and `detailOnly` are Automatic1111's: InvokeAI answers 409. The body may be up to 64 MB |
+| GET | `/api/imagegen/status` | → `{enabled, reachable, backend, models, loras, vaes, templates, boards?, detailerAvailable, civitai, manageModels, modelsDirSet?, modelsDir?, modelsDirProblem?}`. `backend` is `invokeai` or `a1111`. `manageModels` says models can be installed, edited, re-covered and deleted from here — always on InvokeAI, on A1111 once `imageGenModelsDir` (or the `/a1111-models` mount) is a writable models folder; A1111 only: `modelsDirSet` tells "not set" from "set but wrong", `modelsDir` is the folder in use and `modelsDirProblem` says what is wrong with the one that is set. Models and LoRAs carry `key`: InvokeAI's record key, or an A1111 file's path under its models folder (`Lora/ink.safetensors`), which is what the Civitai records are kept by. An A1111 LoRA's `triggerPhrases` and `weight` come from its sidecar, else from its Civitai link. `templates` are InvokeAI's style presets or A1111's saved styles. `gallery` is `invokeai`, or `oppailib` on A1111 (the server's own gallery, below), and `gallerySorts` the orders a gallery listing takes |
+| POST | `/api/imagegen/check` | **admin only.** The Settings → Image generation Test: tries each link an install depends on and returns `{checks:[{id, label, ok, skipped?, detail}]}` — `generator`, and on A1111 `rescan` (POSTs `/sdapi/v1/refresh-loras`), `folder` (writes and removes a probe file), `match` (whether the models A1111 lists are at the same paths in the mounted folder, i.e. it is the folder A1111 reads); then `civitai`, `key` (`/me`) and `download`, which starts a real download with the key and reads only the headers |
+| POST | `/api/imagegen/generate` | `{prompt, negativePrompt?, checkpoint?, vae?, sampler?, steps?, width?, height?, cfgScale?, clipSkip?, seed?, count?, loras?, detailer?:{enabled, model?, prompt?, negativePrompt?, confidence?, denoise?, maskBlur?}, jobId?, initImage?, initGallery?, denoise?, mask?, maskBlur?, detailOnly?, noGallery?}` → `{images:[{id, seed, gallery?}], prompt, positive, negative, rolled}`; each id streams from `/api/imagegen/preview/{id}`, and on A1111 each picture is also kept in the gallery under `gallery` unless `noGallery` (the LoRA comparison's sheets). A run with a `jobId` is not tied to its request: if a proxy drops the call, the run still finishes, and `GET /api/imagegen/progress/{jobId}` answers with `result` (this same body) or `error` once `done`, for three minutes. `initGallery` is a gallery picture's name, read on the server in place of `initImage`. `initImage` (a data URL) starts from a picture instead of noise, moving `denoise` (0–1) away from it; `mask` (a PNG data URL, with `initImage`) repaints only its white, drawn at the full size and pasted back ("only masked", original fill); `detailOnly` (with `initImage` and the detailer on) redoes the picture's faces with ADetailer and nothing else. `mask` and `detailOnly` are Automatic1111's: InvokeAI answers 409. The body may be up to 64 MB |
 | GET | `/api/imagegen/tags?q=&limit=` | prompt completion for the tag being typed → `{items:[{tag, category, count, alias?}], suggestions, correction}`. The vocabulary is Danbooru's — every tag on at least 100 posts, with post counts and aliases — plus this library's own tags (`category` 100). Ranked: the tag itself, tags starting with `q`, an alias that does (`alias` says which), a tag a later word of which does, then near misses for a typo. `suggestions` is `items` as plain names and `correction` a "did you mean", the shape older apps read. `limit` defaults to 12, at most 50 |
 
 ## LoRA training
@@ -484,21 +476,25 @@ and the generator gets its checkpoint back. A run is `preparing` (sending), `que
 | PATCH | `/api/imagegen/train-sets/{id}/pictures/{pic}` | `{addTags?, removeTags?}` → `{id, tags}`. Typed tags are lower-cased and replace the tagger's same tag |
 | DELETE | `/api/imagegen/train-sets/{id}/pictures/{pic}` | takes it out of the set → 204 |
 
-### The generator's gallery
+### The studio's gallery
 
-InvokeAI's own gallery, or on Automatic1111 the outputs folder (each folder inside it a
-board; `none` is every picture, and an image's name is its path, base64url'd).
+InvokeAI's own gallery, or on Automatic1111 the one the server keeps of every picture
+made in Create (`api/gen_gallery.go`, tables `gen_folders`/`gen_images`), apart from the
+library. There the boards are `none` (Unsorted, where a run lands unless a folder is
+open), `all` (every picture) and each folder by id, and an image's name is its row id.
 
 | Method | Path | Notes |
 |--------|------|-------|
 | GET | `/api/imagegen/gallery/boards` | → `{boards:[{id, name, count}]}` |
-| POST, DELETE | `/api/imagegen/gallery/boards[/{id}]` | make or delete an InvokeAI board; refused on A1111 |
-| GET | `/api/imagegen/gallery/images?board=&offset=&limit=&sort=` | → `{items:[{name, width?, height?, created?, label?, size?}], total}`. `sort` is `newest` (default), `oldest`, `name` or `largest`; InvokeAI takes the first two |
-| GET | `/api/imagegen/gallery/image/{name}[/thumb]` | the picture, or its thumbnail (made once and kept, on A1111) |
-| GET | `/api/imagegen/gallery/image/{name}/metadata` | the generation settings: InvokeAI's record, or the PNG's A1111 `parameters` text read into the same shape |
-| DELETE | `/api/imagegen/gallery/image/{name}`, POST `/api/imagegen/gallery/delete` `{names}` | deletes from the generator (on A1111 the file and its `.txt`) |
-| POST | `/api/imagegen/gallery/board` `{board, names}` | files pictures on an InvokeAI board |
-| POST | `/api/imagegen/gallery/save` `{name, title?, tags?}` | copies one into the library |
+| POST, PATCH, DELETE | `/api/imagegen/gallery/boards[/{id}]` | make (`{name}`; on A1111 a name already there is that folder), rename (A1111 only) or delete a board or folder; a deleted folder's pictures go back to Unsorted |
+| GET | `/api/imagegen/gallery/images?board=&offset=&limit=&sort=` | → `{items:[{name, width?, height?, created?, label?, size?}], total}`. `sort` is `newest` (default), `oldest` or (A1111) `largest` |
+| GET | `/api/imagegen/gallery/image/{name}[/thumb]` | the picture, or its thumbnail |
+| GET | `/api/imagegen/gallery/image/{name}/metadata` | the generation settings: InvokeAI's record, or on A1111 the record kept with the picture (the studio's GenInfo shape, a superset of InvokeAI's) |
+| DELETE | `/api/imagegen/gallery/image/{name}`, POST `/api/imagegen/gallery/delete` `{names}` | deletes from the gallery |
+| POST | `/api/imagegen/gallery/board` `{board, names}` | files pictures on a board, or into a folder (`none` is Unsorted) |
+| POST | `/api/imagegen/gallery/save` `{name \| names, title?, tags?}` | InvokeAI: copies one into the library. A1111: moves them — each becomes a library item tagged `ai-generated`, with its record, and leaves the gallery → `{id, ids, moved}`. `POST /api/imagegen/save` of a preview that was kept moves its gallery copy the same way |
+
+`PUT /api/imagegen/lora-thumb` and `/model-thumb` take `{model, previewId}` or `{model, galleryName}`: a picture from the gallery can be a LoRA's or a model's cover long after its preview expired.
 
 The trainer's own API (`trainer/server.py`) is `GET /health`, `GET\|PUT /bases?key=&size=`
 (is a checkpoint here / upload one), `POST /jobs` (settings), `PUT /jobs/{id}/files/{name}`

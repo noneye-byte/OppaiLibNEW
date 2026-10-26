@@ -2346,25 +2346,6 @@ export class OppaiSettings extends LitElement {
                 </div>
               </div>
 
-              <div class="field stack">
-                <div class="field-text">
-                  <div class="field-label">Automatic1111 outputs folder</div>
-                  <div class="field-help">
-                    Automatic1111 has no gallery API: what it made is the pictures it saved in its
-                    <code>outputs</code> folder, so Create's gallery reads that folder. Map it into this
-                    container at <code>/a1111-outputs</code>, or map A1111's whole folder so
-                    <code>outputs</code> sits beside <code>models</code>, and it is found by itself; give a
-                    path here only if you mapped it somewhere else. Deleting from the gallery deletes the
-                    file, so the mapping must be read/write for that.
-                  </div>
-                </div>
-                <div class="field-control">
-                  <input type="text" autocomplete="off" placeholder="/a1111-outputs"
-                    .value=${s.imageGenOutputsDir ?? ""} ?disabled=${!this.canEdit}
-                    @change=${(e: Event) => this.edit({ imageGenOutputsDir: (e.target as HTMLInputElement).value })} />
-                </div>
-              </div>
-
               ${this.renderGenCheck()}
             `}
       </section>

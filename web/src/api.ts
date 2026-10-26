@@ -498,8 +498,6 @@ export interface Settings {
   imageGenUrl: string;
   /** Automatic1111's models folder as the server sees it; blank manages nothing. */
   imageGenModelsDir: string;
-  /** Automatic1111's outputs folder, its gallery; blank looks beside the models folder. */
-  imageGenOutputsDir: string;
   imageGenEnabled: boolean;
   /** The OppaiLib trainer LoRAs are trained on; blank hides training. The token is
    *  write-only like the other secrets. */
@@ -1547,12 +1545,11 @@ export interface ImageGenStatus {
   vaes?: GenVae[];
   templates?: GenTemplate[];
   boards?: GalleryBoard[];
-  /** Whose gallery the studio can show: InvokeAI's own, A1111's outputs folder
-      (once the server can see it), or none. */
-  gallery?: "invokeai" | "a1111";
-  /** A1111 only: why its outputs folder, the gallery, can't be read — set, the
-      panel says how to map it instead of listing pictures. */
-  galleryProblem?: string;
+  /** Whose gallery the studio shows: InvokeAI's own, or on A1111 the one OppaiLib
+      keeps of every picture made in Create. */
+  gallery?: "invokeai" | "oppailib";
+  /** The orders the gallery can be listed in. */
+  gallerySorts?: GallerySort[];
   detailerAvailable?: boolean;
   /** The Civitai browser works against this generator (it does against both). */
   civitai?: boolean;
@@ -1601,11 +1598,28 @@ export interface GenProgress {
   seq: number;
   done: boolean;
   cancelled: boolean;
+  /** Once done: what the generate call answered, or why it failed. A studio whose
+      call came back as a proxy's error page reads its pictures from here. */
+  result?: GenerateResult;
+  error?: string;
 }
 
 export interface GenPreview {
   id: string;
   seed: number;
+  /** Its name in the studio's own gallery (A1111), when it was kept there. */
+  gallery?: string;
+}
+
+/** A finished run, as the generate call answers it. */
+export interface GenerateResult {
+  images: GenPreview[];
+  prompt: string;
+  /** The prompts as they went to the generator, after wildcards were rolled.
+      Differ from what was sent only when `rolled` is set. */
+  positive?: string;
+  negative?: string;
+  rolled?: boolean;
 }
 
 /** One txt2img job. Only `prompt` is required; the server clamps the rest to sane ranges. */
@@ -1649,6 +1663,11 @@ export interface GenerateParams {
   maskBlur?: number;
   /** With initImage and the detailer on: redo its faces and nothing else (A1111). */
   detailOnly?: boolean;
+  /** Start from a gallery picture by name, in place of initImage: the server reads
+      it, so the picture is not uploaded back to where it already is. */
+  initGallery?: string;
+  /** Leave the run out of the studio's gallery (the LoRA comparison's sheets). */
+  noGallery?: boolean;
 }
 
 /** What the trainer says about itself. */
@@ -1825,8 +1844,8 @@ export interface GenModelMeta {
   defaults?: GenModelDefaults;
 }
 
-/** One gallery board: InvokeAI's, or a folder of A1111's outputs. Board id "none"
-    is InvokeAI's uncategorized pile, or every A1111 picture. */
+/** One gallery board: InvokeAI's, or a folder of the studio's own gallery. Board id
+    "none" is the uncategorized pile, and "all" (own gallery only) every picture. */
 export interface GalleryBoard {
   id: string;
   name: string;
@@ -1838,14 +1857,14 @@ export interface GalleryImage {
   width?: number;
   height?: number;
   created?: string;
-  /** How to show an A1111 picture, whose name is an encoded path. */
+  /** How to show a picture whose name is only an id (the studio's own gallery). */
   label?: string;
-  /** The file's bytes (A1111 only). */
+  /** The file's bytes (the studio's own gallery only). */
   size?: number;
 }
 
 /** The orders a gallery page can come back in. InvokeAI sorts by date alone. */
-export type GallerySort = "newest" | "oldest" | "name" | "largest";
+export type GallerySort = "newest" | "oldest" | "largest";
 
 export interface GalleryPage {
   items: GalleryImage[];
@@ -2431,6 +2450,22 @@ async function request<T>(path: string, opts: RequestInit = {}, timeoutMs = 0): 
   return p;
 }
 
+/**
+ * Words for a failed reply that carries none of the server's own. Every error this
+ * server sends is JSON with a message, so one without is somebody else's — a reverse
+ * proxy that gave up waiting, or refused a body too large for it — and over HTTP/2
+ * there is no status text either. It used to read "Something went wrong.", which
+ * named neither the status nor whose answer it was.
+ */
+function replyWithoutMessage(status: number, statusText = ""): string {
+  const code = `${status}${statusText ? ` ${statusText}` : ""}`;
+  if (status === 413) return `The upload was too large for a proxy in front of OppaiLib (${code}).`;
+  if (status === 502 || status === 503 || status === 504 || status === 522 || status === 524) {
+    return `A proxy in front of OppaiLib gave up waiting for it (${code}).`;
+  }
+  return `The server answered ${code} with no message.`;
+}
+
 async function requestOnce<T>(path: string, opts: RequestInit = {}, timeoutMs = 0): Promise<T> {
   const headers = new Headers(opts.headers);
   const token = getToken();
@@ -2469,12 +2504,12 @@ async function requestOnce<T>(path: string, opts: RequestInit = {}, timeoutMs = 
       throw new Error("unauthorized");
     }
     if (!res.ok) {
-      let msg = res.statusText;
+      let msg = "";
       try {
         const body = await res.json();
         if (body?.error) msg = body.error;
       } catch { /* ignore */ }
-      throw new Error(msg);
+      throw new Error(msg || replyWithoutMessage(res.status, res.statusText));
     }
     if (res.status === 204) return undefined as T;
     return (await res.json()) as T;
@@ -2488,9 +2523,10 @@ async function requestOnce<T>(path: string, opts: RequestInit = {}, timeoutMs = 
     // The user navigated away; telling them their own navigation went wrong is
     // noise, and the old code reported every abort as a timeout.
     if (ctl.signal.aborted) throw new DOMException("cancelled", "AbortError");
-    // Likewise a generation the user stopped from the studio: the server answers
-    // "generation cancelled" and the studio says so itself.
-    if (path !== "/api/auth/login" && e instanceof Error && e.message !== "unauthorized" && e.message !== "generation cancelled") {
+    // Likewise a generation: the studio says how a run ended itself — stopped, or
+    // failed — and a call a proxy gave up on may still have pictures to collect
+    // from the job, which an error bubble here would have contradicted.
+    if (path !== "/api/auth/login" && path !== "/api/imagegen/generate" && e instanceof Error && e.message !== "unauthorized") {
       mascotSay(e.message || "Something went wrong.");
     }
     throw e;
@@ -3011,15 +3047,7 @@ export const api = {
 
   // Generation is slow (tens of seconds on CPU, longer for a batch); give it room.
   generate: (params: GenerateParams) =>
-    request<{
-      images: GenPreview[];
-      prompt: string;
-      /** The prompts as they went to the generator, after wildcards were rolled.
-          Differ from what was sent only when `rolled` is set. */
-      positive?: string;
-      negative?: string;
-      rolled?: boolean;
-    }>(
+    request<GenerateResult>(
       "/api/imagegen/generate",
       { method: "POST", body: JSON.stringify(params) },
       10 * 60_000,
@@ -3059,11 +3087,18 @@ export const api = {
 
   // Cover art is read from and written to InvokeAI's model manager.
   modelThumbURL: (model: string) => `/api/imagegen/model-thumb?model=${encodeURIComponent(model)}`,
-  setModelThumb: (body: { model: string; previewId: string }) =>
+  setModelThumb: (body: { model: string; previewId?: string; galleryName?: string }) =>
     request<{ status: string }>("/api/imagegen/model-thumb", {
       method: "PUT",
       body: JSON.stringify(body),
     }),
+  /** A LoRA's cover, from a just-made preview or a gallery picture. On A1111 this is
+      the preview file beside the LoRA, so it needs the models folder. */
+  setLoraThumb: (body: { model: string; previewId?: string; galleryName?: string }) =>
+    request<{ status: string }>("/api/imagegen/lora-thumb", {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }, 40_000),
 
   chatStatus: () => request<ChatStatus>("/api/chat/status", {}, 12_000),
   // Bounded, like every other chat call. This one is what the Chat screen blocks its
@@ -3212,13 +3247,20 @@ export const api = {
     }, 25_000),
 
   // ── InvokeAI gallery ───────────────────────────────────────────────────────
-  // The generator's own gallery (it keeps every finished image), browsed and
-  // pruned from here. Save copies one image into the library.
+  // The studio's gallery — InvokeAI's own, or on A1111 the one OppaiLib keeps —
+  // browsed and pruned from here. Save copies an InvokeAI image into the library and
+  // moves OppaiLib's out of the gallery into it.
 
   galleryBoards: () => request<{ boards: GalleryBoard[] }>("/api/imagegen/gallery/boards", {}, 20_000),
   createGalleryBoard: (name: string) =>
     request<GalleryBoard>("/api/imagegen/gallery/boards", {
       method: "POST",
+      body: JSON.stringify({ name }),
+    }, 20_000),
+  /** Renames a folder of the studio's own gallery (InvokeAI's boards are renamed there). */
+  renameGalleryBoard: (id: string, name: string) =>
+    request<GalleryBoard>(`/api/imagegen/gallery/boards/${encodeURIComponent(id)}`, {
+      method: "PATCH",
       body: JSON.stringify({ name }),
     }, 20_000),
   // Removes the board itself; its images survive, dropped back to Uncategorized.
@@ -3254,8 +3296,8 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ board, names }),
     }, 40_000),
-  saveGalleryImage: (body: { name: string; title?: string; tags?: string[] }) =>
-    request<{ id: number; existed: boolean }>("/api/imagegen/gallery/save", {
+  saveGalleryImage: (body: { name?: string; names?: string[]; title?: string; tags?: string[] }) =>
+    request<{ id: number; ids?: number[]; existed?: boolean; moved?: boolean }>("/api/imagegen/gallery/save", {
       method: "POST",
       body: JSON.stringify(body),
     }, 90_000),

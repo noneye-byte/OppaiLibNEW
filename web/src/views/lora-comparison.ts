@@ -2,7 +2,7 @@ import "@material/web/progress/circular-progress.js";
 import { LitElement, html, css, nothing, type PropertyValues } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { iconStyles } from "../theme.js";
-import { api, type GenLora, type GenModel, type Training } from "../api.js";
+import { api, mascotSay, type GenLora, type GenModel, type Training } from "../api.js";
 import { RESOLUTIONS, SCHEDULERS } from "../gen-options.js";
 import {
   MAX_SEEDS, comparePlan, parseWeights, planSize, promptsFrom, seedsFrom, sheetLayout,
@@ -74,6 +74,8 @@ export class OppaiLoraComparison extends LitElement {
   /** The cell open in the lightbox, by key. */
   @state() private open = "";
   @state() private saved = new Set<string>();
+  /** The cell whose picture was last made its LoRA's cover. */
+  @state() private covered = "";
   @state() private exporting = false;
 
   private jobId = "";
@@ -297,6 +299,9 @@ export class OppaiLoraComparison extends LitElement {
         seed: cell.seed,
         count: 1,
         loras: cell.lora ? [{ name: cell.lora.name, weight: cell.weight }] : [],
+        // A sheet is drawn to be looked at side by side, not kept: a dozen pictures a
+        // run would bury the studio's gallery.
+        noGallery: true,
       });
       const id = out.images[0]?.id;
       this.setResult(cell.key, id ? { state: "done", preview: id } : { state: "failed", error: "No picture came back" });
@@ -342,6 +347,20 @@ export class OppaiLoraComparison extends LitElement {
         tags: c.lora ? ["lora-comparison", c.lora.name] : ["lora-comparison"],
       });
       this.saved = new Set(this.saved).add(c.key);
+    } catch (e) {
+      this.error = (e as Error).message;
+    }
+  }
+
+  /** Makes a compared picture its LoRA's cover — the side-by-side is where the one
+      that shows it best is found. */
+  private async useAsCover(c: CompareCell) {
+    const r = this.results.get(c.key);
+    if (!c.lora || !r?.preview) return;
+    try {
+      await api.setLoraThumb({ model: c.lora.name, previewId: r.preview });
+      this.covered = c.key;
+      mascotSay(`Set as ${c.lora.name}'s cover.`, "success");
     } catch (e) {
       this.error = (e as Error).message;
     }
@@ -621,6 +640,11 @@ export class OppaiLoraComparison extends LitElement {
           <button class="btn tonal" ?disabled=${kept} @click=${() => this.keep(c)}>
             <span class="material-symbols-rounded">${kept ? "check" : "save"}</span> ${kept ? "In library" : "Save to library"}
           </button>
+          ${c.lora ? html`<button class="btn tonal" ?disabled=${this.covered === c.key} @click=${() => this.useAsCover(c)}
+            title=${`Make this ${c.lora.name}'s cover in the LoRA picker`}>
+            <span class="material-symbols-rounded">${this.covered === c.key ? "check" : "photo_library"}</span>
+            ${this.covered === c.key ? "Its cover" : "Use as cover"}
+          </button>` : nothing}
           <button class="btn" @click=${() => (this.open = "")}><span class="material-symbols-rounded">close</span> Close</button>
         </div>
       </figure>

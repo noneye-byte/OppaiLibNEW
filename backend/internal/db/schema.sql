@@ -447,6 +447,38 @@ CREATE TABLE IF NOT EXISTS train_pictures (
 CREATE INDEX IF NOT EXISTS idx_train_pictures_blob ON train_pictures(blob_path);
 CREATE INDEX IF NOT EXISTS idx_train_pictures_thumb ON train_pictures(thumb_path);
 
+-- The studio's gallery on Automatic1111: every picture made in Create, kept here
+-- rather than in the library. A1111 keeps nothing a client can browse — its outputs
+-- folder was tried as the gallery and needed a mapping most containers never had —
+-- and a library item per run buried what was worth keeping under every draft. So a
+-- run lands here, sorted into folders, and reaches the library only when moved
+-- there by hand, which deletes the row and leaves the shared blob to the media row.
+--
+-- Same store and the same rule as train_pictures: content-addressed blobs, so every
+-- delete goes through BlobInUse. info_enc is the generation record, sealed — it is
+-- the prompt, as free-text as a title. folder_id NULL is "Unsorted".
+CREATE TABLE IF NOT EXISTS gen_folders (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS gen_images (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    folder_id  INTEGER REFERENCES gen_folders(id) ON DELETE SET NULL,
+    sha256     TEXT NOT NULL,
+    size       INTEGER NOT NULL,
+    blob_path  TEXT NOT NULL,
+    thumb_path TEXT NOT NULL DEFAULT '',
+    width      INTEGER NOT NULL DEFAULT 0,
+    height     INTEGER NOT NULL DEFAULT 0,
+    info_enc   BLOB,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_gen_images_folder ON gen_images(folder_id, id);
+CREATE INDEX IF NOT EXISTS idx_gen_images_blob ON gen_images(blob_path);
+CREATE INDEX IF NOT EXISTS idx_gen_images_thumb ON gen_images(thumb_path);
+
 -- A model InvokeAI is downloading on our behalf, with what it should be told about
 -- itself once the file is in. InvokeAI's install job is the authority on progress;
 -- this row is only the promise to apply the catalogue's cover, description and

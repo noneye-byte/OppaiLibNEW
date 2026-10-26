@@ -442,8 +442,9 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit, to
         if (generating || prompt.isBlank()) return
         val (pos, neg) = assembledPrompts()
         // Only the newest run stays on screen. Earlier ones aren't lost — InvokeAI
-        // keeps every finished image in its gallery, which is what the Gallery tab
-        // browses. The run outlives this screen: see GenSession.
+        // keeps every finished image in its gallery, and on A1111 the server keeps
+        // them in its own, which is what the Gallery tab browses. The run outlives
+        // this screen: see GenSession.
         GenSession.generate(
             repo,
             GenerateRequest(
@@ -546,13 +547,14 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit, to
             }
 
             else -> Column(Modifier.padding(padding).fillMaxSize()) {
-                // Create first; the Gallery is InvokeAI's own and only it keeps one. The
-                // Civitai browser works against either backend now — an A1111 is linked
-                // by hash and, with its models folder set on the server, installed into.
+                // Create first; the Gallery is InvokeAI's own, or on A1111 the one the
+                // server keeps of everything made in Create. The Civitai browser works
+                // against either backend — an A1111 is linked by hash and, with its
+                // models folder set on the server, installed into.
                 val invoke = st.backend == "invokeai"
                 val tabNames = buildList {
                     add("Create")
-                    if (invoke) add("Gallery")
+                    add("Gallery")
                     if (invoke || st.civitai) add("Civitai")
                 }
                 if (tabNames.size > 1) {
@@ -569,6 +571,7 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit, to
                         board = board,
                         onBoardChange = { board = it },
                         onSaved = onSaved,
+                        own = !invoke,
                     )
                     "Civitai" -> CivitaiTab(
                         repo,
@@ -668,11 +671,16 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit, to
                                     if (pair.size == 1) Box(Modifier.weight(1f)) {}
                                 }
                             }
-                            if (shots.isNotEmpty() && invoke) {
+                            if (shots.isNotEmpty()) {
                                 item {
                                     Text(
-                                        "Only the latest run shows here; InvokeAI keeps every one in the Gallery tab. " +
-                                            "Save copies a picture into the library.",
+                                        if (invoke) {
+                                            "Only the latest run shows here; InvokeAI keeps every one in the Gallery tab. " +
+                                                "Save copies a picture into the library."
+                                        } else {
+                                            "Only the latest run shows here; every one is kept in the Gallery tab. " +
+                                                "Save moves a picture into the library."
+                                        },
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )

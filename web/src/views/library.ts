@@ -18,6 +18,7 @@ import {
 } from "../api.js";
 import { canShare, saveForCharacter, shareWithCharacter } from "../chat-share.js";
 import { attachLongPress } from "../long-press.js";
+import { isPickClick, pickClick } from "../pick-range.js";
 import { formatMoment, OPEN_MEDIA_EVENT } from "../chat-links.js";
 import { isExplicit, loadSafeMode, safeKeyAction, saveSafeMode } from "../safe-mode.js";
 import {
@@ -252,6 +253,8 @@ export class OppaiLibrary extends LitElement {
   @state() private dragActive = false;
   @state() private selectMode = false;
   @state() private selected = new Set<number>();
+  /** The tile a Shift-click range runs from; see pick-range.ts. */
+  private pickAnchor: number | null = null;
   @state() private busy = false;
   @state() private downloads: DownloadTask[] = downloadTasks();
   /** Remote tiles currently visible in Browse. They are separate from downloaded
@@ -2008,16 +2011,34 @@ export class OppaiLibrary extends LitElement {
   private toggleSelectMode = () => {
     this.selectMode = !this.selectMode;
     if (!this.selectMode) this.selected = new Set();
+    this.pickAnchor = null;
   };
   private exitSelect() {
     this.selectMode = false;
     this.selected = new Set();
+    this.pickAnchor = null;
   }
   private toggleSelected(id: number, e?: Event) {
     e?.stopPropagation();
     const next = new Set(this.selected);
     next.has(id) ? next.delete(id) : next.add(id);
     this.selected = next;
+    this.pickAnchor = id;
+  }
+  /** A tile's click: opens it, or picks it in select mode — and Ctrl or Shift with
+      the click picks from anywhere, starting select mode on the way. */
+  private clickTile(e: MouseEvent, id: number, list?: Media[]) {
+    if (!this.selectMode && !isPickClick(e)) {
+      this.openItem(id, list);
+      return;
+    }
+    // Shift-click is also the browser's extend-the-text-selection.
+    if (e.shiftKey) window.getSelection()?.removeAllRanges();
+    this.selectMode = true;
+    const order = (list ?? this.items).map((m) => m.id);
+    const next = pickClick(order, { selected: this.selected, anchor: this.pickAnchor }, id, e);
+    this.selected = next.selected;
+    this.pickAnchor = next.anchor;
   }
   private async bulkDelete() {
     const ids = [...this.selected];
@@ -3109,7 +3130,7 @@ export class OppaiLibrary extends LitElement {
         tabindex="0"
         aria-label=${`${m.title}${stat ? `, ${stat}` : ""}, ${meta.typeLabel}`}
         aria-pressed=${this.selectMode ? (isSel ? "true" : "false") : nothing}
-        @click=${() => (this.selectMode ? this.toggleSelected(m.id) : this.openItem(m.id, list))}
+        @click=${(e: MouseEvent) => this.clickTile(e, m.id, list)}
         @keydown=${(e: KeyboardEvent) => {
           // Enter and Space open, the same as a click. A grid of items you can see but
           // cannot reach without a mouse is not a grid a keyboard user can use at all.

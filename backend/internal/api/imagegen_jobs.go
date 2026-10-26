@@ -26,9 +26,15 @@ import (
 // so a last poll after completion still answers rather than 404s. The registry is a
 // map on the server; a restart forgets every run, and a run without an id from an
 // older client is served exactly as before.
+//
+// A named run is not tied to its request (see handleImageGenGenerate): a reverse
+// proxy may give up on the long call while the run goes on. So the finished job also
+// holds what the call would have answered, and a studio whose call came back as a
+// proxy's error page reads the pictures from its last poll instead.
 
 // genJobGrace is how long a finished job stays readable after its request returned.
-const genJobGrace = 30 * time.Second
+// Long enough for a studio that lost its call to notice and collect the result.
+const genJobGrace = 3 * time.Minute
 
 // genJobIDPattern is what a client-made id may look like: short, URL-safe.
 var genJobIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{4,64}$`)
@@ -45,6 +51,10 @@ type genJob struct {
 	cancelled bool
 	// endedAt is when the request returned; zero while running.
 	endedAt time.Time
+	// result is what the generate call answered, once it succeeded; failure is its
+	// error when it did not.
+	result  *genResult
+	failure string
 }
 
 // genJobs is the registry.
@@ -95,6 +105,18 @@ func (g *genJobs) sweep() {
 	}
 }
 
+func (job *genJob) succeed(res genResult) {
+	job.mu.Lock()
+	job.result = &res
+	job.mu.Unlock()
+}
+
+func (job *genJob) fail(msg string) {
+	job.mu.Lock()
+	job.failure = msg
+	job.mu.Unlock()
+}
+
 // report is the imagegen.Progress callback for one job.
 func (job *genJob) report(p imagegen.Progress) {
 	job.mu.Lock()
@@ -118,6 +140,9 @@ type genProgressResponse struct {
 	Seq       int64   `json:"seq"`
 	Done      bool    `json:"done"`
 	Cancelled bool    `json:"cancelled"`
+	// Result and Error are the run's outcome once it is done.
+	Result *genResult `json:"result,omitempty"`
+	Error  string     `json:"error,omitempty"`
 }
 
 // handleImageGenProgress answers the studio's poll. The preview is omitted when the
@@ -134,6 +159,9 @@ func (s *Server) handleImageGenProgress(w http.ResponseWriter, r *http.Request) 
 	out := genProgressResponse{
 		Index: job.latest.Index, Step: job.latest.Step, Total: job.latest.Total, Percent: job.latest.Percent,
 		Image: job.latest.Image, Seq: job.seq, Done: job.done, Cancelled: job.cancelled,
+	}
+	if job.done {
+		out.Result, out.Error = job.result, job.failure
 	}
 	job.mu.Unlock()
 	if r.URL.Query().Get("seen") == strconv.FormatInt(out.Seq, 10) {

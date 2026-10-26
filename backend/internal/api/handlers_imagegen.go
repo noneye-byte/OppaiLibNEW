@@ -32,10 +32,10 @@ func decodeDataImage(s string) ([]byte, error) {
 // ── ephemeral preview cache ──────────────────────────────────────────────────
 //
 // Generated images must not land in the library unless the user saves one, so they
-// live here — in memory, for a while — between /generate and /save. Nothing is
-// written to disk until /save, and an unsaved preview simply expires. This is what
-// makes "all generated images don't save unless manually saved" true by construction
-// rather than by a flag someone has to remember to check.
+// live here — in memory, for a while — between /generate and /save, and an unsaved
+// preview simply expires. Nothing reaches the library until /save. (On A1111 the
+// studio's runs are also kept in its gallery, which is not the library: see
+// gen_gallery.go.)
 
 const (
 	// A complete outfit is sixty sequential generations. Keeping previews for six
@@ -52,6 +52,9 @@ type genPreview struct {
 	negative string
 	seed     int64
 	model    string
+	// galleryID is the same picture kept in the studio's gallery (gen_gallery.go), 0
+	// when it was not: saving the preview to the library moves it out of there.
+	galleryID int64
 }
 
 type genCache struct {
@@ -189,17 +192,12 @@ func (s *Server) handleImageGenStatus(w http.ResponseWriter, r *http.Request) {
 			out["boards"] = boards
 		}
 		out["gallery"] = "invokeai"
+		out["gallerySorts"] = []string{"newest", "oldest"}
 	} else {
-		// A1111 keeps no gallery of its own; its outputs folder is one once this
-		// process can see it (imagegen/a1111_gallery.go). The panel is there either
-		// way: without the folder it says how to map it, where it used to be missing
-		// with nothing to say why.
-		out["gallery"] = "a1111"
-		if problem := s.imagegen.A1111OutputsProblem(); problem != "" {
-			out["galleryProblem"] = problem
-		}
+		// A1111 keeps no gallery of its own, so the studio keeps one (gen_gallery.go).
+		out["gallery"] = "oppailib"
+		out["gallerySorts"] = []string{"newest", "oldest", "largest"}
 	}
-	out["gallerySorts"] = imagegen.GallerySorts
 	out["detailerAvailable"] = s.imagegen.SupportsADetailer(ctx, set.ImageGenURL)
 	// What the studio can do to the generator's models: browse Civitai and link by
 	// hash always; install, edit, re-cover and delete where the generator lets it —
@@ -273,6 +271,13 @@ type generateReq struct {
 	Mask       string `json:"mask"`
 	MaskBlur   int    `json:"maskBlur"`
 	DetailOnly bool   `json:"detailOnly"`
+	// InitGallery starts from a gallery picture by its name instead of InitImage's
+	// bytes, so a picture that is already on the server is not sent back up to it —
+	// a reverse proxy's body limit refuses that upload with a page of its own.
+	InitGallery string `json:"initGallery"`
+	// NoGallery leaves the run out of the studio's gallery: the LoRA comparison's
+	// sheets, which are drawn to be looked at side by side and not kept.
+	NoGallery bool `json:"noGallery"`
 }
 
 type detailerReq struct {
@@ -307,19 +312,28 @@ func (s *Server) handleImageGenGenerate(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	gen, promptRecord, rolled := s.prepareGenerate(&req)
+	if req.InitGallery != "" && req.InitImage == "" {
+		data, err := s.galleryPicture(r.Context(), set.ImageGenURL, req.InitGallery)
+		if err != nil {
+			writeErr(w, http.StatusNotFound, err.Error())
+			return
+		}
+		req.InitImage = base64.StdEncoding.EncodeToString(data)
+	}
 	if err := decodeGenerateImages(&req, &gen); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	// The studio's A1111 pictures go into its outputs folder, as its own UI's do,
-	// when that folder is the gallery on screen — so what was made here is there to
-	// browse, copy the prompt of and start again from. Libby's camera never comes
-	// through here.
-	gen.SaveOutputs = s.imagegen.A1111OutputsDir() != ""
 	ctx := r.Context()
+	var job *genJob
 	if genJobIDPattern.MatchString(req.JobID) {
-		var job *genJob
-		ctx, job = s.genJobs.start(ctx, req.JobID)
+		// A named run outlives its request. A proxy in front of the server that gives
+		// up on a long one (an ADetailer pass is what pushed runs past a minute) used to
+		// close the connection, which cancelled the run with it, and the studio was
+		// shown the proxy's error page as "something went wrong". Now the run finishes,
+		// is kept, and its result waits on the job for the studio to collect. The
+		// studio's Stop still ends it, through the job's own cancel.
+		ctx, job = s.genJobs.start(context.WithoutCancel(r.Context()), req.JobID)
 		gen.Progress = job.report
 		defer s.genJobs.finish(req.JobID, job)
 	}
@@ -329,49 +343,84 @@ func (s *Server) handleImageGenGenerate(w http.ResponseWriter, r *http.Request) 
 	defer release()
 	res, err := s.imagegen.Generate(ctx, set.ImageGenURL, gen)
 	if err != nil {
-		if ctx.Err() != nil && r.Context().Err() == nil {
+		if job != nil && ctx.Err() != nil {
 			// Stopped from the studio, not failed: the cancel endpoint ended it.
+			job.fail("generation cancelled")
 			writeErr(w, http.StatusConflict, "generation cancelled")
 			return
 		}
+		status := http.StatusBadGateway
 		if errors.Is(err, imagegen.ErrInpaintUnsupported) {
-			writeErr(w, http.StatusConflict, err.Error())
-			return
+			status = http.StatusConflict
+		} else {
+			s.log.Warn("image generate", "err", err)
 		}
-		s.log.Warn("image generate", "err", err)
-		writeErr(w, http.StatusBadGateway, err.Error())
+		if job != nil {
+			job.fail(err.Error())
+		}
+		writeErr(w, status, err.Error())
 		return
 	}
 
-	type preview struct {
-		ID   string `json:"id"`
-		Seed int64  `json:"seed"`
+	// The studio's runs on A1111 are kept in its gallery as they come back, whatever
+	// becomes of this response. Libby's camera never comes through here.
+	var kept []int64
+	if !req.NoGallery && s.ownGallery(ctx, set.ImageGenURL) {
+		kept = s.keepGenerated(ctx, gen, res)
 	}
-	out := make([]preview, 0, len(res.Images))
+	out := make([]genResultImage, 0, len(res.Images))
 	for i, img := range res.Images {
 		seed := res.Seed
 		if i < len(res.Seeds) {
 			seed = res.Seeds[i]
 		}
-		id := s.genCache.put(&genPreview{
+		p := &genPreview{
 			data:     img,
 			prompt:   promptRecord,
 			negative: req.NegativePrompt,
 			seed:     seed,
 			model:    req.Checkpoint,
-		})
-		out = append(out, preview{ID: id, Seed: seed})
+		}
+		item := genResultImage{Seed: seed}
+		if i < len(kept) && kept[i] > 0 {
+			p.galleryID = kept[i]
+			item.Gallery = strconv.FormatInt(kept[i], 10)
+		}
+		item.ID = s.genCache.put(p)
+		out = append(out, item)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"images": out,
-		"prompt": promptRecord,
+	result := genResult{
+		Images: out,
+		Prompt: promptRecord,
 		// The prompts as they went to the generator, after wildcards. A client that
 		// recorded what it typed replaces its record with these when rolled is set,
 		// so the picture's metadata says what actually made it.
-		"positive": req.Prompt,
-		"negative": req.NegativePrompt,
-		"rolled":   rolled,
-	})
+		Positive: req.Prompt,
+		Negative: req.NegativePrompt,
+		Rolled:   rolled,
+	}
+	if job != nil {
+		job.succeed(result)
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+// genResultImage is one picture of a finished run: its preview, the seed that made
+// it, and its name in the studio's gallery when it was kept there.
+type genResultImage struct {
+	ID      string `json:"id"`
+	Seed    int64  `json:"seed"`
+	Gallery string `json:"gallery,omitempty"`
+}
+
+// genResult is a finished run, as the generate call answers it and as its job keeps
+// it for a studio whose call did not come back.
+type genResult struct {
+	Images   []genResultImage `json:"images"`
+	Prompt   string           `json:"prompt"`
+	Positive string           `json:"positive"`
+	Negative string           `json:"negative"`
+	Rolled   bool             `json:"rolled"`
 }
 
 // decodeGenerateImages reads a request's picture to start from and its mask. A mask
@@ -698,6 +747,13 @@ func (s *Server) handleImageGenSave(w http.ResponseWriter, r *http.Request) {
 			s.log.Debug("tag generated image", "tag", t, "err", err)
 		}
 	}
+	// Saved is moved: the picture kept in the gallery when it was made leaves it, as
+	// one moved from the gallery's own panel does. The library row holds the file.
+	if p.galleryID > 0 {
+		if blob, thumb, ok, err := s.db.DeleteGenImage(r.Context(), p.galleryID); err == nil && ok {
+			s.unlinkUnheld(r.Context(), blob, thumb)
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"id": id, "existed": existed})
 }
 
@@ -838,6 +894,10 @@ func (s *Server) handleGalleryBoards(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
+	if s.ownGallery(ctx, base) {
+		s.ownGalleryBoards(w, r)
+		return
+	}
 	boards, err := s.imagegen.Boards(ctx, base)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
@@ -866,6 +926,10 @@ func (s *Server) handleGalleryCreateBoard(w http.ResponseWriter, r *http.Request
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
+	if s.ownGallery(ctx, base) {
+		s.ownGalleryCreateFolder(w, r, req.Name)
+		return
+	}
 	board, err := s.imagegen.CreateBoard(ctx, base, req.Name)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
@@ -887,6 +951,10 @@ func (s *Server) handleGalleryDeleteBoard(w http.ResponseWriter, r *http.Request
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
+	if s.ownGallery(ctx, base) {
+		s.ownGalleryDeleteFolder(w, r, id)
+		return
+	}
 	if err := s.imagegen.DeleteBoard(ctx, base, id); err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
@@ -904,6 +972,10 @@ func (s *Server) handleGalleryImages(w http.ResponseWriter, r *http.Request) {
 	limit := clampInt(atoiDefault(q.Get("limit"), 60), 1, 200)
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
+	if s.ownGallery(ctx, base) {
+		s.ownGalleryImages(w, r, q.Get("board"), q.Get("sort"), offset, limit)
+		return
+	}
 	page, err := s.imagegen.BoardImages(ctx, base, q.Get("board"), q.Get("sort"), offset, limit)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
@@ -941,6 +1013,10 @@ func (s *Server) serveGalleryImage(w http.ResponseWriter, r *http.Request, thumb
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
+	if s.ownGallery(ctx, base) {
+		s.ownGalleryServe(w, r, name, thumb)
+		return
+	}
 	data, ct, err := s.imagegen.GalleryImage(ctx, base, name, thumb)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
@@ -977,6 +1053,10 @@ func (s *Server) handleGalleryMetadata(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
+	if s.ownGallery(ctx, base) {
+		s.ownGalleryMetadata(w, r, name)
+		return
+	}
 	metadata, err := s.imagegen.GalleryImageMetadata(ctx, base, name)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
@@ -997,6 +1077,14 @@ func (s *Server) handleGalleryDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
+	if s.ownGallery(ctx, base) {
+		if err := s.ownGalleryDelete(ctx, []string{name}); err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+		return
+	}
 	if err := s.imagegen.DeleteGalleryImage(ctx, base, name); err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
@@ -1026,6 +1114,14 @@ func (s *Server) handleGalleryDeleteBatch(w http.ResponseWriter, r *http.Request
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
+	if s.ownGallery(ctx, base) {
+		if err := s.ownGalleryDelete(ctx, req.Names); err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+		return
+	}
 	if err := s.imagegen.DeleteGalleryImages(ctx, base, req.Names); err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
@@ -1056,6 +1152,14 @@ func (s *Server) handleGalleryAddToBoard(w http.ResponseWriter, r *http.Request)
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
+	if s.ownGallery(ctx, base) {
+		if err := s.ownGalleryMove(ctx, req.Board, req.Names); err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+		return
+	}
 	if err := s.imagegen.AddImagesToBoard(ctx, base, req.Board, req.Names); err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
@@ -1064,26 +1168,43 @@ func (s *Server) handleGalleryAddToBoard(w http.ResponseWriter, r *http.Request)
 }
 
 type gallerySaveReq struct {
-	Name  string   `json:"name"`
+	Name string `json:"name"`
+	// Names moves several at once — this gallery's only; InvokeAI's are copied one
+	// at a time.
+	Names []string `json:"names"`
 	Title string   `json:"title"`
 	Tags  []string `json:"tags"`
 }
 
 // handleGallerySave copies one InvokeAI gallery image into the library: fetch the
 // full PNG, store it encrypted, file it through the same ingest path as any other
-// image, and keep the generation prompt (when InvokeAI recorded one) as notes.
+// image, and keep the generation prompt (when InvokeAI recorded one) as notes. On
+// A1111 the pictures are this server's own, and they are moved rather than copied:
+// the library is where they go when they are worth keeping, and not before.
 func (s *Server) handleGallerySave(w http.ResponseWriter, r *http.Request) {
 	base, ok := s.galleryBase(w)
 	if !ok {
 		return
 	}
 	var req gallerySaveReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || (req.Name == "" && len(req.Names) == 0) {
 		writeErr(w, http.StatusBadRequest, "an image name is required")
+		return
+	}
+	if len(req.Names) > 500 {
+		writeErr(w, http.StatusBadRequest, "too many images in one request")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
+	if s.ownGallery(ctx, base) {
+		s.ownGallerySave(w, r.WithContext(ctx), req)
+		return
+	}
+	if req.Name == "" {
+		writeErr(w, http.StatusBadRequest, "InvokeAI's pictures are saved one at a time")
+		return
+	}
 	data, _, err := s.imagegen.GalleryImage(ctx, base, req.Name, false)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
@@ -1195,6 +1316,9 @@ type setModelThumbReq struct {
 	// remains only to return a clear error to older clients that try a local upload.
 	PreviewID string `json:"previewId"`
 	ImageData string `json:"imageData"`
+	// GalleryName is a picture in the studio's gallery instead: one made a while ago,
+	// whose preview has long expired, can still be a LoRA's or a model's cover.
+	GalleryName string `json:"galleryName"`
 }
 
 const maxModelThumbBytes = 8 << 20
@@ -1231,21 +1355,6 @@ func (s *Server) setPickerThumb(w http.ResponseWriter, r *http.Request, req setM
 		writeErr(w, http.StatusBadRequest, "custom thumbnail uploads are disabled; choose a generated preview")
 		return
 	}
-	if req.PreviewID == "" {
-		writeErr(w, http.StatusBadRequest, "previewId is required")
-		return
-	}
-	p, ok := s.genCache.get(req.PreviewID)
-	if !ok {
-		writeErr(w, http.StatusNotFound, "preview expired or not found")
-		return
-	}
-	data := p.data
-	if len(data) == 0 || len(data) > maxModelThumbBytes {
-		writeErr(w, http.StatusBadRequest, "image is empty or too large")
-		return
-	}
-
 	set := s.settings.Get()
 	if !set.ImageGenEnabled {
 		writeErr(w, http.StatusServiceUnavailable, "image generation is not configured")
@@ -1253,6 +1362,29 @@ func (s *Server) setPickerThumb(w http.ResponseWriter, r *http.Request, req setM
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
+	var data []byte
+	switch {
+	case req.GalleryName != "":
+		var err error
+		if data, err = s.galleryPicture(ctx, set.ImageGenURL, req.GalleryName); err != nil {
+			writeErr(w, http.StatusNotFound, err.Error())
+			return
+		}
+	case req.PreviewID != "":
+		p, ok := s.genCache.get(req.PreviewID)
+		if !ok {
+			writeErr(w, http.StatusNotFound, "preview expired or not found")
+			return
+		}
+		data = p.data
+	default:
+		writeErr(w, http.StatusBadRequest, "previewId or galleryName is required")
+		return
+	}
+	if len(data) == 0 || len(data) > maxModelThumbBytes {
+		writeErr(w, http.StatusBadRequest, "image is empty or too large")
+		return
+	}
 	if err := s.imagegen.UpdateCover(ctx, set.ImageGenURL, req.Model, data, http.DetectContentType(data)); err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return

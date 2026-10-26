@@ -91,7 +91,7 @@ func TestPaintingToFixRepaintsOnlyTheMaskAtFullSize(t *testing.T) {
 	srv := fakeImg2Img(t, &payload)
 	_, err := New().Generate(context.Background(), srv.URL, GenerateRequest{
 		Prompt: "detailed hand", Steps: 20, Width: 512, Height: 768, CfgScale: 7, Seed: 7, Count: 1,
-		InitImage: []byte("picture"), Mask: []byte("mask"), MaskBlur: 8, Denoise: 0.6, SaveOutputs: true,
+		InitImage: []byte("picture"), Mask: []byte("mask"), MaskBlur: 8, Denoise: 0.6,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -103,9 +103,6 @@ func TestPaintingToFixRepaintsOnlyTheMaskAtFullSize(t *testing.T) {
 	// at the whole size, not a 512-pixel canvas's worth of one hand.
 	if payload["inpainting_fill"] != float64(1) || payload["inpaint_full_res"] != true || payload["mask_blur"] != float64(8) {
 		t.Fatalf("payload = %#v", payload)
-	}
-	if payload["save_images"] != true {
-		t.Fatal("a studio picture is saved into the outputs folder, the gallery")
 	}
 }
 

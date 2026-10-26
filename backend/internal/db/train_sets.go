@@ -238,10 +238,10 @@ func (d *DB) DeleteTrainPicture(ctx context.Context, setID, id int64) (blob, thu
 	return p.BlobPath, p.ThumbPath, true, nil
 }
 
-// BlobInUse says whether any library item, training picture or game save still
-// holds a stored file — as its picture or its thumbnail — so the one deleting a
-// row knows whether the file can go too. The store is content-addressed, so the
-// same picture in the library and in a set is one file.
+// BlobInUse says whether any library item, training picture, studio gallery
+// picture or game save still holds a stored file — as its picture or its thumbnail
+// — so the one deleting a row knows whether the file can go too. The store is
+// content-addressed, so the same picture in the library and in a set is one file.
 func (d *DB) BlobInUse(ctx context.Context, rel string) (bool, error) {
 	if rel == "" {
 		return false, nil
@@ -250,6 +250,7 @@ func (d *DB) BlobInUse(ctx context.Context, rel string) (bool, error) {
 	err := d.sql.QueryRowContext(ctx, `SELECT
 		(SELECT COUNT(*) FROM media WHERE blob_path = ?1 OR thumb_path = ?1) +
 		(SELECT COUNT(*) FROM train_pictures WHERE blob_path = ?1 OR thumb_path = ?1) +
+		(SELECT COUNT(*) FROM gen_images WHERE blob_path = ?1 OR thumb_path = ?1) +
 		(SELECT COUNT(*) FROM game_saves WHERE blob_path = ?1)`, rel).Scan(&n)
 	return n > 0, err
 }

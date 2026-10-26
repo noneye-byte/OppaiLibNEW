@@ -8,16 +8,21 @@ import { openMenu } from "../context-menu.js";
 import { copyText, fromGalleryMetadata, toInfotext, toJSON, type GenInfo } from "../gen-info.js";
 import { downloadGenerationPNG } from "../png-metadata.js";
 import { profileUpdates } from "../ui-metrics.js";
+import { isPickClick, pickClick } from "../pick-range.js";
 
 const PAGE = 40;
 
 /**
- * The generator's gallery panel: every image the generator itself has kept. On
- * InvokeAI that is its own gallery, sorted into boards; on Automatic1111 it is the
- * outputs folder, read by the server (imagegen/a1111_gallery.go), with a board for
- * each folder A1111 writes into. Browse it in any order, open a picture with its
- * settings beside it and step through the rest, copy one into the library, or
- * delete it from the generator. Boards can be made and filed into on InvokeAI only.
+ * The studio's gallery panel. On InvokeAI it is the generator's own gallery, sorted
+ * into its boards; on Automatic1111, which keeps none a client can list, it is the
+ * one the server keeps of every picture made in Create (api/gen_gallery.go), sorted
+ * into folders — and apart from the library, which a picture reaches only when it
+ * is moved there from here. Browse it in any order, open a picture with its settings
+ * beside it and step through the rest, file pictures into folders, make one a LoRA's
+ * cover, or delete them.
+ *
+ * Pictures are picked with the Select button, or straight from the grid with Ctrl
+ * (one at a time) and Shift (a run of them) — see pick-range.ts.
  *
  * The host view calls refresh() after a generation so new images appear without
  * a manual reload. A picture can go back to the studio as the one to start from
@@ -31,25 +36,31 @@ export interface UsePicture {
   url: string;
   name: string;
   mode: UsePictureMode;
+  /** The picture's gallery name, so the server can read it rather than be sent it. */
+  gallery: string;
 }
 
-const SORTS: { id: GallerySort; label: string; a1111Only?: boolean }[] = [
+const SORTS: { id: GallerySort; label: string; ownOnly?: boolean }[] = [
   { id: "newest", label: "Newest first" },
   { id: "oldest", label: "Oldest first" },
-  { id: "name", label: "By name", a1111Only: true },
-  { id: "largest", label: "Largest first", a1111Only: true },
+  { id: "largest", label: "Largest first", ownOnly: true },
 ];
 @customElement("oppai-invoke-gallery")
 export class OppaiInvokeGallery extends LitElement {
-  /** Whose gallery: InvokeAI's own, or A1111's outputs folder. */
-  @property() backend: "invokeai" | "a1111" = "invokeai";
-  /** Why the gallery can't be read (A1111 with no outputs folder in sight): the
-      panel says how to map it instead of listing pictures. */
-  @property() problem = "";
+  /** Whose gallery: InvokeAI's own, or the one OppaiLib keeps for A1111. */
+  @property() backend: "invokeai" | "oppailib" = "invokeai";
   /** The generator can repaint part of a picture (A1111), and redo its faces
       (A1111 with ADetailer). */
   @property({ type: Boolean }) canPaint = false;
   @property({ type: Boolean }) canFixFaces = false;
+  /** The generator's LoRAs by name, for "use as a LoRA's cover". */
+  @property({ attribute: false }) loras: string[] = [];
+  /** Covers can be written (A1111 with its models folder, or InvokeAI). */
+  @property({ type: Boolean }) canSetCovers = false;
+  /** The board to open on: the one the host was last told of. The studio re-renders
+      the panel from scratch whenever it reloads its status, and a panel that always
+      opened on Unsorted dropped you out of the folder you had just made. */
+  @property({ attribute: false }) startBoard = "";
   @state() private boards: GalleryBoard[] = [];
   @state() private sort: GallerySort = "newest";
   /** The open picture's settings, once read. */
@@ -68,6 +79,11 @@ export class OppaiInvokeGallery extends LitElement {
   /** Multi-select mode: tiles become checkboxes and a toolbar acts on the set. */
   @state() private selecting = false;
   @state() private selected = new Set<string>();
+  /** Where a Shift-click range runs from. */
+  private pickAnchor: string | null = null;
+  /** The cover picker in the open picture's panel, and what it would cover. */
+  @state() private coverOpen = false;
+  @state() private coverFor = "";
   private metadata = new Map<string, GenInfo>();
 
   static styles = [
@@ -272,6 +288,36 @@ export class OppaiInvokeGallery extends LitElement {
       .sel-move:disabled {
         opacity: 0.5;
       }
+      .sel-lib {
+        border: none;
+        border-radius: 9px;
+        background: var(--oppai-primary);
+        color: var(--oppai-on-primary);
+        font: inherit;
+        font-size: 12px;
+        font-weight: 600;
+        padding: 6px 12px;
+        cursor: pointer;
+      }
+      .sel-lib:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+      .board-acts {
+        display: flex;
+        gap: 6px;
+      }
+      .board-del.rename {
+        color: var(--oppai-text-dim);
+      }
+      .cover-pick {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        padding: 10px;
+        border-radius: 10px;
+        background: var(--oppai-surface-2);
+      }
       .sel-del {
         margin-left: auto;
         border: none;
@@ -472,12 +518,8 @@ export class OppaiInvokeGallery extends LitElement {
     super.connectedCallback();
     profileUpdates(this, "generation gallery");
     window.addEventListener("keydown", this.onKey);
-    if (!this.problem) void this.refresh();
-  }
-
-  protected updated(changed: Map<string, unknown>) {
-    // The folder was mapped and the host looked again: there is a gallery now.
-    if (changed.has("problem") && !this.problem && changed.get("problem")) void this.refresh();
+    if (this.startBoard) this.board = this.startBoard;
+    void this.refresh();
   }
 
   disconnectedCallback() {
@@ -488,6 +530,8 @@ export class OppaiInvokeGallery extends LitElement {
   /** Arrow keys step through the open picture's board; Escape closes it. */
   private onKey = (e: KeyboardEvent) => {
     if (!this.expanded) return;
+    // Typing in the cover picker is not stepping through pictures.
+    if (e.composedPath().some((t) => t instanceof HTMLSelectElement || t instanceof HTMLInputElement)) return;
     if (e.key === "ArrowLeft") this.step(-1);
     else if (e.key === "ArrowRight") this.step(1);
     else if (e.key === "Escape") this.expanded = null;
@@ -495,8 +539,9 @@ export class OppaiInvokeGallery extends LitElement {
     e.preventDefault();
   };
 
-  private get a1111(): boolean {
-    return this.backend === "a1111";
+  /** The gallery is OppaiLib's own (A1111) rather than InvokeAI's. */
+  private get own(): boolean {
+    return this.backend === "oppailib";
   }
 
   private labelOf(img: GalleryImage): string {
@@ -506,6 +551,7 @@ export class OppaiInvokeGallery extends LitElement {
   /** Opens a picture and reads its settings for the side panel. */
   private open(img: GalleryImage) {
     this.expanded = img;
+    this.coverOpen = false;
     this.info = this.metadata.get(img.name) ?? null;
     this.infoError = "";
     if (this.info) return;
@@ -598,7 +644,7 @@ export class OppaiInvokeGallery extends LitElement {
       this.newBoard = "";
       await this.refresh();
       this.pickBoard(created.id);
-      this.dispatchEvent(new CustomEvent("boards-changed", { bubbles: true, composed: true }));
+      if (!this.own) this.dispatchEvent(new CustomEvent("boards-changed", { bubbles: true, composed: true }));
     } catch (e) {
       this.error = (e as Error).message;
     } finally {
@@ -610,8 +656,9 @@ export class OppaiInvokeGallery extends LitElement {
       them to Uncategorized — so the confirm says as much. */
   private async deleteBoard() {
     const current = this.boards.find((b) => b.id === this.board);
-    if (!current || current.id === "none" || this.busy) return;
-    if (!confirm(`Delete the “${current.name}” gallery? Its images move back to Uncategorized.`)) return;
+    if (!current || !this.isFolder(current.id) || this.busy) return;
+    const back = this.own ? "Unsorted" : "Uncategorized";
+    if (!confirm(`Delete the “${current.name}” ${this.own ? "folder" : "gallery"}? Its pictures move back to ${back}.`)) return;
     this.busy = true;
     this.error = "";
     try {
@@ -621,12 +668,44 @@ export class OppaiInvokeGallery extends LitElement {
       this.board = "none";
       this.items = [];
       await this.refresh();
-      this.dispatchEvent(new CustomEvent("boards-changed", { bubbles: true, composed: true }));
+      if (!this.own) this.dispatchEvent(new CustomEvent("boards-changed", { bubbles: true, composed: true }));
     } catch (e) {
       this.error = (e as Error).message;
     } finally {
       this.busy = false;
     }
+  }
+
+  /** A board that is a folder of pictures rather than "all of them" or "in none". */
+  private isFolder(id: string): boolean {
+    return id !== "none" && id !== "all";
+  }
+
+  private async renameBoard() {
+    const current = this.boards.find((b) => b.id === this.board);
+    if (!current || !this.isFolder(current.id) || this.busy) return;
+    const name = window.prompt("Rename this folder", current.name)?.trim();
+    if (!name || name === current.name) return;
+    this.busy = true;
+    try {
+      await api.renameGalleryBoard(current.id, name);
+      await this.refresh();
+    } catch (e) {
+      this.error = (e as Error).message;
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  /** Takes pictures off the grid after they left the board on screen: deleted, moved
+      to the library, or filed into another folder. */
+  private dropFromView(names: Set<string>) {
+    const before = this.items.length;
+    this.items = this.items.filter((i) => !names.has(i.name));
+    const gone = before - this.items.length;
+    this.total = Math.max(0, this.total - gone);
+    this.boards = this.boards.map((b) => (b.id === this.board ? { ...b, count: Math.max(0, b.count - gone) } : b));
+    if (this.expanded && names.has(this.expanded.name)) this.expanded = null;
   }
 
   private async deleteImage(img: GalleryImage) {
@@ -649,18 +728,92 @@ export class OppaiInvokeGallery extends LitElement {
     }
   }
 
+  /** InvokeAI's picture is copied into the library; OppaiLib's own is moved there,
+      and leaves the gallery. */
   private async saveToLibrary(img: GalleryImage) {
     if (this.busy || this.savedNames.has(img.name)) return;
     this.busy = true;
     try {
       await api.saveGalleryImage({ name: img.name });
-      this.savedNames = new Set(this.savedNames).add(img.name);
+      if (this.own) {
+        // Step on before it goes, so moving a run of keepers is a click each.
+        const at = this.items.findIndex((i) => i.name === img.name);
+        const next = this.items[at + 1] ?? this.items[at - 1];
+        this.dropFromView(new Set([img.name]));
+        this.boards = this.boards.map((b) => (b.id === "all" && this.board !== "all" ? { ...b, count: Math.max(0, b.count - 1) } : b));
+        if (next && this.items.includes(next) && at >= 0) this.open(next);
+        mascotSay("Moved to the library.", "success");
+      } else {
+        this.savedNames = new Set(this.savedNames).add(img.name);
+      }
       this.dispatchEvent(new CustomEvent<LibbyItemFacts>("imported", {
-        detail: { count: 1, kind: "image", title: img.name },
+        detail: { count: 1, kind: "image", title: this.labelOf(img) },
         bubbles: true, composed: true,
       }));
     } catch (e) {
       this.error = (e as Error).message;
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  private async moveSelectedToLibrary() {
+    const names = [...this.selected];
+    if (!names.length || this.busy) return;
+    this.busy = true;
+    try {
+      await api.saveGalleryImage({ names });
+      this.dropFromView(new Set(names));
+      this.selected = new Set();
+      this.selecting = false;
+      mascotSay(names.length === 1 ? "Moved to the library." : `Moved ${names.length} pictures to the library.`, "success");
+      this.dispatchEvent(new CustomEvent<LibbyItemFacts>("imported", {
+        detail: { count: names.length, kind: "image" },
+        bubbles: true, composed: true,
+      }));
+      await this.refresh();
+    } catch (e) {
+      this.error = (e as Error).message;
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  // ── covers ──────────────────────────────────────────────────────────────────
+
+  /** What a picture can be the cover of: the LoRAs it was made with first, since
+      that is nearly always the one meant, then every other LoRA. */
+  private coverChoices(info: GenInfo | null): { used: string[]; rest: string[] } {
+    const used = [...new Set((info?.loras ?? []).map((l) => l.name).filter(Boolean))];
+    const rest = this.loras.filter((n) => !used.includes(n)).sort((a, b) => a.localeCompare(b));
+    return { used, rest };
+  }
+
+  private openCover(img: GalleryImage) {
+    if (this.expanded?.name !== img.name) this.open(img);
+    this.coverOpen = true;
+    this.coverFor = "";
+    // The picker opens on the picture's own LoRA once its settings are read.
+    void this.imageInfo(img).then((info) => {
+      if (this.expanded?.name === img.name && !this.coverFor) this.coverFor = this.coverChoices(info).used[0] ?? "";
+    }, () => undefined);
+  }
+
+  private async setCover(img: GalleryImage) {
+    const target = this.coverFor;
+    if (!target || this.busy) return;
+    this.busy = true;
+    try {
+      if (target.startsWith("model:")) {
+        await api.setModelThumb({ model: target.slice(6), galleryName: img.name });
+      } else {
+        await api.setLoraThumb({ model: target, galleryName: img.name });
+      }
+      this.coverOpen = false;
+      mascotSay(`Set as ${target.startsWith("model:") ? "the model's" : `${target}'s`} cover.`, "success");
+      this.dispatchEvent(new CustomEvent("covers-changed", { bubbles: true, composed: true }));
+    } catch (e) {
+      mascotSay((e as Error).message || "Couldn't set that cover.", "error");
     } finally {
       this.busy = false;
     }
@@ -714,6 +867,8 @@ export class OppaiInvokeGallery extends LitElement {
         { label: "Start from this picture", icon: "add_photo_alternate", run: () => this.usePicture(img, "img2img") },
         ...(this.canPaint ? [{ label: "Paint to fix", icon: "brush", run: () => this.usePicture(img, "inpaint") }] : []),
         ...(this.canFixFaces ? [{ label: "Fix faces", icon: "face_retouching_natural", run: () => this.usePicture(img, "faces") }] : []),
+        ...(this.canSetCovers ? [{ label: "Use as a LoRA's cover…", icon: "photo_library", run: () => this.openCover(img) }] : []),
+        ...(this.own ? [{ label: "Move to library", icon: "save", run: () => void this.saveToLibrary(img) }] : []),
         { label: "Export PNG for Civitai", icon: "download", run: () => void this.exportImage(img) },
         { label: "Send to chat", icon: "forum", run: () => void this.openShareMenu(img, e.clientX, e.clientY) },
       ],
@@ -745,7 +900,7 @@ export class OppaiInvokeGallery extends LitElement {
   /** Hands a picture to the studio to start the next run from. */
   private usePicture(img: GalleryImage, mode: UsePictureMode) {
     this.dispatchEvent(new CustomEvent<UsePicture>("use-picture", {
-      detail: { url: api.galleryFullURL(img.name), name: this.labelOf(img), mode },
+      detail: { url: api.galleryFullURL(img.name), name: this.labelOf(img), mode, gallery: img.name },
       bubbles: true, composed: true,
     }));
     this.expanded = null;
@@ -799,29 +954,41 @@ export class OppaiInvokeGallery extends LitElement {
   private toggleSelecting() {
     this.selecting = !this.selecting;
     if (!this.selecting) this.selected = new Set();
+    this.pickAnchor = null;
   }
 
-  private toggleSelected(name: string) {
-    const next = new Set(this.selected);
-    if (next.has(name)) next.delete(name);
-    else next.add(name);
-    this.selected = next;
+  /** A tile's click: opens it, or picks it in select mode — and Ctrl or Shift with
+      the click picks from anywhere, starting select mode on the way. */
+  private clickTile(e: MouseEvent, img: GalleryImage) {
+    if (!this.selecting && !isPickClick(e)) {
+      this.open(img);
+      return;
+    }
+    if (e.shiftKey) window.getSelection()?.removeAllRanges();
+    this.selecting = true;
+    const next = pickClick(this.items.map((i) => i.name), { selected: this.selected, anchor: this.pickAnchor }, img.name, e);
+    this.selected = next.selected;
+    this.pickAnchor = next.anchor;
+  }
+
+  private selectAll() {
+    this.selected = new Set(this.items.map((i) => i.name));
   }
 
   private async deleteSelected() {
     const names = [...this.selected];
     if (!names.length || this.busy) return;
+    // A Shift range picks a lot in one click, and these were never in the library:
+    // the gallery's copy is the only one.
+    if (this.own && !confirm(`Delete ${names.length === 1 ? "this picture" : `these ${names.length} pictures`}? They are only kept here.`)) {
+      return;
+    }
     this.busy = true;
     try {
       await api.deleteGalleryImages(names);
       const line = libbyReact("galleryDelete", { count: names.length });
       mascotSay(line.message, "success", { emotion: line.emotion, intensity: line.intensity });
-      const gone = this.selected;
-      this.items = this.items.filter((i) => !gone.has(i.name));
-      this.total = Math.max(0, this.total - names.length);
-      this.boards = this.boards.map((b) =>
-        b.id === this.board ? { ...b, count: Math.max(0, b.count - names.length) } : b,
-      );
+      this.dropFromView(new Set(names));
       this.selected = new Set();
       this.selecting = false;
     } catch (e) {
@@ -837,10 +1004,9 @@ export class OppaiInvokeGallery extends LitElement {
     this.busy = true;
     try {
       await api.addGalleryImagesToBoard(boardId, names);
-      // The moved images leave the board we're viewing.
-      const moved = this.selected;
-      this.items = this.items.filter((i) => !moved.has(i.name));
-      this.total = Math.max(0, this.total - names.length);
+      // The moved images leave the board we're viewing — except "All pictures",
+      // which still holds them wherever they are filed.
+      if (this.board !== "all") this.dropFromView(new Set(names));
       this.selected = new Set();
       this.selecting = false;
       await this.refresh();
@@ -851,36 +1017,21 @@ export class OppaiInvokeGallery extends LitElement {
     }
   }
 
-  /** No outputs folder in sight: what to map, and a way to look again once it is. */
-  private renderSetup() {
-    return html`<div class="panel">
-      <div class="head">
-        <span class="material-symbols-rounded" style="font-size:18px;">photo_library</span>
-        A1111 outputs
-      </div>
-      <div class="setup">
-        <span class="material-symbols-rounded">folder</span>
-        <b>The gallery needs A1111's outputs folder</b>
-        <p>${this.problem}</p>
-        <p class="note">On Unraid, edit the OppaiLib container and fill in <b>Automatic1111 outputs</b> with the
-          host folder that holds <code>txt2img-images</code> (it is under the template's advanced paths), or add a
-          path to <code>/a1111-outputs</code> yourself. Once it is there, pictures made here are saved into it
-          and show up in this panel with their prompts.</p>
-        <button class="more" @click=${() => this.dispatchEvent(new CustomEvent("recheck", { bubbles: true, composed: true }))}>
-          <span class="material-symbols-rounded" style="font-size:16px;vertical-align:-3px;">refresh</span> Look again
-        </button>
-      </div>
-    </div>`;
+  /** Where the next run lands, said under the board picker. */
+  private filingNote(current: GalleryBoard | undefined) {
+    if (!this.own) return html`New generations are filed into ${current?.name ?? "this gallery"}.`;
+    const into = current && this.isFolder(current.id) ? current.name : "Unsorted";
+    return html`Every picture made here is kept, and new ones go into <b>${into}</b>. They reach the library
+      only when you move them there. Ctrl- or Shift-click to pick several.`;
   }
 
   render() {
-    if (this.problem) return this.renderSetup();
     const current = this.boards.find((b) => b.id === this.board);
     return html`
       <div class="panel">
         <div class="head">
           <span class="material-symbols-rounded" style="font-size:18px;">photo_library</span>
-          ${this.a1111 ? "A1111 outputs" : "Invoke gallery"}
+          ${this.own ? "Gallery" : "Invoke gallery"}
           <span class="count">${current ? `${this.total || current.count} images` : ""}</span>
           ${this.items.length
             ? html`<button class="sel-toggle ${this.selecting ? "on" : ""}"
@@ -892,18 +1043,27 @@ export class OppaiInvokeGallery extends LitElement {
         ${this.selecting
           ? html`<div class="sel-bar">
               <span class="sel-count">${this.selected.size} selected</span>
-              ${this.a1111 ? nothing : html`<select class="sel-move" aria-label="Move to gallery" .value=${""}
+              ${this.selected.size < this.items.length
+                ? html`<button class="sel-toggle" @click=${() => this.selectAll()}>All ${this.items.length}</button>`
+                : nothing}
+              <select class="sel-move" aria-label=${this.own ? "Move to folder" : "Move to gallery"} .value=${""}
                 ?disabled=${this.busy || !this.selected.size}
                 @change=${(e: Event) => {
                   const el = e.target as HTMLSelectElement;
                   void this.addSelectedToBoard(el.value);
                   el.value = "";
                 }}>
-                <option value="">Add to gallery…</option>
+                <option value="">${this.own ? "Move to folder…" : "Add to gallery…"}</option>
                 ${this.boards
-                  .filter((b) => b.id !== this.board)
+                  .filter((b) => b.id !== this.board && b.id !== "all")
                   .map((b) => html`<option value=${b.id}>${b.name}</option>`)}
-              </select>`}
+              </select>
+              ${this.own ? html`<button class="sel-lib" ?disabled=${this.busy || !this.selected.size}
+                title="Move the picked pictures into the library; they leave the gallery"
+                @click=${() => this.moveSelectedToLibrary()}>
+                <span class="material-symbols-rounded" style="font-size:15px; vertical-align:-3px;">save</span>
+                To library
+              </button>` : nothing}
               <button class="sel-del" ?disabled=${this.busy || !this.selected.size}
                 @click=${() => this.deleteSelected()}>
                 <span class="material-symbols-rounded" style="font-size:15px; vertical-align:-3px;">delete</span>
@@ -920,7 +1080,7 @@ export class OppaiInvokeGallery extends LitElement {
                 </select>
                 <select class="board-select" aria-label="Order" style="flex:none;width:auto;"
                   @change=${(e: Event) => this.pickSort((e.target as HTMLSelectElement).value as GallerySort)}>
-                  ${SORTS.filter((s) => this.a1111 || !s.a1111Only).map((s) => html`<option value=${s.id} ?selected=${s.id === this.sort}>${s.label}</option>`)}
+                  ${SORTS.filter((s) => this.own || !s.ownOnly).map((s) => html`<option value=${s.id} ?selected=${s.id === this.sort}>${s.label}</option>`)}
                 </select>
               </div>
               ${this.boards.length <= 6 ? html`<div class="boards">
@@ -929,25 +1089,29 @@ export class OppaiInvokeGallery extends LitElement {
                     @click=${() => this.pickBoard(b.id)}>${b.name}${b.count ? ` · ${b.count}` : ""}</button>`,
                 )}
               </div>` : nothing}
-              ${this.board !== "none" && !this.a1111
-                ? html`<button class="board-del" ?disabled=${this.busy}
-                    title="Delete this gallery (its images move to Uncategorized)"
-                    @click=${() => this.deleteBoard()}>
-                    <span class="material-symbols-rounded" style="font-size:15px; vertical-align:-3px;">delete</span>
-                    Delete gallery
-                  </button>`
+              ${this.isFolder(this.board)
+                ? html`<div class="board-acts">
+                    ${this.own ? html`<button class="board-del rename" ?disabled=${this.busy} @click=${() => this.renameBoard()}>
+                      <span class="material-symbols-rounded" style="font-size:15px; vertical-align:-3px;">edit</span>
+                      Rename
+                    </button>` : nothing}
+                    <button class="board-del" ?disabled=${this.busy}
+                      title=${this.own ? "Delete this folder (its pictures move to Unsorted)" : "Delete this gallery (its images move to Uncategorized)"}
+                      @click=${() => this.deleteBoard()}>
+                      <span class="material-symbols-rounded" style="font-size:15px; vertical-align:-3px;">delete</span>
+                      ${this.own ? "Delete folder" : "Delete gallery"}
+                    </button>
+                  </div>`
                 : nothing}
             `
           : nothing}
-        ${this.a1111
-          ? html`<div class="note">What Automatic1111 saved to its outputs folder — each folder it writes into is a board.</div>`
-          : html`<div class="note">New generations are filed into ${current?.name ?? "this gallery"}.</div>
-            <div class="new-board">
-              <input maxlength="300" placeholder="New Invoke gallery" .value=${this.newBoard}
-                @input=${(e: Event) => (this.newBoard = (e.target as HTMLInputElement).value)}
-                @keydown=${(e: KeyboardEvent) => { if (e.key === "Enter") void this.createBoard(); }} />
-              <button ?disabled=${this.busy || !this.newBoard.trim()} @click=${() => this.createBoard()}>Create</button>
-            </div>`}
+        <div class="note">${this.filingNote(current)}</div>
+        <div class="new-board">
+          <input maxlength="120" placeholder=${this.own ? "New folder" : "New Invoke gallery"} .value=${this.newBoard}
+            @input=${(e: Event) => (this.newBoard = (e.target as HTMLInputElement).value)}
+            @keydown=${(e: KeyboardEvent) => { if (e.key === "Enter") void this.createBoard(); }} />
+          <button ?disabled=${this.busy || !this.newBoard.trim()} @click=${() => this.createBoard()}>Create</button>
+        </div>
         ${this.error ? html`<div class="err">${this.error}</div>` : nothing}
         ${this.items.length
           ? html`<div class="grid">
@@ -962,8 +1126,7 @@ export class OppaiInvokeGallery extends LitElement {
                       e.preventDefault();
                       this.openImageMenu(img, e);
                     }}
-                    @click=${() =>
-                      this.selecting ? this.toggleSelected(img.name) : this.open(img)}
+                    @click=${(e: MouseEvent) => this.clickTile(e, img)}
                   >
                     <img src=${api.galleryThumbURL(img.name)} alt="Generated image" loading="lazy" />
                     ${this.selecting
@@ -975,7 +1138,7 @@ export class OppaiInvokeGallery extends LitElement {
                       : html`<span
                           class="del"
                           role="button"
-                          title=${this.a1111 ? "Delete from the outputs folder" : "Delete from InvokeAI"}
+                          title=${this.own ? "Delete from the gallery" : "Delete from InvokeAI"}
                           @click=${(e: Event) => {
                             e.stopPropagation();
                             void this.deleteImage(img);
@@ -989,7 +1152,7 @@ export class OppaiInvokeGallery extends LitElement {
             </div>`
           : this.loading
             ? nothing
-            : html`<div class="note">${this.a1111 ? "No pictures in this folder." : "Nothing here yet — generated images land in this gallery."}</div>`}
+            : html`<div class="note">${this.own && this.board !== "none" ? "No pictures in here yet." : "Nothing here yet — generated images land in this gallery."}</div>`}
         ${this.loading ? html`<div class="note">Loading…</div>` : nothing}
         ${!this.loading && this.items.length < this.total
           ? html`<button class="more" @click=${() => this.loadPage(false)}>
@@ -1019,10 +1182,14 @@ export class OppaiInvokeGallery extends LitElement {
           ${this.renderInfo(img, at)}
         </div>
         <div class="overlay-actions">
-          <button class="obtn primary" ?disabled=${this.busy || saved} @click=${() => this.saveToLibrary(img)}>
+          <button class="obtn primary" ?disabled=${this.busy || saved} @click=${() => this.saveToLibrary(img)}
+            title=${this.own ? "Move it into the library; it leaves the gallery" : "Copy it into the library"}>
             <span class="material-symbols-rounded" style="font-size:17px;">${saved ? "check" : "save"}</span>
-            ${saved ? "In library" : "Save to library"}
+            ${saved ? "In library" : this.own ? "Move to library" : "Save to library"}
           </button>
+          ${this.canSetCovers ? html`<button class="obtn" title="Make it a LoRA's or a model's cover" @click=${() => this.openCover(img)}>
+            <span class="material-symbols-rounded" style="font-size:17px;">photo_library</span> Use as cover
+          </button>` : nothing}
           <button class="obtn" ?disabled=${this.busy}
             @click=${(e: MouseEvent) => void this.openShareMenu(img, e.clientX, e.clientY)}>
             <span class="material-symbols-rounded" style="font-size:17px;">forum</span> Send to chat
@@ -1062,6 +1229,34 @@ export class OppaiInvokeGallery extends LitElement {
     </button>`;
   }
 
+  /** Which LoRA (or the model) the open picture is to be the cover of. */
+  private renderCoverPicker(img: GalleryImage, info: GenInfo | null) {
+    const { used, rest } = this.coverChoices(info);
+    const model = info?.model;
+    return html`<div class="cover-pick">
+      <div class="k">Use as the cover of</div>
+      <select class="board-select" aria-label="Cover of" .value=${this.coverFor}
+        @change=${(e: Event) => (this.coverFor = (e.target as HTMLSelectElement).value)}>
+        <option value="" ?selected=${!this.coverFor}>Choose a LoRA…</option>
+        ${used.length ? html`<optgroup label="Made with">
+          ${used.map((n) => html`<option value=${n} ?selected=${n === this.coverFor}>${n}</option>`)}
+        </optgroup>` : nothing}
+        ${model ? html`<optgroup label="Its model">
+          <option value=${`model:${model}`} ?selected=${this.coverFor === `model:${model}`}>${model}</option>
+        </optgroup>` : nothing}
+        ${rest.length ? html`<optgroup label="Every LoRA">
+          ${rest.map((n) => html`<option value=${n} ?selected=${n === this.coverFor}>${n}</option>`)}
+        </optgroup>` : nothing}
+      </select>
+      <div class="acts">
+        <button ?disabled=${this.busy || !this.coverFor} @click=${() => void this.setCover(img)}>
+          <span class="material-symbols-rounded" style="font-size:15px;">check</span> Set cover
+        </button>
+        <button @click=${() => (this.coverOpen = false)}>Cancel</button>
+      </div>
+    </div>`;
+  }
+
   /** The open picture's settings, read from the generator's record of it. */
   private renderInfo(img: GalleryImage, at: number) {
     const i = this.info;
@@ -1069,6 +1264,7 @@ export class OppaiInvokeGallery extends LitElement {
     const when = img.created ? new Date(img.created).toLocaleString() : "";
     return html`<div class="meta">
       <h4>${this.labelOf(img)}<small>${at + 1} of ${this.total}</small></h4>
+      ${this.coverOpen ? this.renderCoverPicker(img, i) : nothing}
       ${!i
         ? html`<div class="note">${this.infoError || "Reading its settings…"}</div>`
         : html`

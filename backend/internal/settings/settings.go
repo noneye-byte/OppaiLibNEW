@@ -62,10 +62,6 @@ type Settings struct {
 	// mount when one is there and looks right, and otherwise lists and links models
 	// but changes none. InvokeAI ignores it. See imagegen/a1111_models.go.
 	ImageGenModelsDir string `json:"imageGenModelsDir"`
-	// ImageGenOutputsDir is Automatic1111's outputs folder, which is its gallery: A1111
-	// has no API that lists what it made. Blank looks for a /a1111-outputs mount, then
-	// outputs beside the models folder. See imagegen/a1111_gallery.go.
-	ImageGenOutputsDir string `json:"imageGenOutputsDir"`
 	// TrainerURL is the OppaiLib trainer (trainer/ in the repo, its own container on
 	// a box with a GPU) that LoRAs are trained on; empty hides training. The token
 	// is the trainer's TRAINER_TOKEN, write-only like the other secrets.
@@ -274,7 +270,6 @@ const (
 	keyItchNSFW            = "itch.nsfw"
 	keyImageGenURL         = "imagegen.url"
 	keyImageGenModelsDir   = "imagegen.models_dir"
-	keyImageGenOutputsDir  = "imagegen.outputs_dir"
 	keyTrainerURL          = "trainer.url"
 	keyTrainerToken        = "trainer.token"
 	keyCivitaiAPIURL       = "civitai.api_url"
@@ -444,9 +439,6 @@ func Merge(base Settings, stored map[string]string) Settings {
 	if v, ok := stored[keyImageGenModelsDir]; ok {
 		s.ImageGenModelsDir = v
 	}
-	if v, ok := stored[keyImageGenOutputsDir]; ok {
-		s.ImageGenOutputsDir = v
-	}
 	if v, ok := stored[keyTrainerURL]; ok {
 		s.TrainerURL = v
 	}
@@ -610,7 +602,6 @@ func (s Settings) Map() map[string]string {
 		keyItchNSFW:            strconv.FormatBool(s.ItchNSFW),
 		keyImageGenURL:         s.ImageGenURL,
 		keyImageGenModelsDir:   s.ImageGenModelsDir,
-		keyImageGenOutputsDir:  s.ImageGenOutputsDir,
 		keyTrainerURL:          s.TrainerURL,
 		keyTrainerToken:        s.TrainerToken,
 		keyCivitaiAPIURL:       s.CivitaiAPIURL,
@@ -733,7 +724,6 @@ func (s *Settings) Clamp() {
 	s.ChatModel = strings.TrimSpace(s.ChatModel)
 	s.ChatModelDir = strings.TrimRight(strings.TrimSpace(s.ChatModelDir), "/")
 	s.ImageGenModelsDir = strings.TrimRight(strings.TrimSpace(s.ImageGenModelsDir), "/")
-	s.ImageGenOutputsDir = strings.TrimRight(strings.TrimSpace(s.ImageGenOutputsDir), "/")
 	s.ChatAPIKey = strings.TrimSpace(s.ChatAPIKey)
 	// A pinned window is bounded rather than rejected: a typo of 80 or 8000000 is
 	// still a statement that the operator wants something other than auto, and

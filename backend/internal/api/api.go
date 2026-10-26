@@ -290,13 +290,6 @@ func NewServer(cfg *config.Config, database *db.DB, store *storage.Store, sc *sc
 		return s.settings.Get().ImageGenModelsDir
 	}
 	s.imagegen.HashCachePath = filepath.Join(cfg.ConfigDir, "a1111-hashes.json")
-	s.imagegen.OutputsDir = func() string {
-		if s.settings == nil {
-			return ""
-		}
-		return s.settings.Get().ImageGenOutputsDir
-	}
-	s.imagegen.ThumbCacheDir = filepath.Join(cfg.CacheDir, "a1111-thumbs")
 	s.games = gamesites.New(base, cfg.ScrapeUserAgent)
 	// F95zone checks every visitor for a person at a real browser, so the server reads
 	// it through Launchy's, which has one. The scraper reads it the same way, so a
@@ -555,11 +548,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/imagegen/model", s.requireAuth(s.handleGetModelMeta))
 	mux.HandleFunc("PATCH /api/imagegen/model", s.requireAuth(s.handlePatchModelMeta))
 	mux.HandleFunc("DELETE /api/imagegen/model", s.requireAuth(s.handleDeleteModel))
-	// The InvokeAI gallery: browse the generator's own boards and images, stream
-	// them through the server, delete from them, or copy one into the library.
+	// The studio's gallery: InvokeAI's own boards and images, or on A1111 the one
+	// this server keeps (gen_gallery.go). Browse, stream, delete, file into boards,
+	// and copy into the library (move, on A1111).
 	mux.HandleFunc("GET /api/imagegen/gallery/boards", s.requireAuth(s.handleGalleryBoards))
 	mux.HandleFunc("POST /api/imagegen/gallery/boards", s.requireAuth(s.handleGalleryCreateBoard))
 	mux.HandleFunc("DELETE /api/imagegen/gallery/boards/{id}", s.requireAuth(s.handleGalleryDeleteBoard))
+	mux.HandleFunc("PATCH /api/imagegen/gallery/boards/{id}", s.requireAuth(s.handleGalleryRenameBoard))
 	mux.HandleFunc("GET /api/imagegen/gallery/images", s.requireAuth(s.handleGalleryImages))
 	mux.HandleFunc("GET /api/imagegen/gallery/image/{name}", s.requireAuth(s.handleGalleryFull))
 	mux.HandleFunc("GET /api/imagegen/gallery/image/{name}/thumb", s.requireAuth(s.handleGalleryThumb))

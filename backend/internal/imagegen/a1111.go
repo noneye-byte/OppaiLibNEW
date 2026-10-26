@@ -61,7 +61,6 @@ type txt2imgPayload struct {
 	InpaintingFill        int    `json:"inpainting_fill,omitempty"`
 	InpaintFullRes        bool   `json:"inpaint_full_res,omitempty"`
 	InpaintFullResPadding int    `json:"inpaint_full_res_padding,omitempty"`
-	SaveImages            bool   `json:"save_images,omitempty"`
 }
 
 // txt2imgResponse is the relevant slice of the API's reply. Info is a JSON *string*
@@ -96,7 +95,6 @@ func (c *Client) a1111Generate(ctx context.Context, base string, req GenerateReq
 		NIter:          req.Count,
 		BatchSize:      1,
 		RestoreAfter:   true,
-		SaveImages:     req.SaveOutputs,
 	}
 	if req.Detailer.Enabled {
 		model := strings.TrimSpace(req.Detailer.Model)

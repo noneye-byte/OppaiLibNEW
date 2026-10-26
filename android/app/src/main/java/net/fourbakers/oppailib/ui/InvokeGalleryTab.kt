@@ -58,10 +58,12 @@ import net.fourbakers.oppailib.data.Repository
 private const val PAGE = 40
 
 /**
- * The InvokeAI gallery on the phone: the images the generator itself keeps,
- * grouped into its boards. Tap to expand; from there save into the library or
- * delete from the generator. [refreshKey] bumps after a generation so fresh
- * images appear without leaving the screen.
+ * The studio's gallery on the phone: InvokeAI's own, grouped into its boards, or
+ * on A1111 ([own]) the one the server keeps of everything made in Create, grouped
+ * into folders — whose pictures are moved into the library rather than copied, and
+ * whose "all" board is every picture rather than a place to file one. Tap to expand;
+ * from there save into the library or delete. [refreshKey] bumps after a generation
+ * so fresh images appear without leaving the screen.
  *
  * The open board is hoisted ([board] / [onBoardChange]) because it is also the
  * destination for new generations: whatever gallery you have open here is where
@@ -74,7 +76,11 @@ fun InvokeGalleryTab(
     board: String,
     onBoardChange: (String) -> Unit,
     onSaved: () -> Unit,
+    own: Boolean = false,
 ) {
+    // The boards that are not folders: the unfiled pile, and (own gallery) all of them.
+    val isFolder = board != "none" && board != "all"
+    val pile = if (own) "Unsorted" else "Uncategorized"
     var boards by remember { mutableStateOf<List<GalleryBoard>>(emptyList()) }
     var items by remember { mutableStateOf<List<GalleryImage>>(emptyList()) }
     var total by remember { mutableStateOf(0) }
@@ -130,7 +136,14 @@ fun InvokeGalleryTab(
         scope.launch {
             runCatching { repo.api.saveGalleryImage(GallerySaveRequest(name = img.name)) }
                 .onSuccess {
-                    savedNames = savedNames + img.name
+                    if (own) {
+                        // Moved, not copied: it has left the gallery.
+                        items = items.filter { it.name != img.name }
+                        total = maxOf(0, total - 1)
+                        if (expanded?.name == img.name) expanded = null
+                    } else {
+                        savedNames = savedNames + img.name
+                    }
                     LibbyMeter.bump() // adding to the library warms Libby up
                     LibbyVoice.react(LibbyVoice.Event.SAVE).let { repo.report(it.message, it.emotion) }
                     onSaved()
@@ -176,7 +189,7 @@ fun InvokeGalleryTab(
     // them back to Uncategorized — then we drop to that pile and reload.
     fun deleteBoard() {
         val target = board
-        if (target == "none") return
+        if (!isFolder) return
         scope.launch {
             runCatching { repo.api.deleteGalleryBoard(target) }
                 .onSuccess {
@@ -205,13 +218,13 @@ fun InvokeGalleryTab(
                     Box {
                         OutlinedButton(
                             onClick = { moveMenuOpen = true },
-                            enabled = selected.isNotEmpty() && boards.any { it.id != board },
-                        ) { Text("Add to gallery") }
+                            enabled = selected.isNotEmpty() && boards.any { it.id != board && it.id != "all" },
+                        ) { Text(if (own) "Move to folder" else "Add to gallery") }
                         androidx.compose.material3.DropdownMenu(
                             expanded = moveMenuOpen,
                             onDismissRequest = { moveMenuOpen = false },
                         ) {
-                            boards.filter { it.id != board }.forEach { b ->
+                            boards.filter { it.id != board && it.id != "all" }.forEach { b ->
                                 androidx.compose.material3.DropdownMenuItem(
                                     text = { Text(b.name) },
                                     onClick = { moveMenuOpen = false; addSelectedToBoard(b.id) },
@@ -247,8 +260,8 @@ fun InvokeGalleryTab(
                         )
                     }
                 }
-                // "none" is the Uncategorized pile, not a real board — it can't be deleted.
-                if (board != "none") {
+                // "none" and "all" are not real boards — they can't be deleted.
+                if (isFolder) {
                     IconButton(onClick = { confirmDeleteBoard = true }) {
                         Icon(
                             Icons.Filled.Delete,
@@ -260,7 +273,12 @@ fun InvokeGalleryTab(
             }
         }
         Text(
-            "New generations are filed into ${boards.find { it.id == board }?.name ?: "this gallery"}.",
+            if (own) {
+                "Every picture made here is kept, and new ones go into ${if (isFolder) boards.find { it.id == board }?.name ?: pile else pile}. " +
+                    "Save moves one into the library."
+            } else {
+                "New generations are filed into ${boards.find { it.id == board }?.name ?: "this gallery"}."
+            },
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(bottom = 4.dp),
@@ -353,8 +371,8 @@ fun InvokeGalleryTab(
         val name = boards.find { it.id == board }?.name ?: "this gallery"
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { confirmDeleteBoard = false },
-            title = { Text("Delete gallery?") },
-            text = { Text("“$name” will be removed. Its images move back to Uncategorized.") },
+            title = { Text(if (own) "Delete folder?" else "Delete gallery?") },
+            text = { Text("“$name” will be removed. Its images move back to $pile.") },
             confirmButton = {
                 androidx.compose.material3.TextButton(onClick = { confirmDeleteBoard = false; deleteBoard() }) {
                     Text("Delete", color = MaterialTheme.colorScheme.error)

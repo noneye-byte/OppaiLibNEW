@@ -28,6 +28,7 @@ import {
   type GenVae,
   type GalleryBoard,
   type GenerateParams,
+  type GenerateResult,
   type ImageGenStatus,
   type LibbyLoadout,
   type LibbyOutfit,
@@ -163,6 +164,9 @@ interface StartPicture {
   mode: UsePictureMode;
   /** Made from a file on this computer, and released when it is let go. */
   objectURL?: boolean;
+  /** Its name in the studio's gallery, when it is there: the server reads it from
+      there rather than being sent it back. */
+  gallery?: string;
 }
 
 /** The Create screen's drawers, down its rail in this order. */
@@ -4213,7 +4217,8 @@ export class OppaiImageGen extends LitElement {
     if (src) {
       // A run from a picture comes out the picture's shape, not the size controls'.
       Object.assign(params, sourceSize(src.width, src.height));
-      params.initImage = await this.sourceDataURL(src);
+      if (src.gallery) params.initGallery = src.gallery;
+      else params.initImage = await this.sourceDataURL(src);
       if (src.mode === "faces") {
         params.detailOnly = true;
         params.count = 1;
@@ -4229,9 +4234,11 @@ export class OppaiImageGen extends LitElement {
     // Named, so the overlay can watch the picture form and the user can stop it.
     params.jobId = newJobId();
     this.startProgressWatch(params.jobId, params.count ?? 1);
-    let res: { images: GenPreview[]; prompt: string; positive?: string; negative?: string; rolled?: boolean };
+    let res: GenerateResult;
     try {
       res = await api.generate(params);
+    } catch (e) {
+      res = await this.collectRun(params.jobId, e as Error);
     } finally {
       this.stopProgressWatch();
     }
@@ -4310,6 +4317,32 @@ export class OppaiImageGen extends LitElement {
   }
 
   /**
+   * The result of a run whose generate call failed, when the run did not. A proxy in
+   * front of the server that gives up on a long run answers the studio with its own
+   * error page while the run goes on to the end (handleImageGenGenerate detaches it),
+   * so the job is asked how it ended: its pictures, or the server's own error. A job
+   * the server does not know — a restart, an older server — leaves the call's error.
+   */
+  private async collectRun(jobId: string | undefined, failure: Error): Promise<GenerateResult> {
+    if (!jobId || failure.name === "AbortError") throw failure;
+    const deadline = Date.now() + 15 * 60_000;
+    while (Date.now() < deadline) {
+      let state: GenProgress;
+      try {
+        state = await api.genProgress(jobId, -1);
+      } catch {
+        throw failure;
+      }
+      if (state.done) {
+        if (state.result) return state.result;
+        throw state.error ? new Error(state.error) : failure;
+      }
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+    throw failure;
+  }
+
+  /**
    * Polls the run's progress while the generate call is in flight. A second a poll:
    * the generator publishes a preview every few steps, and the poll is a few bytes
    * when nothing has changed (the server withholds an unchanged preview).
@@ -4381,7 +4414,7 @@ export class OppaiImageGen extends LitElement {
   // the bytes go to the generator with the run (initImage), the painted mask with it.
 
   /** Makes a picture the one the next run starts from. A face pass runs at once. */
-  private async usePicture(url: string, name: string, mode: UsePictureMode, objectURL = false) {
+  private async usePicture(url: string, name: string, mode: UsePictureMode, objectURL = false, gallery?: string) {
     let img: HTMLImageElement;
     try {
       img = await loadImage(url);
@@ -4389,7 +4422,7 @@ export class OppaiImageGen extends LitElement {
       this.showToast((e as Error).message);
       return;
     }
-    const pic: StartPicture = { url, name, width: img.naturalWidth, height: img.naturalHeight, mode, objectURL };
+    const pic: StartPicture = { url, name, width: img.naturalWidth, height: img.naturalHeight, mode, objectURL, gallery };
     if (mode === "faces") {
       void this.fixFaces(pic);
       return;
@@ -4740,12 +4773,12 @@ export class OppaiImageGen extends LitElement {
         { label: "Export PNG for Civitai", icon: "download", disabled: !shot.info,
           run: () => void this.exportShot(shot) },
         { label: "Start from this picture", icon: "add_photo_alternate",
-          run: () => void this.usePicture(this.previewURL(shot), `seed ${shot.seed}`, "img2img") },
+          run: () => void this.usePicture(this.previewURL(shot), `seed ${shot.seed}`, "img2img", false, shot.gallery) },
         ...(this.status?.backend !== "invokeai" ? [{ label: "Paint to fix", icon: "brush",
-          run: () => void this.usePicture(this.previewURL(shot), `seed ${shot.seed}`, "inpaint") }] : []),
+          run: () => void this.usePicture(this.previewURL(shot), `seed ${shot.seed}`, "inpaint", false, shot.gallery) }] : []),
         ...(this.status?.backend !== "invokeai" && this.status?.detailerAvailable ? [{ label: "Fix faces", icon: "face_retouching_natural",
           disabled: this.generating,
-          run: () => void this.usePicture(this.previewURL(shot), `seed ${shot.seed}`, "faces") }] : []),
+          run: () => void this.usePicture(this.previewURL(shot), `seed ${shot.seed}`, "faces", false, shot.gallery) }] : []),
         { label: "Use as a Libby background", icon: "wallpaper",
           run: () => void this.useAsBackground(shot) },
         { label: "Save as a pose…", icon: "accessibility_new",
@@ -4818,7 +4851,9 @@ export class OppaiImageGen extends LitElement {
     // Titled from what actually made it — after wildcards — rather than the reference.
     const name = title ?? ((shot.info?.prompt?.trim() || this.prompt.trim() || this.outfitText.trim()).slice(0, 80) || "Generated image");
     const res = await api.saveGenerated({ id: shot.id, title: name, tags, info: shot.info });
-    this.shots = this.shots.map((s) => (s.id === shot.id ? { ...s, saved: true } : s));
+    // Saving moved its gallery copy into the library: it is no longer there to start from.
+    this.shots = this.shots.map((s) => (s.id === shot.id ? { ...s, saved: true, gallery: undefined } : s));
+    if (shot.gallery) void this.galleryPanel?.refresh();
     this.dispatchEvent(new CustomEvent("imported", { bubbles: true, composed: true }));
     return res.id;
   }
@@ -5462,8 +5497,8 @@ export class OppaiImageGen extends LitElement {
     }
 
     const invoke = st.backend === "invokeai";
-    // InvokeAI keeps a gallery; A1111's outputs folder is one once the server can see it.
-    const gallery = st.gallery ?? (invoke ? "invokeai" : undefined);
+    // InvokeAI keeps a gallery; on A1111 the server keeps one of everything made here.
+    const gallery = st.gallery ?? (invoke ? "invokeai" : "oppailib");
     const activeModel = (st.models ?? []).find((model) => model.title === this.checkpoint);
     const modelName = activeModel?.model_name || this.checkpoint || "Choose a model";
     if (this.studio) return this.renderStudio(st, invoke, modelName);
@@ -5490,13 +5525,16 @@ export class OppaiImageGen extends LitElement {
           ${gallery
             ? html`<aside class="right create-gallery">
                 <oppai-invoke-gallery workspace backend=${gallery}
-                  .problem=${st.galleryProblem ?? ""}
+                  .startBoard=${this.board}
                   .canPaint=${!invoke}
                   .canFixFaces=${!invoke && !!st.detailerAvailable}
-                  @recheck=${() => this.loadStatus()}
-                  @use-picture=${(e: CustomEvent<UsePicture>) => void this.usePicture(e.detail.url, e.detail.name, e.detail.mode)}
+                  .canSetCovers=${invoke || !!st.manageModels}
+                  .loras=${(st.loras ?? []).map((l) => l.name)}
+                  @covers-changed=${() => this.bumpThumbs()}
+                  @use-picture=${(e: CustomEvent<UsePicture>) =>
+                    void this.usePicture(e.detail.url, e.detail.name, e.detail.mode, false, e.detail.gallery)}
                   @boards-changed=${() => this.loadStatus()}
-                  @board-changed=${(e: CustomEvent<{ board: string }>) => { if (invoke) this.board = e.detail.board; }}
+                  @board-changed=${(e: CustomEvent<{ board: string }>) => (this.board = e.detail.board)}
                   @cut-out=${(e: CustomEvent<{ url: string; name: string }>) =>
                     void this.openCutout(e.detail.url, e.detail.name)}
                   @reuse-generation=${(e: CustomEvent<GenInfo>) => this.reuseGenInfo(e.detail)}
@@ -8197,11 +8235,11 @@ export class OppaiImageGen extends LitElement {
                   <span class="material-symbols-rounded" style="font-size:16px;">photo_camera</span>
                 </button>` : nothing}
                 ${shot.outfitSlot ? nothing : html`<button class="act" title="Start the next picture from this one"
-                  @click=${() => void this.usePicture(this.previewURL(shot), `seed ${shot.seed}`, "img2img")}>
+                  @click=${() => void this.usePicture(this.previewURL(shot), `seed ${shot.seed}`, "img2img", false, shot.gallery)}>
                   <span class="material-symbols-rounded" style="font-size:16px;">add_photo_alternate</span>
                 </button>`}
                 ${shot.outfitSlot || this.status?.backend === "invokeai" ? nothing : html`<button class="act" title="Paint over a part to redo it"
-                  @click=${() => void this.usePicture(this.previewURL(shot), `seed ${shot.seed}`, "inpaint")}>
+                  @click=${() => void this.usePicture(this.previewURL(shot), `seed ${shot.seed}`, "inpaint", false, shot.gallery)}>
                   <span class="material-symbols-rounded" style="font-size:16px;">brush</span>
                 </button>`}
                 <button class="act" title="Copy this image's generation data"
