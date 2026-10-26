@@ -387,12 +387,18 @@ def load_job(job_id: str) -> dict | None:
         return None
 
 
+# The worker and a request (a cancel, say) can save one job at the same moment; one
+# at a time, or the second rename finds the first has already taken its file.
+_save_lock = threading.Lock()
+
+
 def save_job(job: dict) -> None:
     path = job_path(job["id"], "state.json")
     tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(job, f)
-    os.replace(tmp, path)
+    with _save_lock:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(job, f)
+        os.replace(tmp, path)
 
 
 def all_jobs() -> list[dict]:

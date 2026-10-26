@@ -248,8 +248,29 @@ class ApiTest(unittest.TestCase):
         self.assertEqual((code, json.loads(body)["images"]), (200, 2))
         # The job's own 10_ohwx, which no picture went into, is not left for sd-scripts.
         self.assertEqual(sorted(os.listdir(dataset)), ["22_ohwx", "3_ohwx"])
-        self.call("POST", f"/jobs/{job_id}/cancel")
+        # It has no base model, so it ends by itself; wait rather than race it.
+        self.wait(job_id)
         self.assertIn("repeats-per-file", json.loads(self.call("GET", "/health")[1])["features"])
+
+    def test_a_job_saved_from_two_threads_at_once_keeps_a_whole_state_file(self):
+        # Finished, so the worker leaves it alone: a queued one would be run.
+        job = {"id": "20990101-000000-race00", "state": "done"}
+        os.makedirs(server.job_path(job["id"]), exist_ok=True)
+        errors = []
+
+        def save(n):
+            try:
+                for _ in range(200):
+                    server.save_job({**job, "n": n})
+            except OSError as e:
+                errors.append(e)
+        threads = [threading.Thread(target=save, args=(n,)) for n in range(4)]
+        for th in threads:
+            th.start()
+        for th in threads:
+            th.join()
+        self.assertEqual(errors, [])
+        self.assertEqual(server.load_job(job["id"])["state"], "done")
 
     def test_a_job_with_a_bad_name_is_refused(self):
         self.assertEqual(self.call("POST", "/jobs", json.dumps({"name": "../x", "base": {"key": "k"}}).encode())[0], 400)
