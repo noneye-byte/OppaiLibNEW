@@ -102,7 +102,13 @@ import type { OppaiInvokeGallery, UsePicture, UsePictureMode } from "./imagegen-
 import "./imagegen-paint.js";
 import type { PaintResult } from "./imagegen-paint.js";
 import { sourceSize, type PaintStroke } from "../paint-mask.js";
-import { FACE_DETECTORS, detailerModels, fixLabel, passesFromModels, type DetailerPasses } from "../detailer.js";
+import {
+  FACE_DETECTORS, customDetectors, customPassParams, customPassesFrom, detailerModels, detectorLabel, fixLabel,
+  passesFromModels, type CustomPass, type DetailerPasses,
+} from "../detailer.js";
+import {
+  MAX_PEOPLE, newPerson, peopleFrom, regionBoxes, regionNegatives, regionParams, type RegionPerson,
+} from "../regions.js";
 import { hiresScale, hiresUpscalers, scaledSize, upscaleFactor } from "../upscale.js";
 import { inCategory, liveFilter, moveToCategory, uncategorised, type CategoryFilter } from "../lora-categories.js";
 
@@ -558,6 +564,12 @@ export class OppaiImageGen extends LitElement {
   // The detailer's passes: the faces, with detailerModel's detector, and the hands.
   @state() private detailerFaces = true;
   @state() private detailerHands = false;
+  // The passes after the faces and hands, each with a detector of its own (A1111).
+  @state() private detailerCustom: CustomPass[] = [];
+  // Several people, each drawn in a part of the picture of their own (regions.ts).
+  @state() private regionsOn = false;
+  @state() private regionsRows = false;
+  @state() private regionPeople: RegionPerson[] = [newPerson(), newPerson()];
   // A1111's hires fix on runs drawn from noise, and what a finished picture is
   // enlarged with when it is upscaled. Blank upscalers mean the first offered.
   @state() private hiresEnabled = false;
@@ -2847,6 +2859,31 @@ export class OppaiImageGen extends LitElement {
         color: var(--oppai-text-dim);
       }
       .manage-note .material-symbols-rounded { font-size: 18px; color: var(--oppai-primary-bright, var(--oppai-primary)); }
+      .custom-passes, .people { display: flex; flex-direction: column; gap: 8px; }
+      .pass-card {
+        display: flex; flex-direction: column; gap: 6px; padding: 9px; border-radius: 12px;
+        border: 1px solid var(--oppai-border); background: color-mix(in srgb, var(--oppai-surface-2) 60%, transparent);
+      }
+      .pass-row { display: flex; gap: 6px; align-items: center; }
+      .pass-row select { flex: 1; min-width: 0; }
+      .pass-row .lora-weight { width: 84px; flex: none; }
+      .pass-remove {
+        flex: none; width: 30px; height: 30px; display: grid; place-items: center; border-radius: 8px;
+        border: none; background: none; color: var(--oppai-text-dim); cursor: pointer;
+      }
+      .pass-remove:hover:not(:disabled) { background: var(--oppai-surface-2); color: var(--oppai-text); }
+      .pass-remove:disabled { opacity: 0.35; cursor: default; }
+      .pass-remove .material-symbols-rounded { font-size: 18px; }
+      .person-n { width: 18px; text-align: center; color: var(--oppai-primary-bright, var(--oppai-primary)); }
+      .people-layout {
+        display: flex; height: 54px; gap: 3px; border-radius: 10px; overflow: hidden;
+        border: 1px solid var(--oppai-border);
+      }
+      .people-layout.rows { flex-direction: column; height: 84px; }
+      .people-layout span {
+        display: grid; place-items: center; font-size: 12px; font-weight: 600; color: var(--oppai-text-dim);
+        background: color-mix(in srgb, var(--oppai-primary) 14%, var(--oppai-surface));
+      }
 
       .create-stage {
         min-width: 0;
@@ -3324,7 +3361,8 @@ export class OppaiImageGen extends LitElement {
     "outfitLockColors", "outfitLoadoutId", "outfitWardrobeId", "sheetZoom",
     "outfitUnderwearColor", "outfitPubicHair", "outfitPubicHairColor", "camera",
     "detailerEnabled", "detailerModel", "detailerPrompt", "detailerNegative",
-    "detailerConfidence", "detailerDenoise", "detailerMaskBlur", "detailerFaces", "detailerHands",
+    "detailerConfidence", "detailerDenoise", "detailerMaskBlur", "detailerFaces", "detailerHands", "detailerCustom",
+    "regionsOn", "regionsRows", "regionPeople",
     "hiresEnabled", "hiresUpscaler", "hiresScale", "hiresDenoise", "hiresSteps", "upscaleUpscaler", "upscaleBy",
     "open", "showOptions", "shots",
   ]);
@@ -3441,6 +3479,10 @@ export class OppaiImageGen extends LitElement {
       detailerMaskBlur: this.detailerMaskBlur,
       detailerFaces: this.detailerFaces,
       detailerHands: this.detailerHands,
+      detailerCustom: this.detailerCustom,
+      regionsOn: this.regionsOn,
+      regionsRows: this.regionsRows,
+      regionPeople: this.regionPeople,
       hiresEnabled: this.hiresEnabled,
       hiresUpscaler: this.hiresUpscaler,
       hiresScale: this.hiresScale,
@@ -3533,6 +3575,10 @@ export class OppaiImageGen extends LitElement {
     }
     if (d.detailerFaces !== undefined) this.detailerFaces = d.detailerFaces;
     if (d.detailerHands !== undefined) this.detailerHands = d.detailerHands;
+    if (d.detailerCustom) this.detailerCustom = d.detailerCustom;
+    if (d.regionsOn !== undefined) this.regionsOn = d.regionsOn;
+    if (d.regionsRows !== undefined) this.regionsRows = d.regionsRows;
+    if (d.regionPeople?.length) this.regionPeople = d.regionPeople;
     if (d.hiresEnabled !== undefined) this.hiresEnabled = d.hiresEnabled;
     if (d.hiresUpscaler !== undefined) this.hiresUpscaler = d.hiresUpscaler;
     if (d.hiresScale !== undefined) this.hiresScale = d.hiresScale;
@@ -3929,6 +3975,9 @@ export class OppaiImageGen extends LitElement {
         if (p.negativePrompt?.trim()) negParts.push(p.negativePrompt.trim());
       }
     }
+    // Regional Prompter splits the positive prompt only, so the people's characters
+    // keep their negatives in the shared one.
+    if (this.regionsActive) negParts.push(...regionNegatives(this.regionPeople, this.characters));
     // What the LoRAs that are on ask to keep out of the picture.
     negParts.push(loraNegatives(negParts.join(", "),
       (this.status?.loras ?? []).filter((l) => l.name in this.selectedLoras).map((l) => l.negative)));
@@ -4223,17 +4272,30 @@ export class OppaiImageGen extends LitElement {
       asked for with both passes switched off redoes the faces. */
   private detailerParams(): NonNullable<GenerateParams["detailer"]> {
     const models = detailerModels(this.detailerPasses);
-    if (!models.length) models.push(this.detailerModel);
+    const custom = this.status?.detectors?.length ? customPassParams(this.detailerCustom) : [];
+    if (!models.length && !custom.length) models.push(this.detailerModel);
     return {
       enabled: true,
       model: models[0],
       models,
+      custom: custom.length ? custom : undefined,
       prompt: this.detailerPrompt || undefined,
       negativePrompt: this.detailerNegative || undefined,
       confidence: this.detailerConfidence,
       denoise: this.detailerDenoise,
       maskBlur: this.detailerMaskBlur,
     };
+  }
+
+  /** Whether the detailer has anything to run: faces, hands or a pass of its own. */
+  private get detailerHasPasses(): boolean {
+    return detailerModels(this.detailerPasses).length > 0
+      || (!!this.status?.detectors?.length && customPassParams(this.detailerCustom).length > 0);
+  }
+
+  /** Whether the next run draws its people in parts of their own. */
+  private get regionsActive(): boolean {
+    return !!this.status?.regionsAvailable && this.regionsOn && this.regionPeople.length >= 2;
   }
 
   /** Whether this generator can enlarge pictures: A1111 listing its upscalers. */
@@ -4307,9 +4369,11 @@ export class OppaiImageGen extends LitElement {
         count: this.outfitOn ? 1 : this.count,
         seed: this.seed,
         loras: Object.entries(this.selectedLoras).map(([name, weight]) => ({ name, weight })),
-        detailer: this.status?.detailerAvailable && this.detailerEnabled && detailerModels(this.detailerPasses).length
+        detailer: this.status?.detailerAvailable && this.detailerEnabled && this.detailerHasPasses
           ? this.detailerParams() : undefined,
         upscale: src ? undefined : this.hiresParams(),
+        regions: src || !this.regionsActive ? undefined
+          : regionParams(true, this.regionsRows, this.regionPeople, this.characters),
     };
     if (src) {
       // A run from a picture comes out the picture's shape, not the size controls'.
@@ -4773,6 +4837,13 @@ export class OppaiImageGen extends LitElement {
       this.detailerConfidence = params.detailer.confidence ?? 0.3;
       this.detailerDenoise = params.detailer.denoise ?? 0.4;
       this.detailerMaskBlur = params.detailer.maskBlur ?? 4;
+      this.detailerCustom = customPassesFrom(params.detailer.custom);
+    }
+    const people = peopleFrom(params.regions);
+    this.regionsOn = people.length >= 2;
+    if (this.regionsOn) {
+      this.regionPeople = people;
+      this.regionsRows = !!params.regions?.rows;
     }
     // A picture made with a hires fix is made the same way again; one made without
     // leaves the switch as it was, since most records are from before it existed.
@@ -5706,7 +5777,7 @@ export class OppaiImageGen extends LitElement {
   private renderCreateRail() {
     const badges: Partial<Record<CreateTab, number>> = {
       loras: Object.keys(this.selectedLoras).length,
-      look: this.selectedChars.length + this.selectedPoses.length,
+      look: this.selectedChars.length + this.selectedPoses.length + (this.regionsActive ? this.regionPeople.length : 0),
       templates: this.templateId ? 1 : 0,
     };
     return html`<nav class="create-rail" aria-label="Generation setup">
@@ -5758,7 +5829,8 @@ export class OppaiImageGen extends LitElement {
           break;
         case "look":
           body = html`<div class="pane-title">Characters</div>${this.renderCharacterSection()}
-            <div class="pane-title">Poses</div>${this.renderPoseSection()}`;
+            <div class="pane-title">Poses</div>${this.renderPoseSection()}
+            ${invoke ? nothing : html`<div class="pane-title">People in parts of their own</div>${this.renderPeopleSection()}`}`;
           break;
         case "wildcards":
           body = this.renderWildcardSection();
@@ -6782,8 +6854,8 @@ export class OppaiImageGen extends LitElement {
                 ${FACE_DETECTORS.map((d) => html`<option value=${d.id} ?selected=${d.id === this.detailerModel}>${d.label}</option>`)}
               </select>
             </div>` : nothing}
-            ${!this.detailerFaces && !this.detailerHands ? html`<div class="full sec-note">
-              Neither pass is on, so runs skip the detailer. Turn on faces, hands or both.</div>` : nothing}
+            ${!this.detailerHasPasses ? html`<div class="full sec-note">
+              No pass is on, so runs skip the detailer. Turn on faces, hands or both, or add a pass.</div>` : nothing}
             <div class="full">
               <label class="field">Detail prompt (blank reuses prompt)</label>
               <input class="num" .value=${this.detailerPrompt}
@@ -6809,6 +6881,7 @@ export class OppaiImageGen extends LitElement {
               <input class="num" type="number" min="0" max="64" .value=${String(this.detailerMaskBlur)}
                 @input=${(e: Event) => (this.detailerMaskBlur = clampNum((e.target as HTMLInputElement).value, 0, 64, 4))} />
             </div>
+            ${invoke ? nothing : this.renderCustomPasses()}
           ` : nothing}
         ` : invoke ? nothing : html`<div class="full manage-note">
           <span class="material-symbols-rounded">face_retouching_natural</span>
@@ -6820,6 +6893,133 @@ export class OppaiImageGen extends LitElement {
       </div>
     `;
     return this.section("settings", "Model settings", `${this.steps} steps`, body);
+  }
+
+  /** The detailer's passes after the faces and hands: each a detector ADetailer has,
+      with words and a LoRA of its own for what that detector finds. */
+  private renderCustomPasses() {
+    const detectors = customDetectors(this.status?.detectors);
+    const loras = this.status?.loras ?? [];
+    const set = (i: number, patch: Partial<CustomPass>) =>
+      (this.detailerCustom = this.detailerCustom.map((p, j) => (j === i ? { ...p, ...patch } : p)));
+    if (!detectors.length) {
+      return html`<div class="full sec-note">ADetailer didn't list its detectors, so extra passes can't be picked —
+        it may be an old version; update it under Extensions in A1111.</div>`;
+    }
+    return html`<div class="full custom-passes">
+      <label class="field">Extra passes</label>
+      ${this.detailerCustom.map((p, i) => html`<div class="pass-card">
+        <div class="pass-row">
+          <select class="num" aria-label="Detector"
+            @change=${(e: Event) => set(i, { model: (e.target as HTMLSelectElement).value })}>
+            ${p.model && !detectors.includes(p.model)
+              ? html`<option value=${p.model} selected>${detectorLabel(p.model)} — not in ADetailer now</option>` : nothing}
+            ${detectors.map((d) => html`<option value=${d} ?selected=${d === p.model}>${detectorLabel(d)}</option>`)}
+          </select>
+          <button class="pass-remove" title="Remove this pass" aria-label="Remove this pass"
+            @click=${() => (this.detailerCustom = this.detailerCustom.filter((_, j) => j !== i))}>
+            <span class="material-symbols-rounded">close</span>
+          </button>
+        </div>
+        <input class="num" .value=${p.prompt} placeholder="Words for what it finds (blank: the detail prompt)"
+          @input=${(e: Event) => set(i, { prompt: (e.target as HTMLInputElement).value })} />
+        <div class="pass-row">
+          <select class="num" aria-label="LoRA for this pass"
+            @change=${(e: Event) => set(i, { lora: (e.target as HTMLSelectElement).value })}>
+            <option value="" ?selected=${!p.lora}>No LoRA</option>
+            ${loras.map((l) => html`<option value=${l.name} ?selected=${l.name === p.lora}>${l.alias || l.name}</option>`)}
+          </select>
+          ${p.lora ? html`<input class="lora-weight" type="number" min="-2" max="2" step="0.05" title="LoRA weight"
+            aria-label="LoRA weight" .value=${String(p.loraWeight)}
+            @input=${(e: Event) => set(i, { loraWeight: clampFloat((e.target as HTMLInputElement).value, -2, 2, 0.8) })} />` : nothing}
+          <input class="lora-weight" type="number" min="0" max="1" step="0.05" placeholder="Denoise"
+            title="How far it may redraw (blank: the detailer's)" aria-label="Denoise"
+            .value=${p.denoise ? String(p.denoise) : ""}
+            @input=${(e: Event) => set(i, { denoise: clampFloat((e.target as HTMLInputElement).value, 0, 1, 0) })} />
+        </div>
+      </div>`)}
+      <button class="side-add" ?disabled=${this.detailerCustom.length >= 6}
+        @click=${() => (this.detailerCustom = [...this.detailerCustom,
+          { model: detectors[0], prompt: "", lora: "", loraWeight: 0.8, denoise: 0 }])}>
+        <span class="material-symbols-rounded" style="font-size:17px;">add</span> Add a pass
+      </button>
+      <div class="sec-note">Each pass redoes what its detector finds, after the faces and hands, with its own words
+        and LoRA. Detectors for other parts of a body are YOLO models: install one from Civitai (Detectors), or drop
+        the .pt into A1111's models/adetailer, then restart A1111. ADetailer runs as many passes as its "Max models"
+        setting allows (A1111 Settings → ADetailer) — raise it if a pass is skipped.</div>
+    </div>`;
+  }
+
+  /** Several people, each in a part of the picture drawn from their own words and LoRA. */
+  private renderPeopleSection() {
+    if (!this.status?.regionsAvailable) {
+      return html`<div class="manage-note">
+        <span class="material-symbols-rounded">group</span>
+        <span>To draw two or more people with a character LoRA each, without their faces blending into one, install
+          the Regional Prompter extension in Automatic1111 — Extensions → Available → Regional Prompter — and restart it.
+          Each person then gets a part of the picture of their own.</span>
+      </div>`;
+    }
+    const chars = this.characters;
+    const loras = this.status?.loras ?? [];
+    const people = this.regionPeople;
+    const set = (i: number, patch: Partial<RegionPerson>) =>
+      (this.regionPeople = this.regionPeople.map((p, j) => (j === i ? { ...p, ...patch } : p)));
+    const boxes = regionBoxes(people);
+    return html`<div class="pane people">
+      <label class="switch-row"><input type="checkbox" .checked=${this.regionsOn}
+        @change=${(e: Event) => (this.regionsOn = (e.target as HTMLInputElement).checked)} />
+        Draw each person in a part of their own</label>
+      ${this.regionsOn ? html`
+        <div class="chips">
+          <button class="chip small ${this.regionsRows ? "" : "on"}" aria-pressed=${this.regionsRows ? "false" : "true"}
+            @click=${() => (this.regionsRows = false)}>Side by side</button>
+          <button class="chip small ${this.regionsRows ? "on" : ""}" aria-pressed=${this.regionsRows ? "true" : "false"}
+            @click=${() => (this.regionsRows = true)}>Stacked</button>
+        </div>
+        <div class="people-layout ${this.regionsRows ? "rows" : ""}" aria-hidden="true">
+          ${boxes.map((b, i) => html`<span style="flex:${b.size}">${i + 1}</span>`)}
+        </div>
+        ${people.map((p, i) => html`<div class="pass-card">
+          <div class="pass-row">
+            <b class="person-n">${i + 1}</b>
+            <select class="num" aria-label="Character for person ${i + 1}"
+              @change=${(e: Event) => set(i, { character: (e.target as HTMLSelectElement).value })}>
+              <option value="" ?selected=${!p.character}>No saved character</option>
+              ${chars.map((c) => html`<option value=${c.id} ?selected=${c.id === p.character}>${c.name}</option>`)}
+            </select>
+            <button class="pass-remove" title="Remove person ${i + 1}" aria-label="Remove person ${i + 1}"
+              ?disabled=${people.length <= 2}
+              @click=${() => (this.regionPeople = this.regionPeople.filter((_, j) => j !== i))}>
+              <span class="material-symbols-rounded">close</span>
+            </button>
+          </div>
+          <input class="num" .value=${p.words} placeholder="Their words: hair, clothes, what they're doing"
+            @input=${(e: Event) => set(i, { words: (e.target as HTMLInputElement).value })} />
+          <div class="pass-row">
+            <select class="num" aria-label="LoRA for person ${i + 1}"
+              @change=${(e: Event) => set(i, { lora: (e.target as HTMLSelectElement).value })}>
+              <option value="" ?selected=${!p.lora}>No LoRA</option>
+              ${loras.map((l) => html`<option value=${l.name} ?selected=${l.name === p.lora}>${l.alias || l.name}</option>`)}
+            </select>
+            ${p.lora ? html`<input class="lora-weight" type="number" min="-2" max="2" step="0.05" title="LoRA weight"
+              aria-label="LoRA weight" .value=${String(p.loraWeight)}
+              @input=${(e: Event) => set(i, { loraWeight: clampFloat((e.target as HTMLInputElement).value, -2, 2, 0.8) })} />` : nothing}
+            <input class="lora-weight" type="number" min="0.5" max="4" step="0.5"
+              title=${this.regionsRows ? "How tall their part is beside the others" : "How wide their part is beside the others"}
+              aria-label="Size of their part" .value=${String(p.share)}
+              @input=${(e: Event) => set(i, { share: clampFloat((e.target as HTMLInputElement).value, 0.5, 4, 1) })} />
+          </div>
+        </div>`)}
+        <button class="side-add" ?disabled=${people.length >= MAX_PEOPLE}
+          @click=${() => (this.regionPeople = [...this.regionPeople, newPerson()])}>
+          <span class="material-symbols-rounded" style="font-size:17px;">person_add</span> Add a person
+        </button>
+        <div class="sec-note">The prompt becomes what everyone shares: say how many there are (2girls) and where
+          they are. Pick each person's character and LoRA here rather than above, or they go to everyone.
+          ${this.regionsRows ? "" : "Side by side, the face pass redoes each face with its person's words and LoRA, left to right."}</div>
+      ` : nothing}
+    </div>`;
   }
 
   /** The hires fix, and what an upscale of a finished picture uses (A1111). */

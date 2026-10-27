@@ -73,6 +73,8 @@ func civitaiInstallType(t string) string {
 		return "controlnet"
 	case "upscaler":
 		return "upscaler"
+	case "detection":
+		return "detection"
 	}
 	return t
 }

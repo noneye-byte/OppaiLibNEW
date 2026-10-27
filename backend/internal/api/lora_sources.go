@@ -16,16 +16,18 @@ import (
 
 	"github.com/youruser/oppailib/internal/models"
 	"github.com/youruser/oppailib/internal/scraper"
+	"github.com/youruser/oppailib/internal/sources"
 )
 
-// Filling a training set from an X account, and tagging a set.
+// Filling a training set from an X account or a source, and tagging a set.
 //
 // Pictures from outside go into a training set (lora_sets.go), never the library.
 // Uploads need nothing here: the browser shows the files it was given and sends the
 // ones kept to the set itself. An X account is different: the browser cannot see
 // x.com, so the server lists the account's pictures (scraper/twitter_user.go), the
 // browser shows them through the image proxy, and only the ones kept are downloaded
-// into the set.
+// into the set. A Browse source (Rule34) is listed through its own browse endpoint
+// the same way, and its kept posts come here to be downloaded.
 //
 // Importing a few hundred pictures, or tagging them, takes minutes, so both run in
 // the background as a task the screen polls. A task lives in memory: it is a
@@ -145,6 +147,15 @@ type trainImportItem struct {
 	// Source is where the picture was found — the post — kept as the item's source.
 	Source string `json:"source"`
 	Title  string `json:"title"`
+	// Post, in place of URL, is a Browse source's post to read the picture's file
+	// from first: Rule34 listed without an API key has thumbnails and post links
+	// only, and reading every post just to list them is forty requests a page.
+	Post *trainImportPost `json:"post,omitempty"`
+}
+
+type trainImportPost struct {
+	Source string `json:"source"` // a Browse source's id: "rule34"
+	Feed   string `json:"feed"`   // the item's feed id: "post:123"
 }
 
 type trainImportReq struct {
@@ -165,12 +176,22 @@ func (s *Server) handleTrainImport(w http.ResponseWriter, r *http.Request) {
 	items := make([]trainImportItem, 0, len(req.Items))
 	seen := map[string]bool{}
 	for _, it := range req.Items {
+		if it.Post != nil && strings.TrimSpace(it.URL) == "" {
+			key := it.Post.Source + "/" + it.Post.Feed
+			if _, ok := s.sources.Get(it.Post.Source); !ok || it.Post.Feed == "" || seen[key] {
+				continue
+			}
+			seen[key] = true
+			items = append(items, it)
+			continue
+		}
 		u, err := url.Parse(strings.TrimSpace(it.URL))
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || seen[u.String()] {
 			continue
 		}
 		seen[u.String()] = true
 		it.URL = u.String()
+		it.Post = nil
 		items = append(items, it)
 	}
 	if len(items) == 0 {
@@ -231,6 +252,13 @@ func (s *Server) trainImport(tasks *trainTasks, task *trainTask, setID int64, it
 // politeness delay, as the image proxy does: these are a CDN's pictures the person
 // has just looked at, and the import already bounds how many go at once.
 func (s *Server) trainImportOne(ctx context.Context, setID int64, it trainImportItem) (int64, error) {
+	if it.URL == "" && it.Post != nil {
+		media, err := s.trainPostMedia(ctx, *it.Post)
+		if err != nil {
+			return 0, err
+		}
+		it.URL = media
+	}
 	dl, err := s.scraper.FetchImage(ctx, it.URL)
 	if err != nil {
 		return 0, err
@@ -245,6 +273,34 @@ func (s *Server) trainImportOne(ctx context.Context, setID int64, it trainImport
 	}
 	pic, _, err := s.addTrainPicture(ctx, setID, data, it.Source)
 	return pic.ID, err
+}
+
+// trainPostMedia reads a source's post for its picture's file. The file's host is
+// checked against the sources' own, as the stream proxy checks it: a post is the
+// other site's page, and where it points is not ours to follow blindly.
+func (s *Server) trainPostMedia(ctx context.Context, post trainImportPost) (string, error) {
+	src, ok := s.sources.Get(post.Source)
+	if !ok {
+		return "", fmt.Errorf("unknown source %q", post.Source)
+	}
+	listing, err := src.Browse(ctx, sources.BrowseParams{Feed: post.Feed})
+	if err != nil {
+		return "", err
+	}
+	for _, item := range listing.Items {
+		if item.MediaURL == "" {
+			continue
+		}
+		if item.Kind != "image" {
+			return "", fmt.Errorf("that post is a %s, not a still picture", item.Kind)
+		}
+		u, err := url.Parse(item.MediaURL)
+		if err != nil || !s.sources.AllowsHost(u.Hostname()) {
+			return "", errors.New("that post's file is somewhere the source doesn't keep its pictures")
+		}
+		return item.MediaURL, nil
+	}
+	return "", errors.New("that post has no picture")
 }
 
 // ── tagging a set ───────────────────────────────────────────────────────────

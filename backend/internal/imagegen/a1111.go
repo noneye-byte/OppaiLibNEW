@@ -102,21 +102,27 @@ func (c *Client) a1111Generate(ctx context.Context, base string, req GenerateReq
 		BatchSize:      1,
 		RestoreAfter:   true,
 	}
+	payload.OverrideSettings = map[string]any{}
 	if req.Detailer.Enabled {
-		// The second argument is ADetailer's "skip img2img": the img2img pass is run
-		// at one step and thrown away, and the detailer works on the init image. Each
-		// argument after it is one of ADetailer's tabs, run in order on what the last
-		// one left, which is how the faces and then the hands are both redone.
-		args := []any{true, req.DetailOnly && len(req.InitImage) > 0}
-		for _, model := range req.Detailer.Passes() {
-			args = append(args, map[string]any{
-				"ad_model": model, "ad_tab_enable": true,
-				"ad_prompt": req.Detailer.Prompt, "ad_negative_prompt": req.Detailer.NegativePrompt,
-				"ad_confidence": req.Detailer.Confidence, "ad_denoising_strength": req.Detailer.Denoise,
-				"ad_mask_blur": req.Detailer.MaskBlur,
-			})
-		}
+		args := a1111DetailerArgs(req)
 		payload.AlwaysOnScripts = map[string]any{"ADetailer": map[string]any{"args": args}}
+		if tabs := len(args) - 2; tabs > 2 {
+			// ADetailer runs as many tabs as its "Max models" setting has (two unless
+			// changed), so a third pass would be dropped without a word.
+			payload.OverrideSettings["ad_max_models"] = min(tabs, 10)
+		}
+		if len(req.Detailer.FacePrompts) > 1 {
+			// ADetailer's own setting for the order its boxes are handed prompts in;
+			// the people's prompts are written left to right.
+			payload.OverrideSettings["ad_bbox_sortby"] = "Position (left to right)"
+		}
+	}
+	if req.Regions.Active() && len(req.InitImage) == 0 {
+		payload.Prompt = regionalPrompt(req.Prompt+a1111LoraTokens(req.Loras), req.Regions)
+		if payload.AlwaysOnScripts == nil {
+			payload.AlwaysOnScripts = map[string]any{}
+		}
+		payload.AlwaysOnScripts["Regional Prompter"] = map[string]any{"args": regionalArgs(req.Regions)}
 	}
 	if up := req.Upscale; up.Enabled && len(req.InitImage) == 0 {
 		// img2img has no hires fix; a picture started from is the size it is.
@@ -145,14 +151,11 @@ func (c *Client) a1111Generate(ctx context.Context, base string, req GenerateReq
 		}
 		payload.AlwaysOnScripts["controlnet"] = map[string]any{"args": a1111ControlArgs(req.Controls)}
 	}
-	if req.Checkpoint != "" || req.VAE != "" {
-		payload.OverrideSettings = map[string]any{}
-		if req.Checkpoint != "" {
-			payload.OverrideSettings["sd_model_checkpoint"] = req.Checkpoint
-		}
-		if req.VAE != "" {
-			payload.OverrideSettings["sd_vae"] = req.VAE
-		}
+	if req.Checkpoint != "" {
+		payload.OverrideSettings["sd_model_checkpoint"] = req.Checkpoint
+	}
+	if req.VAE != "" {
+		payload.OverrideSettings["sd_vae"] = req.VAE
 	}
 
 	body, err := json.Marshal(payload)
@@ -358,6 +361,12 @@ func clampDenoise(d float64) float64 {
 }
 
 func (c *Client) a1111SupportsADetailer(ctx context.Context, base string) bool {
+	return c.a1111HasScript(ctx, base, "ADetailer")
+}
+
+// a1111HasScript is whether an extension's script is loaded for txt2img. The list
+// names scripts by their titles, in whatever case the extension wrote them.
+func (c *Client) a1111HasScript(ctx context.Context, base, title string) bool {
 	var scripts struct {
 		Txt2Img []string `json:"txt2img"`
 	}
@@ -365,11 +374,31 @@ func (c *Client) a1111SupportsADetailer(ctx context.Context, base string) bool {
 		return false
 	}
 	for _, name := range scripts.Txt2Img {
-		if strings.EqualFold(strings.TrimSpace(name), "ADetailer") {
+		if strings.EqualFold(strings.TrimSpace(name), title) {
 			return true
 		}
 	}
 	return false
+}
+
+// a1111Detectors is every detector ADetailer can run: its own face, hand and person
+// models and whatever has been dropped into its models folder beside them, which
+// is where a model that finds other parts of a body comes from. "None" is
+// ADetailer's way of switching a tab off, not a detector.
+func (c *Client) a1111Detectors(ctx context.Context, base string) ([]string, error) {
+	var out struct {
+		Models []string `json:"ad_model"`
+	}
+	if err := c.getJSON(ctx, base+"/adetailer/v1/ad_model", &out); err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(out.Models))
+	for _, m := range out.Models {
+		if m = strings.TrimSpace(m); m != "" && !strings.EqualFold(m, "None") {
+			names = append(names, m)
+		}
+	}
+	return names, nil
 }
 
 // decodeImage turns one API image string into raw bytes. A1111 returns bare base64,

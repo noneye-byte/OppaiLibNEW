@@ -203,6 +203,14 @@ func (s *Server) handleImageGenStatus(w http.ResponseWriter, r *http.Request) {
 		out["gallerySorts"] = []string{"newest", "oldest", "largest"}
 	}
 	out["detailerAvailable"] = s.imagegen.SupportsADetailer(ctx, set.ImageGenURL)
+	// The detectors ADetailer has on A1111, including ones dropped into its folder
+	// for parts of a body its own models never look for.
+	if out["detailerAvailable"] == true && backend == imagegen.KindA1111 {
+		if names, err := s.imagegen.Detectors(ctx, set.ImageGenURL); err == nil {
+			out["detectors"] = append([]string{}, names...)
+		}
+	}
+	out["regionsAvailable"] = s.imagegen.SupportsRegions(ctx, set.ImageGenURL)
 	// What a picture can be enlarged with: on A1111 its upscaler models (an upscale
 	// or a hires fix) and latent modes (a hires fix only). InvokeAI lists none.
 	if ups, latent, err := s.imagegen.Upscalers(ctx, set.ImageGenURL); err == nil && backend == imagegen.KindA1111 {
@@ -292,6 +300,21 @@ type generateReq struct {
 	// NoGallery leaves the run out of the studio's gallery: the LoRA comparison's
 	// sheets, which are drawn to be looked at side by side and not kept.
 	NoGallery bool `json:"noGallery"`
+	// Regions draws each person in a part of the picture of their own, from their
+	// own words and LoRAs; Prompt is then what the whole picture shares.
+	Regions regionsReq `json:"regions"`
+}
+
+type regionsReq struct {
+	Enabled bool            `json:"enabled"`
+	Rows    bool            `json:"rows"`
+	Parts   []regionPartReq `json:"parts"`
+}
+
+type regionPartReq struct {
+	Prompt string    `json:"prompt"`
+	Loras  []loraReq `json:"loras"`
+	Share  float64   `json:"share"`
 }
 
 type detailerReq struct {
@@ -305,6 +328,18 @@ type detailerReq struct {
 	Confidence     float64  `json:"confidence"`
 	Denoise        float64  `json:"denoise"`
 	MaskBlur       int      `json:"maskBlur"`
+	// Custom is a pass per detector of the person's choosing, after the faces and
+	// hands, each with a prompt and LoRAs of its own.
+	Custom []detailerPassReq `json:"custom"`
+}
+
+type detailerPassReq struct {
+	Model          string    `json:"model"`
+	Prompt         string    `json:"prompt"`
+	NegativePrompt string    `json:"negativePrompt"`
+	Loras          []loraReq `json:"loras"`
+	Confidence     float64   `json:"confidence"`
+	Denoise        float64   `json:"denoise"`
 }
 
 type upscaleReq struct {
@@ -376,7 +411,8 @@ func (s *Server) handleImageGenGenerate(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		status := http.StatusBadGateway
-		if errors.Is(err, imagegen.ErrInpaintUnsupported) || errors.Is(err, imagegen.ErrUpscaleUnsupported) {
+		if errors.Is(err, imagegen.ErrInpaintUnsupported) || errors.Is(err, imagegen.ErrUpscaleUnsupported) ||
+			errors.Is(err, imagegen.ErrRegionsUnsupported) {
 			status = http.StatusConflict
 		} else {
 			s.log.Warn("image generate", "err", err)
@@ -516,22 +552,8 @@ func (s *Server) prepareGenerate(req *generateReq) (gen imagegen.GenerateRequest
 	// Sanitize the LoRA picks once here; each backend applies them its own way
 	// (A1111 as prompt tokens, InvokeAI as graph nodes). promptRecord is the
 	// human-readable account of the whole request, kept for the save notes.
-	var loras []imagegen.LoraWeight
-	promptRecord = req.Prompt
-	for _, lora := range req.Loras {
-		name := strings.TrimSpace(strings.NewReplacer("<", "", ">", "", ":", "").Replace(lora.Name))
-		if name == "" {
-			continue
-		}
-		weight := lora.Weight
-		if weight < -2 {
-			weight = -2
-		} else if weight > 2 {
-			weight = 2
-		}
-		loras = append(loras, imagegen.LoraWeight{Name: name, Weight: weight})
-		promptRecord += fmt.Sprintf(" <lora:%s:%.2g>", name, weight)
-	}
+	loras := sanitizeLoras(req.Loras)
+	promptRecord = req.Prompt + loraTokens(loras)
 
 	cpuNoise := true // preserve Invoke's safe existing default for older clients
 	if req.CPUNoise != nil {
@@ -576,13 +598,78 @@ func (s *Server) prepareGenerate(req *generateReq) (gen imagegen.GenerateRequest
 			Denoise: req.Upscale.Denoise, Steps: req.Upscale.Steps,
 		},
 	}
+	for _, p := range req.Detailer.Custom {
+		if model := strings.TrimSpace(p.Model); model != "" {
+			gen.Detailer.Custom = append(gen.Detailer.Custom, imagegen.DetailerPass{
+				Model: model, Prompt: strings.TrimSpace(p.Prompt), NegativePrompt: strings.TrimSpace(p.NegativePrompt),
+				Loras: sanitizeLoras(p.Loras), Confidence: p.Confidence, Denoise: p.Denoise,
+			})
+		}
+	}
+	if req.Regions.Enabled && len(req.Regions.Parts) >= 2 {
+		gen.Regions = imagegen.Regions{Enabled: true, Rows: req.Regions.Rows}
+		for i, p := range req.Regions.Parts {
+			part := imagegen.RegionPart{Prompt: strings.TrimSpace(p.Prompt), Loras: sanitizeLoras(p.Loras), Share: p.Share}
+			gen.Regions.Parts = append(gen.Regions.Parts, part)
+			promptRecord += fmt.Sprintf("\nPerson %d: %s%s", i+1, part.Prompt, loraTokens(part.Loras))
+		}
+		if !req.Regions.Rows && gen.Detailer.Enabled {
+			// Side by side, the faces are in the people's order left to right, so the
+			// face pass can redo each one with that person's words and LoRAs. The
+			// regions keep a LoRA to its part, but one face pass over the whole
+			// picture would give every face the same prompt again.
+			for _, part := range gen.Regions.Parts {
+				face := strings.TrimSpace(part.Prompt + loraTokens(part.Loras))
+				if own := strings.TrimSpace(req.Detailer.Prompt); own != "" {
+					face = own + ", " + face
+				}
+				gen.Detailer.FacePrompts = append(gen.Detailer.FacePrompts, face)
+			}
+		}
+	}
 	return gen, promptRecord, rolled
+}
+
+// sanitizeLoras drops the blank LoRA picks and the characters that would break out
+// of a prompt token, and keeps each weight within what a LoRA means.
+func sanitizeLoras(in []loraReq) []imagegen.LoraWeight {
+	var out []imagegen.LoraWeight
+	for _, lora := range in {
+		name := strings.TrimSpace(strings.NewReplacer("<", "", ">", "", ":", "").Replace(lora.Name))
+		if name == "" {
+			continue
+		}
+		weight := lora.Weight
+		if weight < -2 {
+			weight = -2
+		} else if weight > 2 {
+			weight = 2
+		}
+		out = append(out, imagegen.LoraWeight{Name: name, Weight: weight})
+	}
+	return out
+}
+
+// loraTokens writes LoRAs the A1111 way, each after a space: how the save notes
+// record them, and how a face's own prompt carries them into ADetailer.
+func loraTokens(loras []imagegen.LoraWeight) string {
+	var b strings.Builder
+	for _, l := range loras {
+		fmt.Fprintf(&b, " <lora:%s:%.2g>", l.Name, l.Weight)
+	}
+	return b.String()
 }
 
 // expandGenerateWildcards rolls the wildcards in every prompt field of a request and
 // reports whether any changed.
 func (s *Server) expandGenerateWildcards(req *generateReq) bool {
 	fields := []*string{&req.Prompt, &req.NegativePrompt, &req.Detailer.Prompt, &req.Detailer.NegativePrompt}
+	for i := range req.Detailer.Custom {
+		fields = append(fields, &req.Detailer.Custom[i].Prompt, &req.Detailer.Custom[i].NegativePrompt)
+	}
+	for i := range req.Regions.Parts {
+		fields = append(fields, &req.Regions.Parts[i].Prompt)
+	}
 	needed := false
 	for _, f := range fields {
 		if strings.Contains(*f, "__") || strings.Contains(*f, "{") {
@@ -648,6 +735,20 @@ func clampGenerate(req *generateReq) {
 	req.Detailer.MaskBlur = clampInt(req.Detailer.MaskBlur, 0, 64)
 	if len(req.Detailer.Models) > 4 {
 		req.Detailer.Models = req.Detailer.Models[:4]
+	}
+	// ADetailer runs as many tabs as A1111's settings give it (two by default, up
+	// to ten), so more passes than fit beside the faces and hands are trimmed here.
+	if len(req.Detailer.Custom) > 6 {
+		req.Detailer.Custom = req.Detailer.Custom[:6]
+	}
+	for i := range req.Detailer.Custom {
+		p := &req.Detailer.Custom[i]
+		p.Confidence = min(max(p.Confidence, 0), 1)
+		p.Denoise = min(max(p.Denoise, 0), 1)
+	}
+	// Four people side by side is already a squeeze at SDXL's sizes.
+	if len(req.Regions.Parts) > 4 {
+		req.Regions.Parts = req.Regions.Parts[:4]
 	}
 	clampUpscale(req)
 	if req.Count <= 0 {

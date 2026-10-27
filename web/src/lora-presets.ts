@@ -333,3 +333,15 @@ export function shareLine(share: PlayDownShare | undefined, total: number): stri
   if (after === before) return `${share.pictures} of ${total} pictures (${before}) — too few repeats to shift; it is still named in their captions.`;
   return `${share.pictures} of ${total} pictures (${before}) — trained as about ${after}, and named in their captions.`;
 }
+
+/**
+ * The pictures of a set that don't have a tag: what "keep only her" drops. Pictures
+ * pulled from a comic or a tag search have everyone in them, and a character LoRA
+ * wants the one; once the tagger has named who is in each, her tag sorts them. A
+ * tag is matched the way the captions match it, so "hatsune_miku" finds "hatsune miku".
+ */
+export function picturesWithout(items: { id: number; tags: { name: string }[] }[], tag: string): number[] {
+  const want = tagKey(tag);
+  if (!want) return [];
+  return items.filter((i) => !i.tags.some((t) => tagKey(t.name) === want)).map((i) => i.id);
+}

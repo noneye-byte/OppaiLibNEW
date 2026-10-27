@@ -165,6 +165,10 @@ func recordingA1111(t *testing.T, got map[string]map[string]any) *httptest.Serve
 			fmt.Fprint(w, `[{"name":"None"},{"name":"Lanczos"},{"name":"R-ESRGAN 4x+"}]`)
 		case "/sdapi/v1/latent-upscale-modes":
 			fmt.Fprint(w, `[{"name":"Latent"},{"name":"Latent (antialiased)"}]`)
+		case "/sdapi/v1/scripts":
+			fmt.Fprint(w, `{"txt2img":["ADetailer","regional prompter"]}`)
+		case "/adetailer/v1/ad_model":
+			fmt.Fprint(w, `{"ad_model":["None","face_yolov8n.pt","hand_yolov8n.pt","nipples_yolov8s-seg.pt"]}`)
 		default:
 			http.NotFound(w, r)
 		}

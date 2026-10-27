@@ -331,6 +331,10 @@ type GenerateRequest struct {
 	// else — a finished picture made bigger without being redrawn.
 	Upscale     Upscale
 	UpscaleOnly bool
+	// Regions draws several people in one picture, each from a prompt and LoRAs of
+	// their own, in side-by-side (or stacked) parts of it. Automatic1111 with the
+	// Regional Prompter extension only; see regions.go.
+	Regions Regions
 	// Controls are pictures that steer the run without being started from: a pose to
 	// copy, a face to keep. Automatic1111 and Forge apply them through the ControlNet
 	// extension; a backend that cannot fails with ErrControlUnsupported so the caller
@@ -368,6 +372,10 @@ var ErrInpaintUnsupported = errors.New("painting a picture to fix it, and fixing
 // upscaling needs a per-install upscale model record this client does not resolve.
 var ErrUpscaleUnsupported = errors.New("upscaling needs Automatic1111 — InvokeAI upscales in its own canvas")
 
+// ErrRegionsUnsupported is a picture of several people in parts of their own, or a
+// detailer pass with a detector of its own, sent where it cannot be drawn that way.
+var ErrRegionsUnsupported = errors.New("people in parts of the picture of their own, and detail passes with a detector of their own, need Automatic1111 with the Regional Prompter and ADetailer extensions")
+
 // Detailer configures either the ADetailer Automatic1111 extension or InvokeAI's
 // adetailer node. The shared fields deliberately map to both APIs.
 type Detailer struct {
@@ -382,13 +390,34 @@ type Detailer struct {
 	Confidence     float64
 	Denoise        float64
 	MaskBlur       int
+	// Custom passes run after the face and hand passes, each with a detector of its
+	// own choosing (one of Detectors, a YOLO model dropped into ADetailer's folder)
+	// and a prompt and LoRAs of its own: a part of the body a general face model
+	// never finds, redone with the LoRA that draws it well. Automatic1111 only.
+	Custom []DetailerPass
+	// FacePrompts, when there are several people, is a prompt per face, left to
+	// right: each face pass redoes the first face found with the first, the second
+	// with the second, so each person keeps their own LoRA's face.
+	FacePrompts []string
+}
+
+// DetailerPass is one custom ADetailer tab. A blank prompt, or a zero confidence or
+// denoise, takes the detailer's own.
+type DetailerPass struct {
+	Model          string
+	Prompt         string
+	NegativePrompt string
+	Loras          []LoraWeight
+	Confidence     float64
+	Denoise        float64
 }
 
 // DefaultDetector is the pass a detailer runs when none is named.
 const DefaultDetector = "face_yolov8n.pt"
 
 // Passes is the detectors the detailer runs, one pass each, in order, without
-// blanks or repeats.
+// blanks or repeats. A detailer with nothing named redoes the faces, unless it has
+// custom passes: those are what it was asked to run, faces and hands switched off.
 func (d Detailer) Passes() []string {
 	names := d.Models
 	if len(names) == 0 {
@@ -404,7 +433,7 @@ func (d Detailer) Passes() []string {
 		seen[n] = true
 		out = append(out, n)
 	}
-	if len(out) == 0 {
+	if len(out) == 0 && len(d.Custom) == 0 {
 		out = append(out, DefaultDetector)
 	}
 	return out
@@ -832,6 +861,9 @@ func (c *Client) Generate(ctx context.Context, base string, req GenerateRequest)
 		if req.Upscale.Enabled || req.UpscaleOnly {
 			return nil, ErrUpscaleUnsupported
 		}
+		if req.Regions.Active() || len(req.Detailer.Custom) > 0 {
+			return nil, ErrRegionsUnsupported
+		}
 		res, err := c.invokeGenerate(ctx, base, req)
 		return rejectBlackGeneration(res, err)
 	}
@@ -926,6 +958,26 @@ func (c *Client) SupportsADetailer(ctx context.Context, base string) bool {
 		return available
 	}
 	return c.a1111SupportsADetailer(ctx, base)
+}
+
+// Detectors lists what ADetailer can look for on Automatic1111: its own models and
+// any added to its folder. InvokeAI's node picks its detector itself, so none.
+func (c *Client) Detectors(ctx context.Context, base string) ([]string, error) {
+	kind, err := c.Backend(ctx, base)
+	if err != nil || kind == KindInvokeAI {
+		return nil, err
+	}
+	return c.a1111Detectors(ctx, base)
+}
+
+// SupportsRegions is whether the generator can draw people in parts of the picture
+// of their own: Automatic1111 with the Regional Prompter extension.
+func (c *Client) SupportsRegions(ctx context.Context, base string) bool {
+	kind, err := c.Backend(ctx, base)
+	if err != nil || kind == KindInvokeAI {
+		return false
+	}
+	return c.a1111HasScript(ctx, base, "Regional Prompter")
 }
 
 // getJSON GETs url and decodes the JSON body into v.

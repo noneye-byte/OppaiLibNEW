@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  PRESETS, autoRepeats, captionOf, datasetAdvice, epochsFor, estimateSteps, isPlayedDown, minSideFor, presetById, setKeep, shareLine,
-  suggestLeaveOut, tagKey, togglePlayDown, wantsLowVram,
+  PRESETS, autoRepeats, captionOf, datasetAdvice, epochsFor, estimateSteps, isPlayedDown, minSideFor, picturesWithout, presetById,
+  setKeep, shareLine, suggestLeaveOut, tagKey, togglePlayDown, wantsLowVram,
 } from "./lora-presets.ts";
 
 const character = presetById("character");
@@ -140,4 +140,15 @@ test("the share line says what the tag comes to, or why it cannot move", () => {
   );
   assert.match(shareLine({ tag: "1girl", pictures: 20, before: 1, after: 1 }, 20), /can't be made rarer/);
   assert.equal(shareLine(undefined, 20), "");
+});
+
+test("keeping only one character drops the pictures she isn't tagged in, however her tag is spelled", () => {
+  const items = [
+    { id: 1, tags: [{ name: "hatsune_miku" }, { name: "1girl" }] },
+    { id: 2, tags: [{ name: "kagamine rin" }] },
+    { id: 3, tags: [] },
+    { id: 4, tags: [{ name: "Hatsune Miku" }, { name: "kagamine_rin" }] },
+  ];
+  assert.deepEqual(picturesWithout(items, " hatsune miku "), [2, 3]);
+  assert.deepEqual(picturesWithout(items, "   "), []);
 });

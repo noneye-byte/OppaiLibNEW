@@ -19,11 +19,12 @@ import {
 } from "../api.js";
 import { toggleTag, trainingActive, trainingFraction, trainingLine, triggerFrom } from "../train-progress.js";
 import {
-  EFFORTS, KEEP_STEPS, PRESETS, captionOf, datasetAdvice, epochsFor, estimateSteps, isPlayedDown, minSideFor, playDownNames,
-  presetById, setKeep, shareLine, suggestLeaveOut, tagKey, togglePlayDown, wantsLowVram, type Effort, type PresetId,
+  EFFORTS, KEEP_STEPS, PRESETS, captionOf, datasetAdvice, epochsFor, estimateSteps, isPlayedDown, minSideFor, picturesWithout,
+  playDownNames, presetById, setKeep, shareLine, suggestLeaveOut, tagKey, togglePlayDown, wantsLowVram, type Effort, type PresetId,
 } from "../lora-presets.js";
 import { loraStyles } from "./lora-styles.js";
 import "./lora-gather.js";
+import "./lora-comic.js";
 import "./lora-comparison.js";
 
 /**
@@ -50,7 +51,7 @@ import "./lora-comparison.js";
  */
 
 type Tab = "new" | "runs" | "compare";
-type AddMode = "upload" | "x" | "library";
+type AddMode = "upload" | "x" | "rule34" | "comic" | "library";
 type Step = 1 | 2 | 3 | 4;
 
 const STEPS: { n: Step; title: string; icon: string }[] = [
@@ -63,6 +64,8 @@ const STEPS: { n: Step; title: string; icon: string }[] = [
 const ADD_MODES: { id: AddMode; title: string; icon: string }[] = [
   { id: "upload", title: "Upload", icon: "upload_file" },
   { id: "x", title: "An X account", icon: "public" },
+  { id: "rule34", title: "Rule34", icon: "travel_explore" },
+  { id: "comic", title: "A comic", icon: "auto_stories" },
   { id: "library", title: "From the library", icon: "photo_library" },
 ];
 
@@ -102,6 +105,8 @@ export class OppaiLoraTrain extends LitElement {
   @state() private setId = 0;
   @state() private addMode: AddMode = "upload";
   @state() private exclude: number[] = [];
+  // The tag of the one character a set's pictures are narrowed to (Tags step).
+  @state() private onlyTag = "";
   /** Copying out of the library: a collection or a tag, and whether to move. */
   @state() private collections: Collection[] = [];
   @state() private libKind: "collection" | "tag" = "collection";
@@ -515,6 +520,19 @@ export class OppaiLoraTrain extends LitElement {
       this.preview = { ...this.preview, items, count: items.length };
     }
     if (this.editing === id) this.editing = 0;
+    this.schedulePreview(600);
+  }
+
+  /** Drops every picture the character isn't tagged in, the way dropping one does. */
+  private keepOnly(tag: string) {
+    const p = this.preview;
+    if (!p) return;
+    const ids = new Set(picturesWithout(p.items, tag));
+    if (!ids.size) return;
+    this.exclude = [...this.exclude, ...ids];
+    const items = p.items.filter((i) => !ids.has(i.id));
+    this.preview = { ...p, items, count: items.length };
+    if (ids.has(this.editing)) this.editing = 0;
     this.schedulePreview(600);
   }
 
@@ -1058,6 +1076,12 @@ export class OppaiLoraTrain extends LitElement {
       case "x":
         return html`<oppai-lora-gather mode="x" .setId=${this.setId} .setName=${this.setId || this.name.trim() ? setName : ""}
           @gathered=${(e: CustomEvent<{ setId: number }>) => this.gathered(e.detail.setId)}></oppai-lora-gather>`;
+      case "rule34":
+        return html`<oppai-lora-gather mode="rule34" .setId=${this.setId} .setName=${this.setId || this.name.trim() ? setName : ""}
+          @gathered=${(e: CustomEvent<{ setId: number }>) => this.gathered(e.detail.setId)}></oppai-lora-gather>`;
+      case "comic":
+        return html`<oppai-lora-comic .setId=${this.setId} .setName=${this.setId || this.name.trim() ? setName : ""}
+          @gathered=${(e: CustomEvent<{ setId: number }>) => this.gathered(e.detail.setId)}></oppai-lora-comic>`;
       case "library": {
         const ready = this.libKind === "tag" ? !!this.libTag.trim() : !!this.libCollection;
         return html`
@@ -1102,6 +1126,28 @@ export class OppaiLoraTrain extends LitElement {
   }
 
   // Step 3 ------------------------------------------------------------------
+
+  /** Narrowing a set to one character by her tag, once the tagger has named who is
+      in each picture: what a comic's panels or a tag search need for a character. */
+  private renderKeepOnly(p: TrainPreview) {
+    const without = this.onlyTag.trim() ? picturesWithout(p.items, this.onlyTag).length : 0;
+    return html`<div class="card">
+      <h3><span class="material-symbols-rounded">person</span> Keep only one character</h3>
+      <p class="sub">Pictures from a comic or a tag search have everyone in them. Type her tag — as the tagger writes it,
+        like <b>hatsune_miku</b> — and the pictures she isn't tagged in are dropped from this LoRA (they stay in the set).</p>
+      <div class="row" style="align-items:center;">
+        <input type="text" list="keep-only-tags" .value=${this.onlyTag} placeholder="Her tag"
+          @input=${(e: Event) => (this.onlyTag = (e.target as HTMLInputElement).value)} />
+        <datalist id="keep-only-tags">${p.commonTags.map((t) => html`<option value=${t.name}></option>`)}</datalist>
+        <button class="btn" style="flex:none;" ?disabled=${!without || without === p.count}
+          @click=${() => this.keepOnly(this.onlyTag)}>
+          <span class="material-symbols-rounded">close</span> Drop ${without || ""} without it
+        </button>
+      </div>
+      ${this.onlyTag.trim() && without === p.count
+        ? html`<div class="note">No picture is tagged with that. Check the spelling against the tags above.</div>` : nothing}
+    </div>`;
+  }
 
   private renderTags() {
     const p = this.preview;
@@ -1157,6 +1203,7 @@ export class OppaiLoraTrain extends LitElement {
           </div>`
         : nothing}
       ${p.commonTags.length ? this.renderPlayDown(p) : nothing}
+      ${p.count && p.untagged < p.count ? this.renderKeepOnly(p) : nothing}
       <div class="card">
         <h3><span class="material-symbols-rounded">edit_note</span> Every picture</h3>
         <p class="sub">Each caption as it will be written. Click a picture to fix its tags or drop it from the set.</p>

@@ -481,6 +481,7 @@ var civitaiTypes = map[string][]string{
 	"vae":        {"VAE"},
 	"controlnet": {"Controlnet"},
 	"upscaler":   {"Upscaler"},
+	"detection":  {"Detection"},
 }
 
 var civitaiSorts = map[string]string{
@@ -501,7 +502,7 @@ var civitaiPeriods = map[string]string{
 // handleCivitaiSearch proxies one page of Civitai's model search.
 //
 //	q=…            words in the name and description
-//	type=lora      checkpoint | lora | embedding | vae | controlnet | upscaler
+//	type=lora      checkpoint | lora | embedding | vae | controlnet | upscaler | detection
 //	category=…     one of the catalogue's tags (see /categories)
 //	base=SDXL 1.0  one base model, as the catalogue names them
 //	period=month   day | week | month | year | all (the window the sort ranks in)

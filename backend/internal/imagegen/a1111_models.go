@@ -58,8 +58,10 @@ var (
 	a1111VaeFolder   = a1111Folder{"vae", "VAE", []string{"vae"}}
 	a1111ControlNet  = a1111Folder{"controlnet", "ControlNet", []string{"controlnet"}}
 	a1111Upscalers   = a1111Folder{"upscaler", "ESRGAN", []string{"esrgan", "upscale_models"}}
+	// ADetailer's detectors: YOLO models that find a part of a picture to redo.
+	a1111DetectorFolder = a1111Folder{"detection", "adetailer", []string{"adetailer"}}
 
-	a1111AllFolders = []a1111Folder{a1111Checkpoints, a1111LoraFolder, a1111VaeFolder, a1111ControlNet, a1111Upscalers}
+	a1111AllFolders = []a1111Folder{a1111Checkpoints, a1111LoraFolder, a1111VaeFolder, a1111ControlNet, a1111Upscalers, a1111DetectorFolder}
 )
 
 // a1111InstallFolders maps a catalogue type (as the Civitai search filter names it,
@@ -75,6 +77,7 @@ var a1111InstallFolders = map[string]a1111Folder{
 	"vae":        a1111VaeFolder,
 	"controlnet": a1111ControlNet,
 	"upscaler":   a1111Upscalers,
+	"detection":  a1111DetectorFolder,
 }
 
 // A1111InstallFolder says where a model of the catalogue's type would be installed,

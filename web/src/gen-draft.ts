@@ -1,6 +1,8 @@
 import type { GenInfo } from "./gen-info.js";
 import type { CameraSpec } from "./camera.js";
 import type { OutfitGear } from "./outfit-loadout.js";
+import type { CustomPass } from "./detailer.js";
+import type { RegionPerson } from "./regions.js";
 
 /**
  * Local draft persistence for the Creation tab.
@@ -140,6 +142,12 @@ export interface GenDraft {
   /** The detailer's passes. Absent on drafts from when it was one detector. */
   detailerFaces?: boolean;
   detailerHands?: boolean;
+  /** The detailer's passes with detectors of their own. */
+  detailerCustom?: CustomPass[];
+  /** People drawn in parts of their own. */
+  regionsOn?: boolean;
+  regionsRows?: boolean;
+  regionPeople?: RegionPerson[];
   /** A1111's hires fix, and what an upscale of a finished picture uses. */
   hiresEnabled?: boolean;
   hiresUpscaler?: string;

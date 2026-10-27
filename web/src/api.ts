@@ -1561,6 +1561,11 @@ export interface ImageGenStatus {
   /** The orders the gallery can be listed in. */
   gallerySorts?: GallerySort[];
   detailerAvailable?: boolean;
+  /** A1111 only: every detector ADetailer can run, its own and any dropped into its
+      models/adetailer folder — what a custom detail pass picks from. */
+  detectors?: string[];
+  /** A1111 with Regional Prompter: people can be drawn in parts of their own. */
+  regionsAvailable?: boolean;
   /** A1111 only: what a picture can be enlarged with — upscaler models (an upscale
       or a hires fix) and latent modes (a hires fix only). */
   upscalers?: string[];
@@ -1671,7 +1676,13 @@ export interface GenerateParams {
     confidence?: number;
     denoise?: number;
     maskBlur?: number;
+    /** Passes after the faces and hands, each with a detector, words and LoRAs of
+        its own (A1111). */
+    custom?: DetailerPassParams[];
   };
+  /** Each person in a part of the picture of their own, from their own words and
+      LoRAs; `prompt` is then what the whole picture shares (A1111 + Regional Prompter). */
+  regions?: RegionsParams;
   /** A picture to start from instead of noise, as a data URL: image to image. */
   initImage?: string;
   /** How far the run may move from initImage, 0–1. */
@@ -1692,6 +1703,24 @@ export interface GenerateParams {
   initGallery?: string;
   /** Leave the run out of the studio's gallery (the LoRA comparison's sheets). */
   noGallery?: boolean;
+}
+
+/** One custom detailer pass. A blank prompt, or a 0 confidence or denoise, takes
+    the detailer's own. */
+export interface DetailerPassParams {
+  model: string;
+  prompt?: string;
+  negativePrompt?: string;
+  loras?: { name: string; weight: number }[];
+  confidence?: number;
+  denoise?: number;
+}
+
+/** The people a picture is drawn in parts for: side by side, or stacked in rows. */
+export interface RegionsParams {
+  enabled: boolean;
+  rows?: boolean;
+  parts: { prompt: string; loras?: { name: string; weight: number }[]; share?: number }[];
 }
 
 /** What the trainer says about itself. */
@@ -3430,7 +3459,8 @@ export const api = {
       {}, 60_000),
   /** Downloads the kept pictures into a training set, in the background. */
   trainImport: (body: {
-    items: { url: string; source?: string; title?: string }[];
+    /** `post`, with `url` blank, is a source's post the server reads for its file. */
+    items: { url: string; source?: string; title?: string; post?: { source: string; feed: string } }[];
     setId?: number;
     setName?: string;
   }) => request<TrainTask>("/api/imagegen/train/import", { method: "POST", body: JSON.stringify(body) }, 30_000),

@@ -57,6 +57,7 @@ const TYPES: { id: string; label: string }[] = [
   { id: "vae", label: "VAEs" },
   { id: "controlnet", label: "ControlNet" },
   { id: "upscaler", label: "Upscalers" },
+  { id: "detection", label: "Detectors" },
 ];
 
 const SORTS: { id: string; label: string }[] = [

@@ -1,12 +1,13 @@
 import { LitElement, html, css, nothing } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { iconStyles } from "../theme.js";
-import { api, type TrainTask, type TwitterMediaPage, type TwitterPicture } from "../api.js";
+import { api, type SourceItem, type TrainTask, type TwitterMediaPage, type TwitterPicture } from "../api.js";
+import { rule34Query, rule34Keeps } from "../rule34-search.js";
 import { loraStyles } from "./lora-styles.js";
 
 /**
- * Bringing pictures into a training set: files from this computer, or an X
- * account's pictures. Either way the person sees every candidate first and keeps
+ * Bringing pictures into a training set: files from this computer, an X account's
+ * pictures, or a Rule34 tag search. Either way the person sees every candidate first and keeps
  * what they want, and only what is kept is stored — uploaded to the set, or
  * downloaded into it by the server (lora_sources.go). A set is not the library
  * (lora_sets.go): nothing kept here turns up in a grid or gets tagged behind the
@@ -15,7 +16,7 @@ import { loraStyles } from "./lora-styles.js";
  * Dispatches "gathered" with the set's id once the pictures are in.
  */
 
-type Mode = "upload" | "x";
+type Mode = "upload" | "x" | "rule34";
 
 interface LocalFile {
   key: string;
@@ -51,6 +52,13 @@ export class OppaiLoraGather extends LitElement {
   @state() private reposts = false;
   @state() private task: TrainTask | null = null;
   @state() private error = "";
+
+  @state() private tags = "";
+  @state() private noAI = true;
+  @state() private r34Sort: "newest" | "score" = "score";
+  @state() private posts: SourceItem[] = [];
+  @state() private r34Cursor = "";
+  @state() private r34Searched = "";
 
   static styles = [
     iconStyles,
@@ -92,6 +100,7 @@ export class OppaiLoraGather extends LitElement {
   }
 
   render() {
+    if (this.mode === "rule34") return this.renderRule34();
     return this.mode === "upload" ? this.renderUpload() : this.renderX();
   }
 
@@ -382,6 +391,146 @@ export class OppaiLoraGather extends LitElement {
         : acct && !this.loading && !acct.protected
           ? html`<div class="empty"><span class="material-symbols-rounded">image</span>No pictures on this account's Media tab.</div>`
           : nothing}
+    `;
+  }
+
+  // ── a Rule34 tag search ───────────────────────────────────────────────────
+
+  private get keptPosts(): SourceItem[] {
+    return this.posts.filter((p) => !this.dropped.has(p.id));
+  }
+
+  /** Reads the search's first pages afresh. */
+  private async searchRule34() {
+    const tags = this.tags.trim();
+    if (!tags || this.loading) return;
+    this.posts = [];
+    this.dropped = new Set();
+    this.r34Cursor = "";
+    this.r34Searched = rule34Query(tags, this.noAI);
+    await this.moreRule34(2);
+  }
+
+  /** Reads up to `pages` more pages of the search, stopping at its end. */
+  private async moreRule34(pages = 2) {
+    const q = this.r34Searched;
+    if (!q || this.loading) return;
+    this.loading = true;
+    this.error = "";
+    try {
+      for (let i = 0; i < pages; i++) {
+        const page = await api.browseSource("rule34", { feed: "search", q, sort: this.r34Sort, cursor: this.r34Cursor || undefined });
+        if (q !== this.r34Searched) return;
+        const have = new Set(this.posts.map((p) => p.id));
+        this.posts = [...this.posts, ...rule34Keeps(page.items, this.noAI).filter((p) => !have.has(p.id))];
+        this.r34Cursor = page.cursor ?? "";
+        if (!this.r34Cursor) break;
+      }
+      if (!this.posts.length) this.error = "Nothing on Rule34 matches those tags.";
+    } catch (e) {
+      const msg = (e as Error).message;
+      // Rule34 turns its listing pages away from some addresses outright; its API,
+      // with an account's key, answers them.
+      this.error = /403|credentials/.test(msg)
+        ? `Rule34 turned the search away (${msg}). Add your Rule34 user id and API key under Settings → Import & scraping — searches then go through its API.`
+        : msg;
+    } finally {
+      this.loading = false;
+    }
+  }
+
+  private async importPosts() {
+    const kept = this.keptPosts;
+    if (!kept.length || this.task) return;
+    this.error = "";
+    try {
+      let task = await api.trainImport({
+        // Without a Rule34 API key the listing has no file links, only posts; the
+        // server reads each kept post for its file as it downloads it.
+        items: kept.map((p) => ({
+          url: p.mediaUrl ?? "",
+          source: p.pageUrl ?? "",
+          title: p.title,
+          post: p.mediaUrl ? undefined : { source: "rule34", feed: p.feedId ?? `post:${p.id}` },
+        })),
+        setId: this.setId || undefined,
+        setName: this.setName || `Rule34 · ${this.tags.trim()}`,
+      });
+      this.task = task;
+      while (!task.finished) {
+        await new Promise((r) => setTimeout(r, 1000));
+        if (!this.isConnected) return;
+        task = await api.trainTask(task.id);
+        this.task = task;
+      }
+      if (task.error) throw new Error(task.error);
+      if (task.failed) this.error = `${task.failed} picture${task.failed === 1 ? "" : "s"} couldn't be downloaded and ${task.failed === 1 ? "was" : "were"} skipped.`;
+      this.setId = task.setId ?? this.setId;
+      this.posts = [];
+      this.r34Searched = "";
+      this.dispatchEvent(new CustomEvent("gathered", { detail: { setId: task.setId } }));
+    } catch (e) {
+      this.error = (e as Error).message;
+    } finally {
+      this.task = null;
+    }
+  }
+
+  private renderRule34() {
+    const kept = this.keptPosts.length;
+    return html`
+      <form class="search" @submit=${(e: Event) => { e.preventDefault(); void this.searchRule34(); }}>
+        <input type="text" placeholder="Tags: an artist, a character, a style — e.g. artist_name solo" .value=${this.tags}
+          @input=${(e: Event) => (this.tags = (e.target as HTMLInputElement).value)} />
+        <button class="btn primary" type="submit" ?disabled=${!this.tags.trim() || this.loading}>
+          <span class="material-symbols-rounded">search</span> ${this.loading && !this.posts.length ? "Looking…" : "Find pictures"}
+        </button>
+      </form>
+      <div class="toolbar" style="margin-top:10px;">
+        <label class="check" style="margin:0;"><input type="checkbox" .checked=${this.noAI}
+          @change=${(e: Event) => (this.noAI = (e.target as HTMLInputElement).checked)} />Leave out AI pictures</label>
+        <div class="seg small">
+          <button class=${this.r34Sort === "score" ? "on" : ""} @click=${() => (this.r34Sort = "score")}>Top score</button>
+          <button class=${this.r34Sort === "newest" ? "on" : ""} @click=${() => (this.r34Sort = "newest")}>Newest</button>
+        </div>
+      </div>
+      <div class="note">Searches Rule34 with your tags${this.noAI ? html`, leaving out <b>ai_generated</b> and the other AI tags — a LoRA trained on another model's pictures learns its mistakes` : nothing}.
+        Videos and animations are left out. Only the pictures you keep are downloaded.</div>
+      ${this.error ? html`<div class="banner"><span class="material-symbols-rounded">warning</span>${this.error}</div>` : nothing}
+      ${this.posts.length
+        ? html`
+            <div class="toolbar">
+              <span class="count">${kept} of ${this.posts.length} kept</span>
+              <button class="btn small ghost" @click=${() => (this.dropped = new Set())}>Keep all</button>
+              <button class="btn small ghost" @click=${() => (this.dropped = new Set(this.posts.map((p) => p.id)))}>Keep none</button>
+            </div>
+            <div class="picks">
+              ${this.posts.map((p) => {
+                const on = !this.dropped.has(p.id);
+                const small = p.width && p.height && Math.min(p.width, p.height) < 640;
+                return html`<button class="pick ${on ? "on" : "off"}" title=${(p.tags ?? []).slice(0, 30).join(" ")}
+                    @click=${() => this.togglePicture(p.id)}>
+                  <img src=${api.sourceStreamURL(p.thumbUrl)} alt="" loading="lazy" />
+                  <span class="mark"><span class="material-symbols-rounded">${on ? "check" : "close"}</span></span>
+                  ${small ? html`<span class="badge">small</span>` : nothing}
+                </button>`;
+              })}
+            </div>
+            ${this.r34Cursor
+              ? html`<div class="more"><button class="btn" ?disabled=${this.loading} @click=${() => this.moreRule34()}>
+                  <span class="material-symbols-rounded">${this.loading ? "hourglass_top" : "expand_more"}</span> ${this.loading ? "Loading…" : "Load more"}
+                </button></div>`
+              : html`<div class="note" style="text-align:center;">That's everything for those tags.</div>`}
+            <div class="footer">
+              ${this.task
+                ? html`<div class="what">Downloading ${this.task.done + this.task.failed} of ${this.task.total}…</div>
+                    <div class="bar"><div style="width:${this.task.total ? ((this.task.done + this.task.failed) / this.task.total) * 100 : 0}%"></div></div>`
+                : html`<div class="what">Kept pictures go into the training set <b>${this.setName || `Rule34 · ${this.tags.trim()}`}</b>, not your library.</div>
+                    <button class="btn primary" ?disabled=${!kept} @click=${() => this.importPosts()}>
+                      <span class="material-symbols-rounded">download</span> Keep ${kept}
+                    </button>`}
+            </div>`
+        : nothing}
     `;
   }
 }

@@ -73,6 +73,7 @@ type genRecord struct {
 	Refiner        *genRecordRefiner            `json:"refiner,omitempty"`
 	Hires          *genRecordUpscale            `json:"hires,omitempty"`
 	Upscaled       *genRecordUpscale            `json:"upscaled,omitempty"`
+	Regions        *genRecordRegions            `json:"regions,omitempty"`
 	Backend        string                       `json:"backend"`
 	At             int64                        `json:"at"`
 }
@@ -86,6 +87,40 @@ type genRecordRefiner struct {
 	Confidence     float64  `json:"confidence"`
 	Denoise        float64  `json:"denoise"`
 	MaskBlur       int      `json:"maskBlur"`
+	// Custom is the passes with detectors of their own, after the faces and hands.
+	Custom []genRecordPass `json:"custom,omitempty"`
+}
+
+// genRecordPass is one custom detailer pass, in the request's own shape so a
+// picture's "use these settings" puts it back as it was.
+type genRecordPass struct {
+	Model          string                       `json:"model"`
+	Prompt         string                       `json:"prompt,omitempty"`
+	NegativePrompt string                       `json:"negativePrompt,omitempty"`
+	Loras          []imagegen.ImageMetadataLora `json:"loras,omitempty"`
+	Confidence     float64                      `json:"confidence,omitempty"`
+	Denoise        float64                      `json:"denoise,omitempty"`
+}
+
+// genRecordRegions is the people a picture was drawn in parts for, in order.
+type genRecordRegions struct {
+	Rows  bool                  `json:"rows,omitempty"`
+	Parts []genRecordRegionPart `json:"parts"`
+}
+
+type genRecordRegionPart struct {
+	Prompt string                       `json:"prompt"`
+	Loras  []imagegen.ImageMetadataLora `json:"loras,omitempty"`
+	Share  float64                      `json:"share,omitempty"`
+}
+
+// recordLoras is LoRAs as a record keeps them.
+func recordLoras(loras []imagegen.LoraWeight) []imagegen.ImageMetadataLora {
+	var out []imagegen.ImageMetadataLora
+	for _, l := range loras {
+		out = append(out, imagegen.ImageMetadataLora{Name: l.Name, Weight: l.Weight})
+	}
+	return out
 }
 
 // genRecordUpscale is how a picture was enlarged: by a hires fix as it was drawn,
@@ -119,10 +154,26 @@ func genRecordOf(gen imagegen.GenerateRequest, seed int64, width, height int) ge
 	}
 	if d := gen.Detailer; d.Enabled && !gen.UpscaleOnly {
 		passes := d.Passes()
-		rec.Refiner = &genRecordRefiner{Model: passes[0], Prompt: d.Prompt, NegativePrompt: d.NegativePrompt,
+		first := ""
+		if len(passes) > 0 {
+			first = passes[0]
+		}
+		rec.Refiner = &genRecordRefiner{Model: first, Prompt: d.Prompt, NegativePrompt: d.NegativePrompt,
 			Confidence: d.Confidence, Denoise: d.Denoise, MaskBlur: d.MaskBlur}
 		if len(passes) > 1 {
 			rec.Refiner.Models = passes
+		}
+		for _, p := range d.Custom {
+			rec.Refiner.Custom = append(rec.Refiner.Custom, genRecordPass{
+				Model: p.Model, Prompt: p.Prompt, NegativePrompt: p.NegativePrompt,
+				Loras: recordLoras(p.Loras), Confidence: p.Confidence, Denoise: p.Denoise,
+			})
+		}
+	}
+	if r := gen.Regions; r.Active() && len(gen.InitImage) == 0 {
+		rec.Regions = &genRecordRegions{Rows: r.Rows}
+		for _, p := range r.Parts {
+			rec.Regions.Parts = append(rec.Regions.Parts, genRecordRegionPart{Prompt: p.Prompt, Loras: recordLoras(p.Loras), Share: p.Share})
 		}
 	}
 	if up := gen.Upscale; gen.UpscaleOnly {

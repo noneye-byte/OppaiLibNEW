@@ -1,4 +1,4 @@
-import type { GalleryImageMetadata, GenerateParams } from "./api.js";
+import type { DetailerPassParams, GalleryImageMetadata, GenerateParams, RegionsParams } from "./api.js";
 
 /**
  * The complete record of how one image was made, and how to write it down.
@@ -77,7 +77,11 @@ export interface GenInfo {
     confidence: number;
     denoise: number;
     maskBlur: number;
+    /** The passes after those, each with a detector, words and LoRAs of its own. */
+    custom?: DetailerPassParams[];
   };
+  /** The people drawn in parts of their own, in order. */
+  regions?: RegionsParams;
   /** A hires fix: drawn, enlarged by `scale` with `upscaler`, drawn again. */
   hires?: { upscaler: string; scale: number; denoise?: number; steps?: number };
   /** A finished picture enlarged and not redrawn. */
@@ -153,8 +157,10 @@ export function buildGenInfo(
             confidence: params.detailer.confidence ?? 0,
             denoise: params.detailer.denoise ?? 0,
             maskBlur: params.detailer.maskBlur ?? 0,
+            custom: params.detailer.custom?.length ? params.detailer.custom : undefined,
           }
         : undefined,
+    regions: params.regions?.enabled && !params.initImage && !params.initGallery ? params.regions : undefined,
     hires: params.upscale?.enabled && !params.upscaleOnly && !params.initImage && !params.initGallery
       ? { upscaler: params.upscale.upscaler ?? "", scale: params.upscale.scale ?? 2,
           denoise: params.upscale.denoise, steps: params.upscale.steps || undefined }
@@ -306,6 +312,7 @@ export function toGenerateParams(info: GenInfo): GenerateParams {
     loras: info.loras.map(({ name, weight }) => ({ name, weight })),
     detailer: info.refiner ? { enabled: true, ...info.refiner } : undefined,
     upscale: info.hires ? { enabled: true, ...info.hires } : undefined,
+    regions: info.regions?.parts?.length ? { ...info.regions, enabled: true } : undefined,
     board: info.board,
   };
 }
