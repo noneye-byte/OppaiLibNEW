@@ -942,29 +942,39 @@ func buildInvokeGraphFrom(main invokeModelRecord, vae *invokeModelRecord, loras 
 	// InvokeAI 6.14's ADetailer node accepts a finished image and performs its own
 	// detection + inpaint pass. Its "auto" model path selects the detector from the
 	// target, which lets the same face/hand/person choices work on A1111 and Invoke.
+	// One node per pass, each working on the last one's picture: the faces, then
+	// the hands.
 	if req.Detailer.Enabled {
-		target := "face"
-		model := strings.ToLower(req.Detailer.Model)
-		if strings.Contains(model, "hand") {
-			target = "hand"
-		} else if strings.Contains(model, "person") {
-			target = "person"
+		last := "l2i"
+		for i, model := range req.Detailer.Passes() {
+			target := "face"
+			model = strings.ToLower(model)
+			if strings.Contains(model, "hand") {
+				target = "hand"
+			} else if strings.Contains(model, "person") {
+				target = "person"
+			}
+			id := "adetailer"
+			if i > 0 {
+				id = fmt.Sprintf("adetailer_%d", i+1)
+			}
+			nodes[id] = map[string]any{
+				"id": id, "type": "adetailer", "is_intermediate": true,
+				"prompt": req.Detailer.Prompt, "negative_prompt": req.Detailer.NegativePrompt,
+				"target": target, "model_path": "auto", "confidence": req.Detailer.Confidence,
+				"denoise_strength": req.Detailer.Denoise, "mask_blur": req.Detailer.MaskBlur,
+				"steps": req.Steps, "cfg_scale": req.CfgScale, "scheduler": scheduler,
+			}
+			edge(last, "image", id, "image")
+			last = id
 		}
-		nodes["adetailer"] = map[string]any{
-			"id": "adetailer", "type": "adetailer", "is_intermediate": true,
-			"prompt": req.Detailer.Prompt, "negative_prompt": req.Detailer.NegativePrompt,
-			"target": target, "model_path": "auto", "confidence": req.Detailer.Confidence,
-			"denoise_strength": req.Detailer.Denoise, "mask_blur": req.Detailer.MaskBlur,
-			"steps": req.Steps, "cfg_scale": req.CfgScale, "scheduler": scheduler,
-		}
-		edge("l2i", "image", "adetailer", "image")
 		nodes["detail_save"] = map[string]any{
 			"id": "detail_save", "type": "save_image", "is_intermediate": false, "use_cache": false,
 		}
 		if req.Board != "" && req.Board != "none" {
 			nodes["detail_save"].(map[string]any)["board"] = map[string]any{"board_id": req.Board}
 		}
-		edge("adetailer", "image", "detail_save", "image")
+		edge(last, "image", "detail_save", "image")
 		edge("metadata", "metadata", "detail_save", "metadata")
 	}
 

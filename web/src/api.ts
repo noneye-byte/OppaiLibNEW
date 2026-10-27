@@ -1473,6 +1473,16 @@ export interface GenLora {
   negative?: string;
   weightMin?: number;
   weightMax?: number;
+  /** The studio's own category it is sorted into; absent for none. */
+  category?: number;
+}
+
+/** One of the studio's LoRA categories, kept by OppaiLib (lora-categories.ts). */
+export interface LoraCategory {
+  id: number;
+  name: string;
+  /** How many LoRAs are in it. */
+  count: number;
 }
 
 /** A standalone VAE. `key` is the selector value the generate call wants. */
@@ -1551,6 +1561,12 @@ export interface ImageGenStatus {
   /** The orders the gallery can be listed in. */
   gallerySorts?: GallerySort[];
   detailerAvailable?: boolean;
+  /** A1111 only: what a picture can be enlarged with — upscaler models (an upscale
+      or a hires fix) and latent modes (a hires fix only). */
+  upscalers?: string[];
+  latentUpscalers?: string[];
+  /** The studio's LoRA categories, each LoRA's `category` naming one. */
+  loraCategories?: LoraCategory[];
   /** The Civitai browser works against this generator (it does against both). */
   civitai?: boolean;
   /** Models can be installed, edited, re-covered and deleted from here: always on
@@ -1648,6 +1664,8 @@ export interface GenerateParams {
   detailer?: {
     enabled: boolean;
     model?: string;
+    /** One pass per detector, in order: the faces, then the hands. */
+    models?: string[];
     prompt?: string;
     negativePrompt?: string;
     confidence?: number;
@@ -1663,6 +1681,12 @@ export interface GenerateParams {
   maskBlur?: number;
   /** With initImage and the detailer on: redo its faces and nothing else (A1111). */
   detailOnly?: boolean;
+  /** A1111's hires fix on a run from noise: drawn, enlarged by `scale` with
+      `upscaler`, and drawn again at the larger size. With upscaleOnly and
+      initImage, only `upscaler` and `scale` are read. */
+  upscale?: { enabled: boolean; upscaler?: string; scale?: number; denoise?: number; steps?: number };
+  /** With initImage: enlarge it with the upscaler and redraw nothing (A1111). */
+  upscaleOnly?: boolean;
   /** Start from a gallery picture by name, in place of initImage: the server reads
       it, so the picture is not uploaded back to where it already is. */
   initGallery?: string;
@@ -3377,6 +3401,20 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ key, versionId: versionId ?? 0 }),
     }, 70_000),
+  // ── LoRA categories ────────────────────────────────────────────────────────
+  // The studio's own; see backend/internal/api/lora_categories.go.
+
+  loraCategoryCreate: (name: string) =>
+    request<LoraCategory>("/api/imagegen/lora-categories", { method: "POST", body: JSON.stringify({ name }) }, 20_000),
+  loraCategoryRename: (id: number, name: string) =>
+    request<LoraCategory>(`/api/imagegen/lora-categories/${id}`, { method: "PATCH", body: JSON.stringify({ name }) }, 20_000),
+  loraCategoryDelete: (id: number) =>
+    request<void>(`/api/imagegen/lora-categories/${id}`, { method: "DELETE" }, 20_000),
+  /** Puts LoRAs in a category, or in none with 0. */
+  loraCategoryAssign: (category: number, loras: string[]) =>
+    request<{ categories: LoraCategory[] }>("/api/imagegen/lora-categories/assign",
+      { method: "POST", body: JSON.stringify({ category, loras }) }, 20_000),
+
   // ── LoRA training ──────────────────────────────────────────────────────────
   // Runs on the trainer, followed by the server; see backend/internal/api/lora_training.go.
 

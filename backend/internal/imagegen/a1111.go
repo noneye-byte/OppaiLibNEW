@@ -61,6 +61,12 @@ type txt2imgPayload struct {
 	InpaintingFill        int    `json:"inpainting_fill,omitempty"`
 	InpaintFullRes        bool   `json:"inpaint_full_res,omitempty"`
 	InpaintFullResPadding int    `json:"inpaint_full_res_padding,omitempty"`
+	// The hires fix, txt2img only. Its denoise is denoising_strength above, which
+	// is why that field is not img2img's alone.
+	EnableHR          bool    `json:"enable_hr,omitempty"`
+	HRScale           float64 `json:"hr_scale,omitempty"`
+	HRUpscaler        string  `json:"hr_upscaler,omitempty"`
+	HRSecondPassSteps int     `json:"hr_second_pass_steps,omitempty"`
 }
 
 // txt2imgResponse is the relevant slice of the API's reply. Info is a JSON *string*
@@ -97,20 +103,28 @@ func (c *Client) a1111Generate(ctx context.Context, base string, req GenerateReq
 		RestoreAfter:   true,
 	}
 	if req.Detailer.Enabled {
-		model := strings.TrimSpace(req.Detailer.Model)
-		if model == "" {
-			model = "face_yolov8n.pt"
-		}
 		// The second argument is ADetailer's "skip img2img": the img2img pass is run
-		// at one step and thrown away, and the detailer works on the init image.
-		payload.AlwaysOnScripts = map[string]any{
-			"ADetailer": map[string]any{"args": []any{true, req.DetailOnly && len(req.InitImage) > 0, map[string]any{
+		// at one step and thrown away, and the detailer works on the init image. Each
+		// argument after it is one of ADetailer's tabs, run in order on what the last
+		// one left, which is how the faces and then the hands are both redone.
+		args := []any{true, req.DetailOnly && len(req.InitImage) > 0}
+		for _, model := range req.Detailer.Passes() {
+			args = append(args, map[string]any{
 				"ad_model": model, "ad_tab_enable": true,
 				"ad_prompt": req.Detailer.Prompt, "ad_negative_prompt": req.Detailer.NegativePrompt,
 				"ad_confidence": req.Detailer.Confidence, "ad_denoising_strength": req.Detailer.Denoise,
 				"ad_mask_blur": req.Detailer.MaskBlur,
-			}}},
+			})
 		}
+		payload.AlwaysOnScripts = map[string]any{"ADetailer": map[string]any{"args": args}}
+	}
+	if up := req.Upscale; up.Enabled && len(req.InitImage) == 0 {
+		// img2img has no hires fix; a picture started from is the size it is.
+		payload.EnableHR = true
+		payload.HRScale = up.Scale
+		payload.HRUpscaler = up.Upscaler
+		payload.HRSecondPassSteps = up.Steps
+		payload.DenoisingStrength = up.Denoise
 	}
 	endpoint := "/sdapi/v1/txt2img"
 	if len(req.InitImage) > 0 {
@@ -212,6 +226,90 @@ func (c *Client) a1111Generate(ctx context.Context, base string, req GenerateReq
 		}
 	}
 	return res, nil
+}
+
+// a1111Upscale enlarges req.InitImage through the extras tab's upscaler, which
+// redraws nothing: the picture comes back as it was, only bigger. The seed is the
+// caller's, since nothing was sampled.
+func (c *Client) a1111Upscale(ctx context.Context, base string, req GenerateRequest) (*GenerateResult, error) {
+	if len(req.InitImage) == 0 {
+		return nil, fmt.Errorf("upscaling needs a picture")
+	}
+	upscaler := strings.TrimSpace(req.Upscale.Upscaler)
+	if upscaler == "" {
+		upscaler = "Lanczos"
+	}
+	body, err := json.Marshal(map[string]any{
+		"image":               base64.StdEncoding.EncodeToString(req.InitImage),
+		"resize_mode":         0,
+		"upscaling_resize":    req.Upscale.Scale,
+		"upscaler_1":          upscaler,
+		"show_extras_results": true,
+	})
+	if err != nil {
+		return nil, err
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/sdapi/v1/extra-single-image", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	resp, err := c.hc.Do(httpReq)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, fmt.Errorf("image generator unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<10))
+		return nil, fmt.Errorf("image generator returned %d: %s", resp.StatusCode, bytes.TrimSpace(msg))
+	}
+	// Not getJSON's 8 MB: a picture made four times as big is tens of megabytes of
+	// base64 PNG.
+	var out struct {
+		Image string `json:"image"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 160<<20)).Decode(&out); err != nil {
+		return nil, fmt.Errorf("decode upscaler response: %w", err)
+	}
+	if out.Image == "" {
+		return nil, fmt.Errorf("generator returned no image")
+	}
+	raw, err := decodeImage(out.Image)
+	if err != nil {
+		return nil, err
+	}
+	return &GenerateResult{Images: [][]byte{raw}, Seed: req.Seed, Seeds: []int64{req.Seed}}, nil
+}
+
+// a1111Upscalers reads the upscaler models and the latent modes. "None" is A1111's
+// own way of saying no upscaler and is left out; a build without the latent list
+// answers with the models alone.
+func (c *Client) a1111Upscalers(ctx context.Context, base string) (models, latent []string, err error) {
+	var ups []struct {
+		Name string `json:"name"`
+	}
+	if err := c.getJSON(ctx, base+"/sdapi/v1/upscalers", &ups); err != nil {
+		return nil, nil, err
+	}
+	for _, u := range ups {
+		if n := strings.TrimSpace(u.Name); n != "" && !strings.EqualFold(n, "None") {
+			models = append(models, n)
+		}
+	}
+	var modes []struct {
+		Name string `json:"name"`
+	}
+	if c.getJSON(ctx, base+"/sdapi/v1/latent-upscale-modes", &modes) == nil {
+		for _, m := range modes {
+			if n := strings.TrimSpace(m.Name); n != "" {
+				latent = append(latent, n)
+			}
+		}
+	}
+	return models, latent, nil
 }
 
 // a1111ControlArgs is the ControlNet extension's unit list. "image" is the field the

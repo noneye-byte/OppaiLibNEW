@@ -221,6 +221,31 @@ func TestInvokeADetailerGraph(t *testing.T) {
 	}
 }
 
+func TestInvokeRunsTheFacePassThenTheHandPass(t *testing.T) {
+	main := invokeModelRecord{Key: "main", Hash: "h", Name: "Main", Base: "sd-1", Type: "main"}
+	graph := buildInvokeGraph(main, nil, nil, GenerateRequest{
+		Prompt: "portrait", Steps: 24, Width: 512, Height: 768, CfgScale: 7,
+		Detailer: Detailer{Enabled: true, Models: []string{"face_yolov8n.pt", "hand_yolov8n.pt"}},
+	}, "euler_a")
+	nodes := graph["nodes"].(map[string]any)
+	if nodes["adetailer"].(map[string]any)["target"] != "face" || nodes["adetailer_2"].(map[string]any)["target"] != "hand" {
+		t.Fatalf("nodes = %#v", nodes)
+	}
+	links := map[string]string{}
+	for _, e := range graph["edges"].([]map[string]any) {
+		from := e["source"].(map[string]any)["node_id"].(string)
+		to := e["destination"].(map[string]any)["node_id"].(string)
+		if from == "l2i" || strings.HasPrefix(from, "adetailer") {
+			if e["source"].(map[string]any)["field"] == "image" {
+				links[from] = to
+			}
+		}
+	}
+	if links["l2i"] != "adetailer" || links["adetailer"] != "adetailer_2" || links["adetailer_2"] != "detail_save" {
+		t.Fatalf("image edges = %v", links)
+	}
+}
+
 func TestInvokeCreatesBoardAndUpdatesCover(t *testing.T) {
 	var gotCover, gotBoard bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

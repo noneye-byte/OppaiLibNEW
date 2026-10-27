@@ -488,6 +488,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/imagegen/save", s.requireAuth(s.handleImageGenSave))
 	mux.HandleFunc("GET /api/imagegen/model-thumb", s.requireAuth(s.handleGetModelThumb))
 	mux.HandleFunc("PUT /api/imagegen/model-thumb", s.requireAuth(s.handleSetModelThumb))
+	// The studio's own categories for LoRAs (lora_categories.go).
+	mux.HandleFunc("GET /api/imagegen/lora-categories", s.requireAuth(s.handleLoraCategories))
+	mux.HandleFunc("POST /api/imagegen/lora-categories", s.requireAuth(s.handleLoraCategoryCreate))
+	mux.HandleFunc("POST /api/imagegen/lora-categories/assign", s.requireAuth(s.handleLoraCategoryAssign))
+	mux.HandleFunc("PATCH /api/imagegen/lora-categories/{id}", s.requireAuth(s.handleLoraCategoryRename))
+	mux.HandleFunc("DELETE /api/imagegen/lora-categories/{id}", s.requireAuth(s.handleLoraCategoryDelete))
 	mux.HandleFunc("GET /api/imagegen/lora-thumb", s.requireAuth(s.handleGetLoraThumb))
 	mux.HandleFunc("PUT /api/imagegen/lora-thumb", s.requireAuth(s.handleSetLoraThumb))
 	mux.HandleFunc("GET /api/imagegen/tags", s.requireAuth(s.handleBooruTags))

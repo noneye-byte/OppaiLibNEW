@@ -15,6 +15,7 @@ import {
 import { iconStyles, motionStyles } from "../theme.js";
 import {
   api,
+  type LoraCategory,
   mascotSay,
   type GenCharacter,
   type GenLora,
@@ -101,6 +102,9 @@ import type { OppaiInvokeGallery, UsePicture, UsePictureMode } from "./imagegen-
 import "./imagegen-paint.js";
 import type { PaintResult } from "./imagegen-paint.js";
 import { sourceSize, type PaintStroke } from "../paint-mask.js";
+import { FACE_DETECTORS, detailerModels, fixLabel, passesFromModels, type DetailerPasses } from "../detailer.js";
+import { hiresScale, hiresUpscalers, scaledSize, upscaleFactor } from "../upscale.js";
+import { inCategory, liveFilter, moveToCategory, uncategorised, type CategoryFilter } from "../lora-categories.js";
 
 // ── Web Speech typings ─────────────────────────────────────────────────────────
 // The Speech Recognition API isn't in the standard DOM lib, and it's still vendor-
@@ -551,6 +555,20 @@ export class OppaiImageGen extends LitElement {
   @state() private detailerConfidence = 0.3;
   @state() private detailerDenoise = 0.4;
   @state() private detailerMaskBlur = 4;
+  // The detailer's passes: the faces, with detailerModel's detector, and the hands.
+  @state() private detailerFaces = true;
+  @state() private detailerHands = false;
+  // A1111's hires fix on runs drawn from noise, and what a finished picture is
+  // enlarged with when it is upscaled. Blank upscalers mean the first offered.
+  @state() private hiresEnabled = false;
+  @state() private hiresUpscaler = "";
+  @state() private hiresScale = 1.5;
+  @state() private hiresDenoise = 0.45;
+  @state() private hiresSteps = 0;
+  @state() private upscaleUpscaler = "";
+  @state() private upscaleBy = 2;
+  /** Which of the LoRA categories the picker shows. */
+  @state() private loraCategory: CategoryFilter = "all";
 
   @state() private generating = false;
   /** The run in flight, named so it can be watched and cancelled; see genProgress. */
@@ -874,6 +892,17 @@ export class OppaiImageGen extends LitElement {
         right: auto;
         left: 4px;
       }
+      .card-cat { overflow: hidden; }
+      .card-cat.set { background: var(--oppai-accent); color: var(--oppai-on-accent); }
+      /* The select fills the button invisibly, so a tap anywhere on it opens the menu. */
+      .card-cat select {
+        position: absolute;
+        inset: 0;
+        opacity: 0;
+        cursor: pointer;
+        font-size: 16px;
+      }
+      .lora-cats { margin-bottom: 10px; }
       .lora-weight {
         width: 100%;
         box-sizing: border-box;
@@ -3295,7 +3324,8 @@ export class OppaiImageGen extends LitElement {
     "outfitLockColors", "outfitLoadoutId", "outfitWardrobeId", "sheetZoom",
     "outfitUnderwearColor", "outfitPubicHair", "outfitPubicHairColor", "camera",
     "detailerEnabled", "detailerModel", "detailerPrompt", "detailerNegative",
-    "detailerConfidence", "detailerDenoise", "detailerMaskBlur",
+    "detailerConfidence", "detailerDenoise", "detailerMaskBlur", "detailerFaces", "detailerHands",
+    "hiresEnabled", "hiresUpscaler", "hiresScale", "hiresDenoise", "hiresSteps", "upscaleUpscaler", "upscaleBy",
     "open", "showOptions", "shots",
   ]);
 
@@ -3409,6 +3439,15 @@ export class OppaiImageGen extends LitElement {
       detailerConfidence: this.detailerConfidence,
       detailerDenoise: this.detailerDenoise,
       detailerMaskBlur: this.detailerMaskBlur,
+      detailerFaces: this.detailerFaces,
+      detailerHands: this.detailerHands,
+      hiresEnabled: this.hiresEnabled,
+      hiresUpscaler: this.hiresUpscaler,
+      hiresScale: this.hiresScale,
+      hiresDenoise: this.hiresDenoise,
+      hiresSteps: this.hiresSteps,
+      upscaleUpscaler: this.upscaleUpscaler,
+      upscaleBy: this.upscaleBy,
       open: this.open,
       showOptions: this.showOptions,
       shots: this.shots.map((s) => ({
@@ -3484,6 +3523,23 @@ export class OppaiImageGen extends LitElement {
     if (d.detailerConfidence !== undefined) this.detailerConfidence = d.detailerConfidence;
     if (d.detailerDenoise !== undefined) this.detailerDenoise = d.detailerDenoise;
     if (d.detailerMaskBlur !== undefined) this.detailerMaskBlur = d.detailerMaskBlur;
+    // A draft from before the face and hand switches named one detector, "Hands"
+    // among them, and comes back as the pass it ran.
+    if (d.detailerFaces === undefined && d.detailerHands === undefined) {
+      const p = passesFromModels(undefined, d.detailerModel);
+      this.detailerFaces = p.faces;
+      this.detailerHands = p.hands;
+      this.detailerModel = p.faceModel;
+    }
+    if (d.detailerFaces !== undefined) this.detailerFaces = d.detailerFaces;
+    if (d.detailerHands !== undefined) this.detailerHands = d.detailerHands;
+    if (d.hiresEnabled !== undefined) this.hiresEnabled = d.hiresEnabled;
+    if (d.hiresUpscaler !== undefined) this.hiresUpscaler = d.hiresUpscaler;
+    if (d.hiresScale !== undefined) this.hiresScale = d.hiresScale;
+    if (d.hiresDenoise !== undefined) this.hiresDenoise = d.hiresDenoise;
+    if (d.hiresSteps !== undefined) this.hiresSteps = d.hiresSteps;
+    if (d.upscaleUpscaler !== undefined) this.upscaleUpscaler = d.upscaleUpscaler;
+    if (d.upscaleBy !== undefined) this.upscaleBy = d.upscaleBy;
     if (d.open) this.open = d.open;
     if (d.showOptions !== undefined) this.showOptions = d.showOptions;
     if (d.shots) this.shots = d.shots.map((s) => ({ ...s }));
@@ -4159,16 +4215,55 @@ export class OppaiImageGen extends LitElement {
     </div>`;
   }
 
-  /** The detailer as the Settings drawer has it, for a run that asks for it. */
+  private get detailerPasses(): DetailerPasses {
+    return { faces: this.detailerFaces, faceModel: this.detailerModel, hands: this.detailerHands };
+  }
+
+  /** The detailer as the Settings drawer has it, for a run that asks for it. A fix
+      asked for with both passes switched off redoes the faces. */
   private detailerParams(): NonNullable<GenerateParams["detailer"]> {
+    const models = detailerModels(this.detailerPasses);
+    if (!models.length) models.push(this.detailerModel);
     return {
       enabled: true,
-      model: this.detailerModel,
+      model: models[0],
+      models,
       prompt: this.detailerPrompt || undefined,
       negativePrompt: this.detailerNegative || undefined,
       confidence: this.detailerConfidence,
       denoise: this.detailerDenoise,
       maskBlur: this.detailerMaskBlur,
+    };
+  }
+
+  /** Whether this generator can enlarge pictures: A1111 listing its upscalers. */
+  private get canUpscale(): boolean {
+    return this.status?.backend !== "invokeai" && !!this.status?.upscalers?.length;
+  }
+
+  /** The hires fix's upscaler: the one picked, while the generator still has it. */
+  private get hiresChoice(): string {
+    const list = hiresUpscalers(this.status?.latentUpscalers, this.status?.upscalers);
+    return list.includes(this.hiresUpscaler) ? this.hiresUpscaler : (list[0] ?? "");
+  }
+
+  /** The upscale's upscaler: the one picked, else an ESRGAN, which is what most
+      people mean by upscaling, else the first there is. */
+  private get upscaleChoice(): string {
+    const list = this.status?.upscalers ?? [];
+    if (list.includes(this.upscaleUpscaler)) return this.upscaleUpscaler;
+    return list.find((u) => /esrgan/i.test(u)) ?? list[0] ?? "";
+  }
+
+  /** The hires fix, for a run drawn from noise that has it switched on. */
+  private hiresParams(): GenerateParams["upscale"] {
+    if (!this.hiresEnabled || !this.canUpscale) return undefined;
+    return {
+      enabled: true,
+      upscaler: this.hiresChoice || undefined,
+      scale: hiresScale(this.width, this.height, this.hiresScale),
+      denoise: this.hiresDenoise,
+      steps: this.hiresSteps || undefined,
     };
   }
 
@@ -4212,14 +4307,22 @@ export class OppaiImageGen extends LitElement {
         count: this.outfitOn ? 1 : this.count,
         seed: this.seed,
         loras: Object.entries(this.selectedLoras).map(([name, weight]) => ({ name, weight })),
-        detailer: this.status?.detailerAvailable && this.detailerEnabled ? this.detailerParams() : undefined,
+        detailer: this.status?.detailerAvailable && this.detailerEnabled && detailerModels(this.detailerPasses).length
+          ? this.detailerParams() : undefined,
+        upscale: src ? undefined : this.hiresParams(),
     };
     if (src) {
       // A run from a picture comes out the picture's shape, not the size controls'.
       Object.assign(params, sourceSize(src.width, src.height));
       if (src.gallery) params.initGallery = src.gallery;
       else params.initImage = await this.sourceDataURL(src);
-      if (src.mode === "faces") {
+      if (src.mode === "upscale") {
+        params.upscaleOnly = true;
+        params.count = 1;
+        params.detailer = undefined;
+        params.upscale = { enabled: false, upscaler: this.upscaleChoice || undefined,
+          scale: upscaleFactor(src.width, src.height, this.upscaleBy) };
+      } else if (src.mode === "faces") {
         params.detailOnly = true;
         params.count = 1;
         params.detailer = this.detailerParams();
@@ -4423,8 +4526,8 @@ export class OppaiImageGen extends LitElement {
       return;
     }
     const pic: StartPicture = { url, name, width: img.naturalWidth, height: img.naturalHeight, mode, objectURL, gallery };
-    if (mode === "faces") {
-      void this.fixFaces(pic);
+    if (mode === "faces" || mode === "upscale") {
+      void this.runOnPicture(pic, mode);
       return;
     }
     this.setSource(pic);
@@ -4472,13 +4575,14 @@ export class OppaiImageGen extends LitElement {
     if (this.source && !this.sourceMask) this.source = { ...this.source, mode: "img2img" };
   }
 
-  /** Redoes a picture's faces with the detailer and nothing else (A1111 + ADetailer). */
-  private async fixFaces(pic: StartPicture) {
+  /** Redoes a picture's faces and hands with the detailer and nothing else
+      (A1111 + ADetailer), or enlarges it with the upscaler (A1111). */
+  private async runOnPicture(pic: StartPicture, mode: "faces" | "upscale") {
     if (this.generating) return;
     this.generating = true;
     this.error = "";
     try {
-      await this.generateOne(false, { ...pic, mode: "faces" });
+      await this.generateOne(false, { ...pic, mode });
     } catch (e) {
       if (/cancelled/i.test((e as Error).message)) this.showToast("Generation cancelled.");
       else this.error = (e as Error).message;
@@ -4517,9 +4621,15 @@ export class OppaiImageGen extends LitElement {
           this.sourceMask = "";
           this.source = { ...src, mode: "img2img" };
         }}>Whole picture</button>` : nothing}
-        ${a1111 && this.status?.detailerAvailable ? html`<button class="chip" title="Redo its faces with ADetailer, and nothing else"
-          ?disabled=${this.generating} @click=${() => void this.fixFaces(src)}>
-          <span class="material-symbols-rounded" style="font-size:16px;">face_retouching_natural</span>Fix faces</button>` : nothing}
+        ${a1111 && this.status?.detailerAvailable ? html`<button class="chip" title="Redo it with ADetailer's passes, and nothing else"
+          ?disabled=${this.generating} @click=${() => void this.runOnPicture(src, "faces")}>
+          <span class="material-symbols-rounded" style="font-size:16px;">face_retouching_natural</span>${fixLabel(this.detailerPasses)}</button>` : nothing}
+        ${this.canUpscale ? (() => {
+          const out = scaledSize(src.width, src.height, upscaleFactor(src.width, src.height, this.upscaleBy));
+          return html`<button class="chip" title=${`Enlarge it to ${out.width}×${out.height} with ${this.upscaleChoice}, redrawing nothing`}
+            ?disabled=${this.generating} @click=${() => void this.runOnPicture(src, "upscale")}>
+            <span class="material-symbols-rounded" style="font-size:16px;">open_in_full</span>Upscale ${this.upscaleBy}×</button>`;
+        })() : nothing}
         <button class="chip" title="Draw from noise again" @click=${() => this.setSource(null)}>
           <span class="material-symbols-rounded" style="font-size:16px;">close</span>Remove</button>
       </div>
@@ -4654,12 +4764,24 @@ export class OppaiImageGen extends LitElement {
     this.board = params.board ?? "none";
     this.detailerEnabled = !!params.detailer?.enabled;
     if (params.detailer) {
-      this.detailerModel = params.detailer.model ?? "face_yolov8n.pt";
+      const passes = passesFromModels(params.detailer.models, params.detailer.model);
+      this.detailerModel = passes.faceModel;
+      this.detailerFaces = passes.faces;
+      this.detailerHands = passes.hands;
       this.detailerPrompt = params.detailer.prompt ?? "";
       this.detailerNegative = params.detailer.negativePrompt ?? "";
       this.detailerConfidence = params.detailer.confidence ?? 0.3;
       this.detailerDenoise = params.detailer.denoise ?? 0.4;
       this.detailerMaskBlur = params.detailer.maskBlur ?? 4;
+    }
+    // A picture made with a hires fix is made the same way again; one made without
+    // leaves the switch as it was, since most records are from before it existed.
+    if (params.upscale?.enabled) {
+      this.hiresEnabled = true;
+      if (params.upscale.upscaler) this.hiresUpscaler = params.upscale.upscaler;
+      if (params.upscale.scale) this.hiresScale = params.upscale.scale;
+      if (params.upscale.denoise) this.hiresDenoise = params.upscale.denoise;
+      this.hiresSteps = params.upscale.steps ?? 0;
     }
     this.templateId = "";
     this.selectedTriggers = [];
@@ -4776,9 +4898,12 @@ export class OppaiImageGen extends LitElement {
           run: () => void this.usePicture(this.previewURL(shot), `seed ${shot.seed}`, "img2img", false, shot.gallery) },
         ...(this.status?.backend !== "invokeai" ? [{ label: "Paint to fix", icon: "brush",
           run: () => void this.usePicture(this.previewURL(shot), `seed ${shot.seed}`, "inpaint", false, shot.gallery) }] : []),
-        ...(this.status?.backend !== "invokeai" && this.status?.detailerAvailable ? [{ label: "Fix faces", icon: "face_retouching_natural",
+        ...(this.status?.backend !== "invokeai" && this.status?.detailerAvailable ? [{ label: fixLabel(this.detailerPasses), icon: "face_retouching_natural",
           disabled: this.generating,
           run: () => void this.usePicture(this.previewURL(shot), `seed ${shot.seed}`, "faces", false, shot.gallery) }] : []),
+        ...(this.canUpscale ? [{ label: `Upscale ${this.upscaleBy}×`, icon: "open_in_full",
+          disabled: this.generating,
+          run: () => void this.usePicture(this.previewURL(shot), `seed ${shot.seed}`, "upscale", false, shot.gallery) }] : []),
         { label: "Use as a Libby background", icon: "wallpaper",
           run: () => void this.useAsBackground(shot) },
         { label: "Save as a pose…", icon: "accessibility_new",
@@ -5528,6 +5653,8 @@ export class OppaiImageGen extends LitElement {
                   .startBoard=${this.board}
                   .canPaint=${!invoke}
                   .canFixFaces=${!invoke && !!st.detailerAvailable}
+                  .fixLabel=${fixLabel(this.detailerPasses)}
+                  .upscaleLabel=${this.canUpscale ? `Upscale ${this.upscaleBy}×` : ""}
                   .canSetCovers=${invoke || !!st.manageModels}
                   .loras=${(st.loras ?? []).map((l) => l.name)}
                   @covers-changed=${() => this.bumpThumbs()}
@@ -6397,15 +6524,22 @@ export class OppaiImageGen extends LitElement {
     // The drawer has the height to show them all and a search to narrow them; the
     // studio's accordion keeps its pages of six.
     const filter = this.flatSections ? this.pickerFilter.trim().toLowerCase() : "";
+    const categories = this.status?.loraCategories ?? [];
+    const cat = liveFilter(this.loraCategory, categories);
+    const inCat = loras.filter((l) => inCategory(l, cat));
     const matching = filter
-      ? loras.filter((l) => `${l.name} ${l.alias ?? ""} ${(l.triggerPhrases ?? []).join(" ")}`.toLowerCase().includes(filter))
-      : loras;
+      ? inCat.filter((l) => `${l.name} ${l.alias ?? ""} ${(l.triggerPhrases ?? []).join(" ")}`.toLowerCase().includes(filter))
+      : inCat;
     const perPage = this.flatSections ? 60 : 6;
     const pages = Math.max(1, Math.ceil(matching.length / perPage));
     const page = Math.min(this.loraPage, pages - 1);
     const visible = matching.slice(page * perPage, page * perPage + perPage);
     const body = html`
+      ${this.renderLoraCategories(loras, categories, cat)}
       ${filter && !matching.length ? html`<div class="sec-note">No LoRA matches “${this.pickerFilter}”.</div>` : nothing}
+      ${!filter && !matching.length ? html`<div class="sec-note">${cat === "none"
+        ? "Every LoRA is in a category."
+        : "No LoRAs in this category yet — use the category button on a LoRA to put it here."}</div>` : nothing}
       <div class="cards">
         ${visible.map((lora) => {
           const on = lora.name in this.selectedLoras;
@@ -6419,6 +6553,24 @@ export class OppaiImageGen extends LitElement {
               ${this.status?.manageModels ? html`<button class="card-edit left" title="Edit LoRA settings" @click=${() => this.openMetaEditor(lora.name)}>
                 <span class="material-symbols-rounded" style="font-size:15px;">edit</span>
               </button>` : nothing}
+              <!-- The category button is a select laid over the icon: the browser's own
+                   menu, which works the same with a mouse and on a phone. -->
+              <label class="card-edit card-cat ${lora.category ? "set" : ""}"
+                title=${lora.category ? `In ${categories.find((c) => c.id === lora.category)?.name ?? "a category"}` : "Put in a category"}>
+                <span class="material-symbols-rounded" style="font-size:15px;">category</span>
+                <select aria-label=${`Category for ${lora.alias || lora.name}`}
+                  @change=${(e: Event) => {
+                    const sel = e.target as HTMLSelectElement;
+                    const v = sel.value;
+                    sel.value = String(lora.category ?? 0);
+                    if (v === "new") void this.newLoraCategory(lora.name);
+                    else void this.setLoraCategory(lora.name, Number(v));
+                  }}>
+                  <option value="0" ?selected=${!lora.category}>No category</option>
+                  ${categories.map((c) => html`<option value=${String(c.id)} ?selected=${c.id === lora.category}>${c.name}</option>`)}
+                  <option value="new">New category…</option>
+                </select>
+              </label>
               ${on ? html`<input class="lora-weight" type="number" min="-2" max="2" step="0.05"
                 aria-label=${`${lora.alias || lora.name} weight`}
                 title=${lora.weightMin && lora.weightMax ? `Works at ${lora.weightMin}–${lora.weightMax}` : ""}
@@ -6439,6 +6591,93 @@ export class OppaiImageGen extends LitElement {
       </div>` : nothing}
     `;
     return this.section("loras", "LoRAs", String(Object.keys(this.selectedLoras).length || loras.length), body);
+  }
+
+  /** The category chips over the LoRA cards, and the controls for the one open. */
+  private renderLoraCategories(loras: GenLora[], categories: LoraCategory[], cat: CategoryFilter) {
+    const pick = (f: CategoryFilter) => {
+      this.loraCategory = f;
+      this.loraPage = 0;
+    };
+    const open = typeof cat === "number" ? categories.find((c) => c.id === cat) : undefined;
+    return html`<div class="chips lora-cats">
+      <button class="chip small ${cat === "all" ? "on" : ""}" @click=${() => pick("all")}>All · ${loras.length}</button>
+      ${categories.map((c) => html`<button class="chip small ${cat === c.id ? "on" : ""}" @click=${() => pick(c.id)}>${c.name} · ${c.count}</button>`)}
+      ${categories.length ? html`<button class="chip small ${cat === "none" ? "on" : ""}" @click=${() => pick("none")}>No category · ${uncategorised(loras)}</button>` : nothing}
+      <button class="chip small" title="Make a category to sort LoRAs into" @click=${() => void this.newLoraCategory()}>
+        <span class="material-symbols-rounded" style="font-size:15px; vertical-align:-3px;">add</span> Category</button>
+      ${open ? html`
+        <button class="chip small" @click=${() => void this.renameLoraCategory(open)}>Rename</button>
+        <button class="chip small" @click=${() => void this.deleteLoraCategory(open)}>Delete</button>` : nothing}
+    </div>`;
+  }
+
+  /** Makes a category; one made from a LoRA's menu takes that LoRA, otherwise the
+      picker opens on it. */
+  private async newLoraCategory(lora?: string) {
+    const name = window.prompt("Name the new category (Characters, Styles, Poses…)", "")?.trim();
+    if (!name) return;
+    try {
+      const made = await api.loraCategoryCreate(name);
+      const st = this.status;
+      if (!st) return;
+      const others = (st.loraCategories ?? []).filter((c) => c.id !== made.id);
+      this.status = { ...st, loraCategories: [...others, made].sort((a, b) => a.name.localeCompare(b.name)) };
+      if (lora) await this.setLoraCategory(lora, made.id);
+      else {
+        this.loraCategory = made.id;
+        this.loraPage = 0;
+      }
+    } catch (e) {
+      this.showToast((e as Error).message);
+    }
+  }
+
+  private async renameLoraCategory(c: LoraCategory) {
+    const name = window.prompt("Rename this category", c.name)?.trim();
+    if (!name || name === c.name) return;
+    try {
+      const renamed = await api.loraCategoryRename(c.id, name);
+      const st = this.status;
+      if (!st) return;
+      this.status = { ...st, loraCategories: (st.loraCategories ?? []).map((x) => (x.id === c.id ? renamed : x))
+        .sort((a, b) => a.name.localeCompare(b.name)) };
+    } catch (e) {
+      this.showToast((e as Error).message);
+    }
+  }
+
+  private async deleteLoraCategory(c: LoraCategory) {
+    if (!confirm(`Delete the category “${c.name}”? Its LoRAs stay installed, in no category.`)) return;
+    try {
+      await api.loraCategoryDelete(c.id);
+      const st = this.status;
+      if (!st) return;
+      this.status = {
+        ...st,
+        loras: (st.loras ?? []).map((l) => (l.category === c.id ? { ...l, category: undefined } : l)),
+        loraCategories: (st.loraCategories ?? []).filter((x) => x.id !== c.id),
+      };
+      this.loraCategory = "all";
+    } catch (e) {
+      this.showToast((e as Error).message);
+    }
+  }
+
+  /** Moves a LoRA into a category (0 for none), on screen at once and then for real;
+      a refusal puts it back. */
+  private async setLoraCategory(name: string, category: number) {
+    const before = this.status;
+    if (!before) return;
+    const moved = moveToCategory(before.loras ?? [], before.loraCategories ?? [], [name], category);
+    this.status = { ...before, loras: moved.loras, loraCategories: moved.categories };
+    try {
+      const res = await api.loraCategoryAssign(category, [name]);
+      if (this.status) this.status = { ...this.status, loraCategories: res.categories };
+    } catch (e) {
+      this.status = before;
+      this.showToast((e as Error).message);
+    }
   }
 
   private renderVaeSection(vaes: GenVae[]) {
@@ -6529,16 +6768,22 @@ export class OppaiImageGen extends LitElement {
             ADetailer face/hand pass</label>
           ${this.detailerEnabled ? html`
             <div class="full">
-              <label class="field">ADetailer detector</label>
-              <select class="num" .value=${this.detailerModel}
-                @change=${(e: Event) => (this.detailerModel = (e.target as HTMLSelectElement).value)}>
-                <option value="face_yolov8n.pt">Face (fast)</option>
-                <option value="face_yolov8s.pt">Face (accurate)</option>
-                <option value="hand_yolov8n.pt">Hands</option>
-                <option value="person_yolov8n-seg.pt">Person</option>
-                <option value="mediapipe_face_full">MediaPipe face</option>
-              </select>
+              <label class="field">Passes</label>
+              <div class="chips">
+                <button class="chip small ${this.detailerFaces ? "on" : ""}" aria-pressed=${this.detailerFaces ? "true" : "false"}
+                  @click=${() => (this.detailerFaces = !this.detailerFaces)}>Faces</button>
+                <button class="chip small ${this.detailerHands ? "on" : ""}" aria-pressed=${this.detailerHands ? "true" : "false"}
+                  @click=${() => (this.detailerHands = !this.detailerHands)}>Hands</button>
+              </div>
             </div>
+            ${this.detailerFaces ? html`<div class="full">
+              <label class="field">Face detector</label>
+              <select class="num" @change=${(e: Event) => (this.detailerModel = (e.target as HTMLSelectElement).value)}>
+                ${FACE_DETECTORS.map((d) => html`<option value=${d.id} ?selected=${d.id === this.detailerModel}>${d.label}</option>`)}
+              </select>
+            </div>` : nothing}
+            ${!this.detailerFaces && !this.detailerHands ? html`<div class="full sec-note">
+              Neither pass is on, so runs skip the detailer. Turn on faces, hands or both.</div>` : nothing}
             <div class="full">
               <label class="field">Detail prompt (blank reuses prompt)</label>
               <input class="num" .value=${this.detailerPrompt}
@@ -6571,9 +6816,63 @@ export class OppaiImageGen extends LitElement {
             Automatic1111 — Extensions → Available → ADetailer, then restart it. It also lets a finished picture's
             faces be redone on their own.</span>
         </div>`}
+        ${this.canUpscale ? this.renderUpscaleSettings() : nothing}
       </div>
     `;
     return this.section("settings", "Model settings", `${this.steps} steps`, body);
+  }
+
+  /** The hires fix, and what an upscale of a finished picture uses (A1111). */
+  private renderUpscaleSettings() {
+    const hiresChoices = hiresUpscalers(this.status?.latentUpscalers, this.status?.upscalers);
+    const hires = this.hiresChoice;
+    const scale = hiresScale(this.width, this.height, this.hiresScale);
+    const out = scaledSize(this.width, this.height, scale);
+    const up = this.upscaleChoice;
+    return html`
+      <label class="switch-row full"><input type="checkbox" .checked=${this.hiresEnabled}
+        @change=${(e: Event) => (this.hiresEnabled = (e.target as HTMLInputElement).checked)} />
+        Hires fix — draw it again bigger</label>
+      ${this.hiresEnabled ? html`
+        <div class="full">
+          <label class="field">Hires upscaler</label>
+          <select class="num" @change=${(e: Event) => (this.hiresUpscaler = (e.target as HTMLSelectElement).value)}>
+            ${hiresChoices.map((u) => html`<option value=${u} ?selected=${u === hires}>${u}</option>`)}
+          </select>
+        </div>
+        <div>
+          <label class="field">Scale</label>
+          <input class="num" type="number" min="1" max="4" step="0.25" .value=${String(this.hiresScale)}
+            @input=${(e: Event) => (this.hiresScale = clampFloat((e.target as HTMLInputElement).value, 1, 4, 1.5))} />
+        </div>
+        <div>
+          <label class="field">Hires denoise</label>
+          <input class="num" type="number" min="0.05" max="1" step="0.05" .value=${String(this.hiresDenoise)}
+            @input=${(e: Event) => (this.hiresDenoise = clampFloat((e.target as HTMLInputElement).value, 0.05, 1, 0.45))} />
+        </div>
+        <div>
+          <label class="field">Hires steps (0 = same)</label>
+          <input class="num" type="number" min="0" max="80" .value=${String(this.hiresSteps)}
+            @input=${(e: Event) => (this.hiresSteps = clampNum((e.target as HTMLInputElement).value, 0, 80, 0))} />
+        </div>
+        <div class="full sec-note">Drawn at ${this.width}×${this.height}, then again at ${out.width}×${out.height}${
+          scale < this.hiresScale ? " — as large as a hires fix goes" : ""}. Pictures started from another keep their size.</div>
+      ` : nothing}
+      <div class="full">
+        <label class="field">Upscale a finished picture with</label>
+        <select class="num" @change=${(e: Event) => (this.upscaleUpscaler = (e.target as HTMLSelectElement).value)}>
+          ${(this.status?.upscalers ?? []).map((u) => html`<option value=${u} ?selected=${u === up}>${u}</option>`)}
+        </select>
+      </div>
+      <div>
+        <label class="field">Upscale by</label>
+        <select class="num" @change=${(e: Event) => (this.upscaleBy = Number((e.target as HTMLSelectElement).value))}>
+          ${[1.5, 2, 3, 4].map((n) => html`<option value=${n} ?selected=${n === this.upscaleBy}>${n}×</option>`)}
+        </select>
+      </div>
+      <div class="full sec-note">Upscale is on a picture's menu, in the gallery and over a picture you start from. It
+        enlarges without redrawing, so nothing in the picture changes.</div>
+    `;
   }
 
   private renderTemplateSection(templates: GenTemplate[]) {

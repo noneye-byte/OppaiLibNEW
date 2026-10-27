@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -175,7 +177,9 @@ func (s *Server) handleImageGenStatus(w http.ResponseWriter, r *http.Request) {
 		s.civitaiTriggerWords(ctx, loras)
 	}
 	s.overlayStatusDefaults(ctx, models, loras)
-	out := map[string]any{"enabled": true, "reachable": true, "backend": backend, "models": models, "loras": loras}
+	categories := s.overlayLoraCategories(ctx, loras)
+	out := map[string]any{"enabled": true, "reachable": true, "backend": backend, "models": models, "loras": loras,
+		"loraCategories": categories}
 	if loraErr != nil {
 		out["loraError"] = loraErr.Error()
 	}
@@ -199,6 +203,12 @@ func (s *Server) handleImageGenStatus(w http.ResponseWriter, r *http.Request) {
 		out["gallerySorts"] = []string{"newest", "oldest", "largest"}
 	}
 	out["detailerAvailable"] = s.imagegen.SupportsADetailer(ctx, set.ImageGenURL)
+	// What a picture can be enlarged with: on A1111 its upscaler models (an upscale
+	// or a hires fix) and latent modes (a hires fix only). InvokeAI lists none.
+	if ups, latent, err := s.imagegen.Upscalers(ctx, set.ImageGenURL); err == nil && backend == imagegen.KindA1111 {
+		out["upscalers"] = append([]string{}, ups...)
+		out["latentUpscalers"] = append([]string{}, latent...)
+	}
 	// What the studio can do to the generator's models: browse Civitai and link by
 	// hash always; install, edit, re-cover and delete where the generator lets it —
 	// InvokeAI always, A1111 once its models folder is mounted (a1111_models.go).
@@ -271,6 +281,10 @@ type generateReq struct {
 	Mask       string `json:"mask"`
 	MaskBlur   int    `json:"maskBlur"`
 	DetailOnly bool   `json:"detailOnly"`
+	// Upscale is a hires fix on a run drawn from noise; UpscaleOnly, with InitImage,
+	// enlarges that picture with Upscale's upscaler and factor and redraws nothing.
+	Upscale     upscaleReq `json:"upscale"`
+	UpscaleOnly bool       `json:"upscaleOnly"`
 	// InitGallery starts from a gallery picture by its name instead of InitImage's
 	// bytes, so a picture that is already on the server is not sent back up to it —
 	// a reverse proxy's body limit refuses that upload with a page of its own.
@@ -281,13 +295,24 @@ type generateReq struct {
 }
 
 type detailerReq struct {
-	Enabled        bool    `json:"enabled"`
-	Model          string  `json:"model"`
-	Prompt         string  `json:"prompt"`
-	NegativePrompt string  `json:"negativePrompt"`
-	Confidence     float64 `json:"confidence"`
-	Denoise        float64 `json:"denoise"`
-	MaskBlur       int     `json:"maskBlur"`
+	Enabled bool   `json:"enabled"`
+	Model   string `json:"model"`
+	// Models is a pass per detector, in order (faces, then hands); Model is the one
+	// pass of a client older than that.
+	Models         []string `json:"models"`
+	Prompt         string   `json:"prompt"`
+	NegativePrompt string   `json:"negativePrompt"`
+	Confidence     float64  `json:"confidence"`
+	Denoise        float64  `json:"denoise"`
+	MaskBlur       int      `json:"maskBlur"`
+}
+
+type upscaleReq struct {
+	Enabled  bool    `json:"enabled"`
+	Upscaler string  `json:"upscaler"`
+	Scale    float64 `json:"scale"`
+	Denoise  float64 `json:"denoise"`
+	Steps    int     `json:"steps"`
 }
 
 type loraReq struct {
@@ -307,7 +332,8 @@ func (s *Server) handleImageGenGenerate(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, http.StatusBadRequest, "invalid body")
 		return
 	}
-	if req.Prompt == "" {
+	// An upscale draws nothing, so it needs nothing to draw.
+	if req.Prompt == "" && !req.UpscaleOnly {
 		writeErr(w, http.StatusBadRequest, "a prompt is required")
 		return
 	}
@@ -350,7 +376,7 @@ func (s *Server) handleImageGenGenerate(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		status := http.StatusBadGateway
-		if errors.Is(err, imagegen.ErrInpaintUnsupported) {
+		if errors.Is(err, imagegen.ErrInpaintUnsupported) || errors.Is(err, imagegen.ErrUpscaleUnsupported) {
 			status = http.StatusConflict
 		} else {
 			s.log.Warn("image generate", "err", err)
@@ -428,8 +454,8 @@ type genResult struct {
 // than quietly drawn from noise.
 func decodeGenerateImages(req *generateReq, gen *imagegen.GenerateRequest) error {
 	if req.InitImage == "" {
-		if req.Mask != "" || req.DetailOnly {
-			return errors.New("painting to fix and fixing faces need a picture to start from")
+		if req.Mask != "" || req.DetailOnly || req.UpscaleOnly {
+			return errors.New("painting to fix, fixing faces and upscaling need a picture to start from")
 		}
 		return nil
 	}
@@ -451,7 +477,30 @@ func decodeGenerateImages(req *generateReq, gen *imagegen.GenerateRequest) error
 		}
 		gen.DetailOnly = true
 	}
+	if req.UpscaleOnly {
+		gen.UpscaleOnly = true
+		gen.Upscale.Scale = upscaleFactor(init, gen.Upscale.Scale)
+	}
 	return nil
+}
+
+// The largest side an upscale may come out at. A1111 will make a 16k picture if
+// asked, and then the server holds it, its base64 and its PNG in memory at once.
+const maxUpscaledSide = 8192
+
+// upscaleFactor keeps an upscale of picture inside 1–4× and maxUpscaledSide. A
+// picture whose size can't be read keeps the factor asked for; A1111 will say.
+func upscaleFactor(picture []byte, factor float64) float64 {
+	if factor <= 1 {
+		factor = 2
+	}
+	factor = min(factor, 4)
+	if cfg, _, err := image.DecodeConfig(bytes.NewReader(picture)); err == nil {
+		if side := max(cfg.Width, cfg.Height); side > 0 && float64(side)*factor > maxUpscaledSide {
+			factor = max(1, float64(maxUpscaledSide)/float64(side))
+		}
+	}
+	return factor
 }
 
 // prepareGenerate turns a studio-shaped request into the generator's, filling defaults,
@@ -517,10 +566,14 @@ func (s *Server) prepareGenerate(req *generateReq) (gen imagegen.GenerateRequest
 		Count:          req.Count,
 		Loras:          loras,
 		Detailer: imagegen.Detailer{
-			Enabled: req.Detailer.Enabled, Model: req.Detailer.Model,
+			Enabled: req.Detailer.Enabled, Model: req.Detailer.Model, Models: req.Detailer.Models,
 			Prompt: detailPrompt, NegativePrompt: detailNegative,
 			Confidence: req.Detailer.Confidence, Denoise: req.Detailer.Denoise,
 			MaskBlur: req.Detailer.MaskBlur,
+		},
+		Upscale: imagegen.Upscale{
+			Enabled: req.Upscale.Enabled, Upscaler: req.Upscale.Upscaler, Scale: req.Upscale.Scale,
+			Denoise: req.Upscale.Denoise, Steps: req.Upscale.Steps,
 		},
 	}
 	return gen, promptRecord, rolled
@@ -593,12 +646,38 @@ func clampGenerate(req *generateReq) {
 		req.Detailer.Denoise = 1
 	}
 	req.Detailer.MaskBlur = clampInt(req.Detailer.MaskBlur, 0, 64)
+	if len(req.Detailer.Models) > 4 {
+		req.Detailer.Models = req.Detailer.Models[:4]
+	}
+	clampUpscale(req)
 	if req.Count <= 0 {
 		req.Count = 1
 	}
 	req.Count = clampInt(req.Count, 1, 8)
 	if req.Seed == 0 {
 		req.Seed = -1
+	}
+}
+
+// clampUpscale keeps a hires fix to what a card can draw: 1–4×, the larger side
+// no more than 4096 once enlarged, and a second pass that redraws enough to add
+// detail without drawing a different picture.
+func clampUpscale(req *generateReq) {
+	up := &req.Upscale
+	up.Upscaler = strings.TrimSpace(up.Upscaler)
+	if up.Scale <= 1 {
+		up.Scale = 2
+	}
+	up.Scale = min(up.Scale, 4, 4096/float64(max(req.Width, req.Height)))
+	up.Scale = max(up.Scale, 1)
+	up.Scale = math.Round(up.Scale*100) / 100
+	if up.Denoise <= 0 {
+		up.Denoise = 0.45
+	}
+	up.Denoise = min(up.Denoise, 1)
+	up.Steps = clampInt(up.Steps, 0, 80)
+	if up.Enabled && up.Upscaler == "" {
+		up.Upscaler = "Latent"
 	}
 }
 
@@ -816,10 +895,10 @@ func (s *Server) handleGetModelMeta(w http.ResponseWriter, r *http.Request) {
 }
 
 type modelMetaPatch struct {
-	Key            string                  `json:"key"`
-	Name           *string                 `json:"name"`
-	Description    *string                 `json:"description"`
-	TriggerPhrases *[]string               `json:"triggerPhrases"`
+	Key            string    `json:"key"`
+	Name           *string   `json:"name"`
+	Description    *string   `json:"description"`
+	TriggerPhrases *[]string `json:"triggerPhrases"`
 	// Defaults is read twice: as settings, and for which of the fields kept on
 	// this side (model_defaults.go) it names.
 	Defaults json.RawMessage `json:"defaults"`

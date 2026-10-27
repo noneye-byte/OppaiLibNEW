@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
@@ -31,6 +32,7 @@ import androidx.compose.material.icons.filled.Style
 import androidx.compose.material.icons.filled.TravelExplore
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.ViewInAr
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.InputChip
 import androidx.compose.material3.ModalBottomSheet
@@ -63,6 +65,7 @@ import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Replay
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
@@ -113,6 +116,9 @@ import net.fourbakers.oppailib.data.GenDraft
 import net.fourbakers.oppailib.data.GenSession
 import net.fourbakers.oppailib.data.GenWildcard
 import net.fourbakers.oppailib.data.DetailerRequest
+import net.fourbakers.oppailib.data.LoraCategoryAssign
+import net.fourbakers.oppailib.data.LoraCategoryName
+import net.fourbakers.oppailib.data.UpscaleRequest
 import net.fourbakers.oppailib.data.GenLoraPick
 import net.fourbakers.oppailib.data.GenModel
 import net.fourbakers.oppailib.data.GenPreview
@@ -157,6 +163,9 @@ private val schedulers = listOf(
 )
 
 /** Sizes the generator accepts: a multiple of eight between 64 and 2048. */
+/** ADetailer's hand detector: the hand pass. */
+private const val HAND_DETECTOR = "hand_yolov8n.pt"
+
 private fun snapSize(n: Int): Int = (n.coerceIn(64, 2048) / 8) * 8
 
 /** A generated preview plus whether it has been saved into the library yet. */
@@ -225,12 +234,26 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit, to
     // A long model list gets a filter box; typing narrows the row.
     var modelFilter by remember { mutableStateOf("") }
     var detailerEnabled by remember { mutableStateOf(draft.detailerEnabled) }
-    var detailerModel by remember { mutableStateOf(draft.detailerModel) }
+    // The face pass's detector; an old draft's "Hands" is the hand pass, below.
+    var detailerModel by remember { mutableStateOf(draft.detailerModel.takeIf { it != HAND_DETECTOR } ?: "face_yolov8n.pt") }
     var detailerPrompt by remember { mutableStateOf(draft.detailerPrompt) }
     var detailerNegative by remember { mutableStateOf(draft.detailerNegative) }
     var detailerConfidence by remember { mutableStateOf(draft.detailerConfidence) }
     var detailerDenoise by remember { mutableStateOf(draft.detailerDenoise) }
     var detailerMaskBlur by remember { mutableStateOf(draft.detailerMaskBlur) }
+    // The detailer's passes. A draft from when it was one detector reads its pass off
+    // detailerModel, "Hands" among them.
+    val draftHands = draft.detailerModel == HAND_DETECTOR
+    var detailerFaces by remember { mutableStateOf(draft.detailerFaces ?: !draftHands) }
+    var detailerHands by remember { mutableStateOf(draft.detailerHands ?: draftHands) }
+    var hiresEnabled by remember { mutableStateOf(draft.hiresEnabled) }
+    var hiresUpscaler by remember { mutableStateOf(draft.hiresUpscaler) }
+    var hiresScale by remember { mutableStateOf(draft.hiresScale) }
+    var hiresDenoise by remember { mutableStateOf(draft.hiresDenoise) }
+    /** Which LoRA category the picker shows: null all, 0 none, else a category id. */
+    var loraCategory by remember { mutableStateOf<Long?>(null) }
+    /** The LoRA a new category is being made for ("" for none), while its dialog is up. */
+    var newCategoryFor by remember { mutableStateOf<String?>(null) }
 
     // The run, and the last run's pictures, from the process-wide session.
     val session by GenSession.state.collectAsState()
@@ -267,7 +290,10 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit, to
         sampler = sampler, clipSkip = clipSkip,
         detailerEnabled = detailerEnabled, detailerModel = detailerModel, detailerPrompt = detailerPrompt,
         detailerNegative = detailerNegative, detailerConfidence = detailerConfidence,
-        detailerDenoise = detailerDenoise, detailerMaskBlur = detailerMaskBlur, board = board,
+        detailerDenoise = detailerDenoise, detailerMaskBlur = detailerMaskBlur,
+        detailerFaces = detailerFaces, detailerHands = detailerHands,
+        hiresEnabled = hiresEnabled, hiresUpscaler = hiresUpscaler, hiresScale = hiresScale, hiresDenoise = hiresDenoise,
+        board = board,
     )
     val latestDraft = androidx.compose.runtime.rememberUpdatedState(currentDraft)
     LaunchedEffect(Unit) {
@@ -462,10 +488,15 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit, to
                 count = count,
                 board = board,
                 loras = loraWeights.map { (name, weight) -> GenLoraPick(name, weight) },
-                detailer = if (status?.detailerAvailable == true && detailerEnabled) {
+                detailer = if (status?.detailerAvailable == true && detailerEnabled && (detailerFaces || detailerHands)) {
+                    val passes = buildList {
+                        if (detailerFaces) add(detailerModel)
+                        if (detailerHands) add(HAND_DETECTOR)
+                    }
                     DetailerRequest(
                         enabled = true,
-                        model = detailerModel,
+                        model = passes.first(),
+                        models = passes,
                         prompt = detailerPrompt,
                         negativePrompt = detailerNegative,
                         confidence = detailerConfidence,
@@ -473,8 +504,53 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit, to
                         maskBlur = detailerMaskBlur,
                     )
                 } else null,
+                upscale = status?.takeIf { hiresEnabled && it.backend != "invokeai" && it.upscalers.isNotEmpty() }?.let { st ->
+                    val choices = (st.latentUpscalers + st.upscalers).distinct()
+                    UpscaleRequest(
+                        enabled = true,
+                        upscaler = hiresUpscaler.takeIf { it in choices } ?: choices.first(),
+                        scale = hiresScale,
+                        denoise = hiresDenoise,
+                    )
+                },
             ),
         )
+    }
+
+    /** Moves a LoRA into a category (0 for none): on screen at once, then for real,
+        and back if the server refuses. */
+    fun setLoraCategory(name: String, category: Long) {
+        val before = status ?: return
+        val from = before.loras.find { it.name == name }?.category ?: 0
+        if (from == category) return
+        status = before.copy(
+            loras = before.loras.map { if (it.name == name) it.copy(category = category) else it },
+            loraCategories = before.loraCategories.map {
+                when (it.id) {
+                    from -> it.copy(count = it.count - 1)
+                    category -> it.copy(count = it.count + 1)
+                    else -> it
+                }
+            },
+        )
+        scope.launch {
+            runCatching { repo.api.assignLoraCategory(LoraCategoryAssign(category, listOf(name))) }
+                .onSuccess { res -> status = status?.copy(loraCategories = res.categories) }
+                .onFailure { status = before; repo.report(it.message ?: "Couldn't move that LoRA") }
+        }
+    }
+
+    fun createLoraCategory(categoryName: String, forLora: String) {
+        scope.launch {
+            runCatching { repo.api.createLoraCategory(LoraCategoryName(categoryName)) }
+                .onSuccess { made ->
+                    status = status?.let { st ->
+                        st.copy(loraCategories = (st.loraCategories.filter { it.id != made.id } + made).sortedBy { it.name.lowercase() })
+                    }
+                    if (forLora.isNotEmpty()) setLoraCategory(forLora, made.id) else loraCategory = made.id
+                }
+                .onFailure { repo.report(it.message ?: "Couldn't make the category") }
+        }
     }
 
     fun save(shot: ShotState) {
@@ -556,6 +632,7 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit, to
                     add("Create")
                     add("Gallery")
                     if (invoke || st.civitai) add("Civitai")
+                    add("Train")
                 }
                 if (tabNames.size > 1) {
                     TabRow(selectedTabIndex = tab.coerceIn(0, tabNames.size - 1)) {
@@ -573,6 +650,7 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit, to
                         onSaved = onSaved,
                         own = !invoke,
                     )
+                    "Train" -> LoraTrainTab(repo, models = st.models, checkpoint = checkpoint)
                     "Civitai" -> CivitaiTab(
                         repo,
                         backend = st.backend,
@@ -788,11 +866,33 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit, to
                                 modifier = Modifier.fillMaxWidth(),
                             )
                         }
+                        val cats = st.loraCategories
+                        val catFilter = loraCategory?.takeIf { it == 0L || cats.any { c -> c.id == it } }
+                        if (st.loras.isNotEmpty()) {
+                            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                FilterChip(selected = catFilter == null, onClick = { loraCategory = null },
+                                    label = { Text("All · ${st.loras.size}") })
+                                cats.forEach { c ->
+                                    FilterChip(selected = catFilter == c.id, onClick = { loraCategory = c.id },
+                                        label = { Text("${c.name} · ${c.count}") })
+                                }
+                                if (cats.isNotEmpty()) {
+                                    FilterChip(selected = catFilter == 0L, onClick = { loraCategory = 0L },
+                                        label = { Text("No category · ${st.loras.count { it.category == 0L }}") })
+                                }
+                                AssistChip(onClick = { newCategoryFor = "" }, label = { Text("＋ Category") })
+                            }
+                        }
                         // Keyed by name, and Compose throws if two items share a key; an
                         // older server can name two LoRAs alike, so duplicates go first.
                         val shown = st.loras.distinctBy { it.name }.filter {
+                            catFilter == null || it.category == catFilter
+                        }.filter {
                             loraFilter.isBlank() || it.name.contains(loraFilter, true) || it.alias.contains(loraFilter, true) ||
                                 it.triggerPhrases.any { p -> p.contains(loraFilter, true) }
+                        }
+                        if (shown.isEmpty() && catFilter != null && loraFilter.isBlank()) {
+                            SheetNote(if (catFilter == 0L) "Every LoRA is in a category." else "Nothing in this category yet — use the category under a LoRA to put it here.")
                         }
                         CardGrid(shown) { lora ->
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -810,6 +910,25 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit, to
                                         else loraWeights + (lora.name to (lora.weight.takeIf { it != 0.0 && it.isFinite() } ?: 1.0))
                                     },
                                 )
+                                // Which category it is in, and a menu to move it.
+                                var catMenu by remember { mutableStateOf(false) }
+                                Box {
+                                    TextButton(onClick = { catMenu = true }, contentPadding = PaddingValues(horizontal = 6.dp)) {
+                                        Text(
+                                            cats.find { it.id == lora.category }?.name ?: "No category",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
+                                    DropdownMenu(expanded = catMenu, onDismissRequest = { catMenu = false }) {
+                                        DropdownMenuItem(text = { Text("No category") }, onClick = { catMenu = false; setLoraCategory(lora.name, 0) })
+                                        cats.forEach { c ->
+                                            DropdownMenuItem(text = { Text(c.name) }, onClick = { catMenu = false; setLoraCategory(lora.name, c.id) })
+                                        }
+                                        DropdownMenuItem(text = { Text("New category…") }, onClick = { catMenu = false; newCategoryFor = lora.name })
+                                    }
+                                }
                                 loraWeights[lora.name]?.let { w ->
                                     Slider(
                                         value = w.toFloat(),
@@ -980,15 +1099,25 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit, to
                             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 FilterChip(selected = detailerEnabled, onClick = { detailerEnabled = !detailerEnabled }, label = { Text("ADetailer") })
                                 if (detailerEnabled) {
+                                    // A pass each, run in order: the faces, then the hands.
+                                    FilterChip(selected = detailerFaces, onClick = { detailerFaces = !detailerFaces }, label = { Text("Faces") })
+                                    FilterChip(selected = detailerHands, onClick = { detailerHands = !detailerHands }, label = { Text("Hands") })
+                                }
+                            }
+                            if (detailerEnabled && detailerFaces) {
+                                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     listOf(
                                         "face_yolov8n.pt" to "Face (fast)",
                                         "face_yolov8s.pt" to "Face (accurate)",
-                                        "hand_yolov8n.pt" to "Hands",
-                                        "person_yolov8n-seg.pt" to "Person",
+                                        "mediapipe_face_full" to "MediaPipe face",
+                                        "person_yolov8n-seg.pt" to "Whole person",
                                     ).forEach { (m, label) ->
                                         FilterChip(selected = detailerModel == m, onClick = { detailerModel = m }, label = { Text(label) })
                                     }
                                 }
+                            }
+                            if (detailerEnabled && !detailerFaces && !detailerHands) {
+                                SheetNote("Neither pass is on, so runs skip the detailer.")
                             }
                             if (detailerEnabled) {
                                 OutlinedTextField(value = detailerPrompt, onValueChange = { detailerPrompt = it },
@@ -1008,10 +1137,58 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit, to
                                 }
                             }
                         }
+                        if (st.backend != "invokeai" && st.upscalers.isNotEmpty()) {
+                            SectionLabel("Upscale")
+                            FilterChip(selected = hiresEnabled, onClick = { hiresEnabled = !hiresEnabled },
+                                label = { Text("Hires fix — draw it again bigger") })
+                            if (hiresEnabled) {
+                                val choices = (st.latentUpscalers + st.upscalers).distinct()
+                                val picked = hiresUpscaler.takeIf { it in choices } ?: choices.first()
+                                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    choices.forEach { u ->
+                                        FilterChip(selected = picked == u, onClick = { hiresUpscaler = u }, label = { Text(u) })
+                                    }
+                                }
+                                SliderRow("Scale", "%.2f×".format(hiresScale), hiresScale.toFloat(), 1f..4f, 11) {
+                                    hiresScale = (it * 4).toInt() / 4.0
+                                }
+                                SliderRow("Denoise", "%.2f".format(hiresDenoise), hiresDenoise.toFloat(), 0.05f..1f, 18) {
+                                    hiresDenoise = (it * 20).toInt() / 20.0
+                                }
+                                // The server holds the larger side to 4096, as the web says too.
+                                val w = snapSize(widthText.toIntOrNull() ?: width)
+                                val h = snapSize(heightText.toIntOrNull() ?: height)
+                                val f = minOf(hiresScale, 4096.0 / maxOf(w, h))
+                                SheetNote("Drawn at ${w}×${h}, then again at ${(w * f).toInt()}×${(h * f).toInt()}.")
+                            }
+                        }
                     }
                 }
             }
         }
+    }
+
+    newCategoryFor?.let { forLora ->
+        var catName by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { newCategoryFor = null },
+            title = { Text("New category") },
+            text = {
+                OutlinedTextField(
+                    value = catName,
+                    onValueChange = { catName = it.take(80) },
+                    placeholder = { Text("Characters, Styles, Poses…") },
+                    singleLine = true,
+                )
+            },
+            confirmButton = {
+                TextButton(enabled = catName.isNotBlank(), onClick = {
+                    newCategoryFor = null
+                    createLoraCategory(catName.trim(), forLora)
+                }) { Text("Make") }
+            },
+            dismissButton = { TextButton(onClick = { newCategoryFor = null }) { Text("Cancel") } },
+        )
     }
 
     editTarget?.let { name ->

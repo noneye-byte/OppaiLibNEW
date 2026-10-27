@@ -24,6 +24,7 @@ import (
 	_ "image/png"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -162,6 +163,9 @@ type Lora struct {
 	Negative  string  `json:"negative,omitempty"`
 	WeightMin float64 `json:"weightMin,omitempty"`
 	WeightMax float64 `json:"weightMax,omitempty"`
+	// Category is the studio's own category the LoRA is sorted into, 0 for none.
+	// OppaiLib keeps it (db.LoraCategories); neither generator has the idea.
+	Category int64 `json:"category,omitempty"`
 }
 
 // ModelDetail is the full editable record for one model or LoRA, as InvokeAI's
@@ -320,6 +324,13 @@ type GenerateRequest struct {
 	// and nothing else — ADetailer's "skip img2img" — so a finished picture's faces
 	// and hands are redone without the rest of it moving. Automatic1111 only.
 	DetailOnly bool
+	// Upscale, on a txt2img run, is Automatic1111's hires fix: the picture is drawn
+	// at the size asked for, enlarged, and drawn over again at the larger size, so
+	// the detail is the model's rather than stretched pixels. UpscaleOnly, with
+	// InitImage, enlarges that picture through A1111's extras upscaler and nothing
+	// else — a finished picture made bigger without being redrawn.
+	Upscale     Upscale
+	UpscaleOnly bool
 	// Controls are pictures that steer the run without being started from: a pose to
 	// copy, a face to keep. Automatic1111 and Forge apply them through the ControlNet
 	// extension; a backend that cannot fails with ErrControlUnsupported so the caller
@@ -353,16 +364,61 @@ var ErrControlUnsupported = errors.New("this generator cannot apply pose or face
 // inpainting graph needs canvas nodes this client does not build.
 var ErrInpaintUnsupported = errors.New("painting a picture to fix it, and fixing faces on a finished one, need Automatic1111 — InvokeAI can start from a picture but not repaint part of one here")
 
+// ErrUpscaleUnsupported is a hires fix or an upscale sent to InvokeAI, whose
+// upscaling needs a per-install upscale model record this client does not resolve.
+var ErrUpscaleUnsupported = errors.New("upscaling needs Automatic1111 — InvokeAI upscales in its own canvas")
+
 // Detailer configures either the ADetailer Automatic1111 extension or InvokeAI's
 // adetailer node. The shared fields deliberately map to both APIs.
 type Detailer struct {
-	Enabled        bool
+	Enabled bool
+	// Model is the detector of a client that names one. Models, when set, is one
+	// pass per detector, run in order: the faces, then the hands. A picture whose
+	// hands came out wrong wants a hand pass as well as the face pass, not instead.
 	Model          string
+	Models         []string
 	Prompt         string
 	NegativePrompt string
 	Confidence     float64
 	Denoise        float64
 	MaskBlur       int
+}
+
+// DefaultDetector is the pass a detailer runs when none is named.
+const DefaultDetector = "face_yolov8n.pt"
+
+// Passes is the detectors the detailer runs, one pass each, in order, without
+// blanks or repeats.
+func (d Detailer) Passes() []string {
+	names := d.Models
+	if len(names) == 0 {
+		names = []string{d.Model}
+	}
+	out := make([]string, 0, len(names))
+	seen := map[string]bool{}
+	for _, n := range names {
+		n = strings.TrimSpace(n)
+		if n == "" || seen[n] {
+			continue
+		}
+		seen[n] = true
+		out = append(out, n)
+	}
+	if len(out) == 0 {
+		out = append(out, DefaultDetector)
+	}
+	return out
+}
+
+// Upscale is a hires fix (or, with UpscaleOnly, an extras upscale): Upscaler is
+// one of the names Upscalers lists, Scale the factor, and for a hires fix Denoise
+// is how far the second pass may redraw and Steps its steps (0 is the first pass's).
+type Upscale struct {
+	Enabled  bool
+	Upscaler string
+	Scale    float64
+	Denoise  float64
+	Steps    int
 }
 
 // GenerateResult carries the decoded image bytes (PNG) and the seeds actually used,
@@ -773,8 +829,14 @@ func (c *Client) Generate(ctx context.Context, base string, req GenerateRequest)
 		if len(req.Mask) > 0 || req.DetailOnly {
 			return nil, ErrInpaintUnsupported
 		}
+		if req.Upscale.Enabled || req.UpscaleOnly {
+			return nil, ErrUpscaleUnsupported
+		}
 		res, err := c.invokeGenerate(ctx, base, req)
 		return rejectBlackGeneration(res, err)
+	}
+	if req.UpscaleOnly {
+		return c.a1111Upscale(ctx, base, req)
 	}
 	res, err := c.a1111Generate(ctx, base, req)
 	if err == nil && containsBlackImage(res) && req.VAE != "" {
@@ -830,6 +892,17 @@ func containsBlackImage(res *GenerateResult) bool {
 		}
 	}
 	return false
+}
+
+// Upscalers lists what the generator can enlarge a picture with: A1111's upscaler
+// models (ESRGAN and the like, which the extras upscale and a hires fix both take)
+// and its latent modes (a hires fix only). InvokeAI lists none here.
+func (c *Client) Upscalers(ctx context.Context, base string) (models, latent []string, err error) {
+	kind, err := c.Backend(ctx, base)
+	if err != nil || kind == KindInvokeAI {
+		return nil, nil, err
+	}
+	return c.a1111Upscalers(ctx, base)
 }
 
 // SupportsADetailer reports whether the detected backend can run the shared

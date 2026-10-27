@@ -1271,7 +1271,22 @@ data class GenLora(
     val weight: Double = 0.0,
     /** Added to the negative prompt while the LoRA is on. */
     val negative: String = "",
+    /** The studio's own category it is sorted into; 0 for none. */
+    val category: Long = 0,
 )
+
+/** One of the studio's LoRA categories, kept by the server (api/lora_categories.go). */
+@Serializable
+data class LoraCategory(val id: Long, val name: String, val count: Int = 0)
+
+@Serializable
+data class LoraCategoryName(val name: String)
+
+@Serializable
+data class LoraCategoryAssign(val category: Long, val loras: List<String>)
+
+@Serializable
+data class LoraCategoryList(val categories: List<LoraCategory> = emptyList())
 
 @Serializable
 data class GenVae(val key: String, val name: String, val base: String = "")
@@ -1378,6 +1393,15 @@ data class GenDraft(
     val detailerConfidence: Double = 0.3,
     val detailerDenoise: Double = 0.4,
     val detailerMaskBlur: Int = 4,
+    /** The detailer's passes. A draft from when it was one detector has neither,
+        and reads its pass off detailerModel. */
+    val detailerFaces: Boolean? = null,
+    val detailerHands: Boolean? = null,
+    /** A1111's hires fix. */
+    val hiresEnabled: Boolean = false,
+    val hiresUpscaler: String = "",
+    val hiresScale: Double = 1.5,
+    val hiresDenoise: Double = 0.45,
     val board: String = "none",
     /** When it was written, so a draft from long ago is not offered as in progress. */
     val at: Long = 0,
@@ -1394,6 +1418,12 @@ data class ImageGenStatus(
     val vaes: List<GenVae> = emptyList(),
     val templates: List<GenTemplate> = emptyList(),
     val detailerAvailable: Boolean = false,
+    /** A1111 only: upscaler models (an upscale or a hires fix) and latent modes
+        (a hires fix only). Empty on InvokeAI, which upscales in its own canvas. */
+    val upscalers: List<String> = emptyList(),
+    val latentUpscalers: List<String> = emptyList(),
+    /** The studio's LoRA categories; each LoRA's `category` names one. */
+    val loraCategories: List<LoraCategory> = emptyList(),
     /** The Civitai browser works against this generator; both backends say yes. */
     val civitai: Boolean = false,
     /** Models can be installed, edited, re-covered and deleted from here: always on
@@ -1413,6 +1443,8 @@ data class GenLoraPick(val name: String, val weight: Double)
 data class DetailerRequest(
     val enabled: Boolean = false,
     val model: String = "face_yolov8n.pt",
+    /** One pass per detector, in order: the faces, then the hands. */
+    val models: List<String> = emptyList(),
     val prompt: String = "",
     val negativePrompt: String = "",
     val confidence: Double = 0.3,
@@ -1440,6 +1472,144 @@ data class GenerateRequest(
     val board: String = "none",
     val loras: List<GenLoraPick> = emptyList(),
     val detailer: DetailerRequest? = null,
+    /** A1111's hires fix: drawn, enlarged with `upscaler`, drawn again bigger. */
+    val upscale: UpscaleRequest? = null,
+)
+
+@Serializable
+data class UpscaleRequest(
+    val enabled: Boolean = false,
+    val upscaler: String = "",
+    val scale: Double = 2.0,
+    val denoise: Double = 0.45,
+    val steps: Int = 0,
+)
+
+// ── LoRA training (api/lora_training.go, api/lora_sets.go) ────────────────────
+
+/** What the trainer says about itself. */
+@Serializable
+data class TrainerHealth(
+    val ok: Boolean = false,
+    val version: String = "",
+    val busy: Boolean = false,
+    val queued: Int = 0,
+    val gpu: String = "",
+    val vramMB: Int = 0,
+)
+
+@Serializable
+data class TrainListResponse(
+    val configured: Boolean = false,
+    /** Whether AI tagging is on, for tagging a set's pictures. */
+    val tagger: Boolean = false,
+    val trainer: TrainerHealth? = null,
+    val trainerError: String = "",
+    val trainings: List<Training> = emptyList(),
+)
+
+/** One run, with its progress while the trainer has it. */
+@Serializable
+data class Training(
+    val id: Long,
+    val name: String,
+    val trigger: String = "",
+    val baseModel: String = "",
+    val images: Int = 0,
+    /** preparing | queued | training | installing | done | failed | cancelled */
+    val status: String,
+    val error: String = "",
+    val createdAt: Long = 0,
+    val finishedAt: Long = 0,
+    val phase: String = "",
+    val step: Int = 0,
+    val total: Int = 0,
+    val epoch: Int = 0,
+    val epochs: Int = 0,
+    val loss: Double = 0.0,
+    val eta: String = "",
+    val elapsed: String = "",
+)
+
+/** A pile of pictures a LoRA learns from, kept apart from the library. */
+@Serializable
+data class TrainSet(
+    val id: Long,
+    val name: String,
+    val count: Int = 0,
+    val coverId: Long = 0,
+    val updatedAt: Long = 0,
+)
+
+@Serializable
+data class TrainSetsResponse(val sets: List<TrainSet> = emptyList())
+
+@Serializable
+data class TrainSetName(val name: String)
+
+@Serializable
+data class TrainPictureUpload(val id: Long = 0, val existed: Boolean = false)
+
+/** Which pictures a run trains on. The phone trains on training sets only. */
+@Serializable
+data class TrainSource(val setId: Long)
+
+@Serializable
+data class TrainPreviewRequest(val source: TrainSource, val trigger: String)
+
+@Serializable
+data class TrainTagCount(val name: String, val count: Int = 0)
+
+@Serializable
+data class TrainPreviewItem(val id: Long, val caption: String = "")
+
+@Serializable
+data class TrainPreview(
+    val count: Int = 0,
+    /** Every picture of the set, as it would be captioned. */
+    val items: List<TrainPreviewItem> = emptyList(),
+    val commonTags: List<TrainTagCount> = emptyList(),
+    val exampleCaption: String = "",
+    val suggestedRepeats: Int = 0,
+    val untagged: Int = 0,
+)
+
+@Serializable
+data class TrainAutotagRequest(val source: TrainSource, val redo: Boolean = false)
+
+/** An import or tagging run filling a training set, while it runs. */
+@Serializable
+data class TrainTask(
+    val id: String,
+    val total: Int = 0,
+    val done: Int = 0,
+    val failed: Int = 0,
+    val finished: Boolean = false,
+    val error: String = "",
+)
+
+/** What starting a run asks for. Zero numbers take the trainer's defaults, and are
+    left out (kotlinx leaves defaults out of the body). */
+@Serializable
+data class TrainRequest(
+    val name: String,
+    val trigger: String,
+    val base: String,
+    val source: TrainSource,
+    val captions: String = "tags",
+    val leaveOut: List<String> = emptyList(),
+    val preset: String = "",
+    val epochs: Int = 0,
+    val learningRate: Double = 0.0,
+    val textEncoderLr: Double = 0.0,
+    val optimizer: String = "",
+    val noiseOffset: Double = 0.0,
+    val lowVram: Boolean = false,
+    val flip: Boolean = false,
+    // False by default only because a default is never sent: these are always
+    // passed, and on, from the Train tab.
+    val freeGpu: Boolean = false,
+    val samples: Boolean = false,
 )
 
 /** One line for the server to read aloud; see LibbySpeech. `heat` is how keyed up

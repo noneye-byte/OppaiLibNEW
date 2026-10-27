@@ -71,17 +71,30 @@ type genRecord struct {
 	Characters     []string                     `json:"characters"`
 	Denoise        float64                      `json:"denoise,omitempty"`
 	Refiner        *genRecordRefiner            `json:"refiner,omitempty"`
+	Hires          *genRecordUpscale            `json:"hires,omitempty"`
+	Upscaled       *genRecordUpscale            `json:"upscaled,omitempty"`
 	Backend        string                       `json:"backend"`
 	At             int64                        `json:"at"`
 }
 
 type genRecordRefiner struct {
-	Model          string  `json:"model"`
-	Prompt         string  `json:"prompt"`
-	NegativePrompt string  `json:"negativePrompt"`
-	Confidence     float64 `json:"confidence"`
-	Denoise        float64 `json:"denoise"`
-	MaskBlur       int     `json:"maskBlur"`
+	Model string `json:"model"`
+	// Models is every pass, in order, when there was more than the one.
+	Models         []string `json:"models,omitempty"`
+	Prompt         string   `json:"prompt"`
+	NegativePrompt string   `json:"negativePrompt"`
+	Confidence     float64  `json:"confidence"`
+	Denoise        float64  `json:"denoise"`
+	MaskBlur       int      `json:"maskBlur"`
+}
+
+// genRecordUpscale is how a picture was enlarged: by a hires fix as it was drawn,
+// or by an upscale of a finished one (no denoise or steps).
+type genRecordUpscale struct {
+	Upscaler string  `json:"upscaler"`
+	Scale    float64 `json:"scale"`
+	Denoise  float64 `json:"denoise,omitempty"`
+	Steps    int     `json:"steps,omitempty"`
 }
 
 // genRecordOf is the record of one picture of a run, from the request as it went to
@@ -104,9 +117,18 @@ func genRecordOf(gen imagegen.GenerateRequest, seed int64, width, height int) ge
 	if len(gen.InitImage) > 0 && !gen.DetailOnly {
 		rec.Denoise = gen.Denoise
 	}
-	if d := gen.Detailer; d.Enabled {
-		rec.Refiner = &genRecordRefiner{Model: d.Model, Prompt: d.Prompt, NegativePrompt: d.NegativePrompt,
+	if d := gen.Detailer; d.Enabled && !gen.UpscaleOnly {
+		passes := d.Passes()
+		rec.Refiner = &genRecordRefiner{Model: passes[0], Prompt: d.Prompt, NegativePrompt: d.NegativePrompt,
 			Confidence: d.Confidence, Denoise: d.Denoise, MaskBlur: d.MaskBlur}
+		if len(passes) > 1 {
+			rec.Refiner.Models = passes
+		}
+	}
+	if up := gen.Upscale; gen.UpscaleOnly {
+		rec.Upscaled = &genRecordUpscale{Upscaler: up.Upscaler, Scale: up.Scale}
+	} else if up.Enabled && len(gen.InitImage) == 0 {
+		rec.Hires = &genRecordUpscale{Upscaler: up.Upscaler, Scale: up.Scale, Denoise: up.Denoise, Steps: up.Steps}
 	}
 	return rec
 }

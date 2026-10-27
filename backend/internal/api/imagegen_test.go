@@ -1,7 +1,9 @@
 package api
 
 import (
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -313,5 +315,73 @@ func TestAMaskOrAFacePassWithoutAPictureIsTheClientsMistake(t *testing.T) {
 	}
 	if err := decodeGenerateImages(&generateReq{InitImage: "bm90IGFuIGltYWdl"}, &gen); err == nil {
 		t.Fatal("text passed as the picture was accepted")
+	}
+}
+
+// upscaleA1111 is an A1111 whose extras tab makes a picture twice as big, and which
+// remembers what it was asked.
+func upscaleA1111(t *testing.T, asked *map[string]any) *httptest.Server {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/sdapi/v1/sd-models":
+			_, _ = w.Write([]byte(`[{"title":"rev.safetensors [abc123]","model_name":"rev","hash":"abc123"}]`))
+		case "/sdapi/v1/upscalers":
+			_, _ = w.Write([]byte(`[{"name":"None"},{"name":"R-ESRGAN 4x+"}]`))
+		case "/sdapi/v1/latent-upscale-modes":
+			_, _ = w.Write([]byte(`[{"name":"Latent"}]`))
+		case "/sdapi/v1/extra-single-image":
+			_ = json.NewDecoder(r.Body).Decode(asked)
+			pic := base64.StdEncoding.EncodeToString(pngOf(t, 128, 192, 9))
+			_, _ = w.Write([]byte(`{"image":"` + pic + `"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestAnUpscaledPictureIsKeptAtItsNewSizeWithHowItWasMade(t *testing.T) {
+	s, token := newTestServer(t)
+	var asked map[string]any
+	enableImageGen(t, s, upscaleA1111(t, &asked).URL)
+
+	rec := do(t, s.Handler(), token, http.MethodGet, "/api/imagegen/status", "")
+	if !strings.Contains(rec.Body.String(), `"upscalers":["R-ESRGAN 4x+"]`) || !strings.Contains(rec.Body.String(), `"latentUpscalers":["Latent"]`) {
+		t.Fatalf("status = %s", rec.Body)
+	}
+
+	// No prompt: an upscale draws nothing. A factor past 4 is held at 4.
+	init := "data:image/png;base64," + base64.StdEncoding.EncodeToString(pngOf(t, 64, 96, 3))
+	out := generateOn(t, s, token, fmt.Sprintf(`{"initImage":%q,"upscaleOnly":true,"upscale":{"upscaler":"R-ESRGAN 4x+","scale":9}}`, init))
+	if asked["upscaling_resize"] != float64(4) || asked["upscaler_1"] != "R-ESRGAN 4x+" {
+		t.Fatalf("asked = %v", asked)
+	}
+	rec = do(t, s.Handler(), token, http.MethodGet, "/api/imagegen/gallery/image/"+out.Images[0].Gallery+"/metadata", "")
+	var meta genRecord
+	_ = json.Unmarshal(rec.Body.Bytes(), &meta)
+	if meta.Width != 128 || meta.Height != 192 || meta.Upscaled == nil || meta.Upscaled.Upscaler != "R-ESRGAN 4x+" || meta.Refiner != nil {
+		t.Fatalf("record = %+v", meta)
+	}
+
+	rec = do(t, s.Handler(), token, http.MethodPost, "/api/imagegen/generate", `{"upscaleOnly":true,"upscale":{"scale":2}}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("an upscale of nothing: %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestAnUpscaleIsHeldToTheLargestSideAllowed(t *testing.T) {
+	big := pngOf(t, 3000, 2000, 1)
+	if got := upscaleFactor(big, 4); got > 8192.0/3000+1e-9 || got < 2.7 {
+		t.Fatalf("factor = %v", got)
+	}
+	if got := upscaleFactor([]byte("not a picture"), 0); got != 2 {
+		t.Fatalf("an unset factor doubles: %v", got)
+	}
+	req := generateReq{Width: 1536, Height: 1024, Upscale: upscaleReq{Enabled: true, Scale: 4}}
+	clampUpscale(&req)
+	if req.Upscale.Scale != 2.67 || req.Upscale.Upscaler != "Latent" || req.Upscale.Denoise != 0.45 {
+		t.Fatalf("hires = %+v", req.Upscale)
 	}
 }

@@ -64,18 +64,24 @@ export interface GenInfo {
   controlImage?: string;
   /** The picture the run started from instead of noise, by name, and how: from the
       whole of it, repainting a painted area, or redoing only its faces. */
-  startedFrom?: { name: string; mode: "img2img" | "inpaint" | "faces" };
+  startedFrom?: { name: string; mode: "img2img" | "inpaint" | "faces" | "upscale" };
   /** How far an image-to-image run was let move from its picture (0–1). */
   denoise?: number;
   /** The face/detail refiner pass, when enabled. */
   refiner?: {
     model: string;
+    /** Every pass, in order, when there was more than the one (faces, then hands). */
+    models?: string[];
     prompt: string;
     negativePrompt: string;
     confidence: number;
     denoise: number;
     maskBlur: number;
   };
+  /** A hires fix: drawn, enlarged by `scale` with `upscaler`, drawn again. */
+  hires?: { upscaler: string; scale: number; denoise?: number; steps?: number };
+  /** A finished picture enlarged and not redrawn. */
+  upscaled?: { upscaler: string; scale: number };
   /** Destination board, for backends that have them. */
   board?: string;
   /** Which API produced this — "invokeai" or "a1111". The same parameters do not
@@ -138,9 +144,10 @@ export function buildGenInfo(
     startedFrom: params.initImage || params.initGallery ? extra.startedFrom : undefined,
     denoise: (params.initImage || params.initGallery) && !params.detailOnly ? params.denoise : undefined,
     refiner:
-      params.detailer?.enabled
+      params.detailer?.enabled && !params.upscaleOnly
         ? {
-            model: params.detailer.model ?? "",
+            model: params.detailer.models?.[0] ?? params.detailer.model ?? "",
+            models: (params.detailer.models?.length ?? 0) > 1 ? params.detailer.models : undefined,
             prompt: params.detailer.prompt ?? "",
             negativePrompt: params.detailer.negativePrompt ?? "",
             confidence: params.detailer.confidence ?? 0,
@@ -148,6 +155,13 @@ export function buildGenInfo(
             maskBlur: params.detailer.maskBlur ?? 0,
           }
         : undefined,
+    hires: params.upscale?.enabled && !params.upscaleOnly && !params.initImage && !params.initGallery
+      ? { upscaler: params.upscale.upscaler ?? "", scale: params.upscale.scale ?? 2,
+          denoise: params.upscale.denoise, steps: params.upscale.steps || undefined }
+      : undefined,
+    upscaled: params.upscaleOnly && params.upscale
+      ? { upscaler: params.upscale.upscaler ?? "", scale: params.upscale.scale ?? 2 }
+      : undefined,
     board: params.board && params.board !== "none" ? params.board : undefined,
     backend: extra.backend,
     seconds: extra.seconds,
@@ -201,8 +215,18 @@ export function toInfotext(info: GenInfo): string {
   }
   if (info.vaePrecision) kv.push(`VAE precision: ${info.vaePrecision}`);
   if (!info.cpuNoise) kv.push("Noise device: gpu");
+  if (info.hires) {
+    // A1111's own keys, so pasting this back into A1111 turns the hires fix on.
+    kv.push(`Hires upscale: ${info.hires.scale}`);
+    if (info.hires.steps) kv.push(`Hires steps: ${info.hires.steps}`);
+    kv.push(`Hires upscaler: ${info.hires.upscaler}`);
+    if (info.hires.denoise !== undefined && info.denoise === undefined) kv.push(`Denoising strength: ${info.hires.denoise}`);
+  }
+  if (info.upscaled) kv.push(`Upscaled: ${info.upscaled.scale}x with ${info.upscaled.upscaler}`);
   if (info.refiner) {
     kv.push(`ADetailer model: ${info.refiner.model}`);
+    // ADetailer's own names for its later tabs: "ADetailer model 2nd".
+    (info.refiner.models ?? []).slice(1).forEach((m, i) => kv.push(`ADetailer model ${ordinal(i + 2)}: ${m}`));
     kv.push(`ADetailer confidence: ${info.refiner.confidence}`);
     kv.push(`ADetailer denoising strength: ${info.refiner.denoise}`);
     kv.push(`ADetailer mask blur: ${info.refiner.maskBlur}`);
@@ -220,6 +244,10 @@ export function toInfotext(info: GenInfo): string {
 
   lines.push(kv.join(", "));
   return lines.join("\n");
+}
+
+function ordinal(n: number): string {
+  return n === 2 ? "2nd" : n === 3 ? "3rd" : `${n}th`;
 }
 
 /** The lossless form, for putting back into this app. */
@@ -277,6 +305,7 @@ export function toGenerateParams(info: GenInfo): GenerateParams {
     count: 1,
     loras: info.loras.map(({ name, weight }) => ({ name, weight })),
     detailer: info.refiner ? { enabled: true, ...info.refiner } : undefined,
+    upscale: info.hires ? { enabled: true, ...info.hires } : undefined,
     board: info.board,
   };
 }

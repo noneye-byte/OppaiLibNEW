@@ -153,6 +153,9 @@ class Repository(private val appContext: Context, val prefs: Prefs) {
     fun modelThumbUrl(model: String): String =
         "${baseUrl}api/imagegen/model-thumb?model=${URLEncoder.encode(model, "UTF-8")}"
 
+    fun trainPictureThumbUrl(setId: Long, id: Long): String =
+        "${baseUrl}api/imagegen/train-sets/$setId/pictures/$id?thumb=1"
+
     fun loraThumbUrl(name: String): String =
         "${baseUrl}api/imagegen/lora-thumb?name=${URLEncoder.encode(name, "UTF-8")}"
 

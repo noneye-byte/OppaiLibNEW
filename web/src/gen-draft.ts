@@ -137,6 +137,17 @@ export interface GenDraft {
   detailerConfidence?: number;
   detailerDenoise?: number;
   detailerMaskBlur?: number;
+  /** The detailer's passes. Absent on drafts from when it was one detector. */
+  detailerFaces?: boolean;
+  detailerHands?: boolean;
+  /** A1111's hires fix, and what an upscale of a finished picture uses. */
+  hiresEnabled?: boolean;
+  hiresUpscaler?: string;
+  hiresScale?: number;
+  hiresDenoise?: number;
+  hiresSteps?: number;
+  upscaleUpscaler?: string;
+  upscaleBy?: number;
 
   /** Panels the user had expanded. Restoring these is what makes a return to the tab
       feel like coming back rather than starting over. */
@@ -208,12 +219,13 @@ export function loadDraft(): GenDraft | null {
   (["prompt", "negative", "checkpoint", "vae", "templateId", "scheduler", "board",
     "outfitText", "outfitMisc", "outfitUnderwearColor", "outfitPubicHairColor",
     "outfitLoadoutId", "outfitWardrobeId",
-    "detailerModel", "detailerPrompt", "detailerNegative"] as const).forEach(str);
+    "detailerModel", "detailerPrompt", "detailerNegative", "hiresUpscaler", "upscaleUpscaler"] as const).forEach(str);
   (["width", "height", "steps", "cfg", "cfgRescale", "clipSkip", "count", "seed",
     "outfitFace", "outfitTier", "detailerConfidence", "detailerDenoise",
-    "detailerMaskBlur", "scrollTop"] as const).forEach(num);
+    "detailerMaskBlur", "hiresScale", "hiresDenoise", "hiresSteps", "upscaleBy", "scrollTop"] as const).forEach(num);
   (["seamlessX", "seamlessY", "cpuNoise", "outfitOn", "outfitCutout", "outfitPubicHair",
-    "outfitLockColors", "outfitMiscBatch", "detailerEnabled", "showOptions"] as const).forEach(bool);
+    "outfitLockColors", "outfitMiscBatch", "detailerEnabled", "detailerFaces", "detailerHands",
+    "hiresEnabled", "showOptions"] as const).forEach(bool);
 
   if (d.vaePrecision === "fp16" || d.vaePrecision === "fp32") out.vaePrecision = d.vaePrecision;
   if (d.outfitBackground === "black" || d.outfitBackground === "white") {

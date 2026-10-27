@@ -26,11 +26,11 @@ const PAGE = 40;
  *
  * The host view calls refresh() after a generation so new images appear without
  * a manual reload. A picture can go back to the studio as the one to start from
- * ("use-picture": image to image, paint to fix, or its faces redone).
+ * ("use-picture": image to image, paint to fix, its faces redone, or enlarged).
  */
 
 /** How a gallery picture is sent back to the studio to be started from. */
-export type UsePictureMode = "img2img" | "inpaint" | "faces";
+export type UsePictureMode = "img2img" | "inpaint" | "faces" | "upscale";
 
 export interface UsePicture {
   url: string;
@@ -53,6 +53,11 @@ export class OppaiInvokeGallery extends LitElement {
       (A1111 with ADetailer). */
   @property({ type: Boolean }) canPaint = false;
   @property({ type: Boolean }) canFixFaces = false;
+  /** What the fix does with the studio's detailer passes: "Fix faces", "Fix hands"… */
+  @property() fixLabel = "Fix faces";
+  /** The upscale the studio would run ("Upscale 2×"); blank when it can't (InvokeAI,
+      or an A1111 listing no upscalers). */
+  @property() upscaleLabel = "";
   /** The generator's LoRAs by name, for "use as a LoRA's cover". */
   @property({ attribute: false }) loras: string[] = [];
   /** Covers can be written (A1111 with its models folder, or InvokeAI). */
@@ -866,7 +871,8 @@ export class OppaiInvokeGallery extends LitElement {
         { label: "Use same generation parameters", icon: "replay", run: () => void this.reuseMetadata(img) },
         { label: "Start from this picture", icon: "add_photo_alternate", run: () => this.usePicture(img, "img2img") },
         ...(this.canPaint ? [{ label: "Paint to fix", icon: "brush", run: () => this.usePicture(img, "inpaint") }] : []),
-        ...(this.canFixFaces ? [{ label: "Fix faces", icon: "face_retouching_natural", run: () => this.usePicture(img, "faces") }] : []),
+        ...(this.canFixFaces ? [{ label: this.fixLabel, icon: "face_retouching_natural", run: () => this.usePicture(img, "faces") }] : []),
+        ...(this.upscaleLabel ? [{ label: this.upscaleLabel, icon: "open_in_full", run: () => this.usePicture(img, "upscale") }] : []),
         ...(this.canSetCovers ? [{ label: "Use as a LoRA's cover…", icon: "photo_library", run: () => this.openCover(img) }] : []),
         ...(this.own ? [{ label: "Move to library", icon: "save", run: () => void this.saveToLibrary(img) }] : []),
         { label: "Export PNG for Civitai", icon: "download", run: () => void this.exportImage(img) },
@@ -1200,8 +1206,11 @@ export class OppaiInvokeGallery extends LitElement {
           ${this.canPaint ? html`<button class="obtn" title="Paint over a part to redo it" @click=${() => this.usePicture(img, "inpaint")}>
             <span class="material-symbols-rounded" style="font-size:17px;">brush</span> Paint to fix
           </button>` : nothing}
-          ${this.canFixFaces ? html`<button class="obtn" title="Redo its faces with ADetailer, and nothing else" @click=${() => this.usePicture(img, "faces")}>
-            <span class="material-symbols-rounded" style="font-size:17px;">face_retouching_natural</span> Fix faces
+          ${this.canFixFaces ? html`<button class="obtn" title="Redo it with ADetailer's passes, and nothing else" @click=${() => this.usePicture(img, "faces")}>
+            <span class="material-symbols-rounded" style="font-size:17px;">face_retouching_natural</span> ${this.fixLabel}
+          </button>` : nothing}
+          ${this.upscaleLabel ? html`<button class="obtn" title="Enlarge it without redrawing; the copy lands in the gallery" @click=${() => this.usePicture(img, "upscale")}>
+            <span class="material-symbols-rounded" style="font-size:17px;">open_in_full</span> ${this.upscaleLabel}
           </button>` : nothing}
           <button class="obtn" @click=${() => this.dispatchEvent(new CustomEvent("cut-out", {
             detail: { url: api.galleryFullURL(img.name), name: img.name }, bubbles: true, composed: true,

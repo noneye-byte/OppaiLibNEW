@@ -154,3 +154,36 @@ test("generation data loads back into reproducible request parameters", () => {
   assert.deepEqual(reused.loras, params.loras);
   assert.equal(reused.detailer?.denoise, params.detailer?.denoise);
 });
+
+test("a hires fix is written the way A1111 reads it back, and loads back on", () => {
+  const info = buildGenInfo(
+    { ...params, detailer: undefined, upscale: { enabled: true, upscaler: "Latent", scale: 1.5, denoise: 0.45, steps: 12 } },
+    { seed: 3, backend: "a1111" },
+  );
+  const text = toInfotext(info);
+  for (const needle of ["Hires upscale: 1.5", "Hires steps: 12", "Hires upscaler: Latent", "Denoising strength: 0.45"]) {
+    assert.ok(text.includes(needle), `${needle} missing from infotext:\n${text}`);
+  }
+  assert.deepEqual(toGenerateParams(info).upscale, { enabled: true, upscaler: "Latent", scale: 1.5, denoise: 0.45, steps: 12 });
+});
+
+test("a picture started from records no hires fix, and an upscale records only the upscale", () => {
+  const hires = { enabled: true, upscaler: "Latent", scale: 2 };
+  assert.equal(buildGenInfo({ ...params, upscale: hires, initImage: "data:x" }, { seed: 1, backend: "a1111" }).hires, undefined);
+  const up = buildGenInfo({ ...params, upscaleOnly: true, initImage: "data:x", upscale: { enabled: false, upscaler: "R-ESRGAN 4x+", scale: 2 } },
+    { seed: 1, backend: "a1111" });
+  assert.deepEqual(up.upscaled, { upscaler: "R-ESRGAN 4x+", scale: 2 });
+  assert.equal(up.refiner, undefined);
+  assert.ok(toInfotext(up).includes("Upscaled: 2x with R-ESRGAN 4x+"));
+});
+
+test("a face pass and a hand pass are both written down, the second as ADetailer names it", () => {
+  const info = buildGenInfo(
+    { ...params, detailer: { enabled: true, model: "face_yolov8n.pt", models: ["face_yolov8n.pt", "hand_yolov8n.pt"] } },
+    { seed: 3, backend: "a1111" },
+  );
+  assert.deepEqual(info.refiner?.models, ["face_yolov8n.pt", "hand_yolov8n.pt"]);
+  const text = toInfotext(info);
+  assert.ok(text.includes("ADetailer model: face_yolov8n.pt") && text.includes("ADetailer model 2nd: hand_yolov8n.pt"), text);
+  assert.deepEqual(toGenerateParams(info).detailer?.models, ["face_yolov8n.pt", "hand_yolov8n.pt"]);
+});

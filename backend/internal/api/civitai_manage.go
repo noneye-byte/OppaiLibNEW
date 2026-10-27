@@ -179,6 +179,10 @@ func (s *Server) handleDeleteModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.civitaiForgetModel(ctx, detail.Key)
+	// A LoRA's category is kept by the name it was picked by.
+	if err := s.db.SetLoraCategory(ctx, 0, []string{key, detail.Key, detail.Name}); err != nil && !errors.Is(err, context.Canceled) {
+		s.log.Warn("lora categories: forget", "model", key, "err", err)
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 

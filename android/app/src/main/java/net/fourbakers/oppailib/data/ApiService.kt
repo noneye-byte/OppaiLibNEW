@@ -426,6 +426,58 @@ interface ApiService {
     @DELETE("api/imagegen/model")
     suspend fun deleteModel(@Query("key") key: String)
 
+    // ── LoRA categories ──────────────────────────────────────────────────
+    // The studio's own; the status carries them, these change them.
+
+    @POST("api/imagegen/lora-categories")
+    suspend fun createLoraCategory(@Body body: LoraCategoryName): LoraCategory
+
+    @PATCH("api/imagegen/lora-categories/{id}")
+    suspend fun renameLoraCategory(@Path("id") id: Long, @Body body: LoraCategoryName): LoraCategory
+
+    @DELETE("api/imagegen/lora-categories/{id}")
+    suspend fun deleteLoraCategory(@Path("id") id: Long)
+
+    /** Puts LoRAs in a category, or in none with 0. */
+    @POST("api/imagegen/lora-categories/assign")
+    suspend fun assignLoraCategory(@Body body: LoraCategoryAssign): LoraCategoryList
+
+    // ── LoRA training ────────────────────────────────────────────────────
+    // Runs on the trainer and followed by the server, so a run started here
+    // finishes and installs with the phone closed.
+
+    @GET("api/imagegen/train")
+    suspend fun trainList(): TrainListResponse
+
+    @POST("api/imagegen/train")
+    suspend fun trainStart(@Body body: TrainRequest): Training
+
+    @POST("api/imagegen/train/preview")
+    suspend fun trainPreview(@Body body: TrainPreviewRequest): TrainPreview
+
+    @POST("api/imagegen/train/{id}/cancel")
+    suspend fun trainCancel(@Path("id") id: Long): Training
+
+    @DELETE("api/imagegen/train/{id}")
+    suspend fun trainDelete(@Path("id") id: Long)
+
+    @POST("api/imagegen/train/autotag")
+    suspend fun trainAutotag(@Body body: TrainAutotagRequest): TrainTask
+
+    @GET("api/imagegen/train-tasks/{id}")
+    suspend fun trainTask(@Path("id") id: String): TrainTask
+
+    @GET("api/imagegen/train-sets")
+    suspend fun trainSets(): TrainSetsResponse
+
+    /** The set by that name (any capitals), made if there is none. */
+    @POST("api/imagegen/train-sets")
+    suspend fun trainSetCreate(@Body body: TrainSetName): TrainSet
+
+    @Multipart
+    @POST("api/imagegen/train-sets/{id}/pictures")
+    suspend fun trainSetUpload(@Path("id") setId: Long, @Part file: MultipartBody.Part): TrainPictureUpload
+
     // ── InvokeAI gallery ─────────────────────────────────────────────────
     // The generator keeps every finished image in its own gallery; these browse
     // and prune it. Images stream via Repository.galleryThumbUrl/galleryFullUrl.

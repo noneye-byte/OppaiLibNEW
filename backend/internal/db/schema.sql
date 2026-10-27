@@ -479,6 +479,25 @@ CREATE INDEX IF NOT EXISTS idx_gen_images_folder ON gen_images(folder_id, id);
 CREATE INDEX IF NOT EXISTS idx_gen_images_blob ON gen_images(blob_path);
 CREATE INDEX IF NOT EXISTS idx_gen_images_thumb ON gen_images(thumb_path);
 
+-- Categories the studio's LoRAs are sorted into — characters, styles, poses,
+-- whatever the person keeps a lot of. Neither generator has anywhere to put this:
+-- A1111's only grouping is the subfolder a file sits in, which moving would change
+-- the name every saved prompt and picture record calls it by, and InvokeAI has
+-- none. A LoRA is in one category or none, and is named as the clients pick it
+-- (its selector name, the one in <lora:name:weight>). A deleted category's LoRAs
+-- go back to having none.
+CREATE TABLE IF NOT EXISTS lora_categories (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS lora_category_members (
+    lora        TEXT PRIMARY KEY,
+    category_id INTEGER NOT NULL REFERENCES lora_categories(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_lora_category_members ON lora_category_members(category_id);
+
 -- A model InvokeAI is downloading on our behalf, with what it should be told about
 -- itself once the file is in. InvokeAI's install job is the authority on progress;
 -- this row is only the promise to apply the catalogue's cover, description and

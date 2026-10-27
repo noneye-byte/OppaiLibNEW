@@ -143,3 +143,145 @@ func TestInvokeAIRefusesAMaskRatherThanIgnoringIt(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// recordingA1111 is an A1111 that records the body of every POST by path.
+func recordingA1111(t *testing.T, got map[string]map[string]any) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/app/version":
+			http.NotFound(w, r)
+		case "/sdapi/v1/txt2img", "/sdapi/v1/img2img":
+			body := map[string]any{}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			got[r.URL.Path] = body
+			fmt.Fprint(w, `{"images":["aGVsbG8="],"info":"{\"seed\":3}"}`)
+		case "/sdapi/v1/extra-single-image":
+			body := map[string]any{}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			got[r.URL.Path] = body
+			fmt.Fprint(w, `{"image":"YmlnZ2Vy","html_info":""}`)
+		case "/sdapi/v1/upscalers":
+			fmt.Fprint(w, `[{"name":"None"},{"name":"Lanczos"},{"name":"R-ESRGAN 4x+"}]`)
+		case "/sdapi/v1/latent-upscale-modes":
+			fmt.Fprint(w, `[{"name":"Latent"},{"name":"Latent (antialiased)"}]`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestFacesAndHandsAreTwoADetailerTabsInThatOrder(t *testing.T) {
+	got := map[string]map[string]any{}
+	srv := recordingA1111(t, got)
+	_, err := New().Generate(context.Background(), srv.URL, GenerateRequest{
+		Prompt: "portrait", Steps: 20, Width: 512, Height: 512, CfgScale: 7, Seed: 1, Count: 1,
+		Detailer: Detailer{Enabled: true, Models: []string{"face_yolov8n.pt", "hand_yolov8n.pt", "face_yolov8n.pt"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := got["/sdapi/v1/txt2img"]["alwayson_scripts"].(map[string]any)["ADetailer"].(map[string]any)["args"].([]any)
+	if len(args) != 4 {
+		t.Fatalf("args = %#v; want enable, skip and one tab per detector, repeats dropped", args)
+	}
+	if args[2].(map[string]any)["ad_model"] != "face_yolov8n.pt" || args[3].(map[string]any)["ad_model"] != "hand_yolov8n.pt" {
+		t.Fatalf("tabs = %#v", args[2:])
+	}
+}
+
+func TestADetailerWithNoDetectorNamedRedoesTheFaces(t *testing.T) {
+	if got := (Detailer{Enabled: true}).Passes(); len(got) != 1 || got[0] != DefaultDetector {
+		t.Fatalf("passes = %v", got)
+	}
+	if got := (Detailer{Model: "hand_yolov8n.pt"}).Passes(); len(got) != 1 || got[0] != "hand_yolov8n.pt" {
+		t.Fatalf("an older client's one model is its one pass: %v", got)
+	}
+}
+
+func TestAHiresFixDrawsThePictureAgainAtTheLargerSize(t *testing.T) {
+	got := map[string]map[string]any{}
+	srv := recordingA1111(t, got)
+	_, err := New().Generate(context.Background(), srv.URL, GenerateRequest{
+		Prompt: "portrait", Steps: 20, Width: 512, Height: 768, CfgScale: 7, Seed: 1, Count: 1,
+		Upscale: Upscale{Enabled: true, Upscaler: "R-ESRGAN 4x+", Scale: 1.5, Denoise: 0.45, Steps: 12},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := got["/sdapi/v1/txt2img"]
+	if p["enable_hr"] != true || p["hr_scale"] != 1.5 || p["hr_upscaler"] != "R-ESRGAN 4x+" ||
+		p["hr_second_pass_steps"] != float64(12) || p["denoising_strength"] != 0.45 {
+		t.Fatalf("payload = %#v", p)
+	}
+}
+
+func TestAPictureStartedFromGetsNoHiresFix(t *testing.T) {
+	got := map[string]map[string]any{}
+	srv := recordingA1111(t, got)
+	_, err := New().Generate(context.Background(), srv.URL, GenerateRequest{
+		Prompt: "portrait", Steps: 20, Width: 512, Height: 768, CfgScale: 7, Seed: 1, Count: 1,
+		InitImage: []byte("picture"), Denoise: 0.3,
+		Upscale: Upscale{Enabled: true, Upscaler: "Latent", Scale: 2, Denoise: 0.6},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := got["/sdapi/v1/img2img"]
+	if _, on := p["enable_hr"]; on || p["denoising_strength"] != 0.3 {
+		t.Fatalf("payload = %#v; img2img's own strength must survive", p)
+	}
+}
+
+func TestUpscalingAPictureEnlargesItWithoutRedrawingIt(t *testing.T) {
+	got := map[string]map[string]any{}
+	srv := recordingA1111(t, got)
+	res, err := New().Generate(context.Background(), srv.URL, GenerateRequest{
+		Prompt: "x", Seed: 42, InitImage: []byte("picture"), UpscaleOnly: true,
+		Upscale: Upscale{Upscaler: "R-ESRGAN 4x+", Scale: 2},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["/sdapi/v1/txt2img"] != nil || got["/sdapi/v1/img2img"] != nil {
+		t.Fatal("an upscale samples nothing")
+	}
+	p := got["/sdapi/v1/extra-single-image"]
+	if p["image"] != "cGljdHVyZQ==" || p["upscaling_resize"] != float64(2) || p["upscaler_1"] != "R-ESRGAN 4x+" {
+		t.Fatalf("payload = %#v", p)
+	}
+	if len(res.Images) != 1 || string(res.Images[0]) != "bigger" || res.Seed != 42 {
+		t.Fatalf("result = %#v", res)
+	}
+}
+
+func TestUpscalersAreListedWithoutNone(t *testing.T) {
+	srv := recordingA1111(t, map[string]map[string]any{})
+	models, latent, err := New().Upscalers(context.Background(), srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(models) != "[Lanczos R-ESRGAN 4x+]" || fmt.Sprint(latent) != "[Latent Latent (antialiased)]" {
+		t.Fatalf("models = %v, latent = %v", models, latent)
+	}
+}
+
+func TestInvokeAIRefusesAnUpscaleRatherThanIgnoringIt(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/app/version" {
+			fmt.Fprint(w, `{"version":"5.6.0"}`)
+			return
+		}
+		t.Errorf("nothing is sent once the upscale is refused: %s", r.URL.Path)
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+	_, err := New().Generate(context.Background(), srv.URL, GenerateRequest{
+		Prompt: "x", Upscale: Upscale{Enabled: true, Scale: 2},
+	})
+	if !errors.Is(err, ErrUpscaleUnsupported) {
+		t.Fatalf("err = %v", err)
+	}
+}
