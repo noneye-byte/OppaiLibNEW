@@ -220,7 +220,7 @@ export function datasetAdvice(
     out.push({ level: "warn", text: `${set.untagged} picture${set.untagged === 1 ? " has" : "s have"} no tags, so ${set.untagged === 1 ? "it" : "they"} would be captioned with the trigger word alone. Tag them in the next step.` });
   }
   if (set.small > 0) {
-    out.push({ level: "warn", text: `${set.small} picture${set.small === 1 ? " is" : "s are"} small for this checkpoint and will come out soft. Drop ${set.small === 1 ? "it" : "them"} if you have larger ones.` });
+    out.push({ level: "warn", text: `${set.small} picture${set.small === 1 ? " is" : "s are"} small for this checkpoint: ${set.small === 1 ? "it is" : "they are"} enlarged to train, which is softer than a larger original. Swap ${set.small === 1 ? "it" : "them"} for larger ones if you have them.` });
   }
   if (out.length === 0) {
     out.push({ level: "good", text: `${set.count} pictures — a good size for ${kind}.` });

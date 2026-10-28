@@ -1,42 +1,37 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-const { inCategory, liveFilter, uncategorised, moveToCategory } = await import("./lora-categories.ts");
+const { inCategory, categoryCounts, moveToCategory, LORA_CATEGORIES } = await import("./lora-categories.ts");
 
-const loras: { name: string; category?: number }[] = [
-  { name: "ink", category: 1 },
-  { name: "mika", category: 2 },
+const loras: { name: string; categoryKey?: string }[] = [
+  { name: "ink", categoryKey: "style" },
+  { name: "mika", categoryKey: "character" },
   { name: "glasses" },
-];
-const categories = [
-  { id: 1, name: "Styles", count: 1 },
-  { id: 2, name: "Characters", count: 1 },
+  { name: "old", categoryKey: "Favourites" },
 ];
 
-test("the filter shows all, the uncategorised, or one category", () => {
-  assert.deepEqual(loras.filter((l) => inCategory(l, "all")).map((l) => l.name), ["ink", "mika", "glasses"]);
-  assert.deepEqual(loras.filter((l) => inCategory(l, "none")).map((l) => l.name), ["glasses"]);
-  assert.deepEqual(loras.filter((l) => inCategory(l, 2)).map((l) => l.name), ["mika"]);
-  assert.equal(uncategorised(loras), 1);
+test("the list is the seven fixed categories, ETC last", () => {
+  assert.deepEqual(LORA_CATEGORIES.map((c) => c.label), ["Character", "Style", "Concept", "Tools", "Poses", "Background", "ETC"]);
 });
 
-test("a deleted category's filter falls back to all", () => {
-  assert.equal(liveFilter(3, categories), "all");
-  assert.equal(liveFilter(2, categories), 2);
-  assert.equal(liveFilter("none", []), "none");
+test("the filter shows all, the unsorted, or one category", () => {
+  assert.deepEqual(loras.filter((l) => inCategory(l, "all")).map((l) => l.name), ["ink", "mika", "glasses", "old"]);
+  assert.deepEqual(loras.filter((l) => inCategory(l, "character")).map((l) => l.name), ["mika"]);
 });
 
-test("moving a LoRA moves its count with it", () => {
-  const moved = moveToCategory(loras, categories, ["ink", "glasses"], 2);
-  assert.deepEqual(moved.loras.map((l) => l.category), [2, 2, 2]);
-  assert.deepEqual(moved.categories.map((c) => c.count), [0, 3]);
-  const out = moveToCategory(loras, categories, ["mika"], 0);
-  assert.equal(out.loras[1].category, undefined);
-  assert.deepEqual(out.categories.map((c) => c.count), [1, 0]);
+test("a key off the list reads as unsorted rather than vanishing", () => {
+  assert.deepEqual(loras.filter((l) => inCategory(l, "none")).map((l) => l.name), ["glasses", "old"]);
+  const counts = categoryCounts(loras);
+  assert.equal(counts.none, 2);
+  assert.equal(counts.style, 1);
+  assert.equal(counts.poses, 0);
+  assert.equal(counts.all, 4);
 });
 
-test("moving a LoRA into the category it is in changes nothing", () => {
-  const same = moveToCategory(loras, categories, ["ink"], 1);
-  assert.equal(same.loras[0], loras[0]);
-  assert.deepEqual(same.categories.map((c) => c.count), [1, 1]);
+test("filing a LoRA moves it and leaves the rest as they were", () => {
+  const moved = moveToCategory(loras, ["ink", "glasses"], "poses");
+  assert.deepEqual(moved.map((l) => l.categoryKey), ["poses", "character", "poses", "Favourites"]);
+  assert.equal(moved[1], loras[1]);
+  const out = moveToCategory(loras, ["mika"], "");
+  assert.equal(out[1].categoryKey, undefined);
 });

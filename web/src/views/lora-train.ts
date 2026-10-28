@@ -22,6 +22,7 @@ import {
   EFFORTS, KEEP_STEPS, PRESETS, captionOf, datasetAdvice, epochsFor, estimateSteps, isPlayedDown, minSideFor, picturesWithout,
   playDownNames, presetById, setKeep, shareLine, suggestLeaveOut, tagKey, togglePlayDown, wantsLowVram, type Effort, type PresetId,
 } from "../lora-presets.js";
+import { picturesToEnlarge, trainResolution } from "../train-fit.js";
 import { loraStyles } from "./lora-styles.js";
 import "./lora-gather.js";
 import "./lora-comic.js";
@@ -143,6 +144,8 @@ export class OppaiLoraTrain extends LitElement {
   @state() private lowVram = false;
   @state() private lowVramTouched = false;
   @state() private flip = false;
+  /** Fit every picture to its training size, enlarging the small ones (lora_fit.go). */
+  @state() private fit = true;
   @state() private freeGpu = true;
   @state() private samples = true;
   @state() private starting = false;
@@ -715,6 +718,7 @@ export class OppaiLoraTrain extends LitElement {
       optimizer: this.optimizer,
       noiseOffset: this.noiseOffset || undefined,
       lowVram: this.lowVram,
+      noFit: this.fit ? undefined : true,
       flip: this.flip,
       freeGpu: this.freeGpu,
       samples: this.samples,
@@ -777,6 +781,7 @@ export class OppaiLoraTrain extends LitElement {
     this.noiseOffset = r.noiseOffset ?? 0;
     this.lowVram = !!r.lowVram;
     this.lowVramTouched = true;
+    this.fit = !r.noFit;
     this.flip = !!r.flip;
     this.freeGpu = r.freeGpu ?? true;
     this.samples = r.samples ?? true;
@@ -1081,6 +1086,7 @@ export class OppaiLoraTrain extends LitElement {
           @gathered=${(e: CustomEvent<{ setId: number }>) => this.gathered(e.detail.setId)}></oppai-lora-gather>`;
       case "comic":
         return html`<oppai-lora-comic .setId=${this.setId} .setName=${this.setId || this.name.trim() ? setName : ""}
+          .canDetect=${!!this.trainer?.features?.includes("detect-people")} .trainerSet=${!!this.trainer || !!this.trainerError}
           @gathered=${(e: CustomEvent<{ setId: number }>) => this.gathered(e.detail.setId)}></oppai-lora-comic>`;
       case "library": {
         const ready = this.libKind === "tag" ? !!this.libTag.trim() : !!this.libCollection;
@@ -1359,6 +1365,16 @@ export class OppaiLoraTrain extends LitElement {
             <input type="checkbox" .checked=${this.samples} @change=${(e: Event) => (this.samples = (e.target as HTMLInputElement).checked)} />
             <span>Render a sample at the end<small>A picture made with the new LoRA, which becomes its cover.</small></span>
           </label>
+          ${(() => {
+            const res = trainResolution(this.resolution, this.baseFamily(), this.lowVram);
+            const small = picturesToEnlarge(p?.items ?? [], res);
+            return html`<label class="check">
+              <input type="checkbox" .checked=${this.fit} @change=${(e: Event) => (this.fit = (e.target as HTMLInputElement).checked)} />
+              <span>Fit every picture to the training size<small>Each is resized to fill ${res}×${res} in its own shape
+                before it is sent${small ? html` — <b>${small}</b> ${small === 1 ? "is" : "are"} smaller than that and will be enlarged
+                with the generator's upscaler first` : ""}. Off, small pictures train at their small size.</small></span>
+            </label>`;
+          })()}
           <label class="check">
             <input type="checkbox" .checked=${this.lowVram} @change=${(e: Event) => { this.lowVram = (e.target as HTMLInputElement).checked; this.lowVramTouched = true; }} />
             <span>Low VRAM${vramGB ? ` (the trainer's card has ${vramGB} GB)` : ""}<small>For a card under 12 GB with SDXL: trains at 768 and leaves the text encoder alone.</small></span>

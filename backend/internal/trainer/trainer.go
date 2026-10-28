@@ -143,6 +143,44 @@ type Picture struct {
 // without it puts every picture in the one folder, so a tag played down is not.
 const FeatureRepeatsPerFile = "repeats-per-file"
 
+// FeatureDetectPeople is a trainer that finds the people in a picture (POST
+// /detect), with the person segmentation model ADetailer uses.
+const FeatureDetectPeople = "detect-people"
+
+// Person is one person the trainer found: a box and the outline of the figure in
+// it, in the picture's own pixels, as [x0, y0, x1, y1] and [[x, y] …].
+type Person struct {
+	Box     [4]int   `json:"box"`
+	Score   float64  `json:"score"`
+	Outline [][2]int `json:"outline"`
+}
+
+// Detection is every person in one picture, largest first.
+type Detection struct {
+	Width  int      `json:"width"`
+	Height int      `json:"height"`
+	Model  string   `json:"model"`
+	People []Person `json:"people"`
+}
+
+// DetectPeople asks the trainer where the people in a picture are. The picture is
+// sent and answered in memory; the trainer does not keep it. The first ask loads the
+// model, which takes some seconds, so it goes on the long-waiting client.
+func (c *Client) DetectPeople(ctx context.Context, base, token string, data []byte, conf float64) (*Detection, error) {
+	path := "/detect"
+	if conf > 0 {
+		path += "?conf=" + strconv.FormatFloat(conf, 'f', 2, 64)
+	}
+	var out Detection
+	if err := c.do(ctx, c.upload, http.MethodPost, base, token, path, bytes.NewReader(data), int64(len(data)), "application/octet-stream", &out); err != nil {
+		return nil, err
+	}
+	if out.People == nil {
+		out.People = []Person{}
+	}
+	return &out, nil
+}
+
 // ErrNotFound is a job the trainer does not have.
 var ErrNotFound = errors.New("the trainer has no such job")
 

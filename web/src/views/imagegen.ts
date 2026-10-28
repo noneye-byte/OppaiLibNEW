@@ -15,7 +15,6 @@ import {
 import { iconStyles, motionStyles } from "../theme.js";
 import {
   api,
-  type LoraCategory,
   mascotSay,
   type GenCharacter,
   type GenLora,
@@ -83,6 +82,7 @@ import "./outfit-wardrobe.js";
 import { createZip, type ZipEntry } from "../zip.js";
 import "./imagegen-gallery.js";
 import { RESOLUTIONS, SCHEDULERS } from "../gen-options.js";
+import { aspectLabel, megapixels, previewFrame } from "../size-preview.js";
 import "./civitai.js";
 import "./lora-train.js";
 import type { PromptSettings } from "../civitai-prompt.js";
@@ -110,7 +110,9 @@ import {
   MAX_PEOPLE, newPerson, peopleFrom, regionBoxes, regionNegatives, regionParams, type RegionPerson,
 } from "../regions.js";
 import { hiresScale, hiresUpscalers, scaledSize, upscaleFactor } from "../upscale.js";
-import { inCategory, liveFilter, moveToCategory, uncategorised, type CategoryFilter } from "../lora-categories.js";
+import {
+  LORA_CATEGORIES, categoryCounts, categoryOf, inCategory, moveToCategory, type CategoryFilter, type LoraCategoryKey,
+} from "../lora-categories.js";
 
 // ── Web Speech typings ─────────────────────────────────────────────────────────
 // The Speech Recognition API isn't in the standard DOM lib, and it's still vendor-
@@ -162,7 +164,7 @@ interface Shot extends GenPreview {
   workspaceY?: number;
 }
 
-type CreateTab = "models" | "loras" | "look" | "wildcards" | "templates" | "settings";
+type CreateTab = "models" | "loras" | "look" | "wildcards" | "detailer" | "settings";
 
 /** A picture a run starts from instead of noise: the whole of it (image to image),
     the painted part of it (paint to fix), or only its faces (the detailer alone). */
@@ -185,7 +187,7 @@ const CREATE_TABS: { id: CreateTab; label: string; icon: string }[] = [
   { id: "loras", label: "LoRAs", icon: "style" },
   { id: "look", label: "Look", icon: "face" },
   { id: "wildcards", label: "Wildcards", icon: "category" },
-  { id: "templates", label: "Styles", icon: "palette" },
+  { id: "detailer", label: "ADetailer", icon: "face_retouching_natural" },
   { id: "settings", label: "Settings", icon: "tune" },
 ];
 
@@ -915,6 +917,9 @@ export class OppaiImageGen extends LitElement {
         font-size: 16px;
       }
       .lora-cats { margin-bottom: 10px; }
+      .detector-list { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+      .lora-cats .chip .material-symbols-rounded { font-size: 15px; margin-right: 4px; vertical-align: -3px; }
+      .lora-cats .chip.zero:not(.on) { opacity: 0.55; }
       .lora-weight {
         width: 100%;
         box-sizing: border-box;
@@ -1149,6 +1154,25 @@ export class OppaiImageGen extends LitElement {
         display: flex;
         gap: 10px;
         align-items: center;
+      }
+      .size-preview { display: flex; gap: 14px; align-items: center; margin-bottom: 12px; }
+      .size-stage {
+        position: relative; flex: none; display: grid; place-items: center; border-radius: 12px;
+        background: repeating-conic-gradient(var(--oppai-surface-2) 0% 25%, transparent 0% 50%) 50% / 12px 12px;
+      }
+      .size-stage > span { grid-area: 1 / 1; box-sizing: border-box; border-radius: 4px; }
+      .size-frame {
+        position: relative; overflow: hidden; background: color-mix(in srgb, var(--oppai-primary) 22%, var(--oppai-surface));
+        border: 2px solid var(--oppai-primary); transition: width 0.18s ease, height 0.18s ease;
+      }
+      .size-frame img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0.85; }
+      .size-hires { border: 1.5px dashed var(--oppai-text-dim); transition: width 0.18s ease, height 0.18s ease; }
+      .size-facts { display: flex; flex-direction: column; gap: 2px; font-size: 12px; color: var(--oppai-text-dim); min-width: 0; }
+      .size-facts b { font-size: 15px; color: var(--oppai-text); font-variant-numeric: tabular-nums; }
+      .size-hires-note { color: var(--oppai-text); }
+      .size-glyph {
+        display: inline-block; border: 1.5px solid currentColor; border-radius: 2px; margin-right: 6px;
+        vertical-align: middle; box-sizing: border-box; opacity: 0.8;
       }
       .custom-size .num {
         width: 90px;
@@ -2880,6 +2904,20 @@ export class OppaiImageGen extends LitElement {
         border: 1px solid var(--oppai-border);
       }
       .people-layout.rows { flex-direction: column; height: 84px; }
+      .people-strip {
+        display: flex; flex-direction: column; gap: 8px; padding: 10px; border-radius: 14px;
+        border: 1px solid var(--oppai-border); background: color-mix(in srgb, var(--oppai-primary) 5%, transparent);
+      }
+      .people-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+      .people-head .people-layout { width: 64px; height: 40px; flex: none; }
+      .people-head .people-layout.rows { height: 48px; width: 48px; }
+      .people-hint { font-size: 12px; color: var(--oppai-text-dim); flex: 1; min-width: 200px; line-height: 1.4; }
+      .people-grid { display: grid; grid-template-columns: repeat(var(--people, 2), minmax(0, 1fr)); gap: 8px; }
+      .person-words { resize: vertical; min-height: 44px; font: inherit; font-size: 13px; line-height: 1.35; }
+      .pass-row .lora-weight.share { width: 58px; }
+      .people-seg { align-items: center; }
+      .people-cycle { display: none; }
+      .people-seg > .material-symbols-rounded { font-size: 17px; color: var(--oppai-text-dim); padding: 0 4px 0 6px; }
       .people-layout span {
         display: grid; place-items: center; font-size: 12px; font-weight: 600; color: var(--oppai-text-dim);
         background: color-mix(in srgb, var(--oppai-primary) 14%, var(--oppai-surface));
@@ -3294,6 +3332,22 @@ export class OppaiImageGen extends LitElement {
         .create-stage .canvas-stage { min-height: 52vh; padding: 14px; }
         .composer { gap: 8px; padding: 9px; border-radius: 18px; }
         .composer-fields { grid-template-columns: 1fr; gap: 6px; }
+        /* A row to scroll sideways, one person tall: stacked, three of them pushed
+           the canvas off a phone's screen. */
+        .people-grid {
+          grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: 86%;
+          overflow-x: auto; scroll-snap-type: x mandatory; overscroll-behavior-x: contain; padding-bottom: 2px;
+        }
+        .people-grid > .pass-card { scroll-snap-align: start; }
+        .people-hint { display: none; }
+        .people-seg { display: none; }
+        .people-cycle {
+          display: inline-flex; align-items: center; gap: 4px; flex: none; height: 40px; padding: 0 12px;
+          border: 1px solid var(--oppai-border-strong); border-radius: 999px; background: transparent;
+          color: var(--oppai-text-dim); font: inherit; font-size: 14px; font-weight: 600; cursor: pointer;
+        }
+        .people-cycle .material-symbols-rounded { font-size: 18px; }
+        .people-cycle.on { background: var(--oppai-primary-container); color: var(--oppai-text); border-color: transparent; }
         .composer .prompt-field textarea { min-height: 58px; font-size: 14px; }
         .composer .prompt-field.negative textarea { min-height: 40px; height: 40px; padding-top: 22px; }
         .composer .field-tag { top: 6px; }
@@ -5778,7 +5832,10 @@ export class OppaiImageGen extends LitElement {
     const badges: Partial<Record<CreateTab, number>> = {
       loras: Object.keys(this.selectedLoras).length,
       look: this.selectedChars.length + this.selectedPoses.length + (this.regionsActive ? this.regionPeople.length : 0),
-      templates: this.templateId ? 1 : 0,
+      detailer: this.status?.detailerAvailable && this.detailerEnabled && this.detailerHasPasses
+        ? detailerModels(this.detailerPasses).length + (this.status?.detectors?.length ? customPassParams(this.detailerCustom).length : 0)
+        : 0,
+      settings: this.templateId ? 1 : 0,
     };
     return html`<nav class="create-rail" aria-label="Generation setup">
       ${CREATE_TABS.map((t) => html`<button class="rail-tab ${this.createTab === t.id ? "on" : ""}"
@@ -5835,13 +5892,16 @@ export class OppaiImageGen extends LitElement {
         case "wildcards":
           body = this.renderWildcardSection();
           break;
-        case "templates":
-          body = this.renderTemplateSection(st.templates ?? []);
+        case "detailer":
+          body = this.renderDetailerSection(invoke);
           break;
         case "settings":
+          // Saved prompt styles were a rail tab of their own, and read as LoRA styles
+          // beside the LoRA categories; they are a setting, and an occasional one.
           body = html`<div class="pane-title">Size</div><div class="pane">${this.renderPromptOptions()}</div>
             <div class="pane-title">Sampling</div>${this.renderSettingsSection(invoke, st.boards ?? [])}
-            <div class="pane-title">VAE</div>${this.renderVaeSection(st.vaes ?? [])}`;
+            <div class="pane-title">VAE</div>${this.renderVaeSection(st.vaes ?? [])}
+            <div class="pane-title">Saved prompt styles</div>${this.renderTemplateSection(st.templates ?? [])}`;
           break;
       }
     } finally {
@@ -6012,6 +6072,7 @@ export class OppaiImageGen extends LitElement {
                   ${this.renderLoraSection(st.loras ?? [], st.loraError)}
                   ${this.renderVaeSection(st.vaes ?? [])}
                   ${this.renderSettingsSection(invoke, st.boards ?? [])}
+                  ${this.renderDetailerSection(invoke)}
                   ${this.renderTemplateSection(st.templates ?? [])}
                   ${this.renderCharacterSection()}
                 </div>
@@ -6596,8 +6657,7 @@ export class OppaiImageGen extends LitElement {
     // The drawer has the height to show them all and a search to narrow them; the
     // studio's accordion keeps its pages of six.
     const filter = this.flatSections ? this.pickerFilter.trim().toLowerCase() : "";
-    const categories = this.status?.loraCategories ?? [];
-    const cat = liveFilter(this.loraCategory, categories);
+    const cat = this.loraCategory;
     const inCat = loras.filter((l) => inCategory(l, cat));
     const matching = filter
       ? inCat.filter((l) => `${l.name} ${l.alias ?? ""} ${(l.triggerPhrases ?? []).join(" ")}`.toLowerCase().includes(filter))
@@ -6607,11 +6667,11 @@ export class OppaiImageGen extends LitElement {
     const page = Math.min(this.loraPage, pages - 1);
     const visible = matching.slice(page * perPage, page * perPage + perPage);
     const body = html`
-      ${this.renderLoraCategories(loras, categories, cat)}
+      ${this.renderLoraCategories(loras, cat)}
       ${filter && !matching.length ? html`<div class="sec-note">No LoRA matches “${this.pickerFilter}”.</div>` : nothing}
       ${!filter && !matching.length ? html`<div class="sec-note">${cat === "none"
         ? "Every LoRA is in a category."
-        : "No LoRAs in this category yet — use the category button on a LoRA to put it here."}</div>` : nothing}
+        : "No LoRAs in this category yet — use the category button on a LoRA to file it here."}</div>` : nothing}
       <div class="cards">
         ${visible.map((lora) => {
           const on = lora.name in this.selectedLoras;
@@ -6627,22 +6687,23 @@ export class OppaiImageGen extends LitElement {
               </button>` : nothing}
               <!-- The category button is a select laid over the icon: the browser's own
                    menu, which works the same with a mouse and on a phone. -->
-              <label class="card-edit card-cat ${lora.category ? "set" : ""}"
-                title=${lora.category ? `In ${categories.find((c) => c.id === lora.category)?.name ?? "a category"}` : "Put in a category"}>
-                <span class="material-symbols-rounded" style="font-size:15px;">category</span>
-                <select aria-label=${`Category for ${lora.alias || lora.name}`}
-                  @change=${(e: Event) => {
-                    const sel = e.target as HTMLSelectElement;
-                    const v = sel.value;
-                    sel.value = String(lora.category ?? 0);
-                    if (v === "new") void this.newLoraCategory(lora.name);
-                    else void this.setLoraCategory(lora.name, Number(v));
-                  }}>
-                  <option value="0" ?selected=${!lora.category}>No category</option>
-                  ${categories.map((c) => html`<option value=${String(c.id)} ?selected=${c.id === lora.category}>${c.name}</option>`)}
-                  <option value="new">New category…</option>
-                </select>
-              </label>
+              ${(() => {
+                const filed = LORA_CATEGORIES.find((c) => c.key === categoryOf(lora));
+                return html`<label class="card-edit card-cat ${filed ? "set" : ""}"
+                  title=${filed ? `${filed.label} — click to file it elsewhere` : "File under a category"}>
+                  <span class="material-symbols-rounded" style="font-size:15px;">${filed?.icon ?? "category"}</span>
+                  <select aria-label=${`Category for ${lora.alias || lora.name}`}
+                    @change=${(e: Event) => {
+                      const sel = e.target as HTMLSelectElement;
+                      const v = sel.value as LoraCategoryKey | "";
+                      sel.value = filed?.key ?? "";
+                      void this.setLoraCategory(lora.name, v);
+                    }}>
+                    <option value="" ?selected=${!filed}>Unsorted</option>
+                    ${LORA_CATEGORIES.map((c) => html`<option value=${c.key} ?selected=${c.key === filed?.key}>${c.label}</option>`)}
+                  </select>
+                </label>`;
+              })()}
               ${on ? html`<input class="lora-weight" type="number" min="-2" max="2" step="0.05"
                 aria-label=${`${lora.alias || lora.name} weight`}
                 title=${lora.weightMin && lora.weightMax ? `Works at ${lora.weightMin}–${lora.weightMax}` : ""}
@@ -6665,87 +6726,32 @@ export class OppaiImageGen extends LitElement {
     return this.section("loras", "LoRAs", String(Object.keys(this.selectedLoras).length || loras.length), body);
   }
 
-  /** The category chips over the LoRA cards, and the controls for the one open. */
-  private renderLoraCategories(loras: GenLora[], categories: LoraCategory[], cat: CategoryFilter) {
+  /** The category chips over the LoRA cards: All, the fixed list, and Unsorted while
+      anything is. */
+  private renderLoraCategories(loras: GenLora[], cat: CategoryFilter) {
     const pick = (f: CategoryFilter) => {
       this.loraCategory = f;
       this.loraPage = 0;
     };
-    const open = typeof cat === "number" ? categories.find((c) => c.id === cat) : undefined;
+    const counts = categoryCounts(loras);
     return html`<div class="chips lora-cats">
-      <button class="chip small ${cat === "all" ? "on" : ""}" @click=${() => pick("all")}>All · ${loras.length}</button>
-      ${categories.map((c) => html`<button class="chip small ${cat === c.id ? "on" : ""}" @click=${() => pick(c.id)}>${c.name} · ${c.count}</button>`)}
-      ${categories.length ? html`<button class="chip small ${cat === "none" ? "on" : ""}" @click=${() => pick("none")}>No category · ${uncategorised(loras)}</button>` : nothing}
-      <button class="chip small" title="Make a category to sort LoRAs into" @click=${() => void this.newLoraCategory()}>
-        <span class="material-symbols-rounded" style="font-size:15px; vertical-align:-3px;">add</span> Category</button>
-      ${open ? html`
-        <button class="chip small" @click=${() => void this.renameLoraCategory(open)}>Rename</button>
-        <button class="chip small" @click=${() => void this.deleteLoraCategory(open)}>Delete</button>` : nothing}
+      <button class="chip small ${cat === "all" ? "on" : ""}" @click=${() => pick("all")}>All · ${counts.all}</button>
+      ${LORA_CATEGORIES.map((c) => html`<button class="chip small ${cat === c.key ? "on" : ""} ${counts[c.key] ? "" : "zero"}"
+        @click=${() => pick(c.key)}>
+        <span class="material-symbols-rounded">${c.icon}</span>${c.label}${counts[c.key] ? html` · ${counts[c.key]}` : nothing}</button>`)}
+      ${counts.none || cat === "none" ? html`<button class="chip small ${cat === "none" ? "on" : ""}" title="LoRAs nothing has filed yet"
+        @click=${() => pick("none")}>Unsorted · ${counts.none}</button>` : nothing}
     </div>`;
   }
 
-  /** Makes a category; one made from a LoRA's menu takes that LoRA, otherwise the
-      picker opens on it. */
-  private async newLoraCategory(lora?: string) {
-    const name = window.prompt("Name the new category (Characters, Styles, Poses…)", "")?.trim();
-    if (!name) return;
-    try {
-      const made = await api.loraCategoryCreate(name);
-      const st = this.status;
-      if (!st) return;
-      const others = (st.loraCategories ?? []).filter((c) => c.id !== made.id);
-      this.status = { ...st, loraCategories: [...others, made].sort((a, b) => a.name.localeCompare(b.name)) };
-      if (lora) await this.setLoraCategory(lora, made.id);
-      else {
-        this.loraCategory = made.id;
-        this.loraPage = 0;
-      }
-    } catch (e) {
-      this.showToast((e as Error).message);
-    }
-  }
-
-  private async renameLoraCategory(c: LoraCategory) {
-    const name = window.prompt("Rename this category", c.name)?.trim();
-    if (!name || name === c.name) return;
-    try {
-      const renamed = await api.loraCategoryRename(c.id, name);
-      const st = this.status;
-      if (!st) return;
-      this.status = { ...st, loraCategories: (st.loraCategories ?? []).map((x) => (x.id === c.id ? renamed : x))
-        .sort((a, b) => a.name.localeCompare(b.name)) };
-    } catch (e) {
-      this.showToast((e as Error).message);
-    }
-  }
-
-  private async deleteLoraCategory(c: LoraCategory) {
-    if (!confirm(`Delete the category “${c.name}”? Its LoRAs stay installed, in no category.`)) return;
-    try {
-      await api.loraCategoryDelete(c.id);
-      const st = this.status;
-      if (!st) return;
-      this.status = {
-        ...st,
-        loras: (st.loras ?? []).map((l) => (l.category === c.id ? { ...l, category: undefined } : l)),
-        loraCategories: (st.loraCategories ?? []).filter((x) => x.id !== c.id),
-      };
-      this.loraCategory = "all";
-    } catch (e) {
-      this.showToast((e as Error).message);
-    }
-  }
-
-  /** Moves a LoRA into a category (0 for none), on screen at once and then for real;
+  /** Files a LoRA under a category ("" for none), on screen at once and then for real;
       a refusal puts it back. */
-  private async setLoraCategory(name: string, category: number) {
+  private async setLoraCategory(name: string, category: LoraCategoryKey | "") {
     const before = this.status;
     if (!before) return;
-    const moved = moveToCategory(before.loras ?? [], before.loraCategories ?? [], [name], category);
-    this.status = { ...before, loras: moved.loras, loraCategories: moved.categories };
+    this.status = { ...before, loras: moveToCategory(before.loras ?? [], [name], category) };
     try {
-      const res = await api.loraCategoryAssign(category, [name]);
-      if (this.status) this.status = { ...this.status, loraCategories: res.categories };
+      await api.loraCategoryAssign(category, [name]);
     } catch (e) {
       this.status = before;
       this.showToast((e as Error).message);
@@ -6834,6 +6840,21 @@ export class OppaiImageGen extends LitElement {
           <label class="switch-row"><input type="checkbox" .checked=${this.seamlessY}
             @change=${(e: Event) => (this.seamlessY = (e.target as HTMLInputElement).checked)} /> Seamless Y</label>
         ` : nothing}
+        ${this.canUpscale ? this.renderUpscaleSettings() : nothing}
+      </div>
+    `;
+    return this.section("settings", "Model settings", `${this.steps} steps`, body);
+  }
+
+  /**
+   * ADetailer: the passes that redo faces, hands and anything else a detector finds,
+   * after a picture is drawn. Its own drawer on the rail — it was the bottom of
+   * Settings, under the sampler, where it was only found by scrolling past it.
+   */
+  private renderDetailerSection(invoke: boolean) {
+    const detectors = this.status?.detectors ?? [];
+    const body = html`
+      <div class="settings">
         ${this.status?.detailerAvailable ? html`
           <label class="switch-row full"><input type="checkbox" .checked=${this.detailerEnabled}
             @change=${(e: Event) => (this.detailerEnabled = (e.target as HTMLInputElement).checked)} />
@@ -6889,10 +6910,19 @@ export class OppaiImageGen extends LitElement {
             Automatic1111 — Extensions → Available → ADetailer, then restart it. It also lets a finished picture's
             faces be redone on their own.</span>
         </div>`}
-        ${this.canUpscale ? this.renderUpscaleSettings() : nothing}
       </div>
+      ${this.status?.detailerAvailable && !invoke ? html`<div class="pane-title">Detectors ADetailer has</div>
+        <div class="detector-list">
+          ${detectors.length
+            ? detectors.map((d) => html`<span class="chip small" title=${d}>${detectorLabel(d)}</span>`)
+            : html`<span class="sec-note">ADetailer didn't list its detectors — it may be an old version.</span>`}
+        </div>
+        ${this.status?.civitai ? html`<button class="side-add" @click=${() => (this.civitaiOpen = true)}>
+          <span class="material-symbols-rounded" style="font-size:17px;">travel_explore</span> Find detectors on Civitai
+        </button>` : nothing}` : nothing}
     `;
-    return this.section("settings", "Model settings", `${this.steps} steps`, body);
+    const on = this.status?.detailerAvailable && this.detailerEnabled && this.detailerHasPasses;
+    return this.section("detailer", "ADetailer", on ? "on" : "off", body);
   }
 
   /** The detailer's passes after the faces and hands: each a detector ADetailer has,
@@ -6950,7 +6980,7 @@ export class OppaiImageGen extends LitElement {
     </div>`;
   }
 
-  /** Several people, each in a part of the picture drawn from their own words and LoRA. */
+  /** The Look drawer's word on people: where they are set, or what to install first. */
   private renderPeopleSection() {
     if (!this.status?.regionsAvailable) {
       return html`<div class="manage-note">
@@ -6960,26 +6990,73 @@ export class OppaiImageGen extends LitElement {
           Each person then gets a part of the picture of their own.</span>
       </div>`;
     }
+    return html`<div class="sec-note">Pick how many people under the prompt, beside the picture count — each then
+      gets a character, words and a LoRA of their own there.</div>`;
+  }
+
+  /** How many people the picture has, beside the picture count: one, or two to four
+      each in a part of their own (Regional Prompter, on A1111). */
+  private renderPeopleCount() {
+    const n = this.regionsActive ? this.regionPeople.length : 1;
+    return html`<div class="count-seg people-seg" role="group" aria-label="People in the picture"
+      title="People in the picture — two or more each get a part of their own, with their own character and LoRA">
+      <span class="material-symbols-rounded" aria-hidden="true">group</span>
+      ${Array.from({ length: MAX_PEOPLE }, (_, i) => i + 1).map((k) => html`<button class=${n === k ? "on" : ""} aria-pressed=${n === k ? "true" : "false"}
+        @click=${() => this.setPeopleCount(k)}>${k}</button>`)}
+    </div>
+    <!-- On a phone the four buttons pushed Generate off the bar: one that steps
+         through them instead. -->
+    <button class="people-cycle ${n > 1 ? "on" : ""}" title="People in the picture — tap for more"
+      aria-label=${`${n} ${n === 1 ? "person" : "people"} in the picture`}
+      @click=${() => this.setPeopleCount(n >= MAX_PEOPLE ? 1 : n + 1)}>
+      <span class="material-symbols-rounded">group</span>${n}
+    </button>`;
+  }
+
+  private setPeopleCount(n: number) {
+    if (n < 2) {
+      this.regionsOn = false;
+      return;
+    }
+    if (!this.status?.regionsAvailable) {
+      this.showToast("Two or more people need the Regional Prompter extension in Automatic1111 — Extensions → Available → Regional Prompter, then restart it");
+      return;
+    }
+    const people = this.regionPeople.slice(0, n);
+    while (people.length < n) people.push(newPerson());
+    this.regionPeople = people;
+    this.regionsOn = true;
+  }
+
+  /**
+   * The people, under the prompt: each a part of the picture drawn from a saved
+   * character, words and a LoRA of their own. It was a section at the foot of the
+   * Look drawer, where it was not found; the prompt is where a picture is described,
+   * so who is in it is said beside it.
+   */
+  private renderPeopleStrip() {
+    if (!this.regionsActive) return nothing;
     const chars = this.characters;
     const loras = this.status?.loras ?? [];
     const people = this.regionPeople;
     const set = (i: number, patch: Partial<RegionPerson>) =>
       (this.regionPeople = this.regionPeople.map((p, j) => (j === i ? { ...p, ...patch } : p)));
     const boxes = regionBoxes(people);
-    return html`<div class="pane people">
-      <label class="switch-row"><input type="checkbox" .checked=${this.regionsOn}
-        @change=${(e: Event) => (this.regionsOn = (e.target as HTMLInputElement).checked)} />
-        Draw each person in a part of their own</label>
-      ${this.regionsOn ? html`
+    return html`<div class="people-strip">
+      <div class="people-head">
+        <div class="people-layout ${this.regionsRows ? "rows" : ""}" aria-hidden="true">
+          ${boxes.map((b, i) => html`<span style="flex:${b.size}">${i + 1}</span>`)}
+        </div>
         <div class="chips">
           <button class="chip small ${this.regionsRows ? "" : "on"}" aria-pressed=${this.regionsRows ? "false" : "true"}
             @click=${() => (this.regionsRows = false)}>Side by side</button>
           <button class="chip small ${this.regionsRows ? "on" : ""}" aria-pressed=${this.regionsRows ? "true" : "false"}
             @click=${() => (this.regionsRows = true)}>Stacked</button>
         </div>
-        <div class="people-layout ${this.regionsRows ? "rows" : ""}" aria-hidden="true">
-          ${boxes.map((b, i) => html`<span style="flex:${b.size}">${i + 1}</span>`)}
-        </div>
+        <span class="people-hint">The prompt is what they share — say how many (2girls) and where.
+          ${this.regionsRows ? "" : "The face pass redoes each face with its person's words and LoRA, left to right."}</span>
+      </div>
+      <div class="people-grid" style="--people:${people.length}">
         ${people.map((p, i) => html`<div class="pass-card">
           <div class="pass-row">
             <b class="person-n">${i + 1}</b>
@@ -6989,13 +7066,17 @@ export class OppaiImageGen extends LitElement {
               ${chars.map((c) => html`<option value=${c.id} ?selected=${c.id === p.character}>${c.name}</option>`)}
             </select>
             <button class="pass-remove" title="Remove person ${i + 1}" aria-label="Remove person ${i + 1}"
-              ?disabled=${people.length <= 2}
-              @click=${() => (this.regionPeople = this.regionPeople.filter((_, j) => j !== i))}>
+              @click=${() => {
+                const rest = this.regionPeople.filter((_, j) => j !== i);
+                if (rest.length < 2) this.regionsOn = false;
+                else this.regionPeople = rest;
+              }}>
               <span class="material-symbols-rounded">close</span>
             </button>
           </div>
-          <input class="num" .value=${p.words} placeholder="Their words: hair, clothes, what they're doing"
-            @input=${(e: Event) => set(i, { words: (e.target as HTMLInputElement).value })} />
+          <textarea class="num person-words" rows="2" .value=${p.words} placeholder="Their words: hair, clothes, what they're doing"
+            aria-label="Words for person ${i + 1}"
+            @input=${(e: Event) => set(i, { words: (e.target as HTMLTextAreaElement).value })}></textarea>
           <div class="pass-row">
             <select class="num" aria-label="LoRA for person ${i + 1}"
               @change=${(e: Event) => set(i, { lora: (e.target as HTMLSelectElement).value })}>
@@ -7005,20 +7086,13 @@ export class OppaiImageGen extends LitElement {
             ${p.lora ? html`<input class="lora-weight" type="number" min="-2" max="2" step="0.05" title="LoRA weight"
               aria-label="LoRA weight" .value=${String(p.loraWeight)}
               @input=${(e: Event) => set(i, { loraWeight: clampFloat((e.target as HTMLInputElement).value, -2, 2, 0.8) })} />` : nothing}
-            <input class="lora-weight" type="number" min="0.5" max="4" step="0.5"
+            <input class="lora-weight share" type="number" min="0.5" max="4" step="0.5"
               title=${this.regionsRows ? "How tall their part is beside the others" : "How wide their part is beside the others"}
               aria-label="Size of their part" .value=${String(p.share)}
               @input=${(e: Event) => set(i, { share: clampFloat((e.target as HTMLInputElement).value, 0.5, 4, 1) })} />
           </div>
         </div>`)}
-        <button class="side-add" ?disabled=${people.length >= MAX_PEOPLE}
-          @click=${() => (this.regionPeople = [...this.regionPeople, newPerson()])}>
-          <span class="material-symbols-rounded" style="font-size:17px;">person_add</span> Add a person
-        </button>
-        <div class="sec-note">The prompt becomes what everyone shares: say how many there are (2girls) and where
-          they are. Pick each person's character and LoRA here rather than above, or they go to everyone.
-          ${this.regionsRows ? "" : "Side by side, the face pass redoes each face with its person's words and LoRA, left to right."}</div>
-      ` : nothing}
+      </div>
     </div>`;
   }
 
@@ -8061,6 +8135,7 @@ export class OppaiImageGen extends LitElement {
             ${this.completionField === "negative" ? this.renderCompletions() : nothing}
           </div>
         </div>
+        ${this.outfitOn ? nothing : this.renderPeopleStrip()}
 
         ${triggerPhrases.length ? html`<div class="trigger-row">
           <span class="trigger-label">Trigger words</span>
@@ -8091,6 +8166,7 @@ export class OppaiImageGen extends LitElement {
                 ${[1, 2, 3, 4].map((n) => html`<button class=${outputCount === n ? "on" : ""} ?disabled=${this.outfitOn}
                   aria-pressed=${outputCount === n ? "true" : "false"} @click=${() => (this.count = n)}>${n}</button>`)}
               </div>
+              ${this.status?.backend === "invokeai" || this.outfitOn ? nothing : this.renderPeopleCount()}
               <span class="prompt-summary">${outputCount} picture${outputCount === 1 ? "" : "s"} · ${this.sizeLabel()}</span>`}
           ${this.generating
             ? html`<button class="generate cancel" type="button" ?disabled=${this.progress?.cancelled} title="Stop this generation" @click=${() => void this.cancelGeneration()}>
@@ -8517,18 +8593,22 @@ export class OppaiImageGen extends LitElement {
 
   private renderPromptOptions() {
     return html`
+      ${this.renderSizePreview()}
       <div>
         <label class="field">Resolution</label>
         <div class="chips">
           ${RESOLUTIONS.map((r) => {
             const on = r.w === this.width && r.h === this.height;
+            // The chip's glyph is the shape alone, fitted; the frame above is the size.
+            const k = 14 / Math.max(r.w, r.h);
+            const glyph = { width: Math.round(r.w * k), height: Math.round(r.h * k) };
             return html`<button
               class="chip ${on ? "on" : ""}"
               @click=${() => {
                 this.width = r.w;
                 this.height = r.h;
               }}
-            >${r.label}<span class="hint">${r.hint}</span></button>`;
+            ><span class="size-glyph" style="width:${glyph.width}px;height:${glyph.height}px"></span>${r.label}<span class="hint">${r.hint}</span></button>`;
           })}
         </div>
       </div>
@@ -8546,6 +8626,37 @@ export class OppaiImageGen extends LitElement {
         </div>
       </div>
     `;
+  }
+
+  /**
+   * The size, drawn: a frame to scale against the largest SDXL size, the picture on
+   * the canvas cropped into it the way a new one at this size will be framed, and a
+   * hires fix's final size as a dashed outline around it.
+   */
+  private renderSizePreview() {
+    const box = 132;
+    const frame = previewFrame(this.width, this.height, box);
+    const { ratio, name } = aspectLabel(this.width, this.height);
+    const hires = this.canUpscale && this.hiresEnabled && !this.source
+      ? scaledSize(this.width, this.height, hiresScale(this.width, this.height, this.hiresScale))
+      : null;
+    const outer = hires ? previewFrame(hires.width, hires.height, box) : null;
+    const latest = this.shots[0];
+    return html`<div class="size-preview">
+      <div class="size-stage" style="width:${box}px;height:${box}px">
+        ${outer ? html`<span class="size-hires" style="width:${outer.width}px;height:${outer.height}px"
+          title="After the hires fix: ${hires!.width}×${hires!.height}"></span>` : nothing}
+        <span class="size-frame" style="width:${frame.width}px;height:${frame.height}px">
+          ${latest ? html`<img src=${this.previewURL(latest)} alt="" />` : nothing}
+        </span>
+      </div>
+      <div class="size-facts">
+        <b>${this.width} × ${this.height}</b>
+        <span>${ratio}${name ? html` · ${name}` : nothing}</span>
+        <span>${megapixels(this.width, this.height)}</span>
+        ${hires ? html`<span class="size-hires-note">hires → ${hires.width} × ${hires.height}</span>` : nothing}
+      </div>
+    </div>`;
   }
 
   /**

@@ -79,6 +79,8 @@ export class OppaiInvokeGallery extends LitElement {
   @state() private expanded: GalleryImage | null = null;
   @state() private busy = false;
   @state() private newBoard = "";
+  /** Covers whose tile would not load (deleted since the list came), drawn as icons. */
+  @state() private failedCovers = new Set<string>();
   /** Names saved to the library this session, so the button can say "Saved". */
   @state() private savedNames = new Set<string>();
   /** Multi-select mode: tiles become checkboxes and a toolbar acts on the set. */
@@ -121,10 +123,32 @@ export class OppaiInvokeGallery extends LitElement {
         font-size: 12px;
         color: var(--oppai-text-muted);
       }
-      .boards {
-        display: flex;
-        gap: 6px;
-        flex-wrap: wrap;
+      .folder-cards {
+        display: grid; grid-auto-flow: column; grid-auto-columns: 92px; gap: 8px;
+        overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: thin; padding-bottom: 4px;
+        scroll-snap-type: x proximity;
+      }
+      .folder-card {
+        display: flex; flex-direction: column; gap: 3px; padding: 0 0 6px; border: none; border-radius: 12px;
+        background: var(--oppai-surface); color: var(--oppai-text); font: inherit; text-align: left; cursor: pointer;
+        overflow: hidden; scroll-snap-align: start; outline: 2px solid transparent; outline-offset: -2px;
+        transition: outline-color 0.12s ease, background 0.12s ease;
+      }
+      .folder-card:hover { background: var(--oppai-surface-2); }
+      .folder-card.on { outline-color: var(--oppai-accent, var(--oppai-primary)); }
+      .folder-cover {
+        display: grid; place-items: center; aspect-ratio: 4 / 3; background: var(--oppai-surface-2);
+        color: var(--oppai-text-muted); overflow: hidden;
+      }
+      .folder-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+      .folder-cover .material-symbols-rounded { font-size: 26px; }
+      .folder-name {
+        padding: 0 8px; font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      }
+      .folder-count { padding: 0 8px; font-size: 11px; color: var(--oppai-text-muted); }
+      .sort-label {
+        flex: 1; min-width: 0; font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        align-self: center;
       }
       .board-select {
         width: 100%;
@@ -160,21 +184,6 @@ export class OppaiInvokeGallery extends LitElement {
         font: inherit;
         padding: 7px 10px;
         cursor: pointer;
-      }
-      .board {
-        border: 1px solid var(--oppai-border-strong);
-        background: transparent;
-        color: var(--oppai-text-dim);
-        border-radius: 999px;
-        font: inherit;
-        font-size: 12px;
-        padding: 4px 10px;
-        cursor: pointer;
-      }
-      .board.on {
-        background: var(--oppai-accent);
-        color: var(--oppai-on-accent);
-        border-color: var(--oppai-accent);
       }
       .board-del {
         margin-top: 6px;
@@ -497,7 +506,6 @@ export class OppaiInvokeGallery extends LitElement {
         border-radius: 8px;
         padding: 5px 8px;
       }
-      :host([workspace]) .boards { display: none; }
       :host([workspace]) .note { line-height: 1.4; }
       :host([workspace]) .new-board input,
       :host([workspace]) .new-board button { height: 32px; box-sizing: border-box; }
@@ -873,6 +881,7 @@ export class OppaiInvokeGallery extends LitElement {
         ...(this.canPaint ? [{ label: "Paint to fix", icon: "brush", run: () => this.usePicture(img, "inpaint") }] : []),
         ...(this.canFixFaces ? [{ label: this.fixLabel, icon: "face_retouching_natural", run: () => this.usePicture(img, "faces") }] : []),
         ...(this.upscaleLabel ? [{ label: this.upscaleLabel, icon: "open_in_full", run: () => this.usePicture(img, "upscale") }] : []),
+        ...(this.isFolder(this.board) ? [{ label: "Set as folder cover", icon: "folder_special", run: () => void this.setFolderCover(img) }] : []),
         ...(this.canSetCovers ? [{ label: "Use as a LoRA's cover…", icon: "photo_library", run: () => this.openCover(img) }] : []),
         ...(this.own ? [{ label: "Move to library", icon: "save", run: () => void this.saveToLibrary(img) }] : []),
         { label: "Export PNG for Civitai", icon: "download", run: () => void this.exportImage(img) },
@@ -1023,6 +1032,43 @@ export class OppaiInvokeGallery extends LitElement {
     }
   }
 
+  /**
+   * The folders, as cards: each its cover, its name and how many it holds. They were
+   * a dropdown, which said nothing about what was in a folder until it was opened.
+   * A folder's cover is the picture chosen for it (the picture menu's "Set as folder
+   * cover"), else its newest.
+   */
+  private renderFolderCards() {
+    return html`<div class="folder-cards" role="listbox" aria-label=${this.own ? "Folders" : "Galleries"}>
+      ${this.boards.map((b) => html`<button class="folder-card ${b.id === this.board ? "on" : ""}" role="option"
+        aria-selected=${b.id === this.board ? "true" : "false"} title=${b.name} @click=${() => this.pickBoard(b.id)}>
+        <span class="folder-cover">
+          ${b.cover && !this.failedCovers.has(b.cover)
+            ? html`<img src=${api.galleryThumbURL(b.cover)} alt="" loading="lazy"
+                @error=${() => (this.failedCovers = new Set(this.failedCovers).add(b.cover!))} />`
+            : html`<span class="material-symbols-rounded">${b.id === "all" ? "photo_library" : this.isFolder(b.id) ? "folder" : "inbox"}</span>`}
+        </span>
+        <span class="folder-name">${b.name}</span>
+        <span class="folder-count">${b.count}</span>
+      </button>`)}
+    </div>`;
+  }
+
+  /** Makes a picture its folder's cover, on the card at once and then for real. */
+  private async setFolderCover(img: GalleryImage) {
+    const id = this.board;
+    if (!this.isFolder(id)) return;
+    const before = this.boards;
+    this.boards = this.boards.map((b) => (b.id === id ? { ...b, cover: img.name } : b));
+    try {
+      await api.setGalleryBoardCover(id, img.name);
+      mascotSay("That's the folder's cover now.", "success");
+    } catch (e) {
+      this.boards = before;
+      mascotSay((e as Error).message || "Couldn't set the cover.", "error");
+    }
+  }
+
   /** Where the next run lands, said under the board picker. */
   private filingNote(current: GalleryBoard | undefined) {
     if (!this.own) return html`New generations are filed into ${current?.name ?? "this gallery"}.`;
@@ -1079,22 +1125,14 @@ export class OppaiInvokeGallery extends LitElement {
           : nothing}
         ${this.boards.length
           ? html`
+              ${this.renderFolderCards()}
               <div class="sort-row">
-                <select class="board-select" aria-label="Gallery" .value=${this.board}
-                  @change=${(e: Event) => this.pickBoard((e.target as HTMLSelectElement).value)}>
-                  ${this.boards.map((b) => html`<option value=${b.id} ?selected=${b.id === this.board}>${b.name}${b.count ? ` · ${b.count}` : ""}</option>`)}
-                </select>
+                <span class="sort-label">${current?.name ?? ""}</span>
                 <select class="board-select" aria-label="Order" style="flex:none;width:auto;"
                   @change=${(e: Event) => this.pickSort((e.target as HTMLSelectElement).value as GallerySort)}>
                   ${SORTS.filter((s) => this.own || !s.ownOnly).map((s) => html`<option value=${s.id} ?selected=${s.id === this.sort}>${s.label}</option>`)}
                 </select>
               </div>
-              ${this.boards.length <= 6 ? html`<div class="boards">
-                ${this.boards.map(
-                  (b) => html`<button class="board ${b.id === this.board ? "on" : ""}"
-                    @click=${() => this.pickBoard(b.id)}>${b.name}${b.count ? ` · ${b.count}` : ""}</button>`,
-                )}
-              </div>` : nothing}
               ${this.isFolder(this.board)
                 ? html`<div class="board-acts">
                     ${this.own ? html`<button class="board-del rename" ?disabled=${this.busy} @click=${() => this.renameBoard()}>
@@ -1193,6 +1231,9 @@ export class OppaiInvokeGallery extends LitElement {
             <span class="material-symbols-rounded" style="font-size:17px;">${saved ? "check" : "save"}</span>
             ${saved ? "In library" : this.own ? "Move to library" : "Save to library"}
           </button>
+          ${this.isFolder(this.board) ? html`<button class="obtn" title="Show it on this folder's card" @click=${() => void this.setFolderCover(img)}>
+            <span class="material-symbols-rounded" style="font-size:17px;">folder_special</span> Folder cover
+          </button>` : nothing}
           ${this.canSetCovers ? html`<button class="obtn" title="Make it a LoRA's or a model's cover" @click=${() => this.openCover(img)}>
             <span class="material-symbols-rounded" style="font-size:17px;">photo_library</span> Use as cover
           </button>` : nothing}

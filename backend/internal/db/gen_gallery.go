@@ -13,6 +13,9 @@ type GenFolder struct {
 	Name      string
 	Count     int
 	CreatedAt int64
+	// CoverID is the picture the folder's card shows: the one chosen, while it is
+	// still in the folder, else the newest there. 0 for an empty folder.
+	CoverID int64
 }
 
 // GenImage is one picture in the studio's gallery.
@@ -48,8 +51,12 @@ func (s GenScope) where() (string, []any) {
 
 // GenFolders lists the folders by name, each with how many pictures it holds.
 func (d *DB) GenFolders(ctx context.Context) ([]GenFolder, error) {
+	// A chosen cover that has since left the folder (moved, or into the library)
+	// stops being its cover rather than showing a picture that is not in it.
 	rows, err := d.sql.QueryContext(ctx, `SELECT f.id, f.name, f.created_at,
-		(SELECT COUNT(*) FROM gen_images i WHERE i.folder_id = f.id)
+		(SELECT COUNT(*) FROM gen_images i WHERE i.folder_id = f.id),
+		COALESCE((SELECT i.id FROM gen_images i WHERE i.id = f.cover_id AND i.folder_id = f.id),
+			(SELECT MAX(i.id) FROM gen_images i WHERE i.folder_id = f.id), 0)
 		FROM gen_folders f ORDER BY lower(f.name), f.id`)
 	if err != nil {
 		return nil, err
@@ -58,7 +65,7 @@ func (d *DB) GenFolders(ctx context.Context) ([]GenFolder, error) {
 	var out []GenFolder
 	for rows.Next() {
 		var f GenFolder
-		if err := rows.Scan(&f.ID, &f.Name, &f.CreatedAt, &f.Count); err != nil {
+		if err := rows.Scan(&f.ID, &f.Name, &f.CreatedAt, &f.Count, &f.CoverID); err != nil {
 			return nil, err
 		}
 		out = append(out, f)
@@ -70,6 +77,39 @@ func (d *DB) GenFolders(ctx context.Context) ([]GenFolder, error) {
 func (d *DB) GenCounts(ctx context.Context) (all, unsorted int, err error) {
 	err = d.sql.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(folder_id IS NULL), 0) FROM gen_images`).Scan(&all, &unsorted)
 	return all, unsorted, err
+}
+
+// GenNewest is the newest picture of all and the newest in no folder, 0 for none:
+// the covers of the two boards that are not folders.
+func (d *DB) GenNewest(ctx context.Context) (all, unsorted int64, err error) {
+	err = d.sql.QueryRowContext(ctx, `SELECT COALESCE(MAX(id), 0),
+		COALESCE((SELECT MAX(id) FROM gen_images WHERE folder_id IS NULL), 0) FROM gen_images`).Scan(&all, &unsorted)
+	return all, unsorted, err
+}
+
+// ErrNotInFolder is a cover chosen from a picture the folder does not hold.
+var ErrNotInFolder = errors.New("that picture isn't in this folder")
+
+// SetGenFolderCover makes one of a folder's pictures its cover; 0 goes back to the
+// newest. sql.ErrNoRows for no such folder.
+func (d *DB) SetGenFolderCover(ctx context.Context, folderID, imageID int64) error {
+	if imageID != 0 {
+		var n int
+		if err := d.sql.QueryRowContext(ctx, `SELECT COUNT(*) FROM gen_images WHERE id = ? AND folder_id = ?`, imageID, folderID).Scan(&n); err != nil {
+			return err
+		}
+		if n == 0 {
+			return ErrNotInFolder
+		}
+	}
+	res, err := d.sql.ExecContext(ctx, `UPDATE gen_folders SET cover_id = NULLIF(?, 0) WHERE id = ?`, imageID, folderID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 // GenFolderExists says whether there is a folder by this id.

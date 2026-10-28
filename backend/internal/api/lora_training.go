@@ -119,6 +119,9 @@ type trainRequest struct {
 	Preset string `json:"preset,omitempty"`
 	// LowVRAM trains the UNet alone at a smaller size, for a card under 12 GB.
 	LowVRAM bool `json:"lowVram,omitempty"`
+	// NoFit sends the pictures as they are rather than fitted to their training size
+	// (lora_fit.go). Off by default: a phone that never heard of it gets the fitting.
+	NoFit bool `json:"noFit,omitempty"`
 	Flip    bool `json:"flip,omitempty"`
 	// FreeGPU asks the generator to let go of its checkpoint while the run trains.
 	FreeGPU bool `json:"freeGpu,omitempty"`
@@ -425,7 +428,8 @@ func (s *Server) handleTrainStart(w http.ResponseWriter, r *http.Request) {
 	st.mu.Lock()
 	st.preparing[t.ID] = true
 	st.mu.Unlock()
-	go s.trainPrepare(t, req, ckpt, pics)
+	fit := s.trainFitFor(ctx, set.ImageGenURL, req)
+	go s.trainPrepare(t, req, ckpt, pics, fit)
 	s.trainWatch()
 	writeJSON(w, http.StatusOK, trainingOutOf(t, nil))
 }
@@ -446,7 +450,7 @@ func (s *Server) trainBaseName(ctx context.Context, genBase, selector string) st
 
 // trainPrepare makes sure the trainer has the checkpoint and sends it the pictures.
 // It runs in the background: a checkpoint is gigabytes.
-func (s *Server) trainPrepare(t db.LoraTraining, req trainRequest, ckpt imagegen.CheckpointFile, pics []trainPic) {
+func (s *Server) trainPrepare(t db.LoraTraining, req trainRequest, ckpt imagegen.CheckpointFile, pics []trainPic, fit trainFit) {
 	st := s.trainState()
 	defer func() {
 		st.mu.Lock()
@@ -523,10 +527,10 @@ func (s *Server) trainPrepare(t db.LoraTraining, req trainRequest, ckpt imagegen
 				s.log.Warn("train: skip a picture", "picture", p.ID, "err", err)
 				continue
 			}
-			ext := loraPictureExt(data)
-			if ext == "" {
+			if loraPictureExt(data) == "" {
 				continue
 			}
+			data, ext := s.trainFitPicture(ctx, fit, data)
 			sent++
 			return trainer.Picture{Ext: ext, Data: data, Caption: loraCaption(req.Trigger, p.Tags, leaveOut, named, req.Captions), Repeats: repeats}, true, nil
 		}
@@ -844,6 +848,23 @@ func (s *Server) trainFollow(ctx context.Context, t *db.LoraTraining, job traine
 	}
 }
 
+// trainPresetCategory is the LoRA category a run's preset means, "" for a custom one.
+func trainPresetCategory(settings string) string {
+	var req trainRequest
+	if json.Unmarshal([]byte(settings), &req) != nil {
+		return ""
+	}
+	switch req.Preset {
+	case "character":
+		return db.LoraCharacter
+	case "style":
+		return db.LoraStyle
+	case "concept", "outfit":
+		return db.LoraConcept
+	}
+	return ""
+}
+
 func trainWantsFreeGPU(settings string) bool {
 	var req trainRequest
 	return json.Unmarshal([]byte(settings), &req) == nil && req.FreeGPU
@@ -854,11 +875,19 @@ func trainWantsFreeGPU(settings string) bool {
 // same install a Civitai download is.
 func (s *Server) trainInstall(ctx context.Context, t *db.LoraTraining, job trainer.Job, genBase string) {
 	base, _, _ := s.trainerSettings()
-	fileName := s.trainFreeLoraName(ctx, genBase, t.Name) + ".safetensors"
+	name := s.trainFreeLoraName(ctx, genBase, t.Name)
+	fileName := name + ".safetensors"
 	source := trainer.OutputURL(base, job)
 	if _, err := s.imagegen.InstallModel(ctx, genBase, imagegen.InstallSpec{Source: source, Type: "lora", FileName: fileName}); err != nil {
 		t.Status, t.Error = "failed", "it trained, but the generator would not install it: "+err.Error()+" — the file is still on the trainer"
 		return
+	}
+	// The kind it was trained as is the category it is filed under: a character LoRA
+	// made here arrives among the characters rather than in the unsorted pile.
+	if cat := trainPresetCategory(t.Settings); cat != "" {
+		if err := s.db.FileLoraIfUnsorted(ctx, name, cat); err != nil {
+			s.log.Warn("train: file under a category", "lora", name, "err", err)
+		}
 	}
 	t.Status, t.InstallSource = "installing", source
 	// The run itself is over; the card can go back while the file is copied.

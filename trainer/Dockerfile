@@ -37,7 +37,17 @@ RUN python -c "from transformers import CLIPTokenizer as T; \
     && test -f /opt/tokenizers/openai_clip-vit-large-patch14/vocab.json \
     && test -f /opt/tokenizers/laion_CLIP-ViT-bigG-14-laion2B-39B-b160k/vocab.json
 
-COPY server.py /opt/trainer/server.py
+# Finding people in a comic's panels (detect.py): ultralytics and the person
+# segmentation model ADetailer itself downloads, baked in so it works offline. The
+# opencv and numpy sd-scripts pinned are kept: ultralytics accepts them, and a newer
+# opencv beside numpy 1 fails to import.
+RUN pip install --no-cache-dir "ultralytics==8.3.40" "numpy<2" "opencv-python==4.8.1.78" \
+    && mkdir -p /opt/detectors \
+    && python -c "import urllib.request as u; u.urlretrieve('https://huggingface.co/Bingsu/adetailer/resolve/main/person_yolov8m-seg.pt', '/opt/detectors/person_yolov8m-seg.pt')" \
+    && YOLO_CONFIG_DIR=/tmp/yolo python -c "from ultralytics import YOLO; YOLO('/opt/detectors/person_yolov8m-seg.pt')" \
+    && python -c "import library.train_util, cv2, numpy; assert numpy.__version__.startswith('1.')"
+
+COPY server.py detect.py /opt/trainer/
 
 ENV TRAINER_DATA=/data \
     TRAINER_MODELS=/models \
@@ -46,6 +56,8 @@ ENV TRAINER_DATA=/data \
     SD_SCRIPTS=/opt/sd-scripts \
     SD_SCRIPTS_VERSION=${SD_SCRIPTS_VERSION} \
     HF_HUB_DISABLE_TELEMETRY=1 \
+    YOLO_CONFIG_DIR=/data/.yolo \
+    YOLO_OFFLINE=true \
     PYTHONUNBUFFERED=1
 
 VOLUME ["/data"]

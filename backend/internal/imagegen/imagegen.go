@@ -163,9 +163,11 @@ type Lora struct {
 	Negative  string  `json:"negative,omitempty"`
 	WeightMin float64 `json:"weightMin,omitempty"`
 	WeightMax float64 `json:"weightMax,omitempty"`
-	// Category is the studio's own category the LoRA is sorted into, 0 for none.
-	// OppaiLib keeps it (db.LoraCategories); neither generator has the idea.
-	Category int64 `json:"category,omitempty"`
+	// CategoryKey is the studio's category the LoRA is filed under (one of
+	// db.LoraCategoryKeys), "" for none. OppaiLib keeps it; neither generator has
+	// the idea. Not "category": that was a number until 0.67, and a phone on the
+	// old app would fail to read the whole status over it.
+	CategoryKey string `json:"categoryKey,omitempty"`
 }
 
 // ModelDetail is the full editable record for one model or LoRA, as InvokeAI's
@@ -199,6 +201,10 @@ type Board struct {
 	ID    string `json:"id"`
 	Name  string `json:"name"`
 	Count int    `json:"count"`
+	// Cover is the name of the picture the board's card shows (a gallery image name),
+	// "" for an empty board. InvokeAI keeps one per board; the server's own gallery
+	// keeps a chosen one or shows the newest.
+	Cover string `json:"cover,omitempty"`
 }
 
 // GalleryImage is one image in the studio's gallery: InvokeAI's, or the one the
@@ -647,6 +653,14 @@ func (c *Client) Boards(ctx context.Context, base string) ([]Board, error) {
 		return nil, err
 	}
 	return c.invokeBoards(ctx, base)
+}
+
+// SetBoardCover makes one of an InvokeAI board's images its cover.
+func (c *Client) SetBoardCover(ctx context.Context, base, boardID, imageName string) error {
+	if err := c.requireInvoke(ctx, base, "board covers"); err != nil {
+		return err
+	}
+	return c.invokeSetBoardCover(ctx, base, boardID, imageName)
 }
 
 // CreateBoard creates an InvokeAI gallery board and returns its server-assigned id.

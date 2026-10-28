@@ -1473,16 +1473,9 @@ export interface GenLora {
   negative?: string;
   weightMin?: number;
   weightMax?: number;
-  /** The studio's own category it is sorted into; absent for none. */
-  category?: number;
-}
-
-/** One of the studio's LoRA categories, kept by OppaiLib (lora-categories.ts). */
-export interface LoraCategory {
-  id: number;
-  name: string;
-  /** How many LoRAs are in it. */
-  count: number;
+  /** The studio's category it is filed under (one of lora-categories.ts); absent
+      for none. */
+  categoryKey?: string;
 }
 
 /** A standalone VAE. `key` is the selector value the generate call wants. */
@@ -1570,8 +1563,6 @@ export interface ImageGenStatus {
       or a hires fix) and latent modes (a hires fix only). */
   upscalers?: string[];
   latentUpscalers?: string[];
-  /** The studio's LoRA categories, each LoRA's `category` naming one. */
-  loraCategories?: LoraCategory[];
   /** The Civitai browser works against this generator (it does against both). */
   civitai?: boolean;
   /** Models can be installed, edited, re-covered and deleted from here: always on
@@ -1734,6 +1725,16 @@ export interface TrainerHealth {
   gpu: string;
   vramMB?: number;
   vramUsedMB?: number;
+  /** What it can do beyond the first protocol: "repeats-per-file", "detect-people". */
+  features?: string[];
+}
+
+/** The people the trainer found in one picture (trainer/detect.py), largest first. */
+export interface PeopleFound {
+  width: number;
+  height: number;
+  model: string;
+  people: { box: [number, number, number, number]; score: number; outline: [number, number][] }[];
 }
 
 /** Which pictures a LoRA is trained on: a training set, or one of the library's. */
@@ -1780,6 +1781,8 @@ export interface TrainRequest {
   /** The kind of LoRA the numbers were set up for; see lora-presets.ts. */
   preset?: string;
   lowVram?: boolean;
+  /** Sends the pictures as they are instead of fitted to their training size. */
+  noFit?: boolean;
   flip?: boolean;
   freeGpu?: boolean;
   samples?: boolean;
@@ -1903,6 +1906,9 @@ export interface GalleryBoard {
   id: string;
   name: string;
   count: number;
+  /** The picture its card shows, by gallery name: one chosen from its own, or the
+      newest. Absent for an empty board. */
+  cover?: string;
 }
 
 export interface GalleryImage {
@@ -2523,7 +2529,7 @@ async function requestOnce<T>(path: string, opts: RequestInit = {}, timeoutMs = 
   const headers = new Headers(opts.headers);
   const token = getToken();
   if (token) headers.set("Authorization", `Bearer ${token}`);
-  if (opts.body && !(opts.body instanceof FormData)) {
+  if (opts.body && !(opts.body instanceof FormData) && !(opts.body instanceof Blob)) {
     headers.set("Content-Type", "application/json");
   }
   // A client-side deadline covering the WHOLE exchange — response headers *and*
@@ -3316,6 +3322,12 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ name }),
     }, 20_000),
+  /** Makes one of a board's pictures its card's cover; "" goes back to its newest. */
+  setGalleryBoardCover: (id: string, cover: string) =>
+    request<void>(`/api/imagegen/gallery/boards/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ cover }),
+    }, 20_000),
   // Removes the board itself; its images survive, dropped back to Uncategorized.
   deleteGalleryBoard: (id: string) =>
     request<{ status: string }>(`/api/imagegen/gallery/boards/${encodeURIComponent(id)}`, {
@@ -3431,17 +3443,11 @@ export const api = {
       body: JSON.stringify({ key, versionId: versionId ?? 0 }),
     }, 70_000),
   // ── LoRA categories ────────────────────────────────────────────────────────
-  // The studio's own; see backend/internal/api/lora_categories.go.
+  // A fixed list (lora-categories.ts); see backend/internal/api/lora_categories.go.
 
-  loraCategoryCreate: (name: string) =>
-    request<LoraCategory>("/api/imagegen/lora-categories", { method: "POST", body: JSON.stringify({ name }) }, 20_000),
-  loraCategoryRename: (id: number, name: string) =>
-    request<LoraCategory>(`/api/imagegen/lora-categories/${id}`, { method: "PATCH", body: JSON.stringify({ name }) }, 20_000),
-  loraCategoryDelete: (id: number) =>
-    request<void>(`/api/imagegen/lora-categories/${id}`, { method: "DELETE" }, 20_000),
-  /** Puts LoRAs in a category, or in none with 0. */
-  loraCategoryAssign: (category: number, loras: string[]) =>
-    request<{ categories: LoraCategory[] }>("/api/imagegen/lora-categories/assign",
+  /** Files LoRAs under a category, or under none with "". */
+  loraCategoryAssign: (category: string, loras: string[]) =>
+    request<void>("/api/imagegen/lora-categories/assign",
       { method: "POST", body: JSON.stringify({ category, loras }) }, 20_000),
 
   // ── LoRA training ──────────────────────────────────────────────────────────
@@ -3472,6 +3478,11 @@ export const api = {
   trainSetRename: (id: number, name: string) =>
     request<TrainSet>(`/api/imagegen/train-sets/${id}`, { method: "PATCH", body: JSON.stringify({ name }) }, 20_000),
   trainSetDelete: (id: number) => request<void>(`/api/imagegen/train-sets/${id}`, { method: "DELETE" }, 60_000),
+  /** Where the people in a picture are, found by the trainer's person detector. */
+  trainDetect: (picture: Blob, conf: number) =>
+    request<PeopleFound>(`/api/imagegen/train/detect?conf=${conf}`, {
+      method: "POST", body: picture, headers: { "Content-Type": "application/octet-stream" },
+    }, 150_000),
   trainSetUpload: (id: number, file: File) => {
     const fd = new FormData();
     fd.append("file", file);

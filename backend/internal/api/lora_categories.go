@@ -2,9 +2,7 @@ package api
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"strings"
 
@@ -12,157 +10,72 @@ import (
 	"github.com/youruser/oppailib/internal/imagegen"
 )
 
-// The categories the studio's LoRAs are sorted into. They are OppaiLib's own (see
-// the table comment in schema.sql): the status hands each LoRA its category and the
-// list of them, and these endpoints make, rename, delete and fill them.
+// The categories the studio's LoRAs are filed under. The list is fixed (see
+// db.LoraCategoryKeys) and the clients carry it themselves; the server keeps which
+// LoRA is in which, hands each LoRA its key in the status, and files a LoRA installed
+// from Civitai or trained here by what it is.
 
-// loraCategoryOut is one category as the clients see it. Count is how many LoRAs
-// are in it, which may count one the generator no longer lists.
-type loraCategoryOut struct {
-	ID    int64  `json:"id"`
-	Name  string `json:"name"`
-	Count int    `json:"count"`
-}
-
-// loraCategoryList is every category with its count.
-func (s *Server) loraCategoryList(ctx context.Context) ([]loraCategoryOut, error) {
-	cats, err := s.db.LoraCategories(ctx)
-	if err != nil {
-		return nil, err
-	}
-	members, err := s.db.LoraCategoryMembers(ctx)
-	if err != nil {
-		return nil, err
-	}
-	counts := map[int64]int{}
-	for _, id := range members {
-		counts[id]++
-	}
-	out := make([]loraCategoryOut, 0, len(cats))
-	for _, c := range cats {
-		out = append(out, loraCategoryOut{ID: c.ID, Name: c.Name, Count: counts[c.ID]})
-	}
-	return out, nil
-}
-
-// overlayLoraCategories gives the status's LoRAs their categories and returns the
-// list of them, counted over the LoRAs the generator lists now. Best-effort: a
-// failed read leaves the picker without categories rather than failing the status.
-func (s *Server) overlayLoraCategories(ctx context.Context, loras []imagegen.Lora) []loraCategoryOut {
-	cats, err := s.db.LoraCategories(ctx)
+// overlayLoraCategories gives the status's LoRAs their categories. A LoRA is filed by
+// the name it is picked by, or — when an install filed it before anyone picked it —
+// by its record key. Best-effort: a failed read leaves the picker unsorted rather
+// than failing the status.
+func (s *Server) overlayLoraCategories(ctx context.Context, loras []imagegen.Lora) {
+	filed, err := s.db.LoraCategories(ctx)
 	if err != nil {
 		s.log.Warn("lora categories", "err", err)
-		return []loraCategoryOut{}
+		return
 	}
-	members, err := s.db.LoraCategoryMembers(ctx)
-	if err != nil {
-		s.log.Warn("lora categories", "err", err)
-		members = nil
-	}
-	counts := map[int64]int{}
 	for i := range loras {
-		if id, ok := members[loras[i].Name]; ok {
-			loras[i].Category = id
-			counts[id]++
+		if key, ok := filed[loras[i].Name]; ok {
+			loras[i].CategoryKey = key
+		} else if key, ok := filed[loras[i].Key]; ok && loras[i].Key != "" {
+			loras[i].CategoryKey = key
 		}
 	}
-	out := make([]loraCategoryOut, 0, len(cats))
-	for _, c := range cats {
-		out = append(out, loraCategoryOut{ID: c.ID, Name: c.Name, Count: counts[c.ID]})
-	}
-	return out
 }
 
-type loraCategoryReq struct {
-	Name string `json:"name"`
-}
-
-// readCategoryName reads and checks a category's name, writing the 400 itself.
-func readCategoryName(w http.ResponseWriter, r *http.Request) (string, bool) {
-	var req loraCategoryReq
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&req); err != nil || strings.TrimSpace(req.Name) == "" {
-		writeErr(w, http.StatusBadRequest, "a category name is required")
-		return "", false
+// civitaiLoraCategory is the category a Civitai model's tags put it in, or "" when
+// it is not a LoRA or carries none of the catalogue's category tags. Civitai files
+// every model under one of a fixed set of tags; the studio's list is those, with
+// the rarer ones folded into the nearest.
+func civitaiLoraCategory(modelType string, tags []string) string {
+	switch strings.ToLower(modelType) {
+	case "lora", "locon", "dora", "lycoris":
+	default:
+		return ""
 	}
-	name := strings.TrimSpace(req.Name)
-	if len([]rune(name)) > 80 {
-		writeErr(w, http.StatusBadRequest, "that name is too long")
-		return "", false
+	byTag := map[string]string{
+		"character": db.LoraCharacter, "celebrity": db.LoraCharacter,
+		"style": db.LoraStyle,
+		"concept": db.LoraConcept, "clothing": db.LoraConcept, "action": db.LoraConcept, "objects": db.LoraConcept,
+		"tool": db.LoraTools,
+		"poses": db.LoraPoses,
+		"background": db.LoraBackground, "buildings": db.LoraBackground,
+		"vehicle": db.LoraEtc, "animal": db.LoraEtc, "assets": db.LoraEtc,
 	}
-	return name, true
-}
-
-func (s *Server) handleLoraCategories(w http.ResponseWriter, r *http.Request) {
-	list, err := s.loraCategoryList(r.Context())
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
+	for _, t := range tags {
+		if key, ok := byTag[strings.ToLower(strings.TrimSpace(t))]; ok {
+			return key
+		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"categories": list})
-}
-
-// handleLoraCategoryCreate makes a category, or answers with the one by that name.
-func (s *Server) handleLoraCategoryCreate(w http.ResponseWriter, r *http.Request) {
-	name, ok := readCategoryName(w, r)
-	if !ok {
-		return
-	}
-	c, err := s.db.CreateLoraCategory(r.Context(), name)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	s.writeLoraCategory(w, r.Context(), c.ID, http.StatusCreated)
-}
-
-func (s *Server) handleLoraCategoryRename(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r)
-	if !ok {
-		return
-	}
-	name, ok := readCategoryName(w, r)
-	if !ok {
-		return
-	}
-	switch err := s.db.RenameLoraCategory(r.Context(), id, name); {
-	case errors.Is(err, db.ErrCategoryNameTaken):
-		writeErr(w, http.StatusConflict, err.Error())
-		return
-	case errors.Is(err, sql.ErrNoRows):
-		writeErr(w, http.StatusNotFound, "no such category")
-		return
-	case err != nil:
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	s.writeLoraCategory(w, r.Context(), id, http.StatusOK)
-}
-
-// handleLoraCategoryDelete removes a category. Its LoRAs stay, in none.
-func (s *Server) handleLoraCategoryDelete(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r)
-	if !ok {
-		return
-	}
-	if err := s.db.DeleteLoraCategory(r.Context(), id); err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
+	return ""
 }
 
 type loraCategoryAssignReq struct {
-	// Category 0 takes the LoRAs out of whichever they are in.
-	Category int64    `json:"category"`
+	// Category "" takes the LoRAs out of whichever they are in.
+	Category string   `json:"category"`
 	Loras    []string `json:"loras"`
 }
 
-// handleLoraCategoryAssign puts LoRAs in a category, or in none, and answers with
-// the categories as they now stand.
+// handleLoraCategoryAssign files LoRAs under a category, or under none.
 func (s *Server) handleLoraCategoryAssign(w http.ResponseWriter, r *http.Request) {
 	var req loraCategoryAssignReq
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 256<<10)).Decode(&req); err != nil || req.Category < 0 {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 256<<10)).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	if req.Category != "" && !db.IsLoraCategory(req.Category) {
+		writeErr(w, http.StatusBadRequest, "category is one of "+strings.Join(db.LoraCategoryKeys, ", "))
 		return
 	}
 	names := make([]string, 0, len(req.Loras))
@@ -176,28 +89,8 @@ func (s *Server) handleLoraCategoryAssign(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if err := s.db.SetLoraCategory(r.Context(), req.Category, names); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			writeErr(w, http.StatusNotFound, "no such category")
-			return
-		}
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	s.handleLoraCategories(w, r)
-}
-
-// writeLoraCategory answers with one category, counted.
-func (s *Server) writeLoraCategory(w http.ResponseWriter, ctx context.Context, id int64, status int) {
-	list, err := s.loraCategoryList(ctx)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	for _, c := range list {
-		if c.ID == id {
-			writeJSON(w, status, c)
-			return
-		}
-	}
-	writeErr(w, http.StatusNotFound, "no such category")
+	w.WriteHeader(http.StatusNoContent)
 }

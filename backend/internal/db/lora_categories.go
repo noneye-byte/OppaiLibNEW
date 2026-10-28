@@ -3,146 +3,151 @@ package db
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"strings"
 )
 
-// LoraCategory is one of the categories the studio's LoRAs are sorted into. See the
-// table comment in schema.sql.
-type LoraCategory struct {
-	ID        int64
-	Name      string
-	CreatedAt int64
+// The studio's LoRA categories are a fixed list rather than ones the person makes:
+// a LoRA is filed under one of these keys or none. They were folders of the person's
+// own until 0.67, which left every library sorted a different way and the phone with
+// a category editor nobody used; the fixed list is Civitai's own groupings, so a LoRA
+// installed from there arrives already filed.
+const (
+	LoraCharacter  = "character"
+	LoraStyle      = "style"
+	LoraConcept    = "concept"
+	LoraTools      = "tools"
+	LoraPoses      = "poses"
+	LoraBackground = "background"
+	LoraEtc        = "etc"
+)
+
+// LoraCategoryKeys is every category, in the order the pickers show them.
+var LoraCategoryKeys = []string{LoraCharacter, LoraStyle, LoraConcept, LoraTools, LoraPoses, LoraBackground, LoraEtc}
+
+// IsLoraCategory reports whether key is one of the fixed categories.
+func IsLoraCategory(key string) bool {
+	for _, k := range LoraCategoryKeys {
+		if k == key {
+			return true
+		}
+	}
+	return false
 }
 
-// ErrCategoryNameTaken is a rename onto another category's name.
-var ErrCategoryNameTaken = errors.New("there is already a category by that name")
+// LoraCategoryFor guesses the category a name means: a folder the person made before
+// the list was fixed ("Characters", "Art styles"), or a Civitai tag. Anything it does
+// not recognise is ETC, so nothing that was sorted falls back into the unsorted pile.
+func LoraCategoryFor(name string) string {
+	n := strings.ToLower(strings.TrimSpace(name))
+	has := func(words ...string) bool {
+		for _, w := range words {
+			if strings.Contains(n, w) {
+				return true
+			}
+		}
+		return false
+	}
+	switch {
+	case has("char", "person", "people", "girl", "waifu", "celeb"):
+		return LoraCharacter
+	case has("style", "artist"):
+		return LoraStyle
+	case has("pose", "posing", "position"):
+		return LoraPoses
+	case has("background", "scene", "place", "location", "building", "room"):
+		return LoraBackground
+	case has("tool", "slider", "detail", "enhanc", "fix", "quality", "helper"):
+		return LoraTools
+	case has("concept", "clothing", "outfit", "cloth", "action", "object", "fetish"):
+		return LoraConcept
+	}
+	return LoraEtc
+}
 
-// LoraCategories lists the categories by name.
-func (d *DB) LoraCategories(ctx context.Context) ([]LoraCategory, error) {
-	rows, err := d.sql.QueryContext(ctx, `SELECT id, name, created_at FROM lora_categories ORDER BY lower(name), id`)
+// LoraCategories maps each LoRA that is filed to its category's key.
+func (d *DB) LoraCategories(ctx context.Context) (map[string]string, error) {
+	rows, err := d.sql.QueryContext(ctx, `SELECT lora, category FROM lora_category_of`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []LoraCategory
+	out := map[string]string{}
 	for rows.Next() {
-		var c LoraCategory
-		if err := rows.Scan(&c.ID, &c.Name, &c.CreatedAt); err != nil {
+		var name, key string
+		if err := rows.Scan(&name, &key); err != nil {
 			return nil, err
 		}
-		out = append(out, c)
+		out[name] = key
 	}
 	return out, rows.Err()
 }
 
-// CreateLoraCategory makes a category, or answers with the one already by that
-// name whatever its capitals, as gallery folders do.
-func (d *DB) CreateLoraCategory(ctx context.Context, name string) (LoraCategory, error) {
-	name = strings.TrimSpace(name)
-	var c LoraCategory
-	err := d.sql.QueryRowContext(ctx, `SELECT id, name, created_at FROM lora_categories WHERE lower(name) = lower(?) ORDER BY id LIMIT 1`, name).
-		Scan(&c.ID, &c.Name, &c.CreatedAt)
-	if err == nil {
-		return c, nil
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return c, err
-	}
-	n := now()
-	res, err := d.sql.ExecContext(ctx, `INSERT INTO lora_categories(name, created_at) VALUES(?, ?)`, name, n)
-	if err != nil {
-		return c, err
-	}
-	id, err := res.LastInsertId()
-	return LoraCategory{ID: id, Name: name, CreatedAt: n}, err
-}
-
-// RenameLoraCategory changes a category's name. Renaming it onto another one's is
-// refused rather than merging them behind the person's back; changing only its
-// capitals is fine. sql.ErrNoRows when there is no such category.
-func (d *DB) RenameLoraCategory(ctx context.Context, id int64, name string) error {
-	name = strings.TrimSpace(name)
-	var other int
-	if err := d.sql.QueryRowContext(ctx, `SELECT COUNT(*) FROM lora_categories WHERE lower(name) = lower(?) AND id <> ?`, name, id).Scan(&other); err != nil {
-		return err
-	}
-	if other > 0 {
-		return ErrCategoryNameTaken
-	}
-	res, err := d.sql.ExecContext(ctx, `UPDATE lora_categories SET name = ? WHERE id = ?`, name, id)
-	if err != nil {
-		return err
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return sql.ErrNoRows
-	}
-	return nil
-}
-
-// DeleteLoraCategory removes a category; its LoRAs are left in none. The members
-// are deleted here rather than left to the foreign key, so it holds on a database
-// opened without foreign keys on.
-func (d *DB) DeleteLoraCategory(ctx context.Context, id int64) error {
+// SetLoraCategory files the LoRAs under a category, out of any other; "" takes them
+// out of every one. The caller checks the key is one of LoraCategoryKeys.
+func (d *DB) SetLoraCategory(ctx context.Context, category string, loras []string) error {
 	tx, err := d.sql.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `DELETE FROM lora_category_members WHERE category_id = ?`, id); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM lora_categories WHERE id = ?`, id); err != nil {
-		return err
+	for _, name := range loras {
+		if category == "" {
+			_, err = tx.ExecContext(ctx, `DELETE FROM lora_category_of WHERE lora = ?`, name)
+		} else {
+			_, err = tx.ExecContext(ctx, `INSERT INTO lora_category_of(lora, category) VALUES(?, ?)
+				ON CONFLICT(lora) DO UPDATE SET category = excluded.category`, name, category)
+		}
+		if err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }
 
-// LoraCategoryMembers maps each LoRA in a category to the category's id.
-func (d *DB) LoraCategoryMembers(ctx context.Context) (map[string]int64, error) {
-	rows, err := d.sql.QueryContext(ctx, `SELECT lora, category_id FROM lora_category_members`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := map[string]int64{}
-	for rows.Next() {
-		var name string
-		var id int64
-		if err := rows.Scan(&name, &id); err != nil {
-			return nil, err
-		}
-		out[name] = id
-	}
-	return out, rows.Err()
+// FileLoraIfUnsorted files a LoRA under a category unless it is already in one: an
+// install says what the LoRA is, but never over the person's own choice.
+func (d *DB) FileLoraIfUnsorted(ctx context.Context, lora, category string) error {
+	_, err := d.sql.ExecContext(ctx, `INSERT INTO lora_category_of(lora, category) VALUES(?, ?)
+		ON CONFLICT(lora) DO NOTHING`, lora, category)
+	return err
 }
 
-// SetLoraCategory puts the LoRAs in a category, moving them out of any other;
-// category 0 takes them out of every one. sql.ErrNoRows for a category that is not
-// there, with nothing changed.
-func (d *DB) SetLoraCategory(ctx context.Context, category int64, loras []string) error {
-	tx, err := d.sql.BeginTx(ctx, nil)
+// migrateLoraFolders moves the person-made categories of 0.65–0.66 onto the fixed
+// list, each LoRA under the category its folder's name means, and drops the old
+// tables. It runs at every open and does nothing once they are gone.
+func migrateLoraFolders(sqldb *sql.DB) error {
+	var n int
+	if err := sqldb.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'lora_categories'`).Scan(&n); err != nil || n == 0 {
+		return err
+	}
+	rows, err := sqldb.Query(`SELECT m.lora, c.name FROM lora_category_members m JOIN lora_categories c ON c.id = m.category_id`)
+	if err != nil {
+		return err
+	}
+	moved := map[string]string{}
+	for rows.Next() {
+		var lora, folder string
+		if err := rows.Scan(&lora, &folder); err != nil {
+			rows.Close()
+			return err
+		}
+		moved[lora] = LoraCategoryFor(folder)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	tx, err := sqldb.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if category > 0 {
-		var n int
-		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM lora_categories WHERE id = ?`, category).Scan(&n); err != nil {
+	for lora, key := range moved {
+		if _, err := tx.Exec(`INSERT INTO lora_category_of(lora, category) VALUES(?, ?) ON CONFLICT(lora) DO NOTHING`, lora, key); err != nil {
 			return err
 		}
-		if n == 0 {
-			return sql.ErrNoRows
-		}
 	}
-	for _, name := range loras {
-		if category == 0 {
-			_, err = tx.ExecContext(ctx, `DELETE FROM lora_category_members WHERE lora = ?`, name)
-		} else {
-			_, err = tx.ExecContext(ctx, `INSERT INTO lora_category_members(lora, category_id) VALUES(?, ?)
-				ON CONFLICT(lora) DO UPDATE SET category_id = excluded.category_id`, name, category)
-		}
-		if err != nil {
+	for _, stmt := range []string{`DROP TABLE IF EXISTS lora_category_members`, `DROP TABLE IF EXISTS lora_categories`} {
+		if _, err := tx.Exec(stmt); err != nil {
 			return err
 		}
 	}

@@ -309,3 +309,71 @@ func TestARunWhoseRequestIsDroppedFinishesAndLeavesItsResultOnTheJob(t *testing.
 		t.Fatalf("the gallery holds %d", got)
 	}
 }
+
+type boardsOut struct {
+	Boards []struct {
+		ID    string `json:"id"`
+		Name  string `json:"name"`
+		Count int    `json:"count"`
+		Cover string `json:"cover"`
+	} `json:"boards"`
+}
+
+func boardCover(t *testing.T, h http.Handler, token, id string) string {
+	t.Helper()
+	var out boardsOut
+	_ = json.Unmarshal(do(t, h, token, http.MethodGet, "/api/imagegen/gallery/boards", "").Body.Bytes(), &out)
+	for _, b := range out.Boards {
+		if b.ID == id {
+			return b.Cover
+		}
+	}
+	t.Fatalf("no board %s in %+v", id, out)
+	return ""
+}
+
+func TestAFolderShowsItsNewestPictureUntilOneOfItsOwnIsChosenAsItsCover(t *testing.T) {
+	s, token := newTestServer(t)
+	enableImageGen(t, s, newGalleryA1111(t, &galleryA1111{}).URL)
+	h := s.Handler()
+
+	rec := do(t, h, token, http.MethodPost, "/api/imagegen/gallery/boards", `{"name":"Mika"}`)
+	var folder struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &folder)
+	if got := boardCover(t, h, token, folder.ID); got != "" {
+		t.Fatalf("an empty folder has a cover: %q", got)
+	}
+	first := generateOn(t, s, token, fmt.Sprintf(`{"prompt":"a face","board":%q}`, folder.ID)).Images[0].Gallery
+	second := generateOn(t, s, token, fmt.Sprintf(`{"prompt":"a face again","board":%q}`, folder.ID)).Images[0].Gallery
+	elsewhere := generateOn(t, s, token, `{"prompt":"a landscape","board":"none"}`).Images[0].Gallery
+	if got := boardCover(t, h, token, folder.ID); got != second {
+		t.Fatalf("cover = %q, want the newest %q", got, second)
+	}
+	if got := boardCover(t, h, token, "none"); got != elsewhere {
+		t.Fatalf("Unsorted's cover = %q, want %q", got, elsewhere)
+	}
+
+	if rec := do(t, h, token, http.MethodPatch, "/api/imagegen/gallery/boards/"+folder.ID, fmt.Sprintf(`{"cover":%q}`, first)); rec.Code != http.StatusOK {
+		t.Fatalf("set cover: %d %s", rec.Code, rec.Body)
+	}
+	if got := boardCover(t, h, token, folder.ID); got != first {
+		t.Fatalf("cover = %q, want the chosen %q", got, first)
+	}
+	// A picture from another folder is not this one's to show.
+	if rec := do(t, h, token, http.MethodPatch, "/api/imagegen/gallery/boards/"+folder.ID, fmt.Sprintf(`{"cover":%q}`, elsewhere)); rec.Code != http.StatusBadRequest {
+		t.Fatalf("a cover from outside the folder: %d %s", rec.Code, rec.Body)
+	}
+	// Moved out, the chosen cover stops being the cover; the newest takes over.
+	do(t, h, token, http.MethodPost, "/api/imagegen/gallery/board", fmt.Sprintf(`{"board":"none","names":[%q]}`, first))
+	if got := boardCover(t, h, token, folder.ID); got != second {
+		t.Fatalf("cover after moving it out = %q, want %q", got, second)
+	}
+	// Setting a cover keeps the name, and renaming keeps the cover.
+	do(t, h, token, http.MethodPatch, "/api/imagegen/gallery/boards/"+folder.ID, `{"name":"Mika K"}`)
+	rec = do(t, h, token, http.MethodGet, "/api/imagegen/gallery/boards", "")
+	if !strings.Contains(rec.Body.String(), `"name":"Mika K"`) || boardCover(t, h, token, folder.ID) != second {
+		t.Fatalf("boards = %s", rec.Body)
+	}
+}

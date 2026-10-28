@@ -2,7 +2,6 @@ package api
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -27,85 +26,79 @@ func loraA1111(t *testing.T) *httptest.Server {
 
 type categoryStatus struct {
 	Loras []struct {
-		Name     string `json:"name"`
-		Category int64  `json:"category"`
+		Name        string `json:"name"`
+		CategoryKey string `json:"categoryKey"`
 	} `json:"loras"`
-	LoraCategories []loraCategoryOut `json:"loraCategories"`
 }
 
-func TestLorasAreSortedIntoCategoriesTheStatusHandsBack(t *testing.T) {
+func statusCategories(t *testing.T, h http.Handler, token string) map[string]string {
+	t.Helper()
+	var st categoryStatus
+	_ = json.Unmarshal(do(t, h, token, http.MethodGet, "/api/imagegen/status", "").Body.Bytes(), &st)
+	got := map[string]string{}
+	for _, l := range st.Loras {
+		got[l.Name] = l.CategoryKey
+	}
+	return got
+}
+
+func TestLorasAreFiledUnderTheFixedCategoriesTheStatusHandsBack(t *testing.T) {
 	s, token := newTestServer(t)
 	enableImageGen(t, s, loraA1111(t).URL)
 	h := s.Handler()
 
-	rec := do(t, h, token, http.MethodPost, "/api/imagegen/lora-categories", `{"name":"Styles"}`)
-	var styles loraCategoryOut
-	_ = json.Unmarshal(rec.Body.Bytes(), &styles)
-	if rec.Code != http.StatusCreated || styles.ID == 0 || styles.Name != "Styles" {
-		t.Fatalf("create: %d %s", rec.Code, rec.Body)
-	}
-	rec = do(t, h, token, http.MethodPost, "/api/imagegen/lora-categories", `{"name":"  styles "}`)
-	var again loraCategoryOut
-	_ = json.Unmarshal(rec.Body.Bytes(), &again)
-	if again.ID != styles.ID {
-		t.Fatalf("the same name in other capitals made a second category: %s", rec.Body)
-	}
-	rec = do(t, h, token, http.MethodPost, "/api/imagegen/lora-categories", `{"name":"Characters"}`)
-	var chars loraCategoryOut
-	_ = json.Unmarshal(rec.Body.Bytes(), &chars)
-
-	rec = do(t, h, token, http.MethodPost, "/api/imagegen/lora-categories/assign",
-		fmt.Sprintf(`{"category":%d,"loras":["ink","glasses"]}`, styles.ID))
-	if rec.Code != http.StatusOK {
+	rec := do(t, h, token, http.MethodPost, "/api/imagegen/lora-categories/assign", `{"category":"style","loras":["ink","glasses"]}`)
+	if rec.Code != http.StatusNoContent {
 		t.Fatalf("assign: %d %s", rec.Code, rec.Body)
 	}
-	// Moving one into another category takes it out of the first.
-	do(t, h, token, http.MethodPost, "/api/imagegen/lora-categories/assign",
-		fmt.Sprintf(`{"category":%d,"loras":["glasses","mika"]}`, chars.ID))
-
-	var st categoryStatus
-	_ = json.Unmarshal(do(t, h, token, http.MethodGet, "/api/imagegen/status", "").Body.Bytes(), &st)
-	got := map[string]int64{}
-	for _, l := range st.Loras {
-		got[l.Name] = l.Category
-	}
-	if got["ink"] != styles.ID || got["glasses"] != chars.ID || got["mika"] != chars.ID {
+	// Filing one under another category takes it out of the first.
+	do(t, h, token, http.MethodPost, "/api/imagegen/lora-categories/assign", `{"category":"character","loras":["glasses","mika"]}`)
+	if got := statusCategories(t, h, token); got["ink"] != "style" || got["glasses"] != "character" || got["mika"] != "character" {
 		t.Fatalf("categories = %v", got)
 	}
-	// Listed by name, counted over the LoRAs there are.
-	if len(st.LoraCategories) != 2 || st.LoraCategories[0].Name != "Characters" || st.LoraCategories[0].Count != 2 || st.LoraCategories[1].Count != 1 {
-		t.Fatalf("loraCategories = %+v", st.LoraCategories)
-	}
 
-	rec = do(t, h, token, http.MethodPatch, fmt.Sprintf("/api/imagegen/lora-categories/%d", styles.ID), `{"name":"characters"}`)
-	if rec.Code != http.StatusConflict {
-		t.Fatalf("renaming onto another category: %d %s", rec.Code, rec.Body)
-	}
-	rec = do(t, h, token, http.MethodPatch, fmt.Sprintf("/api/imagegen/lora-categories/%d", styles.ID), `{"name":"Art styles"}`)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("rename: %d %s", rec.Code, rec.Body)
-	}
-	rec = do(t, h, token, http.MethodPost, "/api/imagegen/lora-categories/assign", `{"category":0,"loras":["mika"]}`)
-	if rec.Code != http.StatusOK {
+	if rec := do(t, h, token, http.MethodPost, "/api/imagegen/lora-categories/assign", `{"category":"","loras":["mika"]}`); rec.Code != http.StatusNoContent {
 		t.Fatalf("take out: %d %s", rec.Code, rec.Body)
 	}
-	rec = do(t, h, token, http.MethodPost, "/api/imagegen/lora-categories/assign", `{"category":9999,"loras":["mika"]}`)
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("a category that isn't there: %d %s", rec.Code, rec.Body)
+	if got := statusCategories(t, h, token); got["mika"] != "" {
+		t.Fatalf("mika is still filed: %v", got)
 	}
+}
 
-	rec = do(t, h, token, http.MethodDelete, fmt.Sprintf("/api/imagegen/lora-categories/%d", chars.ID), "")
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("delete: %d %s", rec.Code, rec.Body)
-	}
-	st = categoryStatus{}
-	_ = json.Unmarshal(do(t, h, token, http.MethodGet, "/api/imagegen/status", "").Body.Bytes(), &st)
-	for _, l := range st.Loras {
-		if l.Name != "ink" && l.Category != 0 {
-			t.Fatalf("%s is still in a deleted category", l.Name)
+func TestACategoryOffTheListIsRefused(t *testing.T) {
+	s, token := newTestServer(t)
+	enableImageGen(t, s, loraA1111(t).URL)
+	h := s.Handler()
+	for _, body := range []string{`{"category":"Art styles","loras":["ink"]}`, `{"category":3,"loras":["ink"]}`} {
+		if rec := do(t, h, token, http.MethodPost, "/api/imagegen/lora-categories/assign", body); rec.Code != http.StatusBadRequest {
+			t.Fatalf("%s: %d %s", body, rec.Code, rec.Body)
 		}
 	}
-	if len(st.LoraCategories) != 1 || st.LoraCategories[0].Name != "Art styles" {
-		t.Fatalf("loraCategories = %+v", st.LoraCategories)
+	if got := statusCategories(t, h, token); got["ink"] != "" {
+		t.Fatalf("ink was filed anyway: %v", got)
+	}
+}
+
+func TestACivitaiLorasCategoryTagSaysWhereItIsFiled(t *testing.T) {
+	cases := []struct {
+		kind string
+		tags []string
+		want string
+	}{
+		{"LORA", []string{"anime", "character", "woman"}, "character"},
+		{"LORA", []string{"celebrity"}, "character"},
+		{"LoCon", []string{"style", "artist"}, "style"},
+		{"LORA", []string{"clothing", "outfit"}, "concept"},
+		{"LORA", []string{"tool", "slider"}, "tools"},
+		{"LORA", []string{"poses"}, "poses"},
+		{"LORA", []string{"buildings"}, "background"},
+		{"LORA", []string{"vehicle"}, "etc"},
+		{"LORA", []string{"anime", "girl"}, ""},
+		{"Checkpoint", []string{"style"}, ""},
+	}
+	for _, c := range cases {
+		if got := civitaiLoraCategory(c.kind, c.tags); got != c.want {
+			t.Errorf("%s %v = %q, want %q", c.kind, c.tags, got, c.want)
+		}
 	}
 }

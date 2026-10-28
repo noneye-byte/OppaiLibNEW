@@ -2,7 +2,6 @@ package net.fourbakers.oppailib.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,19 +11,27 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.border
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.FolderSpecial
+import androidx.compose.material.icons.filled.Inbox
+import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -47,6 +54,7 @@ import androidx.compose.ui.window.Dialog
 import coil.compose.AsyncImage
 import kotlinx.coroutines.launch
 import net.fourbakers.oppailib.data.GalleryBoard
+import net.fourbakers.oppailib.data.GalleryBoardCover
 import net.fourbakers.oppailib.data.GalleryBoardRequest
 import net.fourbakers.oppailib.data.GalleryImage
 import net.fourbakers.oppailib.data.GalleryNamesRequest
@@ -185,6 +193,19 @@ fun InvokeGalleryTab(
         }
     }
 
+    /** Makes a picture its folder's card cover: on the card at once, then for real. */
+    fun setCover(img: GalleryImage) {
+        val target = board
+        if (!isFolder) return
+        val before = boards
+        boards = boards.map { if (it.id == target) it.copy(cover = img.name) else it }
+        scope.launch {
+            runCatching { repo.api.setGalleryBoardCover(target, GalleryBoardCover(img.name)) }
+                .onSuccess { repo.report("That's the folder's cover now", "happy") }
+                .onFailure { boards = before; repo.report(it.message ?: "Couldn't set the cover") }
+        }
+    }
+
     // Deletes the currently-viewed board. Its images aren't lost — the server hands
     // them back to Uncategorized — then we drop to that pile and reload.
     fun deleteBoard() {
@@ -248,16 +269,13 @@ fun InvokeGalleryTab(
                 Modifier.fillMaxWidth().padding(vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Row(
-                    Modifier.weight(1f).horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    boards.forEach { b ->
-                        FilterChip(
-                            selected = board == b.id,
-                            onClick = { if (board != b.id) { items = emptyList(); onBoardChange(b.id) } },
-                            label = { Text(if (b.count > 0) "${b.name} · ${b.count}" else b.name) },
-                        )
+                // Folders as cards, each its cover, name and count: they were chips,
+                // which said nothing about what was in one until it was opened.
+                LazyRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(boards, key = { it.id }) { b ->
+                        FolderCard(repo, b, selected = board == b.id) {
+                            if (board != b.id) { items = emptyList(); onBoardChange(b.id) }
+                        }
                     }
                 }
                 // "none" and "all" are not real boards — they can't be deleted.
@@ -407,6 +425,11 @@ fun InvokeGalleryTab(
                             Modifier.size(16.dp))
                         Text(if (saved) "  In library" else "  Save")
                     }
+                    if (isFolder) {
+                        IconButton(onClick = { setCover(img) }) {
+                            Icon(Icons.Filled.FolderSpecial, contentDescription = "Set as folder cover", tint = Color.White)
+                        }
+                    }
                     IconButton(onClick = { delete(img) }) {
                         Icon(Icons.Filled.Delete, contentDescription = "Delete", tint = MaterialTheme.colorScheme.error)
                     }
@@ -416,5 +439,58 @@ fun InvokeGalleryTab(
                 }
             }
         }
+    }
+}
+
+/** One board as a card: its cover (or an icon for an empty one), name and count. */
+@Composable
+private fun FolderCard(repo: Repository, b: GalleryBoard, selected: Boolean, onClick: () -> Unit) {
+    Column(
+        Modifier
+            .width(96.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainer)
+            .then(if (selected) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(12.dp)) else Modifier)
+            .clickable(onClick = onClick)
+            .padding(bottom = 6.dp),
+    ) {
+        Box(
+            Modifier.fillMaxWidth().aspectRatio(4f / 3f).background(MaterialTheme.colorScheme.surfaceVariant),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (b.cover.isNotEmpty()) {
+                AsyncImage(
+                    model = repo.galleryThumbUrl(b.cover),
+                    imageLoader = repo.imageLoader,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            } else {
+                Icon(
+                    when (b.id) {
+                        "all" -> Icons.Filled.PhotoLibrary
+                        "none" -> Icons.Filled.Inbox
+                        else -> Icons.Filled.Folder
+                    },
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Text(
+            b.name,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(start = 8.dp, end = 8.dp, top = 4.dp),
+        )
+        Text(
+            b.count.toString(),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 8.dp),
+        )
     }
 }

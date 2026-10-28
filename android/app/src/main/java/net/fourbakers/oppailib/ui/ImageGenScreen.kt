@@ -26,7 +26,12 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.Brush
+import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.FaceRetouchingNatural
+import androidx.compose.material.icons.filled.Landscape
+import androidx.compose.material.icons.filled.Lightbulb
+import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Style
 import androidx.compose.material.icons.filled.TravelExplore
@@ -116,8 +121,8 @@ import net.fourbakers.oppailib.data.GenDraft
 import net.fourbakers.oppailib.data.GenSession
 import net.fourbakers.oppailib.data.GenWildcard
 import net.fourbakers.oppailib.data.DetailerRequest
+import net.fourbakers.oppailib.data.LoraCategories
 import net.fourbakers.oppailib.data.LoraCategoryAssign
-import net.fourbakers.oppailib.data.LoraCategoryName
 import net.fourbakers.oppailib.data.UpscaleRequest
 import net.fourbakers.oppailib.data.GenLoraPick
 import net.fourbakers.oppailib.data.GenModel
@@ -250,10 +255,8 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit, to
     var hiresUpscaler by remember { mutableStateOf(draft.hiresUpscaler) }
     var hiresScale by remember { mutableStateOf(draft.hiresScale) }
     var hiresDenoise by remember { mutableStateOf(draft.hiresDenoise) }
-    /** Which LoRA category the picker shows: null all, 0 none, else a category id. */
-    var loraCategory by remember { mutableStateOf<Long?>(null) }
-    /** The LoRA a new category is being made for ("" for none), while its dialog is up. */
-    var newCategoryFor by remember { mutableStateOf<String?>(null) }
+    /** Which LoRA category the picker shows: null all, "" unsorted, else a category key. */
+    var loraCategory by remember { mutableStateOf<String?>(null) }
 
     // The run, and the last run's pictures, from the process-wide session.
     val session by GenSession.state.collectAsState()
@@ -517,39 +520,15 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit, to
         )
     }
 
-    /** Moves a LoRA into a category (0 for none): on screen at once, then for real,
+    /** Files a LoRA under a category ("" for none): on screen at once, then for real,
         and back if the server refuses. */
-    fun setLoraCategory(name: String, category: Long) {
+    fun setLoraCategory(name: String, category: String) {
         val before = status ?: return
-        val from = before.loras.find { it.name == name }?.category ?: 0
-        if (from == category) return
-        status = before.copy(
-            loras = before.loras.map { if (it.name == name) it.copy(category = category) else it },
-            loraCategories = before.loraCategories.map {
-                when (it.id) {
-                    from -> it.copy(count = it.count - 1)
-                    category -> it.copy(count = it.count + 1)
-                    else -> it
-                }
-            },
-        )
+        if (before.loras.find { it.name == name }?.categoryKey == category) return
+        status = before.copy(loras = before.loras.map { if (it.name == name) it.copy(categoryKey = category) else it })
         scope.launch {
             runCatching { repo.api.assignLoraCategory(LoraCategoryAssign(category, listOf(name))) }
-                .onSuccess { res -> status = status?.copy(loraCategories = res.categories) }
                 .onFailure { status = before; repo.report(it.message ?: "Couldn't move that LoRA") }
-        }
-    }
-
-    fun createLoraCategory(categoryName: String, forLora: String) {
-        scope.launch {
-            runCatching { repo.api.createLoraCategory(LoraCategoryName(categoryName)) }
-                .onSuccess { made ->
-                    status = status?.let { st ->
-                        st.copy(loraCategories = (st.loraCategories.filter { it.id != made.id } + made).sortedBy { it.name.lowercase() })
-                    }
-                    if (forLora.isNotEmpty()) setLoraCategory(forLora, made.id) else loraCategory = made.id
-                }
-                .onFailure { repo.report(it.message ?: "Couldn't make the category") }
         }
     }
 
@@ -663,7 +642,8 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit, to
                             badges = mapOf(
                                 SetupSheet.LORAS to loraWeights.size,
                                 SetupSheet.LOOK to selectedChars.size + selectedPoses.size,
-                                SetupSheet.STYLES to if (templateId.isNotEmpty()) 1 else 0,
+                                SetupSheet.DETAILER to if (st.detailerAvailable && detailerEnabled) (if (detailerFaces) 1 else 0) + (if (detailerHands) 1 else 0) else 0,
+                                SetupSheet.SETTINGS to if (templateId.isNotEmpty()) 1 else 0,
                             ),
                             onPick = { sheet = it },
                         )
@@ -866,33 +846,35 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit, to
                                 modifier = Modifier.fillMaxWidth(),
                             )
                         }
-                        val cats = st.loraCategories
-                        val catFilter = loraCategory?.takeIf { it == 0L || cats.any { c -> c.id == it } }
+                        val catFilter = loraCategory
                         if (st.loras.isNotEmpty()) {
+                            val counts = st.loras.groupingBy { LoraCategories.of(it) }.eachCount()
                             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 FilterChip(selected = catFilter == null, onClick = { loraCategory = null },
                                     label = { Text("All · ${st.loras.size}") })
-                                cats.forEach { c ->
-                                    FilterChip(selected = catFilter == c.id, onClick = { loraCategory = c.id },
-                                        label = { Text("${c.name} · ${c.count}") })
+                                LoraCategories.all.forEach { (key, label) ->
+                                    val n = counts[key] ?: 0
+                                    FilterChip(selected = catFilter == key, onClick = { loraCategory = key },
+                                        leadingIcon = { Icon(loraCategoryIcon(key), contentDescription = null, Modifier.size(16.dp)) },
+                                        label = { Text(if (n > 0) "$label · $n" else label) })
                                 }
-                                if (cats.isNotEmpty()) {
-                                    FilterChip(selected = catFilter == 0L, onClick = { loraCategory = 0L },
-                                        label = { Text("No category · ${st.loras.count { it.category == 0L }}") })
+                                val unsorted = counts[""] ?: 0
+                                if (unsorted > 0 || catFilter == "") {
+                                    FilterChip(selected = catFilter == "", onClick = { loraCategory = "" },
+                                        label = { Text("Unsorted · $unsorted") })
                                 }
-                                AssistChip(onClick = { newCategoryFor = "" }, label = { Text("＋ Category") })
                             }
                         }
                         // Keyed by name, and Compose throws if two items share a key; an
                         // older server can name two LoRAs alike, so duplicates go first.
                         val shown = st.loras.distinctBy { it.name }.filter {
-                            catFilter == null || it.category == catFilter
+                            catFilter == null || LoraCategories.of(it) == catFilter
                         }.filter {
                             loraFilter.isBlank() || it.name.contains(loraFilter, true) || it.alias.contains(loraFilter, true) ||
                                 it.triggerPhrases.any { p -> p.contains(loraFilter, true) }
                         }
                         if (shown.isEmpty() && catFilter != null && loraFilter.isBlank()) {
-                            SheetNote(if (catFilter == 0L) "Every LoRA is in a category." else "Nothing in this category yet — use the category under a LoRA to put it here.")
+                            SheetNote(if (catFilter == "") "Every LoRA is in a category." else "Nothing in this category yet — use the category under a LoRA to file it here.")
                         }
                         CardGrid(shown) { lora ->
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -913,20 +895,25 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit, to
                                 // Which category it is in, and a menu to move it.
                                 var catMenu by remember { mutableStateOf(false) }
                                 Box {
+                                    val filed = LoraCategories.of(lora)
                                     TextButton(onClick = { catMenu = true }, contentPadding = PaddingValues(horizontal = 6.dp)) {
+                                        Icon(loraCategoryIcon(filed), contentDescription = null, Modifier.size(14.dp))
                                         Text(
-                                            cats.find { it.id == lora.category }?.name ?: "No category",
+                                            " " + LoraCategories.label(filed),
                                             style = MaterialTheme.typography.labelSmall,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis,
                                         )
                                     }
                                     DropdownMenu(expanded = catMenu, onDismissRequest = { catMenu = false }) {
-                                        DropdownMenuItem(text = { Text("No category") }, onClick = { catMenu = false; setLoraCategory(lora.name, 0) })
-                                        cats.forEach { c ->
-                                            DropdownMenuItem(text = { Text(c.name) }, onClick = { catMenu = false; setLoraCategory(lora.name, c.id) })
+                                        LoraCategories.all.forEach { (key, label) ->
+                                            DropdownMenuItem(
+                                                text = { Text(label) },
+                                                leadingIcon = { Icon(loraCategoryIcon(key), contentDescription = null) },
+                                                onClick = { catMenu = false; setLoraCategory(lora.name, key) },
+                                            )
                                         }
-                                        DropdownMenuItem(text = { Text("New category…") }, onClick = { catMenu = false; newCategoryFor = lora.name })
+                                        DropdownMenuItem(text = { Text("Unsorted") }, onClick = { catMenu = false; setLoraCategory(lora.name, "") })
                                     }
                                 }
                                 loraWeights[lora.name]?.let { w ->
@@ -996,39 +983,56 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit, to
                             }
                         }
                     }
-                    SetupSheet.STYLES -> {
-                        val builtInCount = st.templates.count { it.builtIn }
-                        val visible = if (showBuiltInTemplates) st.templates else st.templates.filter { !it.builtIn }
-                        if (visible.isEmpty()) {
-                            SheetNote(
-                                if (st.templates.isNotEmpty()) "No styles you made — built-in presets are hidden."
-                                else if (st.backend == "invokeai") "No style presets in InvokeAI yet."
-                                else "No styles saved in Automatic1111 yet; save one from its Styles menu.",
-                            )
-                        }
-                        visible.forEach { t ->
-                            Surface(
-                                onClick = { templateId = if (templateId == t.id) "" else t.id },
-                                shape = RoundedCornerShape(14.dp),
-                                color = if (templateId == t.id) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
-                                modifier = Modifier.fillMaxWidth(),
-                            ) {
-                                Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
-                                    Text(t.name, style = MaterialTheme.typography.titleSmall)
-                                    if (t.prompt.isNotBlank()) Text(t.prompt, style = MaterialTheme.typography.bodySmall,
-                                        maxLines = 1, overflow = TextOverflow.Ellipsis,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    SetupSheet.DETAILER -> {
+                        if (!st.detailerAvailable) {
+                            SheetNote(if (st.backend == "invokeai") "InvokeAI has no ADetailer node installed." else
+                                "The face and hand pass shows up here once the ADetailer extension is installed in Automatic1111 — Extensions → Available → ADetailer, then restart it.")
+                        } else {
+                            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                FilterChip(selected = detailerEnabled, onClick = { detailerEnabled = !detailerEnabled }, label = { Text("ADetailer") })
+                                if (detailerEnabled) {
+                                    // A pass each, run in order: the faces, then the hands.
+                                    FilterChip(selected = detailerFaces, onClick = { detailerFaces = !detailerFaces }, label = { Text("Faces") })
+                                    FilterChip(selected = detailerHands, onClick = { detailerHands = !detailerHands }, label = { Text("Hands") })
                                 }
                             }
-                        }
-                        if (builtInCount > 0) {
-                            TextButton(onClick = { showBuiltInTemplates = !showBuiltInTemplates }) {
-                                Text(if (showBuiltInTemplates) "Hide built-in presets" else "Show built-in presets ($builtInCount)")
+                            if (detailerEnabled && detailerFaces) {
+                                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    listOf(
+                                        "face_yolov8n.pt" to "Face (fast)",
+                                        "face_yolov8s.pt" to "Face (accurate)",
+                                        "mediapipe_face_full" to "MediaPipe face",
+                                        "person_yolov8n-seg.pt" to "Whole person",
+                                    ).forEach { (m, label) ->
+                                        FilterChip(selected = detailerModel == m, onClick = { detailerModel = m }, label = { Text(label) })
+                                    }
+                                }
+                            }
+                            if (detailerEnabled && !detailerFaces && !detailerHands) {
+                                SheetNote("Neither pass is on, so runs skip the detailer.")
+                            }
+                            if (detailerEnabled) {
+                                OutlinedTextField(value = detailerPrompt, onValueChange = { detailerPrompt = it },
+                                    label = { Text("Detail prompt (blank reuses prompt)") }, modifier = Modifier.fillMaxWidth())
+                                OutlinedTextField(value = detailerNegative, onValueChange = { detailerNegative = it },
+                                    label = { Text("Detail negative prompt") }, modifier = Modifier.fillMaxWidth())
+                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    NumberField("Confidence", detailerConfidence.toString(), Modifier.weight(1f)) {
+                                        detailerConfidence = (it.toDoubleOrNull() ?: 0.3).coerceIn(0.05, 1.0)
+                                    }
+                                    NumberField("Denoise", detailerDenoise.toString(), Modifier.weight(1f)) {
+                                        detailerDenoise = (it.toDoubleOrNull() ?: 0.4).coerceIn(0.05, 1.0)
+                                    }
+                                    NumberField("Mask blur", detailerMaskBlur.toString(), Modifier.weight(1f)) {
+                                        detailerMaskBlur = (it.toIntOrNull() ?: 4).coerceIn(0, 64)
+                                    }
+                                }
                             }
                         }
                     }
                     SetupSheet.SETTINGS -> {
                         SectionLabel("Size")
+                        SizePreview(width, height)
                         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             sizePresets.forEach { p ->
                                 FilterChip(selected = width == p.w && height == p.h, onClick = { setSize(p.w, p.h) }, label = { Text(p.label) })
@@ -1094,49 +1098,6 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit, to
                                 }
                             }
                         }
-                        if (st.detailerAvailable) {
-                            SectionLabel("Detailer")
-                            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                FilterChip(selected = detailerEnabled, onClick = { detailerEnabled = !detailerEnabled }, label = { Text("ADetailer") })
-                                if (detailerEnabled) {
-                                    // A pass each, run in order: the faces, then the hands.
-                                    FilterChip(selected = detailerFaces, onClick = { detailerFaces = !detailerFaces }, label = { Text("Faces") })
-                                    FilterChip(selected = detailerHands, onClick = { detailerHands = !detailerHands }, label = { Text("Hands") })
-                                }
-                            }
-                            if (detailerEnabled && detailerFaces) {
-                                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    listOf(
-                                        "face_yolov8n.pt" to "Face (fast)",
-                                        "face_yolov8s.pt" to "Face (accurate)",
-                                        "mediapipe_face_full" to "MediaPipe face",
-                                        "person_yolov8n-seg.pt" to "Whole person",
-                                    ).forEach { (m, label) ->
-                                        FilterChip(selected = detailerModel == m, onClick = { detailerModel = m }, label = { Text(label) })
-                                    }
-                                }
-                            }
-                            if (detailerEnabled && !detailerFaces && !detailerHands) {
-                                SheetNote("Neither pass is on, so runs skip the detailer.")
-                            }
-                            if (detailerEnabled) {
-                                OutlinedTextField(value = detailerPrompt, onValueChange = { detailerPrompt = it },
-                                    label = { Text("Detail prompt (blank reuses prompt)") }, modifier = Modifier.fillMaxWidth())
-                                OutlinedTextField(value = detailerNegative, onValueChange = { detailerNegative = it },
-                                    label = { Text("Detail negative prompt") }, modifier = Modifier.fillMaxWidth())
-                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    NumberField("Confidence", detailerConfidence.toString(), Modifier.weight(1f)) {
-                                        detailerConfidence = (it.toDoubleOrNull() ?: 0.3).coerceIn(0.05, 1.0)
-                                    }
-                                    NumberField("Denoise", detailerDenoise.toString(), Modifier.weight(1f)) {
-                                        detailerDenoise = (it.toDoubleOrNull() ?: 0.4).coerceIn(0.05, 1.0)
-                                    }
-                                    NumberField("Mask blur", detailerMaskBlur.toString(), Modifier.weight(1f)) {
-                                        detailerMaskBlur = (it.toIntOrNull() ?: 4).coerceIn(0, 64)
-                                    }
-                                }
-                            }
-                        }
                         if (st.backend != "invokeai" && st.upscalers.isNotEmpty()) {
                             SectionLabel("Upscale")
                             FilterChip(selected = hiresEnabled, onClick = { hiresEnabled = !hiresEnabled },
@@ -1162,33 +1123,40 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit, to
                                 SheetNote("Drawn at ${w}×${h}, then again at ${(w * f).toInt()}×${(h * f).toInt()}.")
                             }
                         }
+                        SectionLabel("Saved prompt styles")
+                        val builtInCount = st.templates.count { it.builtIn }
+                        val visible = if (showBuiltInTemplates) st.templates else st.templates.filter { !it.builtIn }
+                        if (visible.isEmpty()) {
+                            SheetNote(
+                                if (st.templates.isNotEmpty()) "No styles you made — built-in presets are hidden."
+                                else if (st.backend == "invokeai") "No style presets in InvokeAI yet."
+                                else "No styles saved in Automatic1111 yet; save one from its Styles menu.",
+                            )
+                        }
+                        visible.forEach { t ->
+                            Surface(
+                                onClick = { templateId = if (templateId == t.id) "" else t.id },
+                                shape = RoundedCornerShape(14.dp),
+                                color = if (templateId == t.id) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                                    Text(t.name, style = MaterialTheme.typography.titleSmall)
+                                    if (t.prompt.isNotBlank()) Text(t.prompt, style = MaterialTheme.typography.bodySmall,
+                                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                        }
+                        if (builtInCount > 0) {
+                            TextButton(onClick = { showBuiltInTemplates = !showBuiltInTemplates }) {
+                                Text(if (showBuiltInTemplates) "Hide built-in presets" else "Show built-in presets ($builtInCount)")
+                            }
+                        }
                     }
                 }
             }
         }
-    }
-
-    newCategoryFor?.let { forLora ->
-        var catName by remember { mutableStateOf("") }
-        AlertDialog(
-            onDismissRequest = { newCategoryFor = null },
-            title = { Text("New category") },
-            text = {
-                OutlinedTextField(
-                    value = catName,
-                    onValueChange = { catName = it.take(80) },
-                    placeholder = { Text("Characters, Styles, Poses…") },
-                    singleLine = true,
-                )
-            },
-            confirmButton = {
-                TextButton(enabled = catName.isNotBlank(), onClick = {
-                    newCategoryFor = null
-                    createLoraCategory(catName.trim(), forLora)
-                }) { Text("Make") }
-            },
-            dismissButton = { TextButton(onClick = { newCategoryFor = null }) { Text("Cancel") } },
-        )
     }
 
     editTarget?.let { name ->
@@ -1477,8 +1445,22 @@ private enum class SetupSheet(val label: String, val icon: androidx.compose.ui.g
     LORAS("LoRAs", Icons.Filled.Style),
     LOOK("Look", Icons.Filled.Face),
     WILDCARDS("Wildcards", Icons.Filled.Category),
-    STYLES("Styles", Icons.Filled.Palette),
+    // Its own sheet, as on the web's rail: it was the foot of Settings. Saved prompt
+    // styles went the other way, from a sheet of their own into Settings.
+    DETAILER("ADetailer", Icons.Filled.FaceRetouchingNatural),
     SETTINGS("Settings", Icons.Filled.Tune),
+}
+
+/** Each LoRA category's icon, the web's in Material's names. */
+private fun loraCategoryIcon(key: String): androidx.compose.ui.graphics.vector.ImageVector = when (key) {
+    "character" -> Icons.Filled.Person
+    "style" -> Icons.Filled.Brush
+    "concept" -> Icons.Filled.Lightbulb
+    "tools" -> Icons.Filled.Build
+    "poses" -> Icons.Filled.Accessibility
+    "background" -> Icons.Filled.Landscape
+    "etc" -> Icons.Filled.MoreHoriz
+    else -> Icons.Filled.Category
 }
 
 private fun TextRange.coerceTo(length: Int) = TextRange(start.coerceIn(0, length), end.coerceIn(0, length))
@@ -1660,8 +1642,10 @@ private fun EmptyCanvas(invoke: Boolean) {
 
 /**
  * The prompt, its suggestions, the LoRAs' trigger words, how many pictures, and the
- * button. The suggestions sit over the field they belong to, the way a keyboard's do,
- * so the list never pushes the field out from under the thumb that is typing.
+ * button. The suggestions are one strip over the field they belong to, the way a
+ * keyboard's are. They were a list of six rows there, which with the keyboard up was
+ * taller than the room left and pushed the field — and what was being typed — off the
+ * bottom of the screen.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -1778,37 +1762,42 @@ private fun categoryColor(c: PromptComplete.Completion): Color = when (c.kind) {
     }
 }
 
+/** The suggestions, as one row that scrolls sideways: never taller than a chip, so
+    the field under it stays where the keyboard left it. */
 @Composable
 private fun CompletionList(
-    items: List<PromptComplete.Completion>,
+    suggestions: List<PromptComplete.Completion>,
     onAccept: (PromptComplete.Completion) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    Surface(
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerHighest,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Column(Modifier.padding(vertical = 4.dp)) {
-            items.take(6).forEach { c ->
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .clickable { onAccept(c) }
-                        .padding(horizontal = 14.dp, vertical = 9.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+    Row(Modifier.fillMaxWidth().height(40.dp), verticalAlignment = Alignment.CenterVertically) {
+        LazyRow(
+            Modifier.weight(1f),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            contentPadding = PaddingValues(end = 6.dp),
+        ) {
+            items(suggestions.distinctBy { it.kind.name + it.insert }.take(12), key = { it.kind.name + it.insert }) { c ->
+                Surface(
+                    onClick = { onAccept(c) },
+                    shape = RoundedCornerShape(20.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
                 ) {
-                    Box(Modifier.size(9.dp).clip(RoundedCornerShape(if (c.kind == PromptComplete.Kind.TAG) 5.dp else 2.dp)).background(categoryColor(c)))
-                    Text(c.label, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f))
-                    if (c.detail.isNotEmpty()) Text(c.detail, style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
-                    val n = PromptComplete.formatCount(c.count)
-                    if (n.isNotEmpty()) Text(n, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Row(
+                        Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Box(Modifier.size(8.dp).clip(RoundedCornerShape(if (c.kind == PromptComplete.Kind.TAG) 4.dp else 2.dp)).background(categoryColor(c)))
+                        Text(c.label, style = MaterialTheme.typography.bodyMedium, maxLines = 1,
+                            modifier = Modifier.widthIn(max = 220.dp), overflow = TextOverflow.Ellipsis)
+                        val n = PromptComplete.formatCount(c.count)
+                        if (n.isNotEmpty()) Text(n, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                 }
             }
-            TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End).padding(end = 4.dp)) { Text("Hide") }
+        }
+        IconButton(onClick = onDismiss, modifier = Modifier.size(36.dp)) {
+            Icon(Icons.Filled.Close, contentDescription = "Hide suggestions", Modifier.size(18.dp))
         }
     }
 }
@@ -1847,5 +1836,42 @@ private fun ManageNote(problem: String) {
             color = MaterialTheme.colorScheme.onSecondaryContainer,
             modifier = Modifier.padding(12.dp),
         )
+    }
+}
+
+/**
+ * The size, drawn: a frame to scale against the largest SDXL side (1280), so two
+ * portrait sizes look like one shape at two sizes rather than two pairs of numbers.
+ * The web's is size-preview.ts.
+ */
+@Composable
+private fun SizePreview(width: Int, height: Int) {
+    val box = 96f
+    val scale = box / maxOf(1280, width, height)
+    var a = width
+    var b = height
+    while (b != 0) { val t = a % b; a = b; b = t }
+    val g = maxOf(a, 1)
+    val ratio = if (width / g <= 32 && height / g <= 32) "${width / g}:${height / g}"
+        else if (width >= height) "%.2f:1".format(width.toFloat() / height) else "1:%.2f".format(height.toFloat() / width)
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+        Box(Modifier.size(box.dp), contentAlignment = Alignment.Center) {
+            Box(
+                Modifier
+                    .size(width = (width * scale).dp, height = (height * scale).dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(MaterialTheme.colorScheme.primaryContainer)
+                    .border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(4.dp)),
+            )
+        }
+        Column {
+            Text("$width × $height", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "$ratio · ${"%.1f".format(width * height / 1_000_000.0)} MP · " +
+                    if (width == height) "square" else if (width > height) "landscape" else "portrait",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }

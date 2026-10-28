@@ -968,7 +968,17 @@ data class GenModelMetaPatch(
 
 /** One gallery board. Board id "none" is InvokeAI's uncategorized pile. */
 @Serializable
-data class GalleryBoard(val id: String, val name: String, val count: Int = 0)
+data class GalleryBoard(
+    val id: String,
+    val name: String,
+    val count: Int = 0,
+    /** The picture its card shows, by gallery name: one chosen, or the newest. */
+    val cover: String = "",
+)
+
+/** A board's cover, by one of its pictures' gallery names; "" goes back to its newest. */
+@Serializable
+data class GalleryBoardCover(val cover: String)
 
 @Serializable
 data class GalleryBoardsResponse(val boards: List<GalleryBoard> = emptyList())
@@ -1271,22 +1281,35 @@ data class GenLora(
     val weight: Double = 0.0,
     /** Added to the negative prompt while the LoRA is on. */
     val negative: String = "",
-    /** The studio's own category it is sorted into; 0 for none. */
-    val category: Long = 0,
+    /** The studio's category it is filed under, one of [LoraCategories]; "" for none. */
+    val categoryKey: String = "",
 )
 
-/** One of the studio's LoRA categories, kept by the server (api/lora_categories.go). */
-@Serializable
-data class LoraCategory(val id: Long, val name: String, val count: Int = 0)
+/**
+ * The studio's LoRA categories: a fixed list, the web's lora-categories.ts in the same
+ * order. The server keeps which LoRA is under which (api/lora_categories.go).
+ */
+object LoraCategories {
+    val all: List<Pair<String, String>> = listOf(
+        "character" to "Character",
+        "style" to "Style",
+        "concept" to "Concept",
+        "tools" to "Tools",
+        "poses" to "Poses",
+        "background" to "Background",
+        "etc" to "ETC",
+    )
 
-@Serializable
-data class LoraCategoryName(val name: String)
+    /** A key the server sent, if it is one of the list: an unknown one reads as unsorted. */
+    fun of(lora: GenLora): String = lora.categoryKey.takeIf { k -> all.any { it.first == k } } ?: ""
 
-@Serializable
-data class LoraCategoryAssign(val category: Long, val loras: List<String>)
+    fun label(key: String): String = all.firstOrNull { it.first == key }?.second ?: "Unsorted"
+}
 
+/** Files LoRAs under a category, or under none with "". kotlinx leaves a default out
+    of the body, so the category is always passed. */
 @Serializable
-data class LoraCategoryList(val categories: List<LoraCategory> = emptyList())
+data class LoraCategoryAssign(val category: String, val loras: List<String>)
 
 @Serializable
 data class GenVae(val key: String, val name: String, val base: String = "")
@@ -1423,7 +1446,6 @@ data class ImageGenStatus(
     val upscalers: List<String> = emptyList(),
     val latentUpscalers: List<String> = emptyList(),
     /** The studio's LoRA categories; each LoRA's `category` names one. */
-    val loraCategories: List<LoraCategory> = emptyList(),
     /** The Civitai browser works against this generator; both backends say yes. */
     val civitai: Boolean = false,
     /** Models can be installed, edited, re-covered and deleted from here: always on

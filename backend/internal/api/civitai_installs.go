@@ -240,6 +240,14 @@ func (s *Server) civitaiApplyToModel(ctx context.Context, base, key string, mode
 		if err := s.civitaiFillDefaults(ctx, base, key, civitaiSuggestionFor(m, link.VersionID)); err != nil {
 			s.log.Warn("civitai: recommended settings", "model", key, "err", err)
 		}
+		// Civitai files every model under a category tag, and the studio's list is
+		// those: a fresh LoRA lands already sorted, by its record key until it is
+		// picked by name (overlayLoraCategories reads both).
+		if cat := civitaiLoraCategory(m.Type, m.Tags); cat != "" {
+			if err := s.db.FileLoraIfUnsorted(ctx, key, cat); err != nil {
+				s.log.Warn("civitai: file under a category", "model", key, "err", err)
+			}
+		}
 	}
 	return link, nil
 }

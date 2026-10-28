@@ -4,6 +4,7 @@ import { iconStyles } from "../theme.js";
 import { api } from "../api.js";
 import { loadImage } from "../cutout.js";
 import { dragRect, findPanels, scaleRect, type Rect } from "../comic-panels.js";
+import { SURENESS, keptPeople, outlineGrow, outlineOnPage, personRect } from "../person-cut.js";
 import { loraStyles } from "./lora-styles.js";
 
 /**
@@ -13,7 +14,9 @@ import { loraStyles } from "./lora-styles.js";
  * when what was wanted is the art. So every page is cut along its gutters first
  * (comic-panels.ts) and each panel is a picture of its own; a page that doesn't
  * split, a cover or a pin-up, stays whole. For a LoRA of one character, "Cut out"
- * turns a click on a panel into a box drawn round her, and the box is what's kept.
+ * turns a click on a panel into a box drawn round her, and the box is what's kept;
+ * "Find people" has the trainer find everyone in the panels instead (person-cut.ts),
+ * and keeps each one alone on white or black.
  *
  * Everything runs here, on pages the browser already has from this origin: the
  * server sees only the cut pictures that are kept, uploaded into the set as the
@@ -38,8 +41,12 @@ interface Cut {
   rect: Rect;
   thumb: string;
   keep: boolean;
-  kind: "panel" | "page" | "crop";
+  kind: "panel" | "page" | "crop" | "person";
+  /** A found person's outline on the page; outside it is the plain background. */
+  outline?: [number, number][];
 }
+
+type Backdrop = "white" | "black";
 
 interface Cropping {
   cut: Cut;
@@ -63,6 +70,10 @@ export class OppaiLoraComic extends LitElement {
   /** The training set to add to; 0 makes (or joins) the one named setName. */
   @property({ type: Number }) setId = 0;
   @property() setName = "";
+  /** The trainer can find people (it lists "detect-people"). */
+  @property({ type: Boolean }) canDetect = false;
+  /** A trainer is set up at all, so a missing feature means updating it. */
+  @property({ type: Boolean }) trainerSet = false;
 
   @state() private from: From = "library";
   @state() private query = "";
@@ -77,6 +88,9 @@ export class OppaiLoraComic extends LitElement {
   @state() private drag: { x0: number; y0: number; x1: number; y1: number } | null = null;
   @state() private progress: { done: number; total: number; failed: number } | null = null;
   @state() private error = "";
+  @state() private finding: { done: number; total: number; found: number } | null = null;
+  @state() private backdrop: Backdrop = "white";
+  @state() private sureness = "normal";
 
   // Bumped whenever the comic or the split changes, so a read still going for the
   // last one stops adding its pieces to this one's.
@@ -120,6 +134,10 @@ export class OppaiLoraComic extends LitElement {
       .box { position: absolute; border: 2px solid var(--oppai-primary); background: color-mix(in srgb, var(--oppai-primary) 18%, transparent); pointer-events: none; }
       .box.live { border-style: dashed; }
       .crop-bar { display: flex; gap: 10px; align-items: center; color: #fff; font-size: 13px; flex-wrap: wrap; justify-content: center; }
+      .small-select { width: auto; min-height: 30px; padding: 4px 10px; font-size: 12px; border-radius: 999px; }
+      .swatch { width: 12px; height: 12px; border-radius: 50%; border: 1px solid var(--oppai-border-strong); display: inline-block; }
+      .swatch.white { background: #fff; }
+      .swatch.black { background: #000; }
       @media (max-width: 600px) { .footer { margin: 14px -14px -14px; padding: 10px 14px; } }
     `,
   ];
@@ -219,6 +237,11 @@ export class OppaiLoraComic extends LitElement {
     void this.readPages();
   }
 
+  /** A found person is kept or dropped; Cut out does not apply to one. */
+  private dropOrKeep(cut: Cut) {
+    this.cuts = this.cuts.map((c) => (c.key === cut.key ? { ...c, keep: !c.keep } : c));
+  }
+
   private toggle(cut: Cut) {
     if (this.cutOut) {
       void this.startCrop(cut);
@@ -295,6 +318,67 @@ export class OppaiLoraComic extends LitElement {
     }
   }
 
+  // ── finding the people ────────────────────────────────────────────────────
+
+  /**
+   * Sends each kept panel to the trainer and puts the people it finds in after it,
+   * each cut out alone; a panel with anyone in it is dropped, as a hand cut drops its
+   * panel. One at a time: the trainer runs one detection at a time anyway.
+   */
+  private async findPeople() {
+    const comic = this.comic;
+    if (!comic || this.finding || this.reading) return;
+    const panels = this.cuts.filter((c) => c.keep && (c.kind === "panel" || c.kind === "page"));
+    if (!panels.length) return;
+    const conf = SURENESS.find((s) => s.id === this.sureness)?.conf ?? 0.3;
+    const gen = this.generation;
+    this.error = "";
+    this.finding = { done: 0, total: panels.length, found: 0 };
+    const pages = new Map<number, HTMLImageElement>();
+    let lastError = "";
+    try {
+      for (const panel of panels) {
+        try {
+          let img = pages.get(panel.page);
+          if (!img) {
+            img = await loadImage(comic.pages[panel.page]);
+            pages.set(panel.page, img);
+          }
+          const res = await api.trainDetect(await cropBlob(img, panel.rect), conf);
+          if (gen !== this.generation) return;
+          const people = keptPeople(res.people, conf).map((p, n): Cut => {
+            const rect = personRect(p.box, panel.rect);
+            const outline = outlineOnPage(p.outline, panel.rect);
+            return {
+              key: `${panel.key}:p${n}`, page: panel.page, rect, outline, keep: true, kind: "person",
+              thumb: personCanvas(img!, rect, outline, null, THUMB_SIDE).toDataURL("image/png"),
+            };
+          });
+          if (people.length) {
+            const at = this.cuts.findIndex((x) => x.key === panel.key);
+            const next = this.cuts.filter((x) => !x.key.startsWith(`${panel.key}:p`))
+              .map((x) => (x.key === panel.key ? { ...x, keep: false } : x));
+            next.splice(at + 1, 0, ...people);
+            this.cuts = next;
+          }
+          this.finding = { ...this.finding!, found: this.finding!.found + people.length };
+        } catch (e) {
+          lastError = (e as Error).message;
+          // The trainer saying it can't is the same answer for every panel.
+          if (/update|trainer/i.test(lastError) && !this.finding!.found) throw e;
+        }
+        this.finding = { ...this.finding!, done: this.finding!.done + 1 };
+      }
+      if (!this.finding!.found) {
+        this.error = lastError ? `No one was found (${lastError}).` : "No one was found — try “Everyone it can”, or cut her out by hand.";
+      }
+    } catch (e) {
+      this.error = (e as Error).message;
+    } finally {
+      if (gen === this.generation) this.finding = null;
+    }
+  }
+
   // ── keeping them ──────────────────────────────────────────────────────────
 
   private async target(): Promise<number> {
@@ -331,7 +415,9 @@ export class OppaiLoraComic extends LitElement {
           for (const [n, c] of pieces.entries()) {
             try {
               if (!img) throw new Error(lastError || "page didn't load");
-              const blob = await cropBlob(img, c.rect);
+              const blob = c.kind === "person" && c.outline?.length
+                ? await canvasBlob(personCanvas(img, c.rect, c.outline, BACKDROPS[this.backdrop], 0))
+                : await cropBlob(img, c.rect);
               const file = new File([blob], `page${String(page + 1).padStart(3, "0")}-${n + 1}.png`, { type: "image/png" });
               await api.trainSetUpload(set, file);
               this.progress = { ...this.progress!, done: this.progress!.done + 1 };
@@ -394,6 +480,7 @@ export class OppaiLoraComic extends LitElement {
     const comic = this.comic!;
     const kept = this.cuts.filter((c) => c.keep).length;
     const crops = this.cuts.filter((c) => c.kind === "crop").length;
+    const people = this.cuts.filter((c) => c.kind === "person").length;
     return html`
       <div class="head">
         <button class="btn small ghost" @click=${() => this.close()}><span class="material-symbols-rounded">arrow_back</span> Comics</button>
@@ -411,23 +498,44 @@ export class OppaiLoraComic extends LitElement {
           @click=${() => (this.cutOut = !this.cutOut)}>
           <span class="material-symbols-rounded">person</span> Cut out${this.cutOut ? ": on" : ""}
         </button>
-        <span class="count">${kept} of ${this.cuts.length} kept${crops ? ` · ${crops} cut out` : ""}</span>
+        ${this.canDetect
+          ? html`<button class="btn small" ?disabled=${!!this.finding || !!this.reading}
+              title="Have the trainer find every person in the kept panels and cut each out alone"
+              @click=${() => this.findPeople()}>
+              <span class="material-symbols-rounded">person_search</span> ${this.finding
+                ? `Finding… ${this.finding.done}/${this.finding.total}` : "Find people"}
+            </button>
+            <select class="small-select" aria-label="How sure" .value=${this.sureness}
+              @change=${(e: Event) => (this.sureness = (e.target as HTMLSelectElement).value)}>
+              ${SURENESS.map((s) => html`<option value=${s.id} ?selected=${s.id === this.sureness}>${s.label}</option>`)}
+            </select>`
+          : nothing}
+        ${people || this.canDetect ? html`<div class="seg small" role="group" aria-label="Background of a person cut out">
+          ${(["white", "black"] as Backdrop[]).map((b) => html`<button class=${this.backdrop === b ? "on" : ""}
+            aria-pressed=${this.backdrop === b ? "true" : "false"} @click=${() => (this.backdrop = b)}>
+            <span class="swatch ${b}"></span> ${b === "white" ? "On white" : "On black"}</button>`)}
+        </div>` : nothing}
+        <span class="count">${kept} of ${this.cuts.length} kept${crops ? ` · ${crops} cut out` : ""}${people ? ` · ${people} found` : ""}</span>
         <button class="btn small ghost" @click=${() => (this.cuts = this.cuts.map((c) => ({ ...c, keep: true })))}>Keep all</button>
         <button class="btn small ghost" @click=${() => (this.cuts = this.cuts.map((c) => ({ ...c, keep: false })))}>Keep none</button>
       </div>
       <div class="note">${this.cutOut
         ? "Click a panel, then drag a box round her — as many boxes as there are good ones. What you cut out is kept and the panel it came from is dropped."
-        : "Click a picture to drop it: text-heavy panels, someone else, a close-up of nothing. For one character, turn on Cut out."}</div>
+        : this.canDetect
+          ? "Click a picture to drop it. Find people cuts everyone in the kept panels out on their own, on white or black — then drop the ones who aren't her. Training fits each to its size."
+          : html`Click a picture to drop it: text-heavy panels, someone else, a close-up of nothing. For one character, turn on Cut out.${
+            this.trainerSet ? " Update the oppailib-trainer container and it can find the people for you." : ""}`}</div>
       ${this.reading
         ? html`<div class="toolbar"><span class="what">Reading page ${this.reading.done + 1} of ${this.reading.total}…</span>
             <div class="bar" style="flex:1;"><div style="width:${(this.reading.done / this.reading.total) * 100}%"></div></div></div>`
         : nothing}
       <div class="picks ${this.cutOut ? "cutting" : ""}" style="margin-top:10px;">
         ${this.cuts.map((c) => html`<button class="pick ${c.keep ? "on" : "off"}"
-            title=${`Page ${c.page + 1} · ${c.rect.w}×${c.rect.h}`} @click=${() => this.toggle(c)}>
-          <img src=${c.thumb} alt="" loading="lazy" />
+            title=${`Page ${c.page + 1} · ${c.rect.w}×${c.rect.h}`} @click=${() => (c.kind === "person" ? this.dropOrKeep(c) : this.toggle(c))}>
+          <img src=${c.thumb} alt="" loading="lazy" style=${c.kind === "person" ? `background:${BACKDROPS[this.backdrop]}` : ""} />
           <span class="mark"><span class="material-symbols-rounded">${c.keep ? "check" : "close"}</span></span>
-          ${c.kind === "crop" ? html`<span class="badge">cut out</span>`
+          ${c.kind === "person" ? html`<span class="badge">person</span>`
+            : c.kind === "crop" ? html`<span class="badge">cut out</span>`
             : Math.min(c.rect.w, c.rect.h) < SMALL_SIDE ? html`<span class="badge">small</span>` : nothing}
         </button>`)}
       </div>
@@ -501,6 +609,56 @@ function drawRect(img: HTMLImageElement, r: Rect, side: number, type = "image/jp
   canvas.height = Math.max(1, Math.round(r.h * k));
   canvas.getContext("2d")!.drawImage(img, r.x, r.y, r.w, r.h, 0, 0, canvas.width, canvas.height);
   return canvas.toDataURL(type, 0.85);
+}
+
+/** The plain colours a person is laid on. */
+const BACKDROPS: Record<Backdrop, string> = { white: "#ffffff", black: "#000000" };
+
+/**
+ * A found person alone: her box out of the page, with everything outside her outline
+ * on the backdrop (transparent with none, for a tile whose colour CSS sets). The
+ * outline is grown a little first (outlineGrow) and its edge softened by a pixel, so
+ * the ink line round her stays hers. `side` caps the larger side; 0 is full size.
+ */
+function personCanvas(img: HTMLImageElement, r: Rect, outline: [number, number][], backdrop: string | null, side: number): HTMLCanvasElement {
+  const k = side > 0 ? Math.min(1, side / Math.max(r.w, r.h)) : 1;
+  const w = Math.max(1, Math.round(r.w * k)), h = Math.max(1, Math.round(r.h * k));
+  const figure = document.createElement("canvas");
+  figure.width = w;
+  figure.height = h;
+  const fctx = figure.getContext("2d")!;
+  fctx.drawImage(img, r.x, r.y, r.w, r.h, 0, 0, w, h);
+  if (outline.length > 2) {
+    const path = new Path2D();
+    outline.forEach(([x, y], i) => (i ? path.lineTo : path.moveTo).call(path, (x - r.x) * k, (y - r.y) * k));
+    path.closePath();
+    const mask = document.createElement("canvas");
+    mask.width = w;
+    mask.height = h;
+    const mctx = mask.getContext("2d")!;
+    mctx.filter = "blur(1px)";
+    mctx.fillStyle = mctx.strokeStyle = "#000";
+    mctx.lineJoin = "round";
+    mctx.lineWidth = outlineGrow(r) * 2 * k;
+    mctx.fill(path);
+    mctx.stroke(path);
+    fctx.globalCompositeOperation = "destination-in";
+    fctx.drawImage(mask, 0, 0);
+  }
+  if (!backdrop) return figure;
+  const out = document.createElement("canvas");
+  out.width = w;
+  out.height = h;
+  const octx = out.getContext("2d")!;
+  octx.fillStyle = backdrop;
+  octx.fillRect(0, 0, w, h);
+  octx.drawImage(figure, 0, 0);
+  return out;
+}
+
+function canvasBlob(canvas: HTMLCanvasElement): Promise<Blob> {
+  return new Promise((resolve, reject) =>
+    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("couldn't encode the picture"))), "image/png"));
 }
 
 /** Part of a picture at full size, as the PNG that is uploaded. */

@@ -28,6 +28,11 @@ in place; without it, OppaiLib sends the checkpoint the first time it is trained
 against (from Automatic1111's models folder, which then has to be mounted into
 OppaiLib), and the last few are kept in `/data/bases`.
 
+The image also finds the people in a picture for the comic gatherer's **Find people**
+([detect.py](detect.py)): ADetailer's own `person_yolov8m-seg` model, baked in so it
+works offline, run on the GPU between trainings and on the CPU while one runs. A
+trainer from before it (version 2) shows no Find people button until it is updated.
+
 ## On Unraid
 
 Unraid no longer takes a template by URL, so the container is added by hand. It is

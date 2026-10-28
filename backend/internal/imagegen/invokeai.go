@@ -403,6 +403,7 @@ func (c *Client) invokeBoards(ctx context.Context, base string) ([]Board, error)
 		BoardID    string `json:"board_id"`
 		BoardName  string `json:"board_name"`
 		ImageCount int    `json:"image_count"`
+		Cover      string `json:"cover_image_name"`
 	}
 	if err := c.getJSON(ctx, base+"/api/v1/boards/?all=true", &raw); err != nil {
 		return nil, err
@@ -414,9 +415,18 @@ func (c *Client) invokeBoards(ctx context.Context, base string) ([]Board, error)
 		boards[0].Count = len(names)
 	}
 	for _, b := range raw {
-		boards = append(boards, Board{ID: b.BoardID, Name: b.BoardName, Count: b.ImageCount})
+		boards = append(boards, Board{ID: b.BoardID, Name: b.BoardName, Count: b.ImageCount, Cover: b.Cover})
 	}
 	return boards, nil
+}
+
+// invokeSetBoardCover makes one of a board's images its cover, as InvokeAI's own
+// "set as cover" does.
+func (c *Client) invokeSetBoardCover(ctx context.Context, base, boardID, imageName string) error {
+	if boardID == "" || boardID == "none" {
+		return fmt.Errorf("that board has no cover to set")
+	}
+	return c.patchJSON(ctx, base+"/api/v1/boards/"+url.PathEscape(boardID), map[string]any{"cover_image_name": imageName}, nil)
 }
 
 func (c *Client) invokeCreateBoard(ctx context.Context, base, name string) (*Board, error) {

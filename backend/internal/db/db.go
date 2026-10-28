@@ -128,6 +128,12 @@ func Open(path string) (*DB, error) {
 	if err := ensureColumn(sqldb, "civitai_installs", "replace_key", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return nil, err
 	}
+	if err := ensureColumn(sqldb, "gen_folders", "cover_id", "INTEGER"); err != nil {
+		return nil, err
+	}
+	if err := migrateLoraFolders(sqldb); err != nil {
+		return nil, fmt.Errorf("move lora categories: %w", err)
+	}
 	return &DB{sql: sqldb, wal: wal}, nil
 }
 

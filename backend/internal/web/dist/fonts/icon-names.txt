@@ -68,6 +68,7 @@ content_copy
 contrast
 cooking
 create_new_folder
+crop
 crop_square
 dark_mode
 data_object
@@ -102,6 +103,7 @@ fit_screen
 fit_width
 flag
 folder
+folder_special
 folder_zip
 forum
 front_hand
@@ -120,6 +122,7 @@ home
 hourglass_empty
 hourglass_top
 image
+inbox
 info
 ink_eraser
 input
@@ -135,6 +138,7 @@ launch
 library_add
 light
 light_mode
+lightbulb
 link
 link_off
 list
@@ -153,6 +157,7 @@ model_training
 mood
 mop
 more
+more_horiz
 mouse
 movie
 new_releases
@@ -167,6 +172,7 @@ pause_circle
 pending
 person
 person_add
+person_search
 pest_control
 photo_camera
 photo_library

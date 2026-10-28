@@ -17,6 +17,8 @@ training runs here, in a companion container, and OppaiLib drives it over HTTP:
     GET    /jobs/<id>/output       the finished .safetensors
     GET    /jobs/<id>/samples/<f>  a sample picture rendered while training
     DELETE /jobs/<id>              forget it, files and all
+    POST   /detect?conf=           the people in a picture (its bytes): each one's box
+                                   and outline, for cutting out of a comic (detect.py)
 
 One job trains at a time — they share one GPU — and the rest wait in order. A job's
 state is kept in a file beside its data, so a restart of this container does not
@@ -50,11 +52,27 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-VERSION = "2"
+import detect
+
+VERSION = "3"
 # What this trainer can do beyond version 1's protocol, for OppaiLib to check before
 # it relies on one: "repeats-per-file" is a picture shown more or less often than the
-# rest, which is how a tag the pictures have too much of is played down.
+# rest, which is how a tag the pictures have too much of is played down;
+# "detect-people" (added at /health when the detector is there) is POST /detect.
 FEATURES = ["repeats-per-file"]
+# The largest picture /detect reads: a comic page is a few megabytes.
+DETECT_MAX_BYTES = 40 << 20
+_can_detect: bool | None = None
+
+
+def features() -> list[str]:
+    """FEATURES, and "detect-people" when ultralytics and a person model are here.
+    Asked once: importing ultralytics takes seconds, and neither changes while the
+    container runs."""
+    global _can_detect
+    if _can_detect is None:
+        _can_detect = detect.available(MODELS)
+    return FEATURES + (["detect-people"] if _can_detect else [])
 
 DATA = os.environ.get("TRAINER_DATA", "/data")
 MODELS = os.environ.get("TRAINER_MODELS", "/models")
@@ -794,7 +812,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.fail(401, "wrong trainer token")
             jobs = all_jobs()
             return self.send_json(200, {
-                "ok": True, "version": VERSION, "features": FEATURES, "sdScripts": SD_SCRIPTS_VERSION,
+                "ok": True, "version": VERSION, "features": features(), "sdScripts": SD_SCRIPTS_VERSION,
                 "busy": any(j["state"] == "running" for j in jobs),
                 "queued": sum(1 for j in jobs if j["state"] == "queued"),
                 "modelsMounted": os.path.isdir(MODELS) and bool(os.listdir(MODELS)),
@@ -888,9 +906,26 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json(200, {"present": True, "where": "cache"})
 
     def do_POST(self):
-        parts, _ = self.route()
+        parts, q = self.route()
         if not self.authorized():
             return self.fail(401, "wrong trainer token")
+        if parts == ["detect"]:
+            length = int(self.headers.get("Content-Length", "0") or 0)
+            if length <= 0 or length > DETECT_MAX_BYTES:
+                return self.fail(400, "send the picture, up to 40 MB")
+            if "detect-people" not in features():
+                return self.fail(501, "this trainer has no person detector — update the oppailib-trainer container")
+            data = _Limited(self.rfile, length).read()
+            try:
+                conf = float(q.get("conf", "0.35"))
+            except ValueError:
+                conf = 0.35
+            busy = any(j["state"] == "running" for j in all_jobs())
+            try:
+                found = detect.people(data, MODELS, conf=conf, busy=busy)
+            except Exception as e:  # a picture PIL can't open, or the model failing
+                return self.fail(400, f"couldn't look for people in that picture: {e}")
+            return self.send_json(200, found)
         if parts == ["jobs"]:
             length = int(self.headers.get("Content-Length", "0") or 0)
             if length <= 0 or length > 1 << 20:

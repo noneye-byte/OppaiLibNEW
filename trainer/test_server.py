@@ -275,6 +275,37 @@ class ApiTest(unittest.TestCase):
     def test_a_job_with_a_bad_name_is_refused(self):
         self.assertEqual(self.call("POST", "/jobs", json.dumps({"name": "../x", "base": {"key": "k"}}).encode())[0], 400)
 
+    def test_without_a_person_detector_detect_says_to_update_and_health_does_not_offer_it(self):
+        server._can_detect = False
+        try:
+            self.assertNotIn("detect-people", json.loads(self.call("GET", "/health")[1])["features"])
+            code, body = self.call("POST", "/detect", b"not a picture")
+            self.assertEqual(code, 501, body)
+            self.assertIn("update", json.loads(body)["error"])
+        finally:
+            server._can_detect = None
+
+    def test_detect_hands_back_what_the_detector_found_and_runs_on_the_cpu_while_a_job_trains(self):
+        seen = {}
+
+        def people(data, models_dir, conf=0.35, busy=False):
+            seen.update(data=data, conf=conf, busy=busy)
+            return {"width": 10, "height": 20, "model": "fake.pt",
+                    "people": [{"box": [1, 2, 8, 18], "score": 0.9, "outline": [[1, 2], [8, 2], [8, 18]]}]}
+
+        real, server.detect.people = server.detect.people, people
+        server._can_detect = True
+        try:
+            self.assertIn("detect-people", json.loads(self.call("GET", "/health")[1])["features"])
+            code, body = self.call("POST", "/detect?conf=0.5", b"picture")
+            self.assertEqual(code, 200, body)
+            self.assertEqual(json.loads(body)["people"][0]["box"], [1, 2, 8, 18])
+            self.assertEqual((seen["data"], seen["conf"], seen["busy"]), (b"picture", 0.5, False))
+            self.assertEqual(self.call("POST", "/detect", b"")[0], 400)
+            self.assertEqual(self.call("POST", "/detect", b"x", token="")[0], 401)
+        finally:
+            server.detect.people, server._can_detect = real, None
+
 
 if __name__ == "__main__":
     unittest.main()

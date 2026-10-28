@@ -320,11 +320,19 @@ func (s *Server) ownGalleryBoards(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	newestAll, newestUnsorted, err := s.db.GenNewest(ctx)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	// Unsorted first: it is where a run lands when no folder is open, and the panel
 	// opens on the first board it is given.
-	boards := []imagegen.Board{{ID: "none", Name: "Unsorted", Count: unsorted}, {ID: genGalleryAll, Name: "All pictures", Count: all}}
+	boards := []imagegen.Board{
+		{ID: "none", Name: "Unsorted", Count: unsorted, Cover: genImageName(newestUnsorted)},
+		{ID: genGalleryAll, Name: "All pictures", Count: all, Cover: genImageName(newestAll)},
+	}
 	for _, f := range folders {
-		boards = append(boards, imagegen.Board{ID: strconv.FormatInt(f.ID, 10), Name: f.Name, Count: f.Count})
+		boards = append(boards, imagegen.Board{ID: strconv.FormatInt(f.ID, 10), Name: f.Name, Count: f.Count, Cover: genImageName(f.CoverID)})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"boards": boards})
 }
@@ -363,35 +371,86 @@ func (s *Server) ownGalleryDeleteFolder(w http.ResponseWriter, r *http.Request, 
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 }
 
-// handleGalleryRenameBoard renames a folder. InvokeAI's boards are renamed in
-// InvokeAI; only this gallery's folders can be from here.
+// genImageName is a kept picture's name in the gallery endpoints, "" for none.
+func genImageName(id int64) string {
+	if id <= 0 {
+		return ""
+	}
+	return strconv.FormatInt(id, 10)
+}
+
+type galleryBoardChangeReq struct {
+	Name *string `json:"name"`
+	// Cover is one of the board's pictures, by its gallery name; "" goes back to
+	// showing the newest (this gallery) or clears it (InvokeAI).
+	Cover *string `json:"cover"`
+}
+
+// handleGalleryRenameBoard renames a folder or sets its cover. InvokeAI's boards
+// are renamed in InvokeAI, but take a cover from here as they do from its own UI.
 func (s *Server) handleGalleryRenameBoard(w http.ResponseWriter, r *http.Request) {
 	base, ok := s.galleryBase(w)
 	if !ok {
 		return
 	}
+	var req galleryBoardChangeReq
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&req); err != nil || (req.Name == nil && req.Cover == nil) {
+		writeErr(w, http.StatusBadRequest, "a folder name or a cover is required")
+		return
+	}
 	if !s.ownGallery(r.Context(), base) {
-		writeErr(w, http.StatusConflict, "InvokeAI's boards are renamed in InvokeAI")
+		if req.Name != nil {
+			writeErr(w, http.StatusConflict, "InvokeAI's boards are renamed in InvokeAI")
+			return
+		}
+		if err := s.imagegen.SetBoardCover(r.Context(), base, r.PathValue("id"), *req.Cover); err != nil {
+			writeErr(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 		return
 	}
 	n, ok := s.ownGalleryFolderParam(w, r, r.PathValue("id"))
 	if !ok {
 		return
 	}
-	var req galleryCreateBoardReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Name) == "" {
+	if req.Cover != nil {
+		id := int64(0)
+		if *req.Cover != "" {
+			v, err := strconv.ParseInt(*req.Cover, 10, 64)
+			if err != nil || v <= 0 {
+				writeErr(w, http.StatusBadRequest, "no such picture")
+				return
+			}
+			id = v
+		}
+		switch err := s.db.SetGenFolderCover(r.Context(), n, id); {
+		case errors.Is(err, db.ErrNotInFolder):
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		case err != nil:
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if req.Name == nil {
+			writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+			return
+		}
+	}
+	name := *req.Name
+	if strings.TrimSpace(name) == "" {
 		writeErr(w, http.StatusBadRequest, "a folder name is required")
 		return
 	}
-	if len([]rune(req.Name)) > 120 {
+	if len([]rune(name)) > 120 {
 		writeErr(w, http.StatusBadRequest, "that name is too long")
 		return
 	}
-	if err := s.db.RenameGenFolder(r.Context(), n, req.Name); err != nil {
+	if err := s.db.RenameGenFolder(r.Context(), n, name); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, imagegen.Board{ID: strconv.FormatInt(n, 10), Name: strings.TrimSpace(req.Name)})
+	writeJSON(w, http.StatusOK, imagegen.Board{ID: strconv.FormatInt(n, 10), Name: strings.TrimSpace(name)})
 }
 
 func (s *Server) ownGalleryImages(w http.ResponseWriter, r *http.Request, board, order string, offset, limit int) {

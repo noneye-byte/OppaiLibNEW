@@ -177,9 +177,8 @@ func (s *Server) handleImageGenStatus(w http.ResponseWriter, r *http.Request) {
 		s.civitaiTriggerWords(ctx, loras)
 	}
 	s.overlayStatusDefaults(ctx, models, loras)
-	categories := s.overlayLoraCategories(ctx, loras)
-	out := map[string]any{"enabled": true, "reachable": true, "backend": backend, "models": models, "loras": loras,
-		"loraCategories": categories}
+	s.overlayLoraCategories(ctx, loras)
+	out := map[string]any{"enabled": true, "reachable": true, "backend": backend, "models": models, "loras": loras}
 	if loraErr != nil {
 		out["loraError"] = loraErr.Error()
 	}

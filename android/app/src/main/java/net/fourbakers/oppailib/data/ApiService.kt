@@ -427,20 +427,11 @@ interface ApiService {
     suspend fun deleteModel(@Query("key") key: String)
 
     // ── LoRA categories ──────────────────────────────────────────────────
-    // The studio's own; the status carries them, these change them.
+    // A fixed list (Models.kt LoraCategories); the status says which LoRA is in which.
 
-    @POST("api/imagegen/lora-categories")
-    suspend fun createLoraCategory(@Body body: LoraCategoryName): LoraCategory
-
-    @PATCH("api/imagegen/lora-categories/{id}")
-    suspend fun renameLoraCategory(@Path("id") id: Long, @Body body: LoraCategoryName): LoraCategory
-
-    @DELETE("api/imagegen/lora-categories/{id}")
-    suspend fun deleteLoraCategory(@Path("id") id: Long)
-
-    /** Puts LoRAs in a category, or in none with 0. */
+    /** Files LoRAs under a category, or under none with "". */
     @POST("api/imagegen/lora-categories/assign")
-    suspend fun assignLoraCategory(@Body body: LoraCategoryAssign): LoraCategoryList
+    suspend fun assignLoraCategory(@Body body: LoraCategoryAssign)
 
     // ── LoRA training ────────────────────────────────────────────────────
     // Runs on the trainer and followed by the server, so a run started here
@@ -484,6 +475,10 @@ interface ApiService {
 
     @GET("api/imagegen/gallery/boards")
     suspend fun galleryBoards(): GalleryBoardsResponse
+
+    /** Makes one of a board's pictures the cover its card shows. */
+    @PATCH("api/imagegen/gallery/boards/{id}")
+    suspend fun setGalleryBoardCover(@Path("id") id: String, @Body body: GalleryBoardCover)
 
     /** Deletes a gallery board; its images survive, moved back to Uncategorized. */
     @DELETE("api/imagegen/gallery/boards/{id}")
