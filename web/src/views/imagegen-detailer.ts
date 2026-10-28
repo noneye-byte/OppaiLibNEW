@@ -239,7 +239,7 @@ export class OppaiDetailerPanel extends LitElement {
         color: var(--oppai-text-dim); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
       }
       .toggle.on { background: color-mix(in srgb, var(--oppai-primary) 14%, transparent); border-color: color-mix(in srgb, var(--oppai-primary) 55%, transparent); color: var(--oppai-text); }
-      .quick { display: flex; gap: 5px; overflow-x: auto; scrollbar-width: none; margin: 10px -16px 12px; padding: 0 16px; }
+      .quick { display: flex; flex-wrap: wrap; gap: 5px; margin: 10px 0 12px; }
       .quick button {
         flex: none; height: 28px; padding: 0 10px; border-radius: 14px; border: none; background: var(--oppai-surface); color: var(--oppai-text-dim);
         font: inherit; font-size: 12px; cursor: pointer;

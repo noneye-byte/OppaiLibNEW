@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-const { regionParams, regionNegatives, regionBoxes, peopleFrom, newPerson, personPrompt } = await import("./regions.ts");
+const { regionParams, regionNegatives, regionBoxes, peopleFrom, newPerson, personPrompt, sharedLoras, sharedTriggers, peopleAdvice } =
+  await import("./regions.ts");
 
 const chars = [
   { id: "a", name: "Alice", prompt: "red hair, green eyes", negativePrompt: "freckles", hasThumb: false },
@@ -54,4 +55,30 @@ test("a picture's parts come back as people with their words and first LoRA", ()
   assert.deepEqual(peopleFrom({ enabled: true, parts: [{ prompt: "red hair", loras: [{ name: "x", weight: 0.5 }], share: 2 }] }),
     [{ character: "", words: "red hair", lora: "x", loraWeight: 0.5, share: 2 }]);
   assert.deepEqual(peopleFrom(undefined), []);
+});
+
+const loras = [
+  { name: "alice_v2", triggerPhrases: ["alice", "school uniform"], categoryKey: "character" },
+  { name: "detail", triggerPhrases: ["detailed"], categoryKey: "tools" },
+  { name: "bea_xl", triggerPhrases: ["bea"], categoryKey: "character" },
+];
+
+test("a person's LoRA brings its trigger words, the ones their words do not already say", () => {
+  const p = { ...newPerson(), character: "a", words: "wearing a School Uniform", lora: "alice_v2" };
+  assert.equal(personPrompt(p, chars, loras), "red hair, green eyes, wearing a School Uniform, alice");
+  assert.equal(regionParams(true, false, [p, newPerson()], chars, loras)?.parts[0].prompt, "red hair, green eyes, wearing a School Uniform, alice");
+});
+
+test("a LoRA a person wears leaves the recipe the people share, with its trigger words", () => {
+  const people = [{ ...newPerson(), lora: "alice_v2" }, { ...newPerson() }];
+  assert.deepEqual(sharedLoras({ alice_v2: 1, detail: 0.5 }, people), { detail: 0.5 });
+  assert.deepEqual(sharedTriggers(["alice", "detailed", "by hand"], { alice_v2: 1, detail: 0.5 }, people, loras), ["detailed", "by hand"]);
+});
+
+test("thin strips and a character LoRA left in the recipe are pointed out", () => {
+  const two = [{ ...newPerson(), lora: "alice_v2" }, newPerson()];
+  assert.deepEqual(peopleAdvice(false, two, 832, 1216, { bea_xl: 1, detail: 1 }, loras), { narrow: true, everyone: ["bea_xl"] });
+  assert.deepEqual(peopleAdvice(false, two, 1216, 832, { alice_v2: 1 }, loras), { narrow: false, everyone: [] });
+  assert.equal(peopleAdvice(true, two, 832, 1216, {}, loras).narrow, false);
+  assert.equal(peopleAdvice(true, two, 1216, 832, {}, loras).narrow, true);
 });

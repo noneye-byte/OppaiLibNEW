@@ -122,6 +122,7 @@ gif_box
 graphic_eq
 grid_view
 group
+group_off
 hard_drive
 heart_minus
 height
@@ -184,6 +185,7 @@ pending
 people
 person
 person_add
+person_off
 person_search
 pest_control
 photo_camera

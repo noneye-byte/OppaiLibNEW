@@ -1064,7 +1064,15 @@ export class OppaiInvokeGallery extends LitElement {
    * renames or deletes it.
    */
   private renderFolderCards() {
-    return html`<div class="folders" role="listbox" aria-label=${this.own ? "Folders" : "Galleries"}>
+    // A mouse wheel scrolls up and down; over a row of cards that only scrolls
+    // sideways it would do nothing, and the folders past the edge were out of reach.
+    const wheel = (e: WheelEvent) => {
+      const el = e.currentTarget as HTMLElement;
+      if (Math.abs(e.deltaY) <= Math.abs(e.deltaX) || el.scrollWidth <= el.clientWidth) return;
+      el.scrollLeft += e.deltaY;
+      e.preventDefault();
+    };
+    return html`<div class="folders" role="listbox" aria-label=${this.own ? "Folders" : "Galleries"} @wheel=${wheel}>
       ${this.boards.map((b) => {
         const d = this.dropTarget(b);
         return html`<button class="folder ${b.id === this.board ? "on" : ""} ${this.dropOn === b.id ? "drop" : ""}" role="option"

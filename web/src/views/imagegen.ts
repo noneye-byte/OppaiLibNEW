@@ -110,7 +110,8 @@ import {
   passesFromModels, type CustomPass, type DetailerPasses, type DetailerValue,
 } from "../detailer.js";
 import {
-  MAX_PEOPLE, newPerson, peopleFrom, regionBoxes, regionNegatives, regionParams, type RegionPerson,
+  MAX_PEOPLE, newPerson, peopleAdvice, peopleFrom, regionBoxes, regionNegatives, regionParams, sharedLoras, sharedTriggers,
+  type RegionPerson,
 } from "../regions.js";
 import { hiresScale, hiresUpscalers, scaledSize, upscaleFactor } from "../upscale.js";
 import {
@@ -2897,6 +2898,16 @@ export class OppaiImageGen extends LitElement {
         border: 1px solid var(--oppai-border); background: color-mix(in srgb, var(--oppai-primary) 5%, transparent);
       }
       .people-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+      .people-advice { display: flex; flex-direction: column; gap: 6px; }
+      .advice-row {
+        display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 10px; font-size: 12px; line-height: 1.4;
+        color: var(--oppai-text-dim); background: color-mix(in srgb, var(--oppai-accent) 12%, var(--oppai-surface));
+        border: 1px solid color-mix(in srgb, var(--oppai-accent) 35%, transparent);
+      }
+      .advice-row > span:nth-child(2) { flex: 1; min-width: 0; }
+      .advice-row b { color: var(--oppai-text); }
+      .advice-row > .material-symbols-rounded { font-size: 18px; color: var(--oppai-accent); }
+      .advice-row .chip { flex: none; }
       .people-head .people-layout { width: 64px; height: 40px; flex: none; }
       .people-head .people-layout.rows { height: 48px; width: 48px; }
       .people-hint { font-size: 12px; color: var(--oppai-text-dim); flex: 1; min-width: 200px; line-height: 1.4; }
@@ -4009,9 +4020,17 @@ export class OppaiImageGen extends LitElement {
 
   private assemblePrompts(): { prompt: string; negative: string } {
     const outfit = this.outfitFragment();
-    const parts = [this.prompt.trim(), ...this.selectedTriggers, outfit.prompt];
+    // With people in parts of their own, this is the prompt they all share: a LoRA
+    // that moved onto a person takes its trigger words with it, and the characters
+    // picked in the Look drawer sit out — each person has a character of their own,
+    // and one in the shared words was drawn on every one of them.
+    const people = this.regionsActive;
+    const triggers = people
+      ? sharedTriggers(this.selectedTriggers, this.selectedLoras, this.regionPeople, this.status?.loras ?? [])
+      : this.selectedTriggers;
+    const parts = [this.prompt.trim(), ...triggers, outfit.prompt];
     const negParts = [this.negative.trim(), outfit.negative];
-    for (const id of this.selectedChars) {
+    for (const id of people ? [] : this.selectedChars) {
       const c = this.characters.find((ch) => ch.id === id);
       if (!c) continue;
       if (c.prompt.trim()) parts.push(c.prompt.trim());
@@ -4420,12 +4439,13 @@ export class OppaiImageGen extends LitElement {
         // state cannot be named or imported unambiguously, so outfit runs are 1-up.
         count: this.outfitOn ? 1 : this.count,
         seed: this.seed,
-        loras: Object.entries(this.selectedLoras).map(([name, weight]) => ({ name, weight })),
+        loras: Object.entries(!src && this.regionsActive ? sharedLoras(this.selectedLoras, this.regionPeople) : this.selectedLoras)
+          .map(([name, weight]) => ({ name, weight })),
         detailer: this.status?.detailerAvailable && this.detailerEnabled && this.detailerHasPasses
           ? this.detailerParams() : undefined,
         upscale: src ? undefined : this.hiresParams(),
         regions: src || !this.regionsActive ? undefined
-          : regionParams(true, this.regionsRows, this.regionPeople, this.characters),
+          : regionParams(true, this.regionsRows, this.regionPeople, this.characters, this.status?.loras ?? []),
     };
     if (src) {
       // A run from a picture comes out the picture's shape, not the size controls'.
@@ -6885,6 +6905,7 @@ export class OppaiImageGen extends LitElement {
         <span class="people-hint">The prompt is what they share — say how many (2girls) and where.
           ${this.regionsRows ? "" : "The face pass redoes each face with its person's words and LoRA, left to right."}</span>
       </div>
+      ${this.renderPeopleAdvice()}
       <div class="people-grid" style="--people:${people.length}">
         ${people.map((p, i) => html`<div class="pass-card">
           <div class="pass-row">
@@ -6922,6 +6943,36 @@ export class OppaiImageGen extends LitElement {
           </div>
         </div>`)}
       </div>
+    </div>`;
+  }
+
+  /** What would make this picture of several people come out wrong, each with the
+      one click that fixes it — see peopleAdvice in regions.ts. */
+  private renderPeopleAdvice() {
+    const loras = this.status?.loras ?? [];
+    const advice = peopleAdvice(this.regionsRows, this.regionPeople, this.width, this.height, this.selectedLoras, loras);
+    const picked = this.selectedChars.map((id) => this.characters.find((c) => c.id === id)?.name).filter(Boolean);
+    if (!advice.narrow && !advice.everyone.length && !picked.length) return nothing;
+    const label = (name: string) => loras.find((l) => l.name === name)?.alias || name;
+    return html`<div class="people-advice">
+      ${advice.narrow ? html`<div class="advice-row">
+        <span class="material-symbols-rounded">aspect_ratio</span>
+        <span>${this.regionsRows
+          ? `Stacked in a ${this.width}×${this.height} picture, each person is a thin band — they come out squashed.`
+          : `Side by side in a ${this.width}×${this.height} picture, each person gets a strip ${Math.round(this.width / this.regionPeople.length)} pixels wide — too thin to draw a figure.`}</span>
+        <button class="chip small" @click=${() => { const w = this.width; this.width = this.height; this.height = w; }}>
+          ${this.regionsRows ? "Make it tall" : "Make it wide"}</button>
+      </div>` : nothing}
+      ${advice.everyone.map((name) => html`<div class="advice-row">
+        <span class="material-symbols-rounded">group_off</span>
+        <span><b>${label(name)}</b> is a character LoRA in the recipe, so it is put on everyone. Put it on one person instead.</span>
+        <button class="chip small" @click=${() => this.toggleLora(name)}>Take it off the recipe</button>
+      </div>`)}
+      ${picked.length ? html`<div class="advice-row">
+        <span class="material-symbols-rounded">person_off</span>
+        <span>${picked.join(", ")} ${picked.length === 1 ? "is" : "are"} picked in Look, which sits out while people have parts of
+          their own — pick a character for each person here instead.</span>
+      </div>` : nothing}
     </div>`;
   }
 

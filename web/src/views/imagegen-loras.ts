@@ -14,18 +14,19 @@ import {
  * them sorted.
  *
  * The LoRAs that are on sit at the top with their weights, as sliders, so turning
- * one down does not mean finding its card again. Under them is the library, one tab
- * per category on a single line (the chips used to wrap across three), narrowed by
- * the search, by whether a LoRA can work with the checkpoint that is picked, and put
- * in an order of her choosing — see lora-categories.ts.
+ * one down does not mean finding its card again. Under them is the library, one
+ * category at a time from a dropdown with each one's count, narrowed by the search,
+ * by whether a LoRA can work with the checkpoint that is picked, and put in an order
+ * of her choosing — see lora-categories.ts. The categories were chips that wrapped
+ * over three lines, then a strip of tabs that a mouse wheel could not scroll, so the
+ * ones past the edge could not be reached at all.
  *
  * Filing was a select laid over each card's corner, one LoRA at a time, and an
- * unsorted pile of two hundred stayed one. Now there are three ways, each for a
- * different size of job: a card's menu files that one; Sort mode picks a run of
- * cards (click, Ctrl and Shift, as in the gallery) and files them all with one tap
- * on the bar along the bottom; and a card, or the picked run, can be dragged onto a
- * category's tab. "Sort with Civitai" does the unsorted pile at once, by what each
- * LoRA's model is filed under on the catalogue (api/lora_categories.go).
+ * unsorted pile of two hundred stayed one. Now a card's menu files that one; Sort
+ * mode picks a run of cards (click, Ctrl and Shift, as in the gallery) and files them
+ * all with one tap on the bar along the bottom; and "Sort with Civitai" does the
+ * unsorted pile at once, by what each LoRA's model is filed under on the catalogue
+ * (api/lora_categories.go).
  *
  * The studio owns which LoRAs are on, their weights and the filing itself; this
  * element asks for each through an event:
@@ -33,7 +34,6 @@ import {
  *   lora-file {names, category} ("" for none), loras-sorted {results}.
  */
 
-const DRAG_TYPE = "application/x-oppai-loras";
 const PAGE = 60;
 const PREFS_KEY = "oppai.loraPicker";
 
@@ -75,7 +75,6 @@ export class OppaiLoraPicker extends LitElement {
   @state() private sorting = false;
   @state() private picked = new Set<string>();
   private anchor: string | null = null;
-  @state() private dropOn = "";
   @state() private civitaiRun: { done: number; total: number } | null = null;
   @state() private civitaiNote = "";
   @state() private failedThumbs = new Set<string>();
@@ -104,28 +103,14 @@ export class OppaiLoraPicker extends LitElement {
       .icon-btn.on { background: var(--oppai-primary); border-color: var(--oppai-primary); color: var(--oppai-on-primary); }
       .icon-btn .material-symbols-rounded { font-size: 19px; }
 
-      /* One line of tabs that scrolls, rather than nine chips wrapping over three. */
-      .tabs {
-        display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; overscroll-behavior-x: contain;
-        margin: 0 -16px 10px; padding: 0 16px 2px; scroll-padding: 0 16px;
+      .cat {
+        flex: none; display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 10px 0 12px; border-radius: 17px;
+        border: none; background: var(--oppai-primary-container); color: var(--oppai-text); font: inherit; font-size: 12.5px;
+        font-weight: 600; cursor: pointer; max-width: 100%;
       }
-      .tabs::-webkit-scrollbar { display: none; }
-      .tab {
-        flex: none; display: inline-flex; align-items: center; gap: 5px; height: 32px; padding: 0 11px;
-        border-radius: 16px; border: 1px solid transparent; background: var(--oppai-surface); color: var(--oppai-text-dim);
-        font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap;
-        transition: background 0.15s ease, color 0.15s ease, transform 0.15s var(--oppai-ease-spring, ease);
-      }
-      .tab .material-symbols-rounded { font-size: 16px; }
-      .tab .n { font-weight: 500; color: var(--oppai-text-muted); font-variant-numeric: tabular-nums; }
-      .tab:hover { color: var(--oppai-text); }
-      .tab.on { background: var(--oppai-primary-container); color: var(--oppai-text); }
-      .tab.on .n { color: var(--oppai-text-dim); }
-      .tab.zero:not(.on) { opacity: 0.5; }
-      .tab.unsorted { border-color: color-mix(in srgb, var(--oppai-accent) 45%, transparent); }
-      .tab.drop { background: var(--oppai-primary); color: var(--oppai-on-primary); transform: scale(1.06); }
-      .tab.drop .n { color: inherit; }
-
+      .cat .material-symbols-rounded { font-size: 17px; }
+      .cat .n { font-weight: 500; color: var(--oppai-text-dim); font-variant-numeric: tabular-nums; }
+      .cat .caret { margin-left: 2px; color: var(--oppai-text-dim); }
       .filters { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 12px; font-size: 12px; color: var(--oppai-text-muted); }
       .toggle {
         display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 10px; border-radius: 14px;
@@ -188,7 +173,6 @@ export class OppaiLoraPicker extends LitElement {
       .card.on { border-color: var(--oppai-primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--oppai-primary) 22%, transparent); }
       .card.picked { border-color: var(--oppai-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--oppai-accent) 25%, transparent); }
       .card.unfit { opacity: 0.55; }
-      .card.dragging { opacity: 0.4; }
       .card-main { display: block; width: 100%; padding: 0; border: none; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; border-radius: 12px; overflow: hidden; }
       .art { position: relative; aspect-ratio: 3 / 4; background: var(--oppai-surface-2); display: grid; place-items: center; color: var(--oppai-text-muted); }
       .art img { width: 100%; height: 100%; object-fit: cover; display: block; }
@@ -282,7 +266,7 @@ export class OppaiLoraPicker extends LitElement {
     this.picked = new Set([...this.picked].filter((n) => !names.includes(n)));
   }
 
-  // ── sort mode and dragging ─────────────────────────────────────────────────
+  // ── sort mode ──────────────────────────────────────────────────────────────
 
   private setSorting(on: boolean) {
     this.sorting = on;
@@ -300,40 +284,6 @@ export class OppaiLoraPicker extends LitElement {
     const next = pickClick(order, { selected: this.picked, anchor: this.anchor }, l.name, e);
     this.picked = next.selected;
     this.anchor = next.anchor;
-  }
-
-  /** What a drag carries: the picked run when the card is one of it, else the card. */
-  private dragStart(e: DragEvent, l: GenLora) {
-    const names = this.picked.has(l.name) ? [...this.picked] : [l.name];
-    e.dataTransfer?.setData(DRAG_TYPE, JSON.stringify(names));
-    e.dataTransfer?.setData("text/plain", names.join(", "));
-    if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
-    (e.currentTarget as HTMLElement).classList.add("dragging");
-  }
-
-  private dropProps(target: CategoryFilter) {
-    if (target === "all") return {};
-    const key = target === "none" ? "" : target;
-    return {
-      over: (e: DragEvent) => {
-        if (!e.dataTransfer?.types.includes(DRAG_TYPE)) return;
-        e.preventDefault();
-        e.dataTransfer.dropEffect = "move";
-        this.dropOn = target;
-      },
-      leave: () => { if (this.dropOn === target) this.dropOn = ""; },
-      drop: (e: DragEvent) => {
-        this.dropOn = "";
-        const raw = e.dataTransfer?.getData(DRAG_TYPE);
-        if (!raw) return;
-        e.preventDefault();
-        try {
-          this.file(JSON.parse(raw) as string[], key);
-        } catch {
-          // Not ours.
-        }
-      },
-    };
   }
 
   // ── Civitai ────────────────────────────────────────────────────────────────
@@ -402,26 +352,33 @@ export class OppaiLoraPicker extends LitElement {
     const url = this.thumb(l);
     return this.failedThumbs.has(url)
       ? html`<span class="material-symbols-rounded blank">${icon}</span>`
-      : html`<img src=${url} alt="" loading="lazy" draggable="false"
+      : html`<img src=${url} alt="" loading="lazy"
           @error=${() => (this.failedThumbs = new Set(this.failedThumbs).add(url))} />`;
   }
 
-  private renderTabs() {
+  /** The category on show, as a button whose menu lists every one with its count. */
+  private renderCategoryPicker() {
     const counts = categoryCounts(this.loras);
-    const tab = (id: CategoryFilter, label: string, icon: string, n: number, extra = "") => {
-      const d = this.dropProps(id);
-      return html`<button class="tab ${this.category === id ? "on" : ""} ${n ? "" : "zero"} ${this.dropOn === id ? "drop" : ""} ${extra}"
-        role="tab" aria-selected=${this.category === id ? "true" : "false"} @click=${() => this.pickCategory(id)}
-        @dragover=${d.over} @dragleave=${d.leave} @drop=${d.drop}
-        title=${id === "all" ? "Every LoRA" : `${label} — drop LoRAs here to file them`}>
-        ${icon ? html`<span class="material-symbols-rounded">${icon}</span>` : nothing}${label}<span class="n">${n}</span>
-      </button>`;
+    const entries: { id: CategoryFilter; label: string; icon: string }[] = [
+      { id: "all", label: "All", icon: "apps" },
+      ...(counts.none || this.category === "none" ? [{ id: "none" as const, label: "Unsorted", icon: "inbox" }] : []),
+      ...LORA_CATEGORIES.map((c) => ({ id: c.key, label: c.label, icon: c.icon })),
+    ];
+    const current = entries.find((e) => e.id === this.category) ?? entries[0];
+    const open = (e: MouseEvent) => {
+      const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+      openMenu({
+        x: r.left, y: r.bottom + 4, title: "Category",
+        items: entries.map((c) => ({
+          label: c.label, icon: c.icon, hint: `${counts[c.id]}${c.id === this.category ? " ✓" : ""}`,
+          disabled: !counts[c.id] && c.id !== "all", run: () => this.pickCategory(c.id),
+        })),
+      });
     };
-    return html`<div class="tabs" role="tablist" aria-label="LoRA categories">
-      ${tab("all", "All", "apps", counts.all)}
-      ${counts.none || this.category === "none" ? tab("none", "Unsorted", "inbox", counts.none, "unsorted") : nothing}
-      ${LORA_CATEGORIES.map((c) => tab(c.key, c.label, c.icon, counts[c.key]))}
-    </div>`;
+    return html`<button class="cat" aria-haspopup="menu" title="Show one category" @click=${open}>
+      <span class="material-symbols-rounded">${current.icon}</span>${current.label}<span class="n">${counts[current.id]}</span>
+      <span class="material-symbols-rounded caret">expand_more</span>
+    </button>`;
   }
 
   private renderInUse() {
@@ -484,9 +441,7 @@ export class OppaiLoraPicker extends LitElement {
     const filed = LORA_CATEGORIES.find((c) => c.key === categoryOf(l));
     const fam = baseFamily(l.base);
     const fits = fitsModel(l.base, this.modelBase);
-    return html`<div class="card ${on ? "on" : ""} ${picked ? "picked" : ""} ${fits ? "" : "unfit"}" draggable="true"
-      @dragstart=${(e: DragEvent) => this.dragStart(e, l)}
-      @dragend=${(e: DragEvent) => { (e.currentTarget as HTMLElement).classList.remove("dragging"); this.dropOn = ""; }}
+    return html`<div class="card ${on ? "on" : ""} ${picked ? "picked" : ""} ${fits ? "" : "unfit"}"
       @contextmenu=${(e: MouseEvent) => this.openCardMenu(e, l)}>
       <button class="card-main" title=${l.name} aria-pressed=${this.sorting ? (picked ? "true" : "false") : (on ? "true" : "false")}
         @click=${(e: MouseEvent) => this.clickCard(e, l, order)}>
@@ -558,23 +513,23 @@ export class OppaiLoraPicker extends LitElement {
           <span class="material-symbols-rounded">checklist</span>Sort
         </button>
       </div>
-      ${this.renderTabs()}
-      ${fam && hidden
-        ? html`<div class="filters">
-            <button class="toggle ${fitOnly ? "on" : ""}" aria-pressed=${fitOnly ? "true" : "false"}
+      <div class="filters">
+        ${this.renderCategoryPicker()}
+        ${fam && hidden
+          ? html`<button class="toggle ${fitOnly ? "on" : ""}" aria-pressed=${fitOnly ? "true" : "false"}
               @click=${() => { this.fitOnly = !this.fitOnly; this.savePrefs(); }}>
               <span class="material-symbols-rounded">${fitOnly ? "filter_alt" : "filter_alt_off"}</span>
-              ${fitOnly ? `Only ${familyLabel(fam)} · ${hidden} hidden` : `Showing all · ${hidden} not for ${familyLabel(fam)}`}
-            </button>
-            ${this.order !== "name" ? html`<span>${orderLabel}</span>` : nothing}
-          </div>`
-        : this.order !== "name" ? html`<div class="filters"><span>${orderLabel}</span></div>` : nothing}
+              ${fitOnly ? `Only ${familyLabel(fam)} · ${hidden} hidden` : `All · ${hidden} not ${familyLabel(fam)}`}
+            </button>`
+          : nothing}
+        ${this.order !== "name" ? html`<span>${orderLabel}</span>` : nothing}
+      </div>
       ${this.sorting ? nothing : this.renderInUse()}
       ${this.renderUnsortedCallout(unsorted)}
       ${!shown.length
         ? html`<div class="note">${this.query.trim()
             ? `No LoRA here matches “${this.query.trim()}”.`
-            : this.category === "none" ? "Every LoRA is filed." : "Nothing filed here yet — drag a LoRA onto this tab, or use Sort."}</div>`
+            : this.category === "none" ? "Every LoRA is filed." : "Nothing filed here yet — use Sort, or a card's ⋯ menu, to file LoRAs here."}</div>`
         : html`${this.sorting || this.loras.some((l) => l.name in this.selected) ? html`<div class="section-k">${this.sorting ? "Pick the ones to file" : "Library"}</div>` : nothing}
           <div class="grid">${shown.slice(0, this.limit).map((l) => this.renderCard(l, order))}</div>
           ${shown.length > this.limit
