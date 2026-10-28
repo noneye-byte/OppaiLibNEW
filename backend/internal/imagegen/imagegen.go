@@ -238,6 +238,9 @@ type InstallJob struct {
 	// is what lets the catalogue's cover and description be applied to the right
 	// model without guessing from the filename.
 	ModelKey string `json:"modelKey,omitempty"`
+	// Files is what an archive of detectors unpacked to, file names in the detector
+	// folder; ModelKey is the first of them.
+	Files []string `json:"files,omitempty"`
 }
 
 // ModelRecord is one installed model as InvokeAI holds it, of any type. Hash is

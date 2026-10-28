@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -252,13 +253,31 @@ func (c *Client) a1111Download(base, dir string, folder a1111Folder, spec Instal
 		fail(err)
 		return
 	}
-	c.hashes().record(target, hex.EncodeToString(sum.Sum(nil)))
+	var files []string
+	if folder.Type == a1111DetectorFolder.Type && strings.EqualFold(path.Ext(name), ".zip") {
+		// ADetailer reads .pt files and nothing else; see a1111_detectors.go.
+		unpacked, err := unpackDetectors(target, filepath.Dir(target))
+		_ = removeSoon(target)
+		if err != nil {
+			fail(err)
+			return
+		}
+		for _, d := range unpacked {
+			files = append(files, d.Name)
+			if d.SHA256 != "" {
+				c.hashes().record(filepath.Join(filepath.Dir(target), d.Name), d.SHA256)
+			}
+		}
+		key = folder.Folder + "/" + unpacked[0].Name
+	} else {
+		c.hashes().record(target, hex.EncodeToString(sum.Sum(nil)))
+	}
 
 	rctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	c.a1111Refresh(rctx, base, folder.Type)
 	cancel()
 	jobs.update(job, func(j *InstallJob) {
-		j.Status, j.ModelKey, j.Bytes = "completed", key, counter.n
+		j.Status, j.ModelKey, j.Bytes, j.Files = "completed", key, counter.n, files
 		if j.TotalBytes == 0 {
 			j.TotalBytes = counter.n
 		}

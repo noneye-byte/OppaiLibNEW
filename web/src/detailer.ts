@@ -121,3 +121,42 @@ export function customPassesFrom(params: DetailerPassParams[] | undefined): Cust
     };
   });
 }
+
+/**
+ * An icon for what a detector finds, read off its file name, so a pass card and the
+ * detector list say "eyes" or "hands" at a glance rather than in a YOLO file name.
+ * The parts a body detector is usually for go under one figure icon; anything the
+ * name does not say gets a plain target.
+ */
+export function detectorIcon(name: string): string {
+  const n = name.toLowerCase();
+  if (n.includes("hand")) return "back_hand";
+  if (n.includes("eye")) return "visibility";
+  if (n.includes("face") || n.includes("head")) return "face";
+  if (n.includes("person") || n.includes("body")) return "person";
+  if (n.includes("foot") || n.includes("feet") || n.includes("shoe")) return "footprint";
+  if (n.includes("text") || n.includes("bubble") || n.includes("watermark")) return "chat_bubble";
+  if (n.includes("lip") || n.includes("mouth") || n.includes("teeth")) return "sentiment_satisfied";
+  if (/breast|booba|nipple|pussy|vagina|vulva|penis|anus|ass|butt/.test(n)) return "accessibility_new";
+  return "center_focus_strong";
+}
+
+/** The detailer's passes in a line, in the order they run: "Faces · Hands · Eyes". */
+export function passSummary(p: DetailerPasses, custom: CustomPass[], label: (model: string) => string = detectorLabel): string {
+  const names: string[] = [];
+  if (p.faces) names.push(p.faceModel === "person_yolov8n-seg.pt" ? "Whole person" : "Faces");
+  if (p.hands) names.push("Hands");
+  for (const c of custom) if (c.model.trim()) names.push(label(c.model));
+  return names.join(" · ");
+}
+
+/** Everything the ADetailer drawer sets, as the studio keeps it. */
+export interface DetailerValue extends DetailerPasses {
+  enabled: boolean;
+  prompt: string;
+  negative: string;
+  confidence: number;
+  denoise: number;
+  maskBlur: number;
+  custom: CustomPass[];
+}

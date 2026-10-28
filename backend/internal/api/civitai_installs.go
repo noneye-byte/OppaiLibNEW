@@ -116,6 +116,13 @@ func (s *Server) civitaiApplyFinishedInstalls(ctx context.Context) int {
 				_ = s.db.DeleteCivitaiInstall(ctx, p.Source)
 				continue
 			}
+			if isDetectorKey(job.ModelKey) {
+				if err := s.civitaiLinkDetectors(ctx, detectorKeys(job), p.ModelID, p.VersionID); err != nil {
+					s.log.Warn("civitai: link detector", "model", job.ModelKey, "err", err)
+				}
+				_ = s.db.DeleteCivitaiInstall(ctx, p.Source)
+				continue
+			}
 			if _, err := s.civitaiApplyToModel(ctx, set.ImageGenURL, job.ModelKey, p.ModelID, p.VersionID, true); err != nil {
 				s.log.Warn("civitai: apply metadata after install", "model", job.ModelKey, "err", err)
 			}

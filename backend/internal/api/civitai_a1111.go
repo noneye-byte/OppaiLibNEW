@@ -36,6 +36,10 @@ func (s *Server) civitaiInstallSpec(ctx context.Context, source string, modelID,
 		return spec, err
 	}
 	spec.Type = civitaiInstallType(m.Type)
+	if strings.EqualFold(spec.Type, "other") && civitaiIsDetector(*m) {
+		// Half the catalogue's ADetailer models are filed as "Other"; see detectors.go.
+		spec.Type = "detection"
+	}
 	for _, v := range m.ModelVersions {
 		if versionID > 0 && v.ID != versionID {
 			continue

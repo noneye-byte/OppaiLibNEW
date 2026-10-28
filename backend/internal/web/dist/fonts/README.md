@@ -12,14 +12,14 @@ quietly phoning home.
 |------|------|------|
 | `roboto-latin.woff2` | Roboto, variable weight 400–700, latin | 43 kB |
 | `roboto-latin-ext.woff2` | same, latin-ext | 29 kB |
-| `material-symbols-rounded.woff2` | 263 icons, static `wght 400 / FILL 0` | 27 kB |
-| `material-symbols-rounded-fill.woff2` | same 263 icons, static `wght 500 / FILL 1` | 34 kB |
+| `material-symbols-rounded.woff2` | 283 icons, static `wght 400 / FILL 0` | 29 kB |
+| `material-symbols-rounded-fill.woff2` | same 283 icons, static `wght 500 / FILL 1` | 37 kB |
 | `icon-names.txt` | the glyph list both icon files were subset to | — |
 
 Roboto's other seven subsets (cyrillic, greek, vietnamese…) are omitted: Roboto has
 no CJK coverage in any of them, so a Japanese title falls back to a system font
 either way. The icon font is two static instances rather than one variable face
-because the UI only ever draws the outlined and the filled weight — 57 kB against
+because the UI only ever draws the outlined and the filled weight — 66 kB against
 315 kB for a variable face carrying axes nothing sweeps.
 
 ## Refreshing them

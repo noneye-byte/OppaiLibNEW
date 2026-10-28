@@ -2108,6 +2108,39 @@ export interface InstallJob {
   error?: string;
   bytes?: number;
   totalBytes?: number;
+  /** The record it became, once completed. */
+  modelKey?: string;
+  /** What an archive of ADetailer detectors unpacked to, by file name. */
+  files?: string[];
+}
+
+/** One of ADetailer's detectors: a file in its folder, or one of its own models. */
+export interface DetectorInfo {
+  /** What ADetailer lists it as and a pass names: the file name. */
+  name: string;
+  /** Its path under A1111's models folder; absent for ADetailer's own models. */
+  key?: string;
+  size?: number;
+  /** ADetailer has read it. A file not yet listed needs Automatic1111 restarted. */
+  listed: boolean;
+  /** The Civitai model it was installed from. */
+  civitai?: { modelId: number; versionId: number; name: string; creator?: string; cover?: string };
+}
+
+/** A detector in the Civitai shop: a catalogue model, its card picture, and which of
+    its versions are in ADetailer's folder already. */
+export interface CivitaiDetector extends CivitaiModel {
+  cover?: string;
+  installedVersions: number[];
+}
+
+/** What sorting with Civitai did with one LoRA. */
+export interface LoraCivitaiResult {
+  lora: string;
+  category?: string;
+  civitai?: string;
+  outcome: "filed" | "untagged" | "unknown" | "unhashed" | "error";
+  error?: string;
 }
 
 /**
@@ -3449,6 +3482,30 @@ export const api = {
   loraCategoryAssign: (category: string, loras: string[]) =>
     request<void>("/api/imagegen/lora-categories/assign",
       { method: "POST", body: JSON.stringify({ category, loras }) }, 20_000),
+  /** Files unsorted LoRAs by their Civitai model's category tag, found by hash —
+      at most 24 a call, so the caller can show how far it has got. */
+  loraCategoryCivitai: (loras: string[]) =>
+    request<{ results: LoraCivitaiResult[] }>("/api/imagegen/lora-categories/civitai",
+      { method: "POST", body: JSON.stringify({ loras }) }, 110_000),
+
+  // ── ADetailer's detectors ──────────────────────────────────────────────────
+  // Its folder and the Civitai shop for it; see backend/internal/api/detectors.go.
+
+  detectors: () =>
+    request<{ detectors: DetectorInfo[]; folder: boolean; listError?: string; folderError?: string }>(
+      "/api/imagegen/detectors", {}, 25_000),
+  deleteDetector: (key: string) =>
+    request<void>(`/api/imagegen/detectors?key=${encodeURIComponent(key)}`, { method: "DELETE" }, 20_000),
+  detectorShop: (opts: { q?: string; nsfw?: boolean; cursor?: string } = {}) => {
+    const p = new URLSearchParams();
+    if (opts.q) p.set("q", opts.q);
+    if (opts.nsfw === false) p.set("nsfw", "0");
+    if (opts.cursor) p.set("cursor", opts.cursor);
+    return request<{ items: CivitaiDetector[]; nextCursor?: string }>(`/api/imagegen/detectors/civitai?${p}`, {}, 45_000);
+  },
+  installDetector: (modelId: number, versionId: number) =>
+    request<InstallJob>("/api/imagegen/detectors/install",
+      { method: "POST", body: JSON.stringify({ modelId, versionId }) }, 45_000),
 
   // ── LoRA training ──────────────────────────────────────────────────────────
   // Runs on the trainer, followed by the server; see backend/internal/api/lora_training.go.

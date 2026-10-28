@@ -60,3 +60,22 @@ test("a kept pass with two LoRAs comes back with the second in its words", () =>
   assert.deepEqual(customPassesFrom([{ model: "m.pt", prompt: "p", loras: [{ name: "a", weight: 0.5 }, { name: "b", weight: 1 }] }]),
     [{ model: "m.pt", prompt: "p <lora:b:1>", lora: "a", loraWeight: 0.5, denoise: 0 }]);
 });
+
+const { detectorIcon, passSummary } = await import("./detailer.ts");
+
+test("a detector's icon is read off what its name says it finds", () => {
+  assert.equal(detectorIcon("hand_yolov8n.pt"), "back_hand");
+  assert.equal(detectorIcon("Eyes.pt"), "visibility");
+  assert.equal(detectorIcon("face_yolov8s.pt"), "face");
+  assert.equal(detectorIcon("person_yolov8n-seg.pt"), "person");
+  assert.equal(detectorIcon("adetailerFootYolov8x_v20.pt"), "footprint");
+  assert.equal(detectorIcon("adetailerNipples_v20Segm.pt"), "accessibility_new");
+  assert.equal(detectorIcon("mystery.pt"), "center_focus_strong");
+});
+
+test("the passes are summed up in the order they run, custom ones by their label", () => {
+  const custom = [{ model: "Eyes.pt", prompt: "", lora: "", loraWeight: 0.8, denoise: 0 }, { model: " ", prompt: "", lora: "", loraWeight: 1, denoise: 0 }];
+  assert.equal(passSummary({ faces: true, faceModel: "face_yolov8n.pt", hands: true }, custom, (m) => m.replace(".pt", "")), "Faces · Hands · Eyes");
+  assert.equal(passSummary({ faces: true, faceModel: "person_yolov8n-seg.pt", hands: false }, []), "Whole person");
+  assert.equal(passSummary({ faces: false, faceModel: "face_yolov8n.pt", hands: false }, []), "");
+});

@@ -18,6 +18,7 @@ import {
   mascotSay,
   type GenCharacter,
   type GenLora,
+  type LoraCivitaiResult,
   type GenModel,
   type GenModelMeta,
   type GenPose,
@@ -81,6 +82,8 @@ import type { LibbyEmotion } from "../libby.js";
 import "./outfit-wardrobe.js";
 import { createZip, type ZipEntry } from "../zip.js";
 import "./imagegen-gallery.js";
+import "./imagegen-loras.js";
+import "./imagegen-detailer.js";
 import { RESOLUTIONS, SCHEDULERS } from "../gen-options.js";
 import { aspectLabel, megapixels, previewFrame } from "../size-preview.js";
 import "./civitai.js";
@@ -103,15 +106,15 @@ import "./imagegen-paint.js";
 import type { PaintResult } from "./imagegen-paint.js";
 import { sourceSize, type PaintStroke } from "../paint-mask.js";
 import {
-  FACE_DETECTORS, customDetectors, customPassParams, customPassesFrom, detailerModels, detectorLabel, fixLabel,
-  passesFromModels, type CustomPass, type DetailerPasses,
+  customPassParams, customPassesFrom, detailerModels, fixLabel,
+  passesFromModels, type CustomPass, type DetailerPasses, type DetailerValue,
 } from "../detailer.js";
 import {
   MAX_PEOPLE, newPerson, peopleFrom, regionBoxes, regionNegatives, regionParams, type RegionPerson,
 } from "../regions.js";
 import { hiresScale, hiresUpscalers, scaledSize, upscaleFactor } from "../upscale.js";
 import {
-  LORA_CATEGORIES, categoryCounts, categoryOf, inCategory, moveToCategory, type CategoryFilter, type LoraCategoryKey,
+  LORA_CATEGORIES, filedByCategory, moveToCategory, type LoraCategoryKey,
 } from "../lora-categories.js";
 
 // ── Web Speech typings ─────────────────────────────────────────────────────────
@@ -368,7 +371,6 @@ export class OppaiImageGen extends LitElement {
   @state() private showBuiltInTemplates = false;
   @state() private selectedLoras: Record<string, number> = {};
   @state() private selectedTriggers: string[] = [];
-  @state() private loraPage = 0;
   // Outfit helper. `outfitOn` gates the whole fragment so it can be switched off
   // without losing the wardrobe being worked on.
   @state() private outfitOn = false;
@@ -582,7 +584,6 @@ export class OppaiImageGen extends LitElement {
   @state() private upscaleUpscaler = "";
   @state() private upscaleBy = 2;
   /** Which of the LoRA categories the picker shows. */
-  @state() private loraCategory: CategoryFilter = "all";
 
   @state() private generating = false;
   /** The run in flight, named so it can be watched and cancelled; see genProgress. */
@@ -906,20 +907,7 @@ export class OppaiImageGen extends LitElement {
         right: auto;
         left: 4px;
       }
-      .card-cat { overflow: hidden; }
-      .card-cat.set { background: var(--oppai-accent); color: var(--oppai-on-accent); }
       /* The select fills the button invisibly, so a tap anywhere on it opens the menu. */
-      .card-cat select {
-        position: absolute;
-        inset: 0;
-        opacity: 0;
-        cursor: pointer;
-        font-size: 16px;
-      }
-      .lora-cats { margin-bottom: 10px; }
-      .detector-list { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
-      .lora-cats .chip .material-symbols-rounded { font-size: 15px; margin-right: 4px; vertical-align: -3px; }
-      .lora-cats .chip.zero:not(.on) { opacity: 0.55; }
       .lora-weight {
         width: 100%;
         box-sizing: border-box;
@@ -3666,6 +3654,16 @@ export class OppaiImageGen extends LitElement {
     }
   }
 
+  /** Reads the status again without blanking the screen first, for a change made from
+      inside a drawer (a detector arrived) that should not close the drawer it came from. */
+  private async refreshStatus() {
+    try {
+      this.status = await api.imageGenStatus();
+    } catch {
+      // The status on screen stays; the next full load will say what is wrong.
+    }
+  }
+
   private async loadCharacters() {
     try {
       const res = await api.characters();
@@ -5881,8 +5879,8 @@ export class OppaiImageGen extends LitElement {
             ${this.renderManageNote(st, invoke)}`;
           break;
         case "loras":
-          body = html`${this.renderPickerSearch("Search LoRAs")}
-            ${this.renderLoraSection(st.loras ?? [], st.loraError)}`;
+          // The picker has its own search, beside its order and Sort mode.
+          body = this.renderLoraSection(st.loras ?? [], st.loraError);
           break;
         case "look":
           body = html`<div class="pane-title">Characters</div>${this.renderCharacterSection()}
@@ -6644,118 +6642,45 @@ export class OppaiImageGen extends LitElement {
   }
 
   private renderLoraSection(loras: GenLora[], loraError?: string) {
-    if (!loras.length) {
-      return this.section(
-        "loras",
-        "LoRAs",
-        "0",
-        html`<div class="sec-note">
-          ${loraError ? `LoRAs aren't available from this generator: ${loraError}` : "No LoRAs installed."}
-        </div>`,
-      );
-    }
-    // The drawer has the height to show them all and a search to narrow them; the
-    // studio's accordion keeps its pages of six.
-    const filter = this.flatSections ? this.pickerFilter.trim().toLowerCase() : "";
-    const cat = this.loraCategory;
-    const inCat = loras.filter((l) => inCategory(l, cat));
-    const matching = filter
-      ? inCat.filter((l) => `${l.name} ${l.alias ?? ""} ${(l.triggerPhrases ?? []).join(" ")}`.toLowerCase().includes(filter))
-      : inCat;
-    const perPage = this.flatSections ? 60 : 6;
-    const pages = Math.max(1, Math.ceil(matching.length / perPage));
-    const page = Math.min(this.loraPage, pages - 1);
-    const visible = matching.slice(page * perPage, page * perPage + perPage);
-    const body = html`
-      ${this.renderLoraCategories(loras, cat)}
-      ${filter && !matching.length ? html`<div class="sec-note">No LoRA matches “${this.pickerFilter}”.</div>` : nothing}
-      ${!filter && !matching.length ? html`<div class="sec-note">${cat === "none"
-        ? "Every LoRA is in a category."
-        : "No LoRAs in this category yet — use the category button on a LoRA to file it here."}</div>` : nothing}
-      <div class="cards">
-        ${visible.map((lora) => {
-          const on = lora.name in this.selectedLoras;
-          const thumb = `${api.loraThumbURL(lora.name)}&v=${this.thumbVersion}`;
-          return html`
-            <div class="card-wrap">
-              <button class="card ${on ? "on" : ""}" title=${lora.name} @click=${() => this.toggleLora(lora.name)}>
-                ${this.renderArt(thumb, lora.alias || lora.name, "style")}
-                <div class="card-name">${lora.alias || lora.name}</div>
-              </button>
-              ${this.status?.manageModels ? html`<button class="card-edit left" title="Edit LoRA settings" @click=${() => this.openMetaEditor(lora.name)}>
-                <span class="material-symbols-rounded" style="font-size:15px;">edit</span>
-              </button>` : nothing}
-              <!-- The category button is a select laid over the icon: the browser's own
-                   menu, which works the same with a mouse and on a phone. -->
-              ${(() => {
-                const filed = LORA_CATEGORIES.find((c) => c.key === categoryOf(lora));
-                return html`<label class="card-edit card-cat ${filed ? "set" : ""}"
-                  title=${filed ? `${filed.label} — click to file it elsewhere` : "File under a category"}>
-                  <span class="material-symbols-rounded" style="font-size:15px;">${filed?.icon ?? "category"}</span>
-                  <select aria-label=${`Category for ${lora.alias || lora.name}`}
-                    @change=${(e: Event) => {
-                      const sel = e.target as HTMLSelectElement;
-                      const v = sel.value as LoraCategoryKey | "";
-                      sel.value = filed?.key ?? "";
-                      void this.setLoraCategory(lora.name, v);
-                    }}>
-                    <option value="" ?selected=${!filed}>Unsorted</option>
-                    ${LORA_CATEGORIES.map((c) => html`<option value=${c.key} ?selected=${c.key === filed?.key}>${c.label}</option>`)}
-                  </select>
-                </label>`;
-              })()}
-              ${on ? html`<input class="lora-weight" type="number" min="-2" max="2" step="0.05"
-                aria-label=${`${lora.alias || lora.name} weight`}
-                title=${lora.weightMin && lora.weightMax ? `Works at ${lora.weightMin}–${lora.weightMax}` : ""}
-                .value=${String(this.selectedLoras[lora.name])}
-                @input=${(e: Event) => {
-                  const value = Number((e.target as HTMLInputElement).value);
-                  this.selectedLoras = { ...this.selectedLoras,
-                    [lora.name]: Number.isFinite(value) ? Math.max(-2, Math.min(2, value)) : 1 };
-                }} />` : nothing}
-            </div>
-          `;
-        })}
-      </div>
-      ${pages > 1 ? html`<div class="pager">
-        <button ?disabled=${page === 0} @click=${() => (this.loraPage = page - 1)}>Previous</button>
-        <span>${page + 1} / ${pages}</span>
-        <button ?disabled=${page >= pages - 1} @click=${() => (this.loraPage = page + 1)}>Next</button>
-      </div>` : nothing}
-    `;
+    const model = (this.status?.models ?? []).find((m) => m.title === this.checkpoint);
+    const body = html`<oppai-lora-picker .loras=${loras} .selected=${this.selectedLoras} .modelBase=${model?.base ?? ""}
+      .thumbVersion=${this.thumbVersion} ?canEdit=${!!this.status?.manageModels} ?civitai=${!!this.status?.civitai}
+      .error=${loraError ?? ""}
+      @lora-toggle=${(e: CustomEvent<{ name: string }>) => this.toggleLora(e.detail.name)}
+      @lora-weight=${(e: CustomEvent<{ name: string; weight: number }>) =>
+        (this.selectedLoras = { ...this.selectedLoras, [e.detail.name]: e.detail.weight })}
+      @lora-edit=${(e: CustomEvent<{ name: string }>) => this.openMetaEditor(e.detail.name)}
+      @lora-file=${(e: CustomEvent<{ names: string[]; category: LoraCategoryKey | "" }>) =>
+        void this.setLoraCategory(e.detail.names, e.detail.category)}
+      @loras-sorted=${(e: CustomEvent<{ results: LoraCivitaiResult[] }>) => this.applyCivitaiSort(e.detail.results)}
+    ></oppai-lora-picker>`;
     return this.section("loras", "LoRAs", String(Object.keys(this.selectedLoras).length || loras.length), body);
   }
 
-  /** The category chips over the LoRA cards: All, the fixed list, and Unsorted while
-      anything is. */
-  private renderLoraCategories(loras: GenLora[], cat: CategoryFilter) {
-    const pick = (f: CategoryFilter) => {
-      this.loraCategory = f;
-      this.loraPage = 0;
-    };
-    const counts = categoryCounts(loras);
-    return html`<div class="chips lora-cats">
-      <button class="chip small ${cat === "all" ? "on" : ""}" @click=${() => pick("all")}>All · ${counts.all}</button>
-      ${LORA_CATEGORIES.map((c) => html`<button class="chip small ${cat === c.key ? "on" : ""} ${counts[c.key] ? "" : "zero"}"
-        @click=${() => pick(c.key)}>
-        <span class="material-symbols-rounded">${c.icon}</span>${c.label}${counts[c.key] ? html` · ${counts[c.key]}` : nothing}</button>`)}
-      ${counts.none || cat === "none" ? html`<button class="chip small ${cat === "none" ? "on" : ""}" title="LoRAs nothing has filed yet"
-        @click=${() => pick("none")}>Unsorted · ${counts.none}</button>` : nothing}
-    </div>`;
-  }
-
-  /** Files a LoRA under a category ("" for none), on screen at once and then for real;
-      a refusal puts it back. */
-  private async setLoraCategory(name: string, category: LoraCategoryKey | "") {
+  /** Files LoRAs under a category ("" for none), on screen at once and then for real;
+      a refusal puts them back. */
+  private async setLoraCategory(names: string[], category: LoraCategoryKey | "") {
     const before = this.status;
-    if (!before) return;
-    this.status = { ...before, loras: moveToCategory(before.loras ?? [], [name], category) };
+    if (!before || !names.length) return;
+    this.status = { ...before, loras: moveToCategory(before.loras ?? [], names, category) };
     try {
-      await api.loraCategoryAssign(category, [name]);
+      await api.loraCategoryAssign(category, names);
+      if (names.length > 1) {
+        const label = LORA_CATEGORIES.find((c) => c.key === category)?.label ?? "Unsorted";
+        this.showToast(`Filed ${names.length} LoRAs under ${label}`);
+      }
     } catch (e) {
       this.status = before;
       this.showToast((e as Error).message);
     }
+  }
+
+  /** What a round of sorting with Civitai filed, put on the picker's LoRAs — the
+      server has filed them already. */
+  private applyCivitaiSort(results: LoraCivitaiResult[]) {
+    let loras = this.status?.loras ?? [];
+    for (const [category, names] of filedByCategory(results)) loras = moveToCategory(loras, names, category);
+    if (this.status) this.status = { ...this.status, loras };
   }
 
   private renderVaeSection(vaes: GenVae[]) {
@@ -6848,136 +6773,40 @@ export class OppaiImageGen extends LitElement {
 
   /**
    * ADetailer: the passes that redo faces, hands and anything else a detector finds,
-   * after a picture is drawn. Its own drawer on the rail — it was the bottom of
-   * Settings, under the sampler, where it was only found by scrolling past it.
+   * after a picture is drawn — views/imagegen-detailer.ts. Its own drawer on the rail;
+   * it was the bottom of Settings, under the sampler, where it was only found by
+   * scrolling past it.
    */
   private renderDetailerSection(invoke: boolean) {
-    const detectors = this.status?.detectors ?? [];
-    const body = html`
-      <div class="settings">
-        ${this.status?.detailerAvailable ? html`
-          <label class="switch-row full"><input type="checkbox" .checked=${this.detailerEnabled}
-            @change=${(e: Event) => (this.detailerEnabled = (e.target as HTMLInputElement).checked)} />
-            ADetailer face/hand pass</label>
-          ${this.detailerEnabled ? html`
-            <div class="full">
-              <label class="field">Passes</label>
-              <div class="chips">
-                <button class="chip small ${this.detailerFaces ? "on" : ""}" aria-pressed=${this.detailerFaces ? "true" : "false"}
-                  @click=${() => (this.detailerFaces = !this.detailerFaces)}>Faces</button>
-                <button class="chip small ${this.detailerHands ? "on" : ""}" aria-pressed=${this.detailerHands ? "true" : "false"}
-                  @click=${() => (this.detailerHands = !this.detailerHands)}>Hands</button>
-              </div>
-            </div>
-            ${this.detailerFaces ? html`<div class="full">
-              <label class="field">Face detector</label>
-              <select class="num" @change=${(e: Event) => (this.detailerModel = (e.target as HTMLSelectElement).value)}>
-                ${FACE_DETECTORS.map((d) => html`<option value=${d.id} ?selected=${d.id === this.detailerModel}>${d.label}</option>`)}
-              </select>
-            </div>` : nothing}
-            ${!this.detailerHasPasses ? html`<div class="full sec-note">
-              No pass is on, so runs skip the detailer. Turn on faces, hands or both, or add a pass.</div>` : nothing}
-            <div class="full">
-              <label class="field">Detail prompt (blank reuses prompt)</label>
-              <input class="num" .value=${this.detailerPrompt}
-                @input=${(e: Event) => (this.detailerPrompt = (e.target as HTMLInputElement).value)} />
-            </div>
-            <div class="full">
-              <label class="field">Detail negative prompt</label>
-              <input class="num" .value=${this.detailerNegative}
-                @input=${(e: Event) => (this.detailerNegative = (e.target as HTMLInputElement).value)} />
-            </div>
-            <div>
-              <label class="field">Confidence</label>
-              <input class="num" type="number" min="0.05" max="1" step="0.05" .value=${String(this.detailerConfidence)}
-                @input=${(e: Event) => (this.detailerConfidence = clampFloat((e.target as HTMLInputElement).value, 0.05, 1, 0.3))} />
-            </div>
-            <div>
-              <label class="field">Denoise</label>
-              <input class="num" type="number" min="0.05" max="1" step="0.05" .value=${String(this.detailerDenoise)}
-                @input=${(e: Event) => (this.detailerDenoise = clampFloat((e.target as HTMLInputElement).value, 0.05, 1, 0.4))} />
-            </div>
-            <div>
-              <label class="field">Mask blur</label>
-              <input class="num" type="number" min="0" max="64" .value=${String(this.detailerMaskBlur)}
-                @input=${(e: Event) => (this.detailerMaskBlur = clampNum((e.target as HTMLInputElement).value, 0, 64, 4))} />
-            </div>
-            ${invoke ? nothing : this.renderCustomPasses()}
-          ` : nothing}
-        ` : invoke ? nothing : html`<div class="full manage-note">
-          <span class="material-symbols-rounded">face_retouching_natural</span>
-          <span>The face and hand pass (ADetailer) shows up here once the ADetailer extension is installed in
-            Automatic1111 — Extensions → Available → ADetailer, then restart it. It also lets a finished picture's
-            faces be redone on their own.</span>
-        </div>`}
-      </div>
-      ${this.status?.detailerAvailable && !invoke ? html`<div class="pane-title">Detectors ADetailer has</div>
-        <div class="detector-list">
-          ${detectors.length
-            ? detectors.map((d) => html`<span class="chip small" title=${d}>${detectorLabel(d)}</span>`)
-            : html`<span class="sec-note">ADetailer didn't list its detectors — it may be an old version.</span>`}
-        </div>
-        ${this.status?.civitai ? html`<button class="side-add" @click=${() => (this.civitaiOpen = true)}>
-          <span class="material-symbols-rounded" style="font-size:17px;">travel_explore</span> Find detectors on Civitai
-        </button>` : nothing}` : nothing}
-    `;
-    const on = this.status?.detailerAvailable && this.detailerEnabled && this.detailerHasPasses;
+    const st = this.status;
+    const body = html`<oppai-detailer-panel .value=${this.detailerValue} ?invoke=${invoke} ?available=${!!st?.detailerAvailable}
+      .detectors=${st?.detectors ?? []} .loras=${st?.loras ?? []} ?civitai=${!!st?.civitai} ?canInstall=${!!st?.manageModels}
+      .manageNote=${manageModelsNote(st)}
+      @detailer-change=${(e: CustomEvent<Partial<DetailerValue>>) => this.onDetailerChange(e.detail)}
+      @detectors-changed=${() => void this.refreshStatus()}></oppai-detailer-panel>`;
+    const on = st?.detailerAvailable && this.detailerEnabled && this.detailerHasPasses;
     return this.section("detailer", "ADetailer", on ? "on" : "off", body);
   }
 
-  /** The detailer's passes after the faces and hands: each a detector ADetailer has,
-      with words and a LoRA of its own for what that detector finds. */
-  private renderCustomPasses() {
-    const detectors = customDetectors(this.status?.detectors);
-    const loras = this.status?.loras ?? [];
-    const set = (i: number, patch: Partial<CustomPass>) =>
-      (this.detailerCustom = this.detailerCustom.map((p, j) => (j === i ? { ...p, ...patch } : p)));
-    if (!detectors.length) {
-      return html`<div class="full sec-note">ADetailer didn't list its detectors, so extra passes can't be picked —
-        it may be an old version; update it under Extensions in A1111.</div>`;
-    }
-    return html`<div class="full custom-passes">
-      <label class="field">Extra passes</label>
-      ${this.detailerCustom.map((p, i) => html`<div class="pass-card">
-        <div class="pass-row">
-          <select class="num" aria-label="Detector"
-            @change=${(e: Event) => set(i, { model: (e.target as HTMLSelectElement).value })}>
-            ${p.model && !detectors.includes(p.model)
-              ? html`<option value=${p.model} selected>${detectorLabel(p.model)} — not in ADetailer now</option>` : nothing}
-            ${detectors.map((d) => html`<option value=${d} ?selected=${d === p.model}>${detectorLabel(d)}</option>`)}
-          </select>
-          <button class="pass-remove" title="Remove this pass" aria-label="Remove this pass"
-            @click=${() => (this.detailerCustom = this.detailerCustom.filter((_, j) => j !== i))}>
-            <span class="material-symbols-rounded">close</span>
-          </button>
-        </div>
-        <input class="num" .value=${p.prompt} placeholder="Words for what it finds (blank: the detail prompt)"
-          @input=${(e: Event) => set(i, { prompt: (e.target as HTMLInputElement).value })} />
-        <div class="pass-row">
-          <select class="num" aria-label="LoRA for this pass"
-            @change=${(e: Event) => set(i, { lora: (e.target as HTMLSelectElement).value })}>
-            <option value="" ?selected=${!p.lora}>No LoRA</option>
-            ${loras.map((l) => html`<option value=${l.name} ?selected=${l.name === p.lora}>${l.alias || l.name}</option>`)}
-          </select>
-          ${p.lora ? html`<input class="lora-weight" type="number" min="-2" max="2" step="0.05" title="LoRA weight"
-            aria-label="LoRA weight" .value=${String(p.loraWeight)}
-            @input=${(e: Event) => set(i, { loraWeight: clampFloat((e.target as HTMLInputElement).value, -2, 2, 0.8) })} />` : nothing}
-          <input class="lora-weight" type="number" min="0" max="1" step="0.05" placeholder="Denoise"
-            title="How far it may redraw (blank: the detailer's)" aria-label="Denoise"
-            .value=${p.denoise ? String(p.denoise) : ""}
-            @input=${(e: Event) => set(i, { denoise: clampFloat((e.target as HTMLInputElement).value, 0, 1, 0) })} />
-        </div>
-      </div>`)}
-      <button class="side-add" ?disabled=${this.detailerCustom.length >= 6}
-        @click=${() => (this.detailerCustom = [...this.detailerCustom,
-          { model: detectors[0], prompt: "", lora: "", loraWeight: 0.8, denoise: 0 }])}>
-        <span class="material-symbols-rounded" style="font-size:17px;">add</span> Add a pass
-      </button>
-      <div class="sec-note">Each pass redoes what its detector finds, after the faces and hands, with its own words
-        and LoRA. Detectors for other parts of a body are YOLO models: install one from Civitai (Detectors), or drop
-        the .pt into A1111's models/adetailer, then restart A1111. ADetailer runs as many passes as its "Max models"
-        setting allows (A1111 Settings → ADetailer) — raise it if a pass is skipped.</div>
-    </div>`;
+  private get detailerValue(): DetailerValue {
+    return {
+      enabled: this.detailerEnabled, faces: this.detailerFaces, faceModel: this.detailerModel, hands: this.detailerHands,
+      prompt: this.detailerPrompt, negative: this.detailerNegative, confidence: this.detailerConfidence,
+      denoise: this.detailerDenoise, maskBlur: this.detailerMaskBlur, custom: this.detailerCustom,
+    };
+  }
+
+  private onDetailerChange(p: Partial<DetailerValue>) {
+    if (p.enabled !== undefined) this.detailerEnabled = p.enabled;
+    if (p.faces !== undefined) this.detailerFaces = p.faces;
+    if (p.faceModel !== undefined) this.detailerModel = p.faceModel;
+    if (p.hands !== undefined) this.detailerHands = p.hands;
+    if (p.prompt !== undefined) this.detailerPrompt = p.prompt;
+    if (p.negative !== undefined) this.detailerNegative = p.negative;
+    if (p.confidence !== undefined) this.detailerConfidence = p.confidence;
+    if (p.denoise !== undefined) this.detailerDenoise = p.denoise;
+    if (p.maskBlur !== undefined) this.detailerMaskBlur = p.maskBlur;
+    if (p.custom !== undefined) this.detailerCustom = p.custom;
   }
 
   /** The Look drawer's word on people: where they are set, or what to install first. */
