@@ -129,16 +129,48 @@ export function customPassesFrom(params: DetailerPassParams[] | undefined): Cust
  * name does not say gets a plain target.
  */
 export function detectorIcon(name: string): string {
+  const kind = detectorKind(name);
+  return DETECTOR_KINDS.find((k) => k.id === kind)!.icon;
+}
+
+/** What detectors find, in the order the drawer groups them. A folder of thirty
+    detectors read as one alphabetical list of file names; grouped by the part of a
+    body each finds, the three that find eyes sit together. */
+export const DETECTOR_KINDS = [
+  { id: "face", label: "Faces & heads", icon: "face" },
+  { id: "eyes", label: "Eyes", icon: "visibility" },
+  { id: "mouth", label: "Mouths", icon: "sentiment_satisfied" },
+  { id: "hands", label: "Hands", icon: "back_hand" },
+  { id: "feet", label: "Feet", icon: "footprint" },
+  { id: "body", label: "Whole bodies", icon: "person" },
+  { id: "intimate", label: "Intimate", icon: "accessibility_new" },
+  { id: "text", label: "Text & bubbles", icon: "chat_bubble" },
+  { id: "other", label: "Other", icon: "center_focus_strong" },
+] as const;
+
+export type DetectorKind = (typeof DETECTOR_KINDS)[number]["id"];
+
+/** What a detector finds, read off its name (and its catalogue name, when it has
+    one — pass both). */
+export function detectorKind(name: string): DetectorKind {
   const n = name.toLowerCase();
-  if (n.includes("hand")) return "back_hand";
-  if (n.includes("eye")) return "visibility";
+  if (n.includes("hand")) return "hands";
+  if (n.includes("eye")) return "eyes";
   if (n.includes("face") || n.includes("head")) return "face";
-  if (n.includes("person") || n.includes("body")) return "person";
-  if (n.includes("foot") || n.includes("feet") || n.includes("shoe")) return "footprint";
-  if (n.includes("text") || n.includes("bubble") || n.includes("watermark")) return "chat_bubble";
-  if (n.includes("lip") || n.includes("mouth") || n.includes("teeth")) return "sentiment_satisfied";
-  if (/breast|booba|nipple|pussy|vagina|vulva|penis|anus|ass|butt/.test(n)) return "accessibility_new";
-  return "center_focus_strong";
+  if (n.includes("person") || n.includes("body")) return "body";
+  if (n.includes("foot") || n.includes("feet") || n.includes("shoe")) return "feet";
+  if (n.includes("text") || n.includes("bubble") || n.includes("watermark")) return "text";
+  if (n.includes("lip") || n.includes("mouth") || n.includes("teeth")) return "mouth";
+  if (/breast|booba|nipple|pussy|vagina|vulva|penis|anus|ass|butt/.test(n)) return "intimate";
+  return "other";
+}
+
+/** Detectors in groups by what they find, the groups in DETECTOR_KINDS order and
+    each keeping the order it was given; empty groups are left out. */
+export function groupDetectors<T>(items: T[], kindOf: (item: T) => DetectorKind): { kind: (typeof DETECTOR_KINDS)[number]; items: T[] }[] {
+  return DETECTOR_KINDS
+    .map((kind) => ({ kind, items: items.filter((it) => kindOf(it) === kind.id) }))
+    .filter((g) => g.items.length);
 }
 
 /** The detailer's passes in a line, in the order they run: "Faces · Hands · Eyes". */

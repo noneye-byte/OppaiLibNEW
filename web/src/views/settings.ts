@@ -129,6 +129,8 @@ export class OppaiSettings extends LitElement {
   /** The Test button's results; null until it has been pressed. */
   @state() private genChecks: GenCheck[] | null = null;
   @state() private genCheckBusy = false;
+  /** Automatic1111 was asked to restart: what became of it, "" before. */
+  @state() private genRestart = "";
   @state() private genCheckErr = "";
 
   @state() private pwCurrent = "";
@@ -1877,20 +1879,12 @@ export class OppaiSettings extends LitElement {
         <div class="field-text">
           <div class="field-label">Clips</div>
           <div class="field-help">
-            She can turn the last picture she sent into a few seconds of video through
-            ComfyUI. Export the image-to-video workflow you already use (Wan, LTX,
-            AnimateDiff) with <em>Save (API Format)</em> and paste it below, with
-            <code>{{image}}</code> in its Load Image node, <code>{{prompt}}</code> and
-            <code>{{negative}}</code> in its text nodes, and <code>{{seed}}</code> as the seed.
-            Both blank is off.
+            She can turn the last picture she sent into a few seconds of video, with the
+            picture-to-video workflow under <b>Image generation → Video</b> — the same one
+            Create's Video drawer uses. ${s.libbyClipUrl && s.libbyClipWorkflow
+              ? html`It is set up, so she can.`
+              : html`It is not set up yet, so she can't.`}
           </div>
-        </div>
-        <div class="field-control" style="display:grid;gap:6px;">
-          <input placeholder="http://comfyui:8188" .value=${s.libbyClipUrl ?? ""} ?disabled=${!this.canEdit}
-            @change=${(e: Event) => this.edit({ libbyClipUrl: (e.target as HTMLInputElement).value })}/>
-          <textarea rows="4" style="width:100%;font-family:monospace;font-size:11px;" placeholder='{"3": {"class_type": "KSampler", …}}'
-            .value=${s.libbyClipWorkflow ?? ""} ?disabled=${!this.canEdit}
-            @change=${(e: Event) => this.edit({ libbyClipWorkflow: (e.target as HTMLTextAreaElement).value })}></textarea>
         </div>
       </div>
 
@@ -2347,8 +2341,11 @@ export class OppaiSettings extends LitElement {
               </div>
 
               ${this.renderGenCheck()}
+              ${this.renderGenRestart()}
             `}
       </section>
+
+      ${this.renderVideoGen()}
 
       <section class="card">
         <h3><span class="material-symbols-rounded">download</span>Civitai</h3>
@@ -2425,6 +2422,67 @@ export class OppaiSettings extends LitElement {
     `;
   }
 
+  /**
+   * ComfyUI, for clips: Create's Video drawer and Libby's own. The setting names say
+   * "libby" because hers came first; there is one ComfyUI, set up here, for both.
+   */
+  private renderVideoGen() {
+    const s = this.settings;
+    const workflow = (label: string, help: unknown, value: string, set: (v: string) => void) => html`
+      <div class="field stack">
+        <div class="field-text">
+          <div class="field-label">${label}</div>
+          <div class="field-help">${help}</div>
+        </div>
+        <div class="field-control">
+          <textarea rows="4" style="width:100%;font-family:monospace;font-size:11px;" placeholder='{"3": {"class_type": "KSampler", …}}'
+            .value=${value} ?disabled=${!this.canEdit}
+            @change=${(e: Event) => set((e.target as HTMLTextAreaElement).value)}></textarea>
+        </div>
+      </div>`;
+    return html`
+      <section class="card">
+        <h3><span class="material-symbols-rounded">movie</span>Video</h3>
+        <p class="card-sub">
+          A few seconds of video, from words or from a picture, made by ComfyUI — Create's Video
+          drawer, and Libby's clips of herself. Neither Automatic1111 nor InvokeAI makes video.
+        </p>
+        ${!s
+          ? html`<div class="field-help">Loading…</div>`
+          : html`
+              <div class="field stack">
+                <div class="field-text">
+                  <div class="field-label">ComfyUI</div>
+                  <div class="field-help">
+                    The address of a ComfyUI server on your network, e.g. <code>http://192.168.1.10:8188</code>.
+                    Blank turns clips off.
+                  </div>
+                </div>
+                <div class="field-control">
+                  <input type="text" autocomplete="off" placeholder="http://comfyui:8188"
+                    .value=${s.libbyClipUrl ?? ""} ?disabled=${!this.canEdit}
+                    @change=${(e: Event) => this.edit({ libbyClipUrl: (e.target as HTMLInputElement).value })} />
+                </div>
+              </div>
+              <div class="field-help" style="margin:0 0 4px;">
+                Build each workflow in ComfyUI until it makes the clip you want (Wan 2.x, LTX-Video,
+                AnimateDiff — any of them), then export it with <em>Workflow → Export (API)</em> (<em>Save (API Format)</em> in older versions) and paste it
+                below. Put placeholders where a run varies, each as a whole value in quotes:
+                <code>"{{prompt}}"</code> and <code>"{{negative}}"</code> in the text nodes,
+                <code>"{{seed}}"</code> as the seed, and in a picture workflow <code>"{{image}}"</code> in its
+                Load Image node. Optional ones put a control in the drawer: <code>"{{width}}"</code>,
+                <code>"{{height}}"</code>, <code>"{{frames}}"</code> (a length — Wan's <code>length</code>),
+                <code>"{{fps}}"</code> and <code>"{{steps}}"</code>. Anything left out keeps the value in the workflow.
+              </div>
+              ${workflow("From a picture", html`Image to video: brings a still to life — what Animate on a
+                picture and Libby's clips run.`, s.libbyClipWorkflow ?? "", (v) => this.edit({ libbyClipWorkflow: v }))}
+              ${workflow("From words", html`Text to video: a clip from a description alone. Optional.`,
+                s.clipTextWorkflow ?? "", (v) => this.edit({ clipTextWorkflow: v }))}
+            `}
+      </section>
+    `;
+  }
+
   private async runGenCheck() {
     this.genCheckBusy = true;
     this.genCheckErr = "";
@@ -2466,6 +2524,60 @@ export class OppaiSettings extends LitElement {
           </ul>`
         : nothing}
     </div>`;
+  }
+
+  /** Restarting Automatic1111, for what it reads only when it starts: ADetailer's
+      detectors, a renamed one, an extension just installed. */
+  private renderGenRestart() {
+    const st = this.genStatus;
+    if (!st?.reachable || st.backend !== "a1111") return nothing;
+    const busy = this.genRestart === "Restarting…";
+    return html`<div class="field">
+      <div class="field-text">
+        <div class="field-label">Restart Automatic1111</div>
+        <div class="field-help">
+          ${st.canRestart
+            ? "It reads ADetailer's detectors and its extensions only when it starts. Back in a minute or two; a picture it is drawing is lost."
+            : html`It can only be restarted from here when it is started with <code>--api-server-stop</code> — add that to
+                COMMANDLINE_ARGS beside <code>--api</code> and restart it by hand once.`}
+        </div>
+        ${this.genRestart && !busy ? html`<div class="field-status">${this.genRestart}</div>` : nothing}
+      </div>
+      <div class="field-control">
+        <button class="btn" ?disabled=${!this.canEdit || busy} @click=${() => void this.restartGen()}>
+          ${busy ? "Restarting…" : "Restart"}
+        </button>
+      </div>
+    </div>`;
+  }
+
+  private async restartGen() {
+    if (!confirm("Restart Automatic1111? It takes a minute or two, and a picture it is drawing now is lost.")) return;
+    this.genRestart = "Restarting…";
+    try {
+      await api.restartGenerator();
+    } catch (e) {
+      this.genRestart = (e as Error).message;
+      return;
+    }
+    // Down, then answering again — or answering long enough after that the time it
+    // was down fell between two looks.
+    const started = Date.now();
+    let wentDown = false;
+    while (this.isConnected && Date.now() - started < 5 * 60_000) {
+      await new Promise((r) => setTimeout(r, 3000));
+      const st = await api.imageGenStatus().catch(() => null);
+      if (!st?.reachable) {
+        wentDown = true;
+        continue;
+      }
+      if (wentDown || Date.now() - started > 45_000) {
+        this.genRestart = "Automatic1111 is back.";
+        void this.loadGenLists();
+        return;
+      }
+    }
+    this.genRestart = "It hasn't come back yet — look at it where it runs.";
   }
 
   /** What the generator URL reached, as of the last save. */

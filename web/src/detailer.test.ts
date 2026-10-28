@@ -79,3 +79,17 @@ test("the passes are summed up in the order they run, custom ones by their label
   assert.equal(passSummary({ faces: true, faceModel: "person_yolov8n-seg.pt", hands: false }, []), "Whole person");
   assert.equal(passSummary({ faces: false, faceModel: "face_yolov8n.pt", hands: false }, []), "");
 });
+
+const { detectorKind, groupDetectors } = await import("./detailer.ts");
+
+test("detectors are grouped by what they find, in a fixed order, empty groups left out", () => {
+  assert.equal(detectorKind("adetailerAfterDetailer_v10.pt Foot detection"), "feet");
+  assert.equal(detectorKind("Eyes.pt"), "eyes");
+  const groups = groupDetectors(["mystery.pt", "Eyes.pt", "hand_yolov8n.pt", "eyes_yolov8s.pt", "face_yolov8n.pt"], detectorKind);
+  assert.deepEqual(groups.map((g) => [g.kind.id, g.items]), [
+    ["face", ["face_yolov8n.pt"]],
+    ["eyes", ["Eyes.pt", "eyes_yolov8s.pt"]],
+    ["hands", ["hand_yolov8n.pt"]],
+    ["other", ["mystery.pt"]],
+  ]);
+});

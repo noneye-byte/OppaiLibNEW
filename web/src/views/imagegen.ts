@@ -19,6 +19,7 @@ import {
   type GenCharacter,
   type GenLora,
   type LoraCivitaiResult,
+  type ModelRename,
   type GenModel,
   type GenModelMeta,
   type GenPose,
@@ -82,8 +83,10 @@ import type { LibbyEmotion } from "../libby.js";
 import "./outfit-wardrobe.js";
 import { createZip, type ZipEntry } from "../zip.js";
 import "./imagegen-gallery.js";
-import "./imagegen-loras.js";
+import { LORA_DRAG_TYPE } from "./imagegen-loras.js";
+import "./rename-dialog.js";
 import "./imagegen-detailer.js";
+import { animatePicture, clipsRunning, onClipsChange } from "./imagegen-video.js";
 import { RESOLUTIONS, SCHEDULERS } from "../gen-options.js";
 import { aspectLabel, megapixels, previewFrame } from "../size-preview.js";
 import "./civitai.js";
@@ -110,9 +113,10 @@ import {
   passesFromModels, type CustomPass, type DetailerPasses, type DetailerValue,
 } from "../detailer.js";
 import {
-  MAX_PEOPLE, newPerson, peopleAdvice, peopleFrom, regionBoxes, regionNegatives, regionParams, sharedLoras, sharedTriggers,
-  type RegionPerson,
+  MAX_PEOPLE, newPerson, peopleAdvice, peopleFrom, putLoraOn, regionBoxes, regionNegatives, regionParams, sharedLoras,
+  sharedTriggers, unwearLora, type RegionPerson,
 } from "../regions.js";
+import { renameKeys, renameLorasInPrompt, renamedMap } from "../model-rename.js";
 import { hiresScale, hiresUpscalers, scaledSize, upscaleFactor } from "../upscale.js";
 import {
   LORA_CATEGORIES, filedByCategory, moveToCategory, type LoraCategoryKey,
@@ -168,7 +172,7 @@ interface Shot extends GenPreview {
   workspaceY?: number;
 }
 
-type CreateTab = "models" | "loras" | "look" | "wildcards" | "detailer" | "settings";
+type CreateTab = "models" | "loras" | "look" | "wildcards" | "detailer" | "video" | "settings";
 
 /** A picture a run starts from instead of noise: the whole of it (image to image),
     the painted part of it (paint to fix), or only its faces (the detailer alone). */
@@ -177,7 +181,8 @@ interface StartPicture {
   name: string;
   width: number;
   height: number;
-  mode: UsePictureMode;
+  /** Never "animate": a clip's picture is the Video drawer's, not a run's start. */
+  mode: Exclude<UsePictureMode, "animate">;
   /** Made from a file on this computer, and released when it is let go. */
   objectURL?: boolean;
   /** Its name in the studio's gallery, when it is there: the server reads it from
@@ -192,6 +197,7 @@ const CREATE_TABS: { id: CreateTab; label: string; icon: string }[] = [
   { id: "look", label: "Look", icon: "face" },
   { id: "wildcards", label: "Wildcards", icon: "category" },
   { id: "detailer", label: "ADetailer", icon: "face_retouching_natural" },
+  { id: "video", label: "Video", icon: "movie" },
   { id: "settings", label: "Settings", icon: "tune" },
 ];
 
@@ -517,6 +523,7 @@ export class OppaiImageGen extends LitElement {
   /** The source's bytes as a data URL, read once and sent with every run from it. */
   private sourceData = "";
   @query("input.source-file") private sourceFile?: HTMLInputElement;
+  private unwatchClips?: () => void;
 
   // Which sidebar sections are unfolded. Models start open — it's the choice that
   // shapes everything else; the rest unfold on demand.
@@ -635,6 +642,15 @@ export class OppaiImageGen extends LitElement {
 
   /** Whether the Civitai browser is on screen. */
   @state() private civitaiOpen = false;
+  /** The LoRA being dragged from the picker, "" when none: while it is, the canvas
+      shows where it can go — the whole picture, or each person's part of it. */
+  @state() private loraDrag = "";
+  /** The drop target a dragged LoRA is over: a person by index, or everyone. */
+  @state() private loraOver: number | "all" | null = null;
+  /** The LoRAs being named after Civitai, while that dialog is open. */
+  @state() private renamingLoras: string[] | null = null;
+  /** Automatic1111 was asked to restart and has not come back yet. */
+  @state() private restarting = false;
   /** The Train a LoRA screen, over the studio like the Civitai browser. */
   @state() private trainOpen = false;
 
@@ -2378,6 +2394,55 @@ export class OppaiImageGen extends LitElement {
           linear-gradient(90deg, color-mix(in srgb, var(--oppai-border) 34%, transparent) 1px, transparent 1px);
         background-size: 24px 24px;
       }
+      /* The canvas scrolls; a dragged LoRA's drop targets sit over it, still. */
+      .canvas-wrap { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+      .canvas-wrap > .canvas-stage { flex: 1; }
+      .lora-drop {
+        position: absolute; inset: 0; z-index: 12; display: flex; flex-direction: column; align-items: center; justify-content: center;
+        gap: 12px; padding: 18px; box-sizing: border-box; background: color-mix(in srgb, var(--oppai-bg) 74%, transparent);
+        backdrop-filter: blur(3px); animation: oppai-fade-in 0.12s ease both; container-type: size; overflow: hidden;
+      }
+      .drop-title { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: center; font-size: 13px; color: var(--oppai-text-dim); }
+      .drop-title b { color: var(--oppai-text); }
+      .drop-title .material-symbols-rounded { font-size: 18px; color: var(--oppai-primary-bright, var(--oppai-primary)); }
+      .drop-all {
+        flex: 1 1 auto; width: 100%; max-width: 560px; max-height: 320px; display: flex; align-items: center; justify-content: center; gap: 8px;
+        border: 2px dashed color-mix(in srgb, var(--oppai-primary) 50%, var(--oppai-border-strong)); border-radius: 18px;
+        color: var(--oppai-text-dim); font-size: 15px; font-weight: 600; transition: background 0.12s ease, border-color 0.12s ease;
+      }
+      .drop-all.slim { flex: none; height: 52px; font-size: 13px; }
+      .drop-all.over, .drop-part.over {
+        border-style: solid; border-color: var(--oppai-primary); color: var(--oppai-text);
+        background: color-mix(in srgb, var(--oppai-primary) 16%, transparent);
+      }
+      .people-frame {
+        display: flex; gap: 6px; padding: 6px; box-sizing: border-box; max-height: 100%; border-radius: 14px;
+        border: 1px solid var(--oppai-border-strong); background: color-mix(in srgb, var(--oppai-surface) 72%, transparent);
+      }
+      .people-frame.rows { flex-direction: column; }
+      .drop-part {
+        position: relative; min-width: 0; min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+        gap: 6px; padding: 26px 6px 8px; box-sizing: border-box; border-radius: 10px; text-align: center; font-size: 12px;
+        color: var(--oppai-text-muted); border: 2px dashed color-mix(in srgb, var(--oppai-primary) 45%, var(--oppai-border-strong));
+        transition: background 0.12s ease, border-color 0.12s ease;
+      }
+      .drop-n { position: absolute; top: 5px; left: 9px; font-size: 13px; font-weight: 700; color: var(--oppai-primary-bright, var(--oppai-primary)); }
+      .drop-lora {
+        display: inline-flex; align-items: center; gap: 4px; max-width: 100%; box-sizing: border-box; padding: 4px 4px 4px 8px;
+        border-radius: 14px; background: var(--oppai-primary-container); color: var(--oppai-text); font-size: 12px; font-weight: 600;
+      }
+      .drop-lora .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .drop-lora .material-symbols-rounded { font-size: 15px; }
+      .drop-lora button {
+        flex: none; width: 20px; height: 20px; padding: 0; border: none; border-radius: 10px; background: none; color: inherit;
+        display: grid; place-items: center; cursor: pointer;
+      }
+      .people-empty { place-self: center; width: 100%; display: flex; flex-direction: column; align-items: center; gap: 12px; }
+      .people-empty .hint { max-width: 360px; font-size: 12px; line-height: 1.5; color: var(--oppai-text-muted); text-align: center; }
+      .restart-pane { display: flex; align-items: center; gap: 12px; font-size: 12.5px; line-height: 1.45; color: var(--oppai-text-dim); }
+      .restart-pane > span { flex: 1; }
+      .restart-pane .chip { flex: none; display: inline-flex; align-items: center; gap: 5px; }
+      .restart-pane .chip .material-symbols-rounded { font-size: 17px; }
       .canvas-empty {
         width: min(420px, 88%);
         min-height: 260px;
@@ -3261,6 +3326,10 @@ export class OppaiImageGen extends LitElement {
           width: 340px;
           box-shadow: 18px 0 46px rgba(0, 0, 0, 0.42);
         }
+        /* filter, not opacity: the drawer's entrance animation fills forwards and
+           would hold its opacity at 1. */
+        .create-shell.lora-dragging .create-drawer { filter: opacity(0.35); pointer-events: none; transition: filter 0.15s ease; }
+        .create-shell.lora-dragging .drawer-scrim { pointer-events: none; }
       }
       /* A tablet or a phone: one column that scrolls — the rail across the top, the
          canvas and composer, then the gallery — and the drawer a sheet from below. */
@@ -3369,6 +3438,8 @@ export class OppaiImageGen extends LitElement {
     void this.loadPoses();
     void this.loadWildcards();
     if (this.studio) this.enterStudio();
+    // The rail counts the clips being made, which go on with their drawer shut.
+    this.unwatchClips = onClipsChange(() => this.requestUpdate());
   }
 
   /**
@@ -3387,6 +3458,7 @@ export class OppaiImageGen extends LitElement {
 
   disconnectedCallback() {
     super.disconnectedCallback();
+    this.unwatchClips?.();
     // A full wardrobe can take a while. Leaving Creation finishes only the request
     // already accepted by the generator, then stops the client-side queue.
     this.stopOutfitBatch = true;
@@ -4661,6 +4733,12 @@ export class OppaiImageGen extends LitElement {
       this.showToast((e as Error).message);
       return;
     }
+    if (mode === "animate") {
+      // A clip is not the next picture's start: the Video drawer keeps its own.
+      animatePicture({ url, name, width: img.naturalWidth, height: img.naturalHeight, gallery });
+      this.openCreateTab("video");
+      return;
+    }
     const pic: StartPicture = { url, name, width: img.naturalWidth, height: img.naturalHeight, mode, objectURL, gallery };
     if (mode === "faces" || mode === "upscale") {
       void this.runOnPicture(pic, mode);
@@ -5047,6 +5125,8 @@ export class OppaiImageGen extends LitElement {
         ...(this.canUpscale ? [{ label: `Upscale ${this.upscaleBy}×`, icon: "open_in_full",
           disabled: this.generating,
           run: () => void this.usePicture(this.previewURL(shot), `seed ${shot.seed}`, "upscale", false, shot.gallery) }] : []),
+        ...(this.status?.clips?.image ? [{ label: "Animate", icon: "animation",
+          run: () => void this.usePicture(this.previewURL(shot), `seed ${shot.seed}`, "animate", false, shot.gallery) }] : []),
         { label: "Use as a Libby background", icon: "wallpaper",
           run: () => void this.useAsBackground(shot) },
         { label: "Save as a pose…", icon: "accessibility_new",
@@ -5773,7 +5853,7 @@ export class OppaiImageGen extends LitElement {
     const tab = this.createTab;
     return html`
       <div class="workspace create">
-        <div class="create-shell ${tab ? "drawer-open" : ""} ${gallery ? "with-gallery" : ""}">
+        <div class="create-shell ${tab ? "drawer-open" : ""} ${gallery ? "with-gallery" : ""} ${this.loraDrag ? "lora-dragging" : ""}">
           ${this.renderCreateRail()}
           ${tab
             ? html`<div class="drawer-scrim" @click=${() => (this.createTab = "")}></div>
@@ -5783,10 +5863,15 @@ export class OppaiImageGen extends LitElement {
             : nothing}
           <section class="create-stage">
             ${this.renderRecipeStrip(st, invoke)}
-            <div class="canvas-stage">
-              ${this.renderResults()}
-              ${this.error ? html`<div class="banner">${this.error}</div>` : nothing}
-              ${this.generating ? this.renderGenerating(invoke) : nothing}
+            <div class="canvas-wrap">
+              <div class="canvas-stage">
+                ${this.renderResults()}
+                ${this.restarting || this.error
+                  ? html`<div class="banner">${this.restarting ? "Restarting Automatic1111 — it takes a minute or two…" : this.error}</div>`
+                  : nothing}
+                ${this.generating ? this.renderGenerating(invoke) : nothing}
+              </div>
+              ${this.loraDrag ? this.renderLoraDrop() : nothing}
             </div>
             <div class="prompt-dock">${this.renderPrompt()}</div>
           </section>
@@ -5798,6 +5883,7 @@ export class OppaiImageGen extends LitElement {
                   .canFixFaces=${!invoke && !!st.detailerAvailable}
                   .fixLabel=${fixLabel(this.detailerPasses)}
                   .upscaleLabel=${this.canUpscale ? `Upscale ${this.upscaleBy}×` : ""}
+                  .canAnimate=${!!st.clips?.image}
                   .canSetCovers=${invoke || !!st.manageModels}
                   .loras=${(st.loras ?? []).map((l) => l.name)}
                   @covers-changed=${() => this.bumpThumbs()}
@@ -5826,6 +5912,11 @@ export class OppaiImageGen extends LitElement {
             @close=${() => this.onCivitaiClose()}
             @use-prompt=${(e: CustomEvent<PromptSettings>) => this.onCivitaiPrompt(e.detail)}></oppai-civitai>`
         : nothing}
+      ${this.renamingLoras
+        ? html`<oppai-rename-dialog kind="lora" .names=${this.renamingLoras} .existing=${(st.loras ?? []).map((l) => l.name)}
+            @renamed=${(e: CustomEvent<{ renamed: ModelRename[] }>) => this.onLorasRenamed(e.detail.renamed)}
+            @close=${() => (this.renamingLoras = null)}></oppai-rename-dialog>`
+        : nothing}
     `;
   }
 
@@ -5853,6 +5944,7 @@ export class OppaiImageGen extends LitElement {
       detailer: this.status?.detailerAvailable && this.detailerEnabled && this.detailerHasPasses
         ? detailerModels(this.detailerPasses).length + (this.status?.detectors?.length ? customPassParams(this.detailerCustom).length : 0)
         : 0,
+      video: clipsRunning(),
       settings: this.templateId ? 1 : 0,
     };
     return html`<nav class="create-rail" aria-label="Generation setup">
@@ -5913,13 +6005,17 @@ export class OppaiImageGen extends LitElement {
         case "detailer":
           body = this.renderDetailerSection(invoke);
           break;
+        case "video":
+          body = html`<oppai-clip-panel .clips=${st.clips ?? {}}></oppai-clip-panel>`;
+          break;
         case "settings":
           // Saved prompt styles were a rail tab of their own, and read as LoRA styles
           // beside the LoRA categories; they are a setting, and an occasional one.
           body = html`<div class="pane-title">Size</div><div class="pane">${this.renderPromptOptions()}</div>
             <div class="pane-title">Sampling</div>${this.renderSettingsSection(invoke, st.boards ?? [])}
             <div class="pane-title">VAE</div>${this.renderVaeSection(st.vaes ?? [])}
-            <div class="pane-title">Saved prompt styles</div>${this.renderTemplateSection(st.templates ?? [])}`;
+            <div class="pane-title">Saved prompt styles</div>${this.renderTemplateSection(st.templates ?? [])}
+            ${this.renderGeneratorPane(st, invoke)}`;
           break;
       }
     } finally {
@@ -5977,6 +6073,15 @@ export class OppaiImageGen extends LitElement {
             <span class="material-symbols-rounded">close</span>
           </button>
         </span>`)}
+        ${this.regionsActive ? this.regionPeople.map((p, i) => p.lora ? html`<span class="recipe-chip lora">
+          <button class="recipe-chip-main" title=${`Person ${i + 1}'s LoRA — change it under Look`} @click=${() => this.openCreateTab("look")}>
+            <span class="material-symbols-rounded">person</span>${i + 1} · ${this.loraLabel(p.lora)}<b>${p.loraWeight}</b>
+          </button>
+          <button class="recipe-chip-x" title=${`Take this LoRA off person ${i + 1}`} aria-label=${`Take ${this.loraLabel(p.lora)} off person ${i + 1}`}
+            @click=${() => this.takeLoraOffPerson(i)}>
+            <span class="material-symbols-rounded">close</span>
+          </button>
+        </span>` : nothing) : nothing}
         ${loras.length ? nothing : html`<button class="recipe-chip add" @click=${() => this.openCreateTab("loras")}>
           <span class="material-symbols-rounded">add</span>LoRA
         </button>`}
@@ -6002,6 +6107,190 @@ export class OppaiImageGen extends LitElement {
         <span class="material-symbols-rounded">model_training</span><span>Train</span>
       </button>
     </div>`;
+  }
+
+  private loraLabel(name: string): string {
+    const l = (this.status?.loras ?? []).find((x) => x.name === name);
+    return l?.alias || name;
+  }
+
+  private takeLoraOffPerson(i: number) {
+    this.regionPeople = this.regionPeople.map((p, j) => (j === i ? { ...p, lora: "" } : p));
+  }
+
+  // ── dragging a LoRA onto the picture ────────────────────────────────────────
+  //
+  // A card dragged out of the LoRA picker is put on where it is dropped: anywhere on
+  // the picture with one person, and with two or more, on one person's part of it —
+  // the parts drawn to the picture's shape, the way Regional Prompter divides it —
+  // or on the band for everyone. It used to take the Look drawer's dropdown per
+  // person, which listed two hundred LoRAs by file name.
+
+  /** Over the canvas while a LoRA is dragged: where it can go. */
+  private renderLoraDrop() {
+    const name = this.loraLabel(this.loraDrag);
+    const people = this.regionsActive;
+    const target = (t: number | "all") => ({
+      over: (e: DragEvent) => this.loraDragOver(e, t),
+      drop: (e: DragEvent) => this.loraDrop(e, t),
+    });
+    const all = target("all");
+    return html`<div class="lora-drop" @dragover=${(e: DragEvent) => { if (e.target === e.currentTarget) this.loraOver = null; }}
+      @drop=${(e: DragEvent) => { e.preventDefault(); this.loraDrag = ""; }}>
+      <div class="drop-title"><span class="material-symbols-rounded">style</span><b>${name}</b>
+        ${people ? html`<span>— on a person, or on everyone</span>` : nothing}</div>
+      ${people
+        ? html`${this.renderPeopleFrame(true)}
+            <div class="drop-all slim ${this.loraOver === "all" ? "over" : ""}" @dragover=${all.over} @drop=${all.drop}>
+              <span class="material-symbols-rounded">group</span>Everyone — in the prompt they all share</div>`
+        : html`<div class="drop-all ${this.loraOver === "all" ? "over" : ""}" @dragover=${all.over} @drop=${all.drop}>
+            <span class="material-symbols-rounded">add_circle</span>${this.selectedLoras[this.loraDrag] !== undefined ? "It's on already" : "Drop to put it on"}</div>`}
+    </div>`;
+  }
+
+  /** The picture as its people divide it, each part a place to drop a LoRA for that
+      person and showing the one they wear: over the canvas while a LoRA is dragged,
+      and on the canvas while it is empty. */
+  private renderPeopleFrame(dragging: boolean) {
+    const people = this.regionPeople;
+    const boxes = regionBoxes(people);
+    const ratio = this.width / Math.max(1, this.height);
+    // Over the canvas, as big as the room under the title and above the band for
+    // everyone allows (the overlay is a size container); on the empty canvas, which
+    // scrolls, a fixed size.
+    const width = dragging
+      ? `min(100%, ${Math.round(420 * ratio)}px, calc((100cqh - 128px) * ${ratio.toFixed(4)}))`
+      : `min(100%, ${Math.round(260 * ratio)}px)`;
+    return html`<div class="people-frame ${this.regionsRows ? "rows" : ""}"
+      style=${`width:${width};aspect-ratio:${this.width} / ${this.height};`}>
+      ${people.map((p, i) => html`<div class="drop-part ${this.loraOver === i ? "over" : ""}" style=${`flex:${boxes[i].size} 1 0;`}
+        @dragover=${(e: DragEvent) => this.loraDragOver(e, i)} @drop=${(e: DragEvent) => this.loraDrop(e, i)}>
+        <span class="drop-n">${i + 1}</span>
+        ${p.lora
+          ? html`<span class="drop-lora" title=${p.lora}><span class="material-symbols-rounded">style</span><span class="nm">${this.loraLabel(p.lora)}</span>
+              ${dragging ? nothing : html`<button title=${`Take it off person ${i + 1}`} aria-label=${`Take ${this.loraLabel(p.lora)} off person ${i + 1}`}
+                @click=${() => this.takeLoraOffPerson(i)}><span class="material-symbols-rounded">close</span></button>`}</span>`
+          : html`<span class="drop-empty">${dragging ? `Person ${i + 1}` : "Drop a LoRA here"}</span>`}
+      </div>`)}
+    </div>`;
+  }
+
+  private loraDragOver(e: DragEvent, target: number | "all") {
+    if (!e.dataTransfer?.types.includes(LORA_DRAG_TYPE)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = "copy";
+    if (this.loraOver !== target) this.loraOver = target;
+  }
+
+  private loraDrop(e: DragEvent, target: number | "all") {
+    const name = e.dataTransfer?.getData(LORA_DRAG_TYPE) || this.loraDrag;
+    if (!name) return;
+    e.preventDefault();
+    e.stopPropagation();
+    this.loraDrag = "";
+    this.loraOver = null;
+    this.wearLora(name, target);
+  }
+
+  /** Puts a LoRA on one person, or on the whole picture (and off whoever wore it). */
+  private wearLora(name: string, target: number | "all") {
+    const label = this.loraLabel(name);
+    if (target === "all") {
+      const worn = this.regionPeople.some((p) => p.lora === name);
+      this.regionPeople = unwearLora(this.regionPeople, name);
+      if (!(name in this.selectedLoras)) this.toggleLora(name);
+      else if (!worn) {
+        this.showToast(`${label} is on already`);
+        return;
+      }
+      if (this.regionsActive) this.showToast(`${label} is on everyone`);
+      return;
+    }
+    const weight = (this.status?.loras ?? []).find((l) => l.name === name)?.weight;
+    this.regionPeople = putLoraOn(this.regionPeople, target, name, weight);
+    this.showToast(`${label} is on person ${target + 1}`);
+  }
+
+  /** What was renamed, followed everywhere the studio names a LoRA: the ones that are
+      on, the people's, the passes' and the tags typed into the prompts. */
+  private onLorasRenamed(renamed: ModelRename[]) {
+    const to = renamedMap(renamed);
+    if (!to.size) return;
+    this.selectedLoras = renameKeys(this.selectedLoras, to);
+    this.regionPeople = this.regionPeople.map((p) => (to.has(p.lora) ? { ...p, lora: to.get(p.lora)! } : p));
+    this.detailerCustom = this.detailerCustom.map((p) => ({
+      ...p, lora: to.get(p.lora) ?? p.lora, prompt: renameLorasInPrompt(p.prompt, to),
+    }));
+    this.prompt = renameLorasInPrompt(this.prompt, to);
+    this.negative = renameLorasInPrompt(this.negative, to);
+    this.detailerPrompt = renameLorasInPrompt(this.detailerPrompt, to);
+    // On screen at once; the status read after says the same with the rest moved.
+    if (this.status?.loras) {
+      const keys = new Map(renamed.map((r) => [r.oldName, r.newKey]));
+      this.status = {
+        ...this.status,
+        loras: this.status.loras.map((l) => (to.has(l.name) ? { ...l, name: to.get(l.name)!, key: keys.get(l.name) ?? l.key } : l)),
+      };
+    }
+    this.showToast(renamed.length === 1 ? `Renamed to ${renamed[0].newName}` : `Renamed ${renamed.length} LoRAs`);
+    void this.refreshStatus();
+  }
+
+  // ── restarting Automatic1111 ────────────────────────────────────────────────
+
+  /** The generator itself, at the foot of the settings drawer: restarting it, for
+      what it reads only when it starts. */
+  private renderGeneratorPane(st: ImageGenStatus, invoke: boolean) {
+    if (invoke) return nothing;
+    return html`<div class="pane-title">Automatic1111</div>
+      <div class="pane restart-pane">
+        <span>${st.canRestart
+          ? "Restart it to read new detectors and extensions. It is back in a minute or two; a picture it is drawing is lost."
+          : "To restart it from here, start Automatic1111 with --api-server-stop (in COMMANDLINE_ARGS, beside --api) once by hand."}</span>
+        <button class="chip" ?disabled=${this.restarting} @click=${() => void this.restartGenerator()}>
+          <span class="material-symbols-rounded">restart_alt</span>${this.restarting ? "Restarting…" : "Restart"}
+        </button>
+      </div>`;
+  }
+
+  /** Asks Automatic1111 to restart, then follows the status until it is back: down
+      first, then answering again (or answering after long enough that the going
+      down was missed between two looks). */
+  private async restartGenerator() {
+    if (this.restarting) return;
+    if (!confirm("Restart Automatic1111? It takes a minute or two, and a picture it is drawing now is lost.")) return;
+    this.restarting = true;
+    try {
+      await api.restartGenerator();
+    } catch (e) {
+      this.restarting = false;
+      this.showToast((e as Error).message);
+      return;
+    }
+    const started = Date.now();
+    let wentDown = false;
+    while (this.isConnected && Date.now() - started < 5 * 60_000) {
+      await new Promise((r) => setTimeout(r, 3000));
+      try {
+        const st = await api.imageGenStatus();
+        if (!st.reachable) {
+          wentDown = true;
+          continue;
+        }
+        if (wentDown || Date.now() - started > 45_000) {
+          this.status = st;
+          this.restarting = false;
+          this.showToast("Automatic1111 is back");
+          return;
+        }
+      } catch {
+        wentDown = true;
+      }
+    }
+    this.restarting = false;
+    this.showToast("Automatic1111 hasn't come back yet — look at it where it runs");
+    void this.refreshStatus();
   }
 
   /** Keeps the seed of the picture on the canvas, or goes back to a new one each time. */
@@ -6665,7 +6954,12 @@ export class OppaiImageGen extends LitElement {
     const model = (this.status?.models ?? []).find((m) => m.title === this.checkpoint);
     const body = html`<oppai-lora-picker .loras=${loras} .selected=${this.selectedLoras} .modelBase=${model?.base ?? ""}
       .thumbVersion=${this.thumbVersion} ?canEdit=${!!this.status?.manageModels} ?civitai=${!!this.status?.civitai}
+      ?canRename=${!!this.status?.canRename}
+      .people=${this.regionsActive ? this.regionPeople.map((p) => p.lora) : []}
       .error=${loraError ?? ""}
+      @lora-drag=${(e: CustomEvent<{ name: string }>) => { this.loraDrag = e.detail.name; this.loraOver = null; }}
+      @lora-person=${(e: CustomEvent<{ name: string; person: number }>) => this.wearLora(e.detail.name, e.detail.person)}
+      @lora-rename=${(e: CustomEvent<{ names: string[] }>) => (this.renamingLoras = e.detail.names)}
       @lora-toggle=${(e: CustomEvent<{ name: string }>) => this.toggleLora(e.detail.name)}
       @lora-weight=${(e: CustomEvent<{ name: string; weight: number }>) =>
         (this.selectedLoras = { ...this.selectedLoras, [e.detail.name]: e.detail.weight })}
@@ -6801,7 +7095,8 @@ export class OppaiImageGen extends LitElement {
     const st = this.status;
     const body = html`<oppai-detailer-panel .value=${this.detailerValue} ?invoke=${invoke} ?available=${!!st?.detailerAvailable}
       .detectors=${st?.detectors ?? []} .loras=${st?.loras ?? []} ?civitai=${!!st?.civitai} ?canInstall=${!!st?.manageModels}
-      .manageNote=${manageModelsNote(st)}
+      .manageNote=${manageModelsNote(st)} ?canRename=${!!st?.canRename} ?restarting=${this.restarting}
+      @restart-generator=${() => void this.restartGenerator()}
       @detailer-change=${(e: CustomEvent<Partial<DetailerValue>>) => this.onDetailerChange(e.detail)}
       @detectors-changed=${() => void this.refreshStatus()}></oppai-detailer-panel>`;
     const on = st?.detailerAvailable && this.detailerEnabled && this.detailerHasPasses;
@@ -8662,6 +8957,13 @@ export class OppaiImageGen extends LitElement {
   }
 
   private renderResults() {
+    if (!this.shots.length && this.regionsActive) {
+      return html`<div class="people-empty">
+        <span class="hint">${this.regionPeople.length} people, ${this.regionsRows ? "stacked" : "side by side"}. Drag a LoRA from the
+          LoRAs drawer onto a person to put it on them alone.</span>
+        ${this.renderPeopleFrame(false)}
+      </div>`;
+    }
     if (!this.shots.length) {
       return html`<div class="canvas-empty">
         <span class="material-symbols-rounded">image</span>

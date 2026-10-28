@@ -20,6 +20,7 @@ import (
 	"github.com/youruser/oppailib/internal/crypto"
 	"github.com/youruser/oppailib/internal/db"
 	"github.com/youruser/oppailib/internal/imagegen"
+	"github.com/youruser/oppailib/internal/recognize"
 )
 
 // decodeDataImage decodes a base64 image, tolerating a leading "data:...;base64,"
@@ -54,6 +55,8 @@ type genPreview struct {
 	negative string
 	seed     int64
 	model    string
+	// mime is a clip's type; blank is a picture, which generators return as PNG.
+	mime string
 	// galleryID is the same picture kept in the studio's gallery (gen_gallery.go), 0
 	// when it was not: saving the preview to the library moves it out of there.
 	galleryID int64
@@ -210,6 +213,9 @@ func (s *Server) handleImageGenStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	out["regionsAvailable"] = s.imagegen.SupportsRegions(ctx, set.ImageGenURL)
+	// Clips are ComfyUI's (gen_clips.go): read off the settings, not probed, because a
+	// render box that is asleep should not take the Video drawer away.
+	out["clips"] = clipsStatus(set)
 	// What a picture can be enlarged with: on A1111 its upscaler models (an upscale
 	// or a hires fix) and latent modes (a hires fix only). InvokeAI lists none.
 	if ups, latent, err := s.imagegen.Upscalers(ctx, set.ImageGenURL); err == nil && backend == imagegen.KindA1111 {
@@ -228,6 +234,10 @@ func (s *Server) handleImageGenStatus(w http.ResponseWriter, r *http.Request) {
 		out["modelsDirSet"] = dir.Path != ""
 		out["modelsDir"] = dir.Dir
 		out["modelsDirProblem"] = dir.Problem
+		// LoRAs and detectors are named by their files, which need the folder to rename.
+		out["canRename"] = dir.Dir != "" && dir.Writable
+		// Restarting needs A1111 started with --api-server-stop (a1111_restart.go).
+		out["canRestart"] = s.imagegen.CanRestart(ctx, set.ImageGenURL)
 	} else {
 		out["manageModels"] = s.imagegen.ManagesModels(ctx, set.ImageGenURL)
 	}
@@ -482,6 +492,8 @@ type genResult struct {
 	Positive string           `json:"positive"`
 	Negative string           `json:"negative"`
 	Rolled   bool             `json:"rolled"`
+	// Clip is the one result of a clip run (gen_clips.go), which has no pictures.
+	Clip *genClip `json:"clip,omitempty"`
 }
 
 // decodeGenerateImages reads a request's picture to start from and its mask. A mask
@@ -801,12 +813,18 @@ func (s *Server) handleImageGenPreview(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "preview expired or not found")
 		return
 	}
-	// Generators return PNG. safeInlineContentType keeps an inline image safe on our
-	// origin; no-store keeps an unsaved preview from lingering in a disk cache.
-	w.Header().Set("Content-Type", safeInlineContentType("image/png"))
+	// Generators return PNG; a clip says what it is. safeInlineContentType keeps an
+	// inline file safe on our origin; no-store keeps an unsaved preview from lingering
+	// in a disk cache.
+	ct := p.mime
+	if ct == "" {
+		ct = "image/png"
+	}
+	w.Header().Set("Content-Type", safeInlineContentType(ct))
 	w.Header().Set("Cache-Control", "private, no-store")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(p.data)
+	// ServeContent answers range requests, which a <video> makes to seek and which
+	// Safari will not play a clip without.
+	http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(p.data))
 }
 
 type genPreviewImageReq struct {
@@ -878,8 +896,16 @@ func (s *Server) handleImageGenSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A clip is filed as what its bytes are — a video, or an animated WebP/GIF — so it
+	// gets a poster frame and plays in the viewer rather than sitting as a broken picture.
+	kind := "image"
+	if p.mime != "" {
+		kind = string(recognize.KindFromBytes(p.data, ""))
+	}
 	title := req.Title
-	if title == "" {
+	if title == "" && kind != "image" {
+		title = "Generated clip"
+	} else if title == "" {
 		title = "Generated image"
 	}
 	titleEnc, _ := crypto.SealBytes(s.kek, []byte(title), []byte("title"))
@@ -891,7 +917,7 @@ func (s *Server) handleImageGenSave(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id, existed, err := s.db.InsertMedia(r.Context(), &db.MediaRow{
-		Kind:     "image",
+		Kind:     kind,
 		SHA256:   put.SHA256,
 		Size:     put.Size,
 		BlobPath: put.RelPath,
@@ -903,7 +929,7 @@ func (s *Server) handleImageGenSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !existed {
-		s.processIngestAsync(id, put.RelPath, "image", put.Size, 0)
+		s.processIngestAsync(id, put.RelPath, kind, put.Size, 0)
 	}
 	// The full recipe rides along when the client sent one. Only for a fresh row: a
 	// duplicate save must not overwrite the record of the image that is already there.

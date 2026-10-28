@@ -199,47 +199,15 @@ func (s *Server) loraCivitaiSortOne(ctx context.Context, res *loraCivitaiResult,
 	if hash == "" {
 		hash = civitaiHashOf(l.Hash)
 	}
-	known := links[key]
-	modelID, versionID := known.ModelID, known.VersionID
-	if modelID == 0 {
-		// A file the catalogue did not know a little while ago is not asked about again.
-		if known.ModelKey != "" && known.Hash != "" && time.Since(time.Unix(known.CheckedAt, 0)) < civitaiLinkStale {
-			res.Outcome = "unknown"
-			return
-		}
-		if hash == "" {
-			res.Outcome = "unhashed"
-			return
-		}
-		v, err := s.civitaiVersionByHash(ctx, hash)
-		if errors.Is(err, errCivitaiNotFound) {
-			res.Outcome = "unknown"
-			if key != "" {
-				_ = s.db.PutCivitaiLink(ctx, db.CivitaiLink{ModelKey: key, Hash: hash})
-			}
-			return
-		}
+	m, _, outcome, err := s.civitaiFindFile(ctx, key, hash, links[key])
+	if m == nil {
+		res.Outcome = outcome
 		if err != nil {
-			res.Outcome, res.Error = "error", err.Error()
-			return
+			res.Error = err.Error()
 		}
-		modelID, versionID = v.ModelID, v.ID
-	}
-	m, err := s.civitaiModel(ctx, modelID)
-	if err != nil {
-		res.Outcome, res.Error = "error", err.Error()
 		return
 	}
 	res.Civitai = m.Name
-	if key != "" {
-		link := civitaiLinkFrom(key, hash, m, versionID)
-		if known.CoverURL != "" && known.VersionID == link.VersionID {
-			link.CoverURL = known.CoverURL
-		}
-		if err := s.db.PutCivitaiLink(ctx, link); err != nil {
-			s.log.Warn("lora categories: keep civitai link", "lora", l.Name, "err", err)
-		}
-	}
 	cat := civitaiLoraCategory(m.Type, m.Tags)
 	if cat == "" {
 		res.Outcome = "untagged"
@@ -250,4 +218,47 @@ func (s *Server) loraCivitaiSortOne(ctx context.Context, res *loraCivitaiResult,
 		return
 	}
 	res.Category, res.Outcome = cat, "filed"
+}
+
+// civitaiFindFile finds a model file on the catalogue: by the link an install or an
+// earlier lookup left under its key, else by its hash. What is learned is kept as the
+// file's link, so its cover and trigger words come with it, and a file the catalogue
+// did not know a little while ago is not asked about again. With no model, outcome
+// says why: unknown (not on Civitai), unhashed (nothing to look it up by yet) or
+// error.
+func (s *Server) civitaiFindFile(ctx context.Context, key, hash string, known db.CivitaiLink) (*civitaiRawModel, int64, string, error) {
+	modelID, versionID := known.ModelID, known.VersionID
+	if modelID == 0 {
+		if known.ModelKey != "" && known.Hash != "" && time.Since(time.Unix(known.CheckedAt, 0)) < civitaiLinkStale {
+			return nil, 0, "unknown", nil
+		}
+		if hash == "" {
+			return nil, 0, "unhashed", nil
+		}
+		v, err := s.civitaiVersionByHash(ctx, hash)
+		if errors.Is(err, errCivitaiNotFound) {
+			if key != "" {
+				_ = s.db.PutCivitaiLink(ctx, db.CivitaiLink{ModelKey: key, Hash: hash})
+			}
+			return nil, 0, "unknown", nil
+		}
+		if err != nil {
+			return nil, 0, "error", err
+		}
+		modelID, versionID = v.ModelID, v.ID
+	}
+	m, err := s.civitaiModel(ctx, modelID)
+	if err != nil {
+		return nil, 0, "error", err
+	}
+	if key != "" {
+		link := civitaiLinkFrom(key, hash, m, versionID)
+		if known.CoverURL != "" && known.VersionID == link.VersionID {
+			link.CoverURL = known.CoverURL
+		}
+		if err := s.db.PutCivitaiLink(ctx, link); err != nil {
+			s.log.Warn("civitai: keep link", "model", key, "err", err)
+		}
+	}
+	return m, versionID, "", nil
 }

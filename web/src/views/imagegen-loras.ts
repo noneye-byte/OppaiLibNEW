@@ -28,13 +28,24 @@ import {
  * unsorted pile at once, by what each LoRA's model is filed under on the catalogue
  * (api/lora_categories.go).
  *
+ * A card can also be dragged onto the picture: dropped there it is put on, and with
+ * two or more people, dropped on one person's part it goes on that person alone (the
+ * studio draws the parts while a card is dragged). A phone has no dragging, so a
+ * card's menu says the same: "Put it on person 2".
+ *
  * The studio owns which LoRAs are on, their weights and the filing itself; this
  * element asks for each through an event:
  *   lora-toggle {name}, lora-weight {name, weight}, lora-edit {name},
- *   lora-file {names, category} ("" for none), loras-sorted {results}.
+ *   lora-file {names, category} ("" for none), loras-sorted {results},
+ *   lora-drag {name} ("" when the drag ends), lora-person {name, person},
+ *   lora-rename {names}.
  */
 
 const PAGE = 60;
+
+/** What a dragged LoRA card carries: its name, under a type nothing else accepts —
+    a textarea would take text/plain and type the name into the prompt. */
+export const LORA_DRAG_TYPE = "application/x-oppai-lora";
 const PREFS_KEY = "oppai.loraPicker";
 
 interface Prefs {
@@ -65,6 +76,11 @@ export class OppaiLoraPicker extends LitElement {
   @property({ type: Boolean }) civitai = false;
   /** Why the generator listed no LoRAs, when it failed to. */
   @property() error = "";
+  /** LoRAs can be renamed: their files are in a models folder this side can write. */
+  @property({ type: Boolean }) canRename = false;
+  /** With two or more people in the picture, the LoRA each wears ("" for none);
+      empty otherwise. */
+  @property({ attribute: false }) people: string[] = [];
 
   @state() private query = "";
   @state() private category: CategoryFilter = "all";
@@ -125,6 +141,12 @@ export class OppaiLoraPicker extends LitElement {
         letter-spacing: 0.7px; text-transform: uppercase; color: var(--oppai-text-muted);
       }
       .section-k .grow { flex: 1; }
+      .drag-hint { display: inline-flex; align-items: center; gap: 2px; font-weight: 500; letter-spacing: 0; text-transform: none; }
+      .drag-hint .material-symbols-rounded { font-size: 15px; }
+      .card[draggable="true"] { cursor: grab; }
+      .icon-btn:disabled { opacity: 0.45; cursor: default; }
+      /* A phone has no dragging to do; the card's menu puts a LoRA on a person. */
+      @media (hover: none) { .drag-hint { display: none; } }
       .section-k button { border: none; background: none; color: var(--oppai-primary-bright, var(--oppai-primary)); font: inherit; font-size: 11px; letter-spacing: 0; text-transform: none; cursor: pointer; padding: 2px 4px; }
 
       .inuse { display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; }
@@ -286,6 +308,15 @@ export class OppaiLoraPicker extends LitElement {
     this.anchor = next.anchor;
   }
 
+  private dragStart(e: DragEvent, l: GenLora) {
+    if (!e.dataTransfer) return;
+    e.dataTransfer.setData(LORA_DRAG_TYPE, l.name);
+    e.dataTransfer.effectAllowed = "copy";
+    // After the drag has begun: Chrome drops a drag whose page changes under it
+    // during dragstart, and the studio draws its drop targets in answer to this.
+    setTimeout(() => this.emit("lora-drag", { name: l.name }));
+  }
+
   // ── Civitai ────────────────────────────────────────────────────────────────
 
   /** Asks Civitai about every unsorted LoRA, a batch at a time, filing as it goes. */
@@ -329,8 +360,13 @@ export class OppaiLoraPicker extends LitElement {
     const filed = categoryOf(l);
     const names = this.picked.has(l.name) && this.picked.size > 1 ? [...this.picked] : [l.name];
     const items: MenuItem[] = [
-      { label: on ? "Take it off" : "Put it on", icon: on ? "remove_circle" : "add_circle", run: () => this.emit("lora-toggle", { name: l.name }) },
+      { label: on ? "Take it off" : this.people.length > 1 ? "Put it on everyone" : "Put it on", icon: on ? "remove_circle" : "add_circle", run: () => this.emit("lora-toggle", { name: l.name }) },
+      ...this.people.map((worn, i) => ({
+        label: `Put it on person ${i + 1}`, icon: "person", hint: worn === l.name ? "on" : "", disabled: worn === l.name,
+        run: () => this.emit("lora-person", { name: l.name, person: i }),
+      })),
       ...(this.canEdit ? [{ label: "Edit its settings", icon: "edit", run: () => this.emit("lora-edit", { name: l.name }) }] : []),
+      ...(this.canRename ? [{ label: names.length > 1 ? `Rename ${names.length}…` : "Rename…", icon: "edit_note", run: () => this.emit("lora-rename", { names }) }] : []),
       ...(l.triggerPhrases?.length ? [{ label: "Copy trigger words", icon: "content_copy", run: () => void navigator.clipboard?.writeText(l.triggerPhrases!.join(", ")) }] : []),
       menuDivider,
       ...LORA_CATEGORIES.map((c) => ({
@@ -442,6 +478,9 @@ export class OppaiLoraPicker extends LitElement {
     const fam = baseFamily(l.base);
     const fits = fitsModel(l.base, this.modelBase);
     return html`<div class="card ${on ? "on" : ""} ${picked ? "picked" : ""} ${fits ? "" : "unfit"}"
+      draggable=${this.sorting ? "false" : "true"}
+      @dragstart=${(e: DragEvent) => this.dragStart(e, l)}
+      @dragend=${() => this.emit("lora-drag", { name: "" })}
       @contextmenu=${(e: MouseEvent) => this.openCardMenu(e, l)}>
       <button class="card-main" title=${l.name} aria-pressed=${this.sorting ? (picked ? "true" : "false") : (on ? "true" : "false")}
         @click=${(e: MouseEvent) => this.clickCard(e, l, order)}>
@@ -474,6 +513,7 @@ export class OppaiLoraPicker extends LitElement {
         ${names.length < shown.length ? html`<button @click=${() => (this.picked = new Set(shown.map((l) => l.name)))}>Pick all ${shown.length}</button>` : nothing}
         ${names.length ? html`<button @click=${() => (this.picked = new Set())}>Clear</button>` : nothing}
         <span class="grow"></span>
+        ${this.canRename && names.length ? html`<button @click=${() => this.emit("lora-rename", { names })}>Rename</button>` : nothing}
         <button class="done" @click=${() => this.setSorting(false)}>Done</button>
       </div>
       <div class="file-to" role="group" aria-label="File the picked LoRAs under">
@@ -512,6 +552,12 @@ export class OppaiLoraPicker extends LitElement {
           title="Sort mode: pick LoRAs and file them under a category" @click=${() => this.setSorting(!this.sorting)}>
           <span class="material-symbols-rounded">checklist</span>Sort
         </button>
+        ${this.canRename && this.civitai
+          ? html`<button class="icon-btn" title="Name the LoRAs shown here after Civitai" aria-label="Name after Civitai"
+              ?disabled=${!shown.length} @click=${() => this.emit("lora-rename", { names: order })}>
+              <span class="material-symbols-rounded">edit_note</span>
+            </button>`
+          : nothing}
       </div>
       <div class="filters">
         ${this.renderCategoryPicker()}
@@ -530,7 +576,11 @@ export class OppaiLoraPicker extends LitElement {
         ? html`<div class="note">${this.query.trim()
             ? `No LoRA here matches “${this.query.trim()}”.`
             : this.category === "none" ? "Every LoRA is filed." : "Nothing filed here yet — use Sort, or a card's ⋯ menu, to file LoRAs here."}</div>`
-        : html`${this.sorting || this.loras.some((l) => l.name in this.selected) ? html`<div class="section-k">${this.sorting ? "Pick the ones to file" : "Library"}</div>` : nothing}
+        : html`<div class="section-k">${this.sorting ? "Pick the ones to file" : "Library"}<span class="grow"></span>
+            ${this.sorting ? nothing : html`<span class="drag-hint"><span class="material-symbols-rounded">drag_indicator</span>${this.people.length > 1
+              ? "Drag one onto a person"
+              : "Drag one onto the picture"}</span>`}
+          </div>
           <div class="grid">${shown.slice(0, this.limit).map((l) => this.renderCard(l, order))}</div>
           ${shown.length > this.limit
             ? html`<button class="more-btn" @click=${() => (this.limit += PAGE)}>Show more (${shown.length - this.limit} left)</button>`

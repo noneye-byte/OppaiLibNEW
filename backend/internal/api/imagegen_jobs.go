@@ -111,6 +111,14 @@ func (job *genJob) succeed(res genResult) {
 	job.mu.Unlock()
 }
 
+// wasCancelled is whether the studio's Stop ended the run, as against its running out
+// of time: both leave the context done.
+func (job *genJob) wasCancelled() bool {
+	job.mu.Lock()
+	defer job.mu.Unlock()
+	return job.cancelled
+}
+
 func (job *genJob) fail(msg string) {
 	job.mu.Lock()
 	job.failure = msg

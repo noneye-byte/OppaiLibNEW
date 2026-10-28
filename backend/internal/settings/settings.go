@@ -217,6 +217,11 @@ type Settings struct {
 	// imagegen/comfy.go.
 	LibbyClipURL      string `json:"libbyClipUrl"`
 	LibbyClipWorkflow string `json:"libbyClipWorkflow"`
+	// ClipTextWorkflow is the same server's words-to-video workflow, for the studio's
+	// clips that start from nothing. The address and the picture workflow above are
+	// the studio's too, despite their names: one ComfyUI, set up once. See
+	// api/gen_clips.go.
+	ClipTextWorkflow string `json:"clipTextWorkflow"`
 	// LibbyStories lets her post a picture and a line while they are away, at most
 	// LibbyStoriesPerDay a day. See api.libby_stories.go.
 	LibbyStories       bool `json:"libbyStories"`
@@ -317,6 +322,7 @@ const (
 	keyLibbyFaceModel     = "libby.camera.face_model"
 	keyLibbyClipURL       = "libby.clip.url"
 	keyLibbyClipWorkflow  = "libby.clip.workflow"
+	keyClipTextWorkflow   = "clip.text_workflow"
 	keyLibbyStories       = "libby.stories"
 	keyLibbyStoriesPerDay = "libby.stories.per_day"
 	keyChatToolMode       = "chat.tool_mode"
@@ -566,7 +572,8 @@ func Merge(base Settings, stored map[string]string) Settings {
 		keyLibbyPoseModule: &s.LibbyPoseModule, keyLibbyPoseModel: &s.LibbyPoseModel,
 		keyLibbyFaceModule: &s.LibbyFaceModule, keyLibbyFaceModel: &s.LibbyFaceModel,
 		keyLibbyClipURL: &s.LibbyClipURL, keyLibbyClipWorkflow: &s.LibbyClipWorkflow,
-		keyChatToolMode: &s.ChatToolMode,
+		keyClipTextWorkflow: &s.ClipTextWorkflow,
+		keyChatToolMode:     &s.ChatToolMode,
 	} {
 		if v, ok := stored[key]; ok {
 			*field = v
@@ -646,6 +653,7 @@ func (s Settings) Map() map[string]string {
 		keyLibbyFaceModel:     s.LibbyFaceModel,
 		keyLibbyClipURL:       s.LibbyClipURL,
 		keyLibbyClipWorkflow:  s.LibbyClipWorkflow,
+		keyClipTextWorkflow:   s.ClipTextWorkflow,
 		keyLibbyStories:       strconv.FormatBool(s.LibbyStories),
 		keyLibbyStoriesPerDay: strconv.Itoa(s.LibbyStoriesPerDay),
 		keyChatToolMode:       s.ChatToolMode,
@@ -821,6 +829,10 @@ func (s *Settings) Clamp() {
 	// A workflow is a big blob of JSON; past a quarter of a megabyte it is not a workflow.
 	if len(s.LibbyClipWorkflow) > 256<<10 {
 		s.LibbyClipWorkflow = ""
+	}
+	s.ClipTextWorkflow = strings.TrimSpace(s.ClipTextWorkflow)
+	if len(s.ClipTextWorkflow) > 256<<10 {
+		s.ClipTextWorkflow = ""
 	}
 	if s.LibbyStoriesPerDay < 1 {
 		s.LibbyStoriesPerDay = 1

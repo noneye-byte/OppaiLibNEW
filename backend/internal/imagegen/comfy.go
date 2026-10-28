@@ -13,6 +13,7 @@ import (
 	"net/textproto"
 	"net/url"
 	"path"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -128,6 +129,25 @@ func (c *Client) RunComfyWorkflow(ctx context.Context, base, workflow string, va
 func crawl(elapsed time.Duration) float64 {
 	s := elapsed.Seconds()
 	return 0.05 + 0.9*(s/(s+90))
+}
+
+// comfyPlaceholder is a {{name}} in a workflow: lowercase, as the settings help names them.
+var comfyPlaceholder = regexp.MustCompile(`\{\{([a-z]+)\}\}`)
+
+// ComfyPlaceholders names the placeholders a workflow holds, each once, in the order
+// they first appear. The studio offers a control only for what the workflow will
+// take: a length slider over a workflow with its frame count written in would move
+// nothing.
+func ComfyPlaceholders(workflow string) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, m := range comfyPlaceholder.FindAllStringSubmatch(workflow, -1) {
+		if !seen[m[1]] {
+			seen[m[1]] = true
+			out = append(out, m[1])
+		}
+	}
+	return out
 }
 
 // substituteComfyVars fills a workflow's placeholders and parses the result.

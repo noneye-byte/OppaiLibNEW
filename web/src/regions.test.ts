@@ -82,3 +82,17 @@ test("thin strips and a character LoRA left in the recipe are pointed out", () =
   assert.equal(peopleAdvice(true, two, 832, 1216, {}, loras).narrow, false);
   assert.equal(peopleAdvice(true, two, 1216, 832, {}, loras).narrow, true);
 });
+
+const { putLoraOn, unwearLora } = await import("./regions.ts");
+
+test("a LoRA dropped on a person's part replaces theirs, at its own weight", () => {
+  const two = [{ ...newPerson(), lora: "old", loraWeight: 0.6 }, newPerson()];
+  assert.deepEqual(putLoraOn(two, 0, "alice_v2", 0.7).map((p) => [p.lora, p.loraWeight]), [["alice_v2", 0.7], ["", 0.8]]);
+  assert.equal(putLoraOn(two, 1, "bea_xl").at(1)?.loraWeight, 0.8);
+});
+
+test("a LoRA dropped on the whole picture comes off the people who wore it", () => {
+  const two = [{ ...newPerson(), lora: "detail" }, { ...newPerson(), lora: "bea_xl" }];
+  assert.deepEqual(unwearLora(two, "detail").map((p) => p.lora), ["", "bea_xl"]);
+  assert.equal(unwearLora(two, "nobody"), two);
+});

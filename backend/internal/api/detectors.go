@@ -382,6 +382,9 @@ func (s *Server) civitaiLinkDetectors(ctx context.Context, keys []string, modelI
 	if err != nil {
 		return err
 	}
+	// Named after what the catalogue says it finds, in ADetailer's own style, before
+	// ADetailer first reads the folder at its next start (model_names.go).
+	keys = s.civitaiNameDetectors(keys, m, versionID)
 	for _, key := range keys {
 		if err := s.db.PutCivitaiLink(ctx, civitaiLinkFrom(key, "", m, versionID)); err != nil {
 			return err

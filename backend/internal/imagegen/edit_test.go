@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -183,6 +184,13 @@ func TestFinishedClipFilesListMovingPicturesFirstAndSkipPreviews(t *testing.T) {
 	files := comfyFiles(h)
 	if len(files) != 2 || files[0].Filename != "clip.mp4" || files[1].Filename != "still.png" {
 		t.Fatalf("files = %+v", files)
+	}
+}
+
+func TestAWorkflowsPlaceholdersAreNamedOnceInTheOrderTheyAppear(t *testing.T) {
+	got := ComfyPlaceholders(`{"1":{"inputs":{"text":"{{prompt}}, {{prompt}}"}},"2":{"inputs":{"length":"{{frames}}","seed":"{{seed}}","w":"{{Width}}","note":"{{ spaced }}"}}}`)
+	if strings.Join(got, ",") != "prompt,frames,seed" {
+		t.Fatalf("placeholders = %v", got)
 	}
 }
 

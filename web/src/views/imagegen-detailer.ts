@@ -1,11 +1,13 @@
-import { LitElement, html, css, nothing } from "lit";
+import { LitElement, html, css, nothing, type PropertyValues } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { iconStyles, motionStyles } from "../theme.js";
-import { api, type CivitaiDetector, type DetectorInfo, type GenLora, type InstallJob } from "../api.js";
+import { api, type CivitaiDetector, type DetectorInfo, type GenLora, type InstallJob, type ModelRename } from "../api.js";
 import {
-  FACE_DETECTORS, customDetectors, detectorIcon, detectorLabel, passSummary,
+  FACE_DETECTORS, customDetectors, detectorIcon, detectorKind, detectorLabel, groupDetectors, passSummary,
   type CustomPass, type DetailerValue,
 } from "../detailer.js";
+import { renamedMap } from "../model-rename.js";
+import "./rename-dialog.js";
 
 /**
  * The ADetailer drawer: the passes that redo parts of a picture after it is drawn,
@@ -22,9 +24,14 @@ import {
  * its folder once, when Automatic1111 starts, so a detector that has just arrived is
  * shown as needing a restart rather than offered as a pass that would do nothing.
  *
+ * The detectors are listed by what they find (faces, eyes, feet…), and the ones from
+ * Civitai can be named after it there, in ADetailer's own style ("feet_yolov8s.pt"
+ * for what arrived as "adetailerAfterDetailer_v10.pt"). A rename is another thing
+ * ADetailer reads only at a start, so the drawer offers the restart itself.
+ *
  * The studio keeps the settings (they are its draft and its generate call); a change
- * comes back as "detailer-change" with the fields that moved, and a new detector in
- * the folder as "detectors-changed".
+ * comes back as "detailer-change" with the fields that moved, a new detector in the
+ * folder as "detectors-changed", and the restart as "restart-generator".
  */
 
 /** A detector ADetailer finds things with, as the drawer shows it. */
@@ -56,6 +63,13 @@ export class OppaiDetailerPanel extends LitElement {
   @property({ type: Boolean }) canInstall = false;
   /** Why not, when canInstall is off; see model-manage.ts. */
   @property() manageNote = "";
+  /** Detector files can be renamed. */
+  @property({ type: Boolean }) canRename = false;
+  /** Automatic1111 is restarting. */
+  @property({ type: Boolean }) restarting = false;
+
+  /** The detectors being named after Civitai, while that dialog is open. */
+  @state() private renaming: string[] | null = null;
 
   @state() private view: "passes" | "shop" = "passes";
   @state() private files: DetectorInfo[] | null = null;
@@ -97,6 +111,24 @@ export class OppaiDetailerPanel extends LitElement {
       .callout.warn { background: color-mix(in srgb, var(--oppai-accent) 10%, var(--oppai-surface)); border-color: color-mix(in srgb, var(--oppai-accent) 35%, transparent); }
       .callout > .material-symbols-rounded { font-size: 18px; color: var(--oppai-primary-bright, var(--oppai-primary)); }
       .callout.warn > .material-symbols-rounded { color: var(--oppai-accent); }
+      .callout .callout-text { flex: 1; display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+      .restart-btn {
+        display: inline-flex; align-items: center; gap: 5px; height: 30px; padding: 0 12px; border-radius: 15px; border: none;
+        background: var(--oppai-accent); color: var(--oppai-on-accent, #000); font: inherit; font-size: 12px; font-weight: 700; cursor: pointer;
+      }
+      .restart-btn:disabled { opacity: 0.6; cursor: default; }
+      .restart-btn .material-symbols-rounded { font-size: 16px; }
+      .kind-k { display: flex; align-items: center; gap: 6px; padding: 8px 10px 4px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.6px;
+        text-transform: uppercase; color: var(--oppai-text-muted); border-top: 1px solid var(--oppai-border); background: var(--oppai-surface-2); }
+      .kind-k:first-child { border-top: none; }
+      .kind-k .material-symbols-rounded { font-size: 14px; }
+      .kind-k + .det { border-top: none; }
+      .det { gap: 6px; }
+      .det .icon-x { width: 26px; height: 26px; }
+      .det .icon-x .material-symbols-rounded { font-size: 17px; }
+      .k .k-btn { border: none; background: none; display: inline-flex; align-items: center; gap: 3px; color: var(--oppai-primary-bright, var(--oppai-primary));
+        font: inherit; font-size: 11px; letter-spacing: 0; text-transform: none; cursor: pointer; padding: 2px 4px; }
+      .k .k-btn .material-symbols-rounded { font-size: 15px; }
 
       /* The switch: a checkbox drawn as a track and thumb. */
       .switch { position: relative; flex: none; width: 44px; height: 26px; cursor: pointer; }
@@ -279,6 +311,12 @@ export class OppaiDetailerPanel extends LitElement {
     if (!this.invoke && this.available) void this.loadFiles();
   }
 
+  updated(changed: PropertyValues<this>) {
+    // ADetailer's list changed — a restart read the folder again — so which files
+    // it has read did too; the folder's listing says which.
+    if (changed.has("detectors") && changed.get("detectors") !== undefined && !this.invoke && this.available) void this.loadFiles();
+  }
+
   disconnectedCallback() {
     super.disconnectedCallback();
     window.clearTimeout(this.searchTimer);
@@ -426,7 +464,8 @@ export class OppaiDetailerPanel extends LitElement {
       </div>
       <div class="pass-body">
         ${!d.listed && this.files ? html`<div class="callout warn"><span class="material-symbols-rounded">restart_alt</span>
-          <span>ADetailer hasn't read this detector yet — restart Automatic1111, or this pass is skipped.</span></div>` : nothing}
+          <span class="callout-text"><span>ADetailer hasn't read this detector yet — restart Automatic1111, or this pass is skipped.</span>
+            ${this.renderRestartButton()}</span></div>` : nothing}
         <label class="field"><span>Detector</span>
           <select class="text" @change=${(e: Event) => this.setPass(i, { model: (e.target as HTMLSelectElement).value })}>
             ${choices.some((c) => c.name === p.model) ? nothing : html`<option value=${p.model} selected>${d.label} — not in ADetailer now</option>`}
@@ -474,12 +513,39 @@ export class OppaiDetailerPanel extends LitElement {
     </div>`;
   }
 
+  private renderRestartButton() {
+    return html`<button class="restart-btn" ?disabled=${this.restarting}
+      @click=${() => this.dispatchEvent(new CustomEvent("restart-generator", { bubbles: true, composed: true }))}>
+      <span class="material-symbols-rounded">restart_alt</span>${this.restarting ? "Restarting…" : "Restart Automatic1111"}</button>`;
+  }
+
+  /** The detectors in the folder Civitai may have a better name for: the files, not
+      ADetailer's own. */
+  private get renamable(): Detector[] {
+    return this.allDetectors.filter((d) => d.key);
+  }
+
+  private onRenamed(renamed: ModelRename[]) {
+    const to = renamedMap(renamed);
+    if (this.value.custom.some((p) => to.has(p.model))) {
+      this.set({ custom: this.value.custom.map((p) => ({ ...p, model: to.get(p.model) ?? p.model })) });
+    }
+    void this.loadFiles();
+    this.dispatchEvent(new CustomEvent("detectors-changed", { bubbles: true, composed: true }));
+  }
+
   private renderDetectorList() {
     const all = this.allDetectors;
     const fmt = (b?: number) => (b ? `${(b / 1048576).toFixed(b < 10485760 ? 1 : 0)} MB` : "");
-    return html`<div class="k">Detectors ADetailer has<span class="grow"></span><small>${all.length}</small></div>
+    const groups = groupDetectors(all, (d) => detectorKind(`${d.name} ${d.label}`));
+    const nameable = this.canRename && this.civitai ? this.renamable : [];
+    return html`<div class="k">Detectors ADetailer has<span class="grow"></span>
+        ${nameable.length ? html`<button class="k-btn" title="Name the detectors in the folder after what Civitai says they find"
+          @click=${() => (this.renaming = nameable.map((d) => d.name))}><span class="material-symbols-rounded">edit_note</span>Name after Civitai</button>` : nothing}
+        <small>${all.length}</small></div>
       ${all.length ? html`<div class="dets">
-        ${all.map((d) => html`<div class="det">
+        ${groups.map((g) => html`${groups.length > 1 ? html`<div class="kind-k"><span class="material-symbols-rounded">${g.kind.icon}</span>${g.kind.label}</div>` : nothing}
+        ${g.items.map((d) => html`<div class="det">
           <span class="ico">${this.renderIcon(d)}</span>
           <div class="det-text"><b title=${d.label}>${d.label}</b>
             <span title=${d.name}>${[d.name, fmt(d.size)].filter(Boolean).join(" · ")}</span></div>
@@ -488,9 +554,11 @@ export class OppaiDetailerPanel extends LitElement {
             : html`<span class="chip restart" title="ADetailer reads its folder when Automatic1111 starts">Restart A1111</span>`}
           <button class="icon-x" title="Add a pass with it" aria-label=${`Add a pass with ${d.label}`} @click=${() => this.addPass(d.name)}>
             <span class="material-symbols-rounded">add</span></button>
+          ${d.key && this.canRename ? html`<button class="icon-x" title="Rename it" aria-label=${`Rename ${d.label}`}
+            @click=${() => (this.renaming = [d.name])}><span class="material-symbols-rounded">edit_note</span></button>` : nothing}
           ${d.key && this.canInstall ? html`<button class="icon-x" title="Delete it from ADetailer's folder" aria-label=${`Delete ${d.label}`}
             @click=${() => void this.deleteDetector(d)}><span class="material-symbols-rounded">delete</span></button>` : nothing}
-        </div>`)}
+        </div>`)}`)}
       </div>` : html`<div class="note">ADetailer didn't list its detectors — it may be an old version; update it under Extensions in Automatic1111.</div>`}
       ${this.civitai
         ? html`<button class="big-btn" @click=${() => this.openShop()}>
@@ -529,8 +597,9 @@ export class OppaiDetailerPanel extends LitElement {
     return html`
       ${this.renderHero()}
       ${waiting && !this.invoke ? html`<div class="callout warn" style="margin-top:10px;"><span class="material-symbols-rounded">restart_alt</span>
-        <span>${waiting === 1 ? "A new detector is" : `${waiting} new detectors are`} in ADetailer's folder. It reads the folder when
-          Automatic1111 starts — restart it to use ${waiting === 1 ? "it" : "them"}.</span></div>` : nothing}
+        <span class="callout-text"><span>${waiting === 1 ? "A new or renamed detector is" : `${waiting} new or renamed detectors are`} in ADetailer's folder.
+          It reads the folder when Automatic1111 starts — restart it to use ${waiting === 1 ? "it" : "them"}.</span>
+          ${this.renderRestartButton()}</span></div>` : nothing}
       <div class="k">Passes<span class="grow"></span><small>run top to bottom</small></div>
       <div class="passes ${v.enabled ? "" : "off"}">
         ${this.renderFacePass(v.faces ? ++step : 0)}
@@ -720,7 +789,12 @@ export class OppaiDetailerPanel extends LitElement {
 
   render() {
     if (!this.value) return nothing;
-    return this.view === "shop" && !this.invoke ? this.renderShop() : this.renderPasses();
+    return html`${this.view === "shop" && !this.invoke ? this.renderShop() : this.renderPasses()}
+      ${this.renaming
+        ? html`<oppai-rename-dialog kind="detector" .names=${this.renaming} .existing=${this.renamable.map((d) => d.name)}
+            @renamed=${(e: CustomEvent<{ renamed: ModelRename[] }>) => this.onRenamed(e.detail.renamed)}
+            @close=${() => (this.renaming = null)}></oppai-rename-dialog>`
+        : nothing}`;
   }
 }
 

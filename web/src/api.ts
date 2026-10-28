@@ -584,6 +584,9 @@ export interface Settings {
   /** A ComfyUI server and an API-format workflow that turns a still into a clip. */
   libbyClipUrl: string;
   libbyClipWorkflow: string;
+  /** ComfyUI's words-to-video workflow, for the studio's clips that start from nothing.
+      The address and the picture workflow are the two above, shared with her. */
+  clipTextWorkflow?: string;
   /** Whether she posts stories while you are away, and at most how many a day. */
   libbyStories: boolean;
   libbyStoriesPerDay: number;
@@ -1575,6 +1578,34 @@ export interface ImageGenStatus {
   modelsDir?: string;
   /** A1111 only: why the folder that is set can't be used, in words for the operator. */
   modelsDirProblem?: string;
+  /** A1111 only: LoRAs and detectors can be renamed (their files, in the models folder). */
+  canRename?: boolean;
+  /** A1111 only: it was started with --api-server-stop, so it can be restarted from here. */
+  canRestart?: boolean;
+  /** The ComfyUI workflows set up for clips, each with the placeholders it takes. */
+  clips?: { image?: ClipWorkflow; text?: ClipWorkflow };
+}
+
+/** One clip workflow: which of image, prompt, negative, seed, width, height, frames,
+    fps and steps it has a placeholder for. The studio offers only those. */
+export interface ClipWorkflow {
+  takes: string[];
+}
+
+/** One clip, from words or from a picture. Knobs left out keep the workflow's own. */
+export interface ClipParams {
+  jobId?: string;
+  from: "image" | "text";
+  prompt: string;
+  negativePrompt?: string;
+  initImage?: string;
+  initGallery?: string;
+  width?: number;
+  height?: number;
+  frames?: number;
+  fps?: number;
+  steps?: number;
+  seed?: number;
 }
 
 /** One link the Image generation panel's Test tried: the generator, its rescan
@@ -1632,6 +1663,8 @@ export interface GenerateResult {
   positive?: string;
   negative?: string;
   rolled?: boolean;
+  /** A clip run's one result, a preview like a picture's (genPreviewURL). */
+  clip?: { id: string; mime: string; seed: number };
 }
 
 /** One txt2img job. Only `prompt` is required; the server clamps the rest to sane ranges. */
@@ -2143,6 +2176,27 @@ export interface LoraCivitaiResult {
   error?: string;
 }
 
+/** What LoRAs and detectors are named: "detector" names keep their ".pt". */
+export type NamedKind = "lora" | "detector";
+
+/** The name Civitai gives one LoRA or detector (backend/internal/api/model_names.go). */
+export interface NameSuggestion {
+  name: string;
+  /** The suggested name; absent when there is none. */
+  to?: string;
+  civitai?: string;
+  outcome: "named" | "same" | "unknown" | "unhashed" | "error";
+  error?: string;
+}
+
+/** One file renamed: its key under the models folder and the name it is picked by. */
+export interface ModelRename {
+  oldKey: string;
+  newKey: string;
+  oldName: string;
+  newName: string;
+}
+
 /**
  * What Libby knows about this server: the library in numbers, plus what was added
  * most recently. Read so her built-in replies can answer library questions with no
@@ -2617,8 +2671,11 @@ async function requestOnce<T>(path: string, opts: RequestInit = {}, timeoutMs = 
     if (ctl.signal.aborted) throw new DOMException("cancelled", "AbortError");
     // Likewise a generation: the studio says how a run ended itself — stopped, or
     // failed — and a call a proxy gave up on may still have pictures to collect
-    // from the job, which an error bubble here would have contradicted.
-    if (path !== "/api/auth/login" && path !== "/api/imagegen/generate" && e instanceof Error && e.message !== "unauthorized") {
+    // from the job, which an error bubble here would have contradicted. Its polls are
+    // quiet too: one that lands before the server has registered the run is a 404
+    // the caller expects, not "no such generation" for her to announce.
+    if (path !== "/api/auth/login" && path !== "/api/imagegen/generate" && path !== "/api/imagegen/clip" &&
+      !path.startsWith("/api/imagegen/progress/") && e instanceof Error && e.message !== "unauthorized") {
       mascotSay(e.message || "Something went wrong.");
     }
     throw e;
@@ -3145,6 +3202,11 @@ export const api = {
       10 * 60_000,
     ),
 
+  /** A few seconds of video through ComfyUI. Minutes, not seconds: the server holds
+      the run past a proxy's timeout, and the result is collected with genProgress. */
+  makeClip: (params: ClipParams) =>
+    request<GenerateResult>("/api/imagegen/clip", { method: "POST", body: JSON.stringify(params) }, 16 * 60_000),
+
   /**
    * What the generator has drawn so far of a run named by jobId: the step count and,
    * when it published one, a small preview as a data: URL. `seen` is the last seq the
@@ -3487,6 +3549,22 @@ export const api = {
   loraCategoryCivitai: (loras: string[]) =>
     request<{ results: LoraCivitaiResult[] }>("/api/imagegen/lora-categories/civitai",
       { method: "POST", body: JSON.stringify({ loras }) }, 110_000),
+
+  // ── names ──────────────────────────────────────────────────────────────────
+  // LoRAs and detectors named after what Civitai says they are; see
+  // backend/internal/api/model_names.go.
+
+  /** What Civitai would call each one — at most 24 a call. Renames nothing. */
+  suggestNames: (kind: NamedKind, names: string[]) =>
+    request<{ suggestions: NameSuggestion[] }>("/api/imagegen/names/suggest",
+      { method: "POST", body: JSON.stringify({ kind, names }) }, 110_000),
+  /** Renames the files; a name that fails leaves the others done. */
+  renameModels: (kind: NamedKind, renames: { name: string; to: string }[]) =>
+    request<{ renamed: ModelRename[]; failed: { name: string; error: string }[] }>("/api/imagegen/names/rename",
+      { method: "POST", body: JSON.stringify({ kind, renames }) }, 5 * 60_000),
+  /** Asks Automatic1111 to restart itself; it answers at once and comes back later. */
+  restartGenerator: () =>
+    request<{ status: string }>("/api/imagegen/restart", { method: "POST" }, 35_000),
 
   // ── ADetailer's detectors ──────────────────────────────────────────────────
   // Its folder and the Civitai shop for it; see backend/internal/api/detectors.go.

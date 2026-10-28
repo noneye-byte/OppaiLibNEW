@@ -477,6 +477,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/imagegen/check", s.requireAuth(s.requireAdmin(s.handleImageGenCheck)))
 	mux.HandleFunc("POST /api/imagegen/prompt", s.requireAuth(s.handleImageGenPrompt))
 	mux.HandleFunc("POST /api/imagegen/generate", s.requireAuth(s.handleImageGenGenerate))
+	mux.HandleFunc("POST /api/imagegen/clip", s.requireAuth(s.handleImageGenClip))
 	mux.HandleFunc("GET /api/imagegen/progress/{id}", s.requireAuth(s.handleImageGenProgress))
 	mux.HandleFunc("POST /api/imagegen/cancel/{id}", s.requireAuth(s.handleImageGenCancel))
 	// Preview ids are 128-bit random capabilities and expire from memory. Keeping the
@@ -491,6 +492,10 @@ func (s *Server) Handler() http.Handler {
 	// The studio's own categories for LoRAs (lora_categories.go).
 	mux.HandleFunc("POST /api/imagegen/lora-categories/assign", s.requireAuth(s.handleLoraCategoryAssign))
 	mux.HandleFunc("POST /api/imagegen/lora-categories/civitai", s.requireAuth(s.handleLoraCategoryCivitai))
+	// Naming LoRAs and detectors after what Civitai says they are (model_names.go).
+	mux.HandleFunc("POST /api/imagegen/names/suggest", s.requireAuth(s.handleNameSuggest))
+	mux.HandleFunc("POST /api/imagegen/names/rename", s.requireAuth(s.handleRename))
+	mux.HandleFunc("POST /api/imagegen/restart", s.requireAuth(s.handleRestart))
 	mux.HandleFunc("GET /api/imagegen/detectors", s.requireAuth(s.handleDetectors))
 	mux.HandleFunc("DELETE /api/imagegen/detectors", s.requireAuth(s.handleDetectorDelete))
 	mux.HandleFunc("GET /api/imagegen/detectors/civitai", s.requireAuth(s.handleDetectorCivitai))

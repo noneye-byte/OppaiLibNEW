@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"path"
 	"strings"
 	"time"
 
@@ -57,6 +58,13 @@ func (s *Server) civitaiInstallSpec(ctx context.Context, source string, modelID,
 		}
 		if primary != nil {
 			spec.FileName = primary.Name
+			// A LoRA is picked and prompted by its file's name, so it arrives named
+			// after what it is rather than whatever its uploader called the file.
+			if spec.Type == "lora" {
+				if name := loraNameFor(m.Name, v.Name); name != "" {
+					spec.FileName = name + path.Ext(primary.Name)
+				}
+			}
 		}
 		break
 	}

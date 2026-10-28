@@ -142,3 +142,15 @@ export function peopleAdvice(
   const everyone = loras.filter((l) => shared.has(l.name) && l.categoryKey === "character").map((l) => l.name);
   return { narrow: n > 1 && part < 0.45, everyone };
 }
+
+/** The people with a LoRA put on one of them — dropped on their part of the picture —
+    at its preferred weight. It replaces the one they wore: a person has one LoRA. */
+export function putLoraOn(people: RegionPerson[], i: number, name: string, weight?: number): RegionPerson[] {
+  return people.map((p, j) => (j === i ? { ...p, lora: name, loraWeight: weight && weight > 0 ? weight : 0.8 } : p));
+}
+
+/** The people with a LoRA taken off whoever wore it: it was dropped on the whole
+    picture, and a LoRA a person wears is left out of what they all share. */
+export function unwearLora(people: RegionPerson[], name: string): RegionPerson[] {
+  return people.some((p) => p.lora === name) ? people.map((p) => (p.lora === name ? { ...p, lora: "" } : p)) : people;
+}

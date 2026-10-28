@@ -37,11 +37,12 @@ const SIZE_KEY = "oppai.gallerySize";
  *
  * The host view calls refresh() after a generation so new images appear without
  * a manual reload. A picture can go back to the studio as the one to start from
- * ("use-picture": image to image, paint to fix, its faces redone, or enlarged).
+ * ("use-picture": image to image, paint to fix, its faces redone, enlarged, or
+ * animated into a clip).
  */
 
 /** How a gallery picture is sent back to the studio to be started from. */
-export type UsePictureMode = "img2img" | "inpaint" | "faces" | "upscale";
+export type UsePictureMode = "img2img" | "inpaint" | "faces" | "upscale" | "animate";
 
 export interface UsePicture {
   url: string;
@@ -74,6 +75,8 @@ export class OppaiInvokeGallery extends LitElement {
   /** The upscale the studio would run ("Upscale 2×"); blank when it can't (InvokeAI,
       or an A1111 listing no upscalers). */
   @property() upscaleLabel = "";
+  /** ComfyUI has a picture-to-video workflow, so a picture can be animated. */
+  @property({ type: Boolean }) canAnimate = false;
   /** The generator's LoRAs by name, for "use as a LoRA's cover". */
   @property({ attribute: false }) loras: string[] = [];
   /** Covers can be written (A1111 with its models folder, or InvokeAI). */
@@ -151,8 +154,12 @@ export class OppaiInvokeGallery extends LitElement {
       .hbtn.on { background: var(--oppai-primary); color: var(--oppai-on-primary); }
       .hbtn .material-symbols-rounded { font-size: 20px; }
 
+      /* Not shrinkable: the rail is a flex column of fixed height, and a row that
+         scrolls sideways is a scroll container, whose least height is nothing — so
+         once a few days of pictures overflowed the rail, the folders were squeezed
+         out of sight entirely. */
       .folders {
-        display: grid; grid-auto-flow: column; grid-auto-columns: 96px; gap: 8px; overflow-x: auto; overscroll-behavior-x: contain;
+        flex: none; display: grid; grid-auto-flow: column; grid-auto-columns: 96px; gap: 8px; overflow-x: auto; overscroll-behavior-x: contain;
         scrollbar-width: thin; padding: 2px 0 4px; scroll-snap-type: x proximity;
       }
       .folder {
@@ -882,6 +889,7 @@ export class OppaiInvokeGallery extends LitElement {
         ...(this.canPaint ? [{ label: "Paint to fix", icon: "brush", run: () => this.usePicture(img, "inpaint") }] : []),
         ...(this.canFixFaces ? [{ label: this.fixLabel, icon: "face_retouching_natural", run: () => this.usePicture(img, "faces") }] : []),
         ...(this.upscaleLabel ? [{ label: this.upscaleLabel, icon: "open_in_full", run: () => this.usePicture(img, "upscale") }] : []),
+        ...(this.canAnimate ? [{ label: "Animate", icon: "animation", run: () => this.usePicture(img, "animate") }] : []),
         menuDivider,
         ...targets.map((b) => ({ label: `Move to ${b.name}`, icon: b.id === "none" ? "inbox" : "drive_file_move", run: () => void this.moveNames([img.name], b.id) })),
         ...(this.isFolder(this.board) ? [{ label: "Set as folder cover", icon: "folder_special", run: () => void this.setFolderCover(img) }] : []),
@@ -1306,6 +1314,7 @@ export class OppaiInvokeGallery extends LitElement {
               ${this.canPaint ? use("brush", "Paint to fix", "Paint over a part to redo it", () => this.usePicture(img, "inpaint")) : nothing}
               ${this.canFixFaces ? use("face_retouching_natural", this.fixLabel, "Redo it with ADetailer's passes, and nothing else", () => this.usePicture(img, "faces")) : nothing}
               ${this.upscaleLabel ? use("open_in_full", this.upscaleLabel, "Enlarge it without redrawing; the copy lands in the gallery", () => this.usePicture(img, "upscale")) : nothing}
+              ${this.canAnimate ? use("animation", "Animate", "Make a few seconds of video from it", () => this.usePicture(img, "animate")) : nothing}
               ${use("background_replace", "Cut out", "Cut the figure out of its background", () => this.dispatchEvent(new CustomEvent("cut-out", {
                 detail: { url: api.galleryFullURL(img.name), name: img.name }, bubbles: true, composed: true,
               })))}
