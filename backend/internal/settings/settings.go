@@ -883,6 +883,11 @@ func (s *Settings) Clamp() {
 	s.LibbyFaceModule = strings.TrimSpace(s.LibbyFaceModule)
 	s.LibbyFaceModel = strings.TrimSpace(s.LibbyFaceModel)
 	s.LibbyClipURL = strings.TrimRight(strings.TrimSpace(s.LibbyClipURL), "/")
+	// "192.168.1.10:8188" is how ComfyUI prints its own address, and without a scheme
+	// Go reads the IP as one and every request fails before it is sent.
+	if s.LibbyClipURL != "" && !strings.Contains(s.LibbyClipURL, "://") {
+		s.LibbyClipURL = "http://" + s.LibbyClipURL
+	}
 	s.LibbyClipWorkflow = strings.TrimSpace(s.LibbyClipWorkflow)
 	// A workflow is a big blob of JSON; past a quarter of a megabyte it is not a workflow.
 	if len(s.LibbyClipWorkflow) > 256<<10 {

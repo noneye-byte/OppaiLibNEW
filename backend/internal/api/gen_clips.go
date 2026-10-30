@@ -139,6 +139,12 @@ func (s *Server) handleComfyModels(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, "give ComfyUI's address and save first")
 		return
 	}
+	// The first call is the one a firewall would hang, so it is the reachability probe
+	// the Test makes, with its limit and its explanation.
+	if _, err := s.comfyReach(r.Context(), set.LibbyClipURL); err != nil {
+		writeErr(w, http.StatusBadGateway, comfyUnreachable(set.LibbyClipURL, err))
+		return
+	}
 	models, err := s.imagegen.ListComfyModels(r.Context(), set.LibbyClipURL)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())

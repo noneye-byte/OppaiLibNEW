@@ -2,10 +2,14 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/youruser/oppailib/internal/imagegen"
@@ -35,8 +39,8 @@ func (s *Server) comfyChecks(ctx context.Context) []genCheck {
 	var lists *imagegen.ComfyModels
 	if base == "" {
 		add(genCheck{ID: "comfy", Label: "ComfyUI", Detail: "No address is set, so clips are off."})
-	} else if sys, err := s.imagegen.ComfySystemStats(ctx, base); err != nil {
-		add(genCheck{ID: "comfy", Label: "ComfyUI", Detail: fmt.Sprintf("Could not reach %s: %v. Is ComfyUI running, and started with --listen so other machines can reach it?", base, err)})
+	} else if sys, err := s.comfyReach(ctx, base); err != nil {
+		add(genCheck{ID: "comfy", Label: "ComfyUI", Detail: comfyUnreachable(base, err)})
 	} else {
 		add(genCheck{ID: "comfy", Label: "ComfyUI", OK: true, Detail: comfySystemLine(base, sys)})
 		if running, pending, err := s.imagegen.ComfyQueue(ctx, base); err == nil {
@@ -65,6 +69,53 @@ func (s *Server) comfyChecks(ctx context.Context) []genCheck {
 		add(comfyFolderCheck("folder-"+k.folder, k.label, k.what, places[k.folder], comfyListed(lists, k.folder)))
 	}
 	return out
+}
+
+// comfyReachWait is how long ComfyUI gets to answer the first call. A firewall drops
+// packets rather than refusing them, and without a limit of its own that call would
+// sit out the whole check's minute before saying anything.
+var comfyReachWait = 8 * time.Second // a var for the test
+
+func (s *Server) comfyReach(ctx context.Context, base string) (imagegen.ComfySystem, error) {
+	ctx, cancel := context.WithTimeout(ctx, comfyReachWait)
+	defer cancel()
+	return s.imagegen.ComfySystemStats(ctx, base)
+}
+
+// comfyUnreachable says why ComfyUI did not answer, by how it failed. --listen is
+// rarely the problem by the time someone presses Test; what is left is the address,
+// the port, a firewall, or Docker's networking, and each fails differently.
+func comfyUnreachable(base string, err error) string {
+	u, perr := url.Parse(base)
+	host, port := "", ""
+	if perr == nil {
+		host, port = u.Hostname(), u.Port()
+	}
+	if port == "" {
+		port = "80"
+	}
+	var dns *net.DNSError
+	var nerr net.Error
+	switch {
+	case perr != nil || host == "":
+		return fmt.Sprintf("%s is not an address — write it like http://192.168.1.10:8188.", base)
+	case strings.Contains(err.Error(), "returned"):
+		return fmt.Sprintf("Something answered at %s, but not as ComfyUI does (%v) — is that ComfyUI's port, and is anything (a reverse proxy, a login) in front of it?", base, err)
+	case (errors.Is(err, syscall.ECONNREFUSED) || strings.Contains(err.Error(), "refused")) &&
+		(host == "localhost" || host == "0.0.0.0" || strings.HasPrefix(host, "127.")):
+		return fmt.Sprintf("%s refused the connection — and it points at OppaiLib's own container, not at ComfyUI: inside a container, localhost is the container itself. Use the LAN IP of the machine ComfyUI runs on, such as http://192.168.1.10:8188.", base)
+	case errors.Is(err, syscall.ECONNREFUSED) || strings.Contains(err.Error(), "refused"):
+		return fmt.Sprintf("%s refused the connection: the machine is there, but nothing is listening on port %s. Check ComfyUI is running and on that port (it says \"To see the GUI go to: …\" when it starts; the default is 8188). (%v)", host, port, err)
+	case errors.As(err, &dns):
+		return fmt.Sprintf("The name %s doesn't resolve from inside the OppaiLib container — use the IP address instead. (%v)", host, err)
+	case errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &nerr) && nerr.Timeout()):
+		return fmt.Sprintf("Nothing answered from %s:%s within %d seconds — something is dropping the connection. On Windows, Defender Firewall blocks ComfyUI's port even with --listen: allow python.exe (or port %s) for private networks. On Unraid, if ComfyUI or OppaiLib is on a custom network (br0) and the other on bridge or host, turn on Settings → Docker → Host access to custom networks, or put both on the same network.", host, port, int(comfyReachWait/time.Second), port)
+	// Not just "unreachable": the client prefixes every failure with that word.
+	case strings.Contains(err.Error(), "no route to host") || strings.Contains(err.Error(), "network is unreachable") ||
+		strings.Contains(err.Error(), "host is unreachable"):
+		return fmt.Sprintf("There is no route from the OppaiLib container to %s — a different subnet, or Unraid's custom-network isolation (Settings → Docker → Host access to custom networks). (%v)", host, err)
+	}
+	return fmt.Sprintf("Could not reach %s: %v.", base, err)
 }
 
 // comfySystemLine is ComfyUI's version and the card it renders on, with its memory.

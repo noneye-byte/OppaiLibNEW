@@ -49,3 +49,18 @@ func TestTheOldGuessedComfyFoldersAreWrittenDownOnceAndThenLeftAlone(t *testing.
 		t.Errorf("after a save = %q, %q", again.ComfyLoraDir, again.ComfyVaeDir)
 	}
 }
+
+func TestComfyUIsAddressWithoutAScemeIsTakenAsHTTP(t *testing.T) {
+	for in, want := range map[string]string{
+		"192.168.1.10:8188":         "http://192.168.1.10:8188",
+		" http://comfy:8188/ ":      "http://comfy:8188",
+		"https://comfy.example.com": "https://comfy.example.com",
+		"":                          "",
+	} {
+		s := Settings{LibbyClipURL: in}
+		s.Clamp()
+		if s.LibbyClipURL != want {
+			t.Errorf("%q → %q; want %q", in, s.LibbyClipURL, want)
+		}
+	}
+}

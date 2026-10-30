@@ -2,14 +2,17 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/youruser/oppailib/internal/settings"
 )
@@ -127,7 +130,7 @@ func TestTheComfyTestStillLooksAtTheFoldersWhenComfyIsDown(t *testing.T) {
 	cur.ComfyLoraDir = t.TempDir()
 	s.settings.Set(cur)
 	got := checksByID(s.comfyChecks(context.Background()))
-	if c := got["comfy"]; c.OK || !strings.Contains(c.Detail, "Could not reach") {
+	if c := got["comfy"]; c.OK || !strings.Contains(c.Detail, "refused the connection") {
 		t.Errorf("comfy = %+v", c)
 	}
 	if _, ok := got["image"]; ok {
@@ -135,5 +138,49 @@ func TestTheComfyTestStillLooksAtTheFoldersWhenComfyIsDown(t *testing.T) {
 	}
 	if c := got["folder-loras"]; !c.OK || !strings.Contains(c.Detail, "is empty") {
 		t.Errorf("folder-loras = %+v", c)
+	}
+}
+
+func TestAnUnreachableComfyIsExplainedByHowItFailed(t *testing.T) {
+	s, _ := newTestServer(t)
+	orig := comfyReachWait
+	t.Cleanup(func() { comfyReachWait = orig })
+	comfyReachWait = 300 * time.Millisecond
+
+	closed := httptest.NewServer(http.NotFoundHandler())
+	closed.Close()
+	notComfy := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(notComfy.Close)
+	// Accepts the connection and never answers, as a request a firewall drops looks.
+	silent, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { silent.Close() })
+	go func() {
+		for {
+			c, err := silent.Accept()
+			if err != nil {
+				return
+			}
+			t.Cleanup(func() { c.Close() })
+		}
+	}()
+
+	for _, c := range []struct{ base, saying string }{
+		{closed.URL, "refused the connection"},
+		{notComfy.URL, "not as ComfyUI does"},
+		{"http://" + silent.Addr().String(), "dropping the connection"},
+	} {
+		_, err := s.comfyReach(context.Background(), c.base)
+		if err == nil {
+			t.Fatalf("%s answered", c.base)
+		}
+		if got := comfyUnreachable(c.base, err); !strings.Contains(got, c.saying) {
+			t.Errorf("%s: %v → %q; want it to say %q", c.base, err, got, c.saying)
+		}
+	}
+	if got := comfyUnreachable("http://localhost:8188", errors.New("connect: connection refused")); !strings.Contains(got, "OppaiLib's own container") {
+		t.Errorf("localhost → %q", got)
 	}
 }
