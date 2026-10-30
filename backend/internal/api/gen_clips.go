@@ -44,6 +44,9 @@ type clipReq struct {
 	FPS    int   `json:"fps"`
 	Steps  int   `json:"steps"`
 	Seed   int64 `json:"seed"`
+	// Loras are put on for this clip alone, over the ones Settings always puts on: a
+	// built clip only, since a pasted workflow has its LoRAs written in.
+	Loras []settings.ClipLora `json:"loras"`
 }
 
 // genClip is a finished clip as the studio is given it: a preview, like a picture's,
@@ -52,6 +55,8 @@ type genClip struct {
 	ID   string `json:"id"`
 	MIME string `json:"mime"`
 	Seed int64  `json:"seed"`
+	// Recipe is the steps, CFG and shift a built clip ran at, said under it.
+	Recipe string `json:"recipe,omitempty"`
 }
 
 // clipStatus is what the studio is told: which workflows are set up and what each
@@ -63,17 +68,30 @@ type clipStatus struct {
 
 type clipWorkflowStatus struct {
 	Takes []string `json:"takes"`
+	// For a built clip, the LoRAs Settings always puts on, which the studio shows above
+	// its own picks, and whether the model is Wan 2.2's pair, whose LoRAs come in halves.
+	Loras []settings.ClipLora `json:"loras,omitempty"`
+	Pair  bool                `json:"pair,omitempty"`
 }
 
 func clipsStatus(set settings.Settings) clipStatus {
 	var out clipStatus
 	if r := clipRecipeFor(set, true); r.ready(set.LibbyClipURL) {
-		out.Image = &clipWorkflowStatus{Takes: r.takes(true)}
+		out.Image = r.status(true)
 	}
 	if r := clipRecipeFor(set, false); r.ready(set.LibbyClipURL) {
-		out.Text = &clipWorkflowStatus{Takes: r.takes(false)}
+		out.Text = r.status(false)
 	}
 	return out
+}
+
+func (r clipRecipe) status(fromImage bool) *clipWorkflowStatus {
+	st := &clipWorkflowStatus{Takes: r.takes(fromImage)}
+	if r.built() {
+		st.Loras = r.models.Loras
+		st.Pair = r.models.LowModel != "" && !r.models.Checkpoint
+	}
+	return st
 }
 
 // clipRecipe is how one direction of clip is made: Wan files picked in settings, or
@@ -103,32 +121,94 @@ func (r clipRecipe) takes(fromImage bool) []string {
 	if !r.built() {
 		return imagegen.ComfyPlaceholders(r.workflow)
 	}
-	knobs := []string{"prompt", "negative", "seed", "width", "height", "frames", "fps"}
+	knobs := []string{"prompt", "negative", "seed", "width", "height", "frames", "fps", "loras"}
 	if fromImage {
 		return append([]string{"image"}, knobs...)
 	}
 	return knobs
 }
 
-// run makes the clip, from the same vars a pasted workflow's placeholders take.
-func (r clipRecipe) run(ctx context.Context, gen *imagegen.Client, clipURL string, vars map[string]string, init []byte, progress func(imagegen.Progress)) ([]imagegen.ComfyOutput, error) {
+// run makes the clip, from the same vars a pasted workflow's placeholders take, with
+// any LoRAs picked for this clip alone.
+func (r clipRecipe) run(ctx context.Context, gen *imagegen.Client, clipURL string, vars map[string]string, extra []settings.ClipLora, init []byte, progress func(imagegen.Progress)) ([]imagegen.ComfyOutput, error) {
 	if !r.built() {
 		return gen.RunComfyWorkflow(ctx, clipURL, r.workflow, vars, init, progress)
 	}
+	return gen.RunWanClip(ctx, clipURL, r.wanClip(vars, extra), init, progress)
+}
+
+// recipe is the numbers a built clip runs at, or "" for a pasted workflow, whose
+// numbers are its own.
+func (r clipRecipe) recipe(vars map[string]string, extra []settings.ClipLora) string {
+	if !r.built() {
+		return ""
+	}
+	return r.wanClip(vars, extra).Recipe()
+}
+
+func (r clipRecipe) wanClip(vars map[string]string, extra []settings.ClipLora) imagegen.WanClip {
 	m := r.models
 	clip := imagegen.WanClip{
 		Model: m.Model, Checkpoint: m.Checkpoint, LowModel: m.LowModel, TextEncoder: m.TextEncoder, VAE: m.VAE,
 		Steps: m.Steps, CFG: m.CFG, Shift: m.Shift, Prompt: vars["prompt"], Negative: vars["negative"],
 	}
-	for _, l := range m.Loras {
-		clip.Loras = append(clip.Loras, imagegen.WanLora{Name: l.Name, Weight: l.Weight, Stage: l.Stage})
+	set := clip
+	set.Loras = wanLoras(m.Loras)
+	clip.Loras = wanLoras(mergeClipLoras(m.Loras, extra))
+	// A speed LoRA put on in the studio brings its steps and CFG along, as adding one in
+	// Settings does: numbers typed for a full-strength model would burn it. Settings
+	// that are already distilled keep whatever they say.
+	if clip.Distilled() && !set.Distilled() {
+		clip.Steps, clip.CFG = 0, 0
 	}
 	clip.Seed, _ = strconv.ParseInt(vars["seed"], 10, 64)
 	clip.Width, _ = strconv.Atoi(vars["width"])
 	clip.Height, _ = strconv.Atoi(vars["height"])
 	clip.Frames, _ = strconv.Atoi(vars["frames"])
 	clip.FPS, _ = strconv.Atoi(vars["fps"])
-	return gen.RunWanClip(ctx, clipURL, clip, init, progress)
+	return clip
+}
+
+func wanLoras(in []settings.ClipLora) []imagegen.WanLora {
+	out := make([]imagegen.WanLora, 0, len(in))
+	for _, l := range in {
+		out = append(out, imagegen.WanLora{Name: l.Name, Weight: l.Weight, Stage: l.Stage})
+	}
+	return out
+}
+
+// maxClipLoras bounds the LoRAs on one clip, Settings' and the studio's together. A
+// pair's LoRA is two files, and each is another model ComfyUI loads per expert.
+const maxClipLoras = 16
+
+// mergeClipLoras is Settings' LoRAs with the studio's picks over them: a pick of one
+// already there sets its weight for this clip, and the rest are added after.
+func mergeClipLoras(base, extra []settings.ClipLora) []settings.ClipLora {
+	out := append([]settings.ClipLora{}, base...)
+	at := map[string]int{}
+	for i, l := range out {
+		at[l.Name] = i
+	}
+	for _, l := range extra {
+		l.Name = strings.TrimSpace(l.Name)
+		if l.Name == "" {
+			continue
+		}
+		l.Weight = min(max(l.Weight, -2), 2)
+		if l.Stage != "high" && l.Stage != "low" {
+			l.Stage = ""
+		}
+		if i, ok := at[l.Name]; ok {
+			out[i].Weight = l.Weight
+			continue
+		}
+		if len(out) >= maxClipLoras {
+			break
+		}
+		at[l.Name] = len(out)
+		out = append(out, l)
+	}
+	return out
 }
 
 // handleComfyModels lists what the saved ComfyUI has for the settings screen's pickers.
@@ -227,7 +307,8 @@ func (s *Server) handleImageGenClip(w http.ResponseWriter, r *http.Request) {
 	// does not stop ComfyUI, and her model must not come back onto the card mid-render.
 	release := s.lendCardToImages(ctx)
 	defer release()
-	outs, err := recipe.run(ctx, s.imagegen, set.LibbyClipURL, clipVars(req), init, func(p imagegen.Progress) {
+	vars := clipVars(req)
+	outs, err := recipe.run(ctx, s.imagegen, set.LibbyClipURL, vars, req.Loras, init, func(p imagegen.Progress) {
 		if job != nil {
 			job.report(p)
 		}
@@ -256,7 +337,7 @@ func (s *Server) handleImageGenClip(w http.ResponseWriter, r *http.Request) {
 	})
 	result := genResult{
 		Images: []genResultImage{}, Prompt: req.Prompt, Positive: req.Prompt, Negative: req.NegativePrompt,
-		Clip: &genClip{ID: id, MIME: mime, Seed: req.Seed},
+		Clip: &genClip{ID: id, MIME: mime, Seed: req.Seed, Recipe: recipe.recipe(vars, req.Loras)},
 	}
 	if job != nil {
 		job.succeed(result)

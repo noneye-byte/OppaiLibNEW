@@ -1543,6 +1543,10 @@ export interface ImageGenStatus {
     fps and steps it has a placeholder for. The studio offers only those. */
 export interface ClipWorkflow {
   takes: string[];
+  /** A built clip's LoRAs from Settings, always on, under the studio's own picks. */
+  loras?: ClipLora[];
+  /** The model is Wan 2.2's high/low pair, whose LoRAs come a file per expert. */
+  pair?: boolean;
 }
 
 /** A Wan clip as files, named exactly as ComfyUI lists them. `model` is Wan 2.2's
@@ -1600,6 +1604,8 @@ export interface ClipParams {
   fps?: number;
   steps?: number;
   seed?: number;
+  /** LoRAs for this clip alone, over Settings' own (a built clip only). */
+  loras?: ClipLora[];
 }
 
 /** One link a Test tried: for Image generation the generator, its rescan route, the
@@ -1659,7 +1665,7 @@ export interface GenerateResult {
   negative?: string;
   rolled?: boolean;
   /** A clip run's one result, a preview like a picture's (genPreviewURL). */
-  clip?: { id: string; mime: string; seed: number };
+  clip?: { id: string; mime: string; seed: number; recipe?: string };
 }
 
 /** One txt2img job. Only `prompt` is required; the server clamps the rest to sane ranges. */

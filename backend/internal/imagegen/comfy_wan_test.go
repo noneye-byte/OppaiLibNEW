@@ -241,3 +241,51 @@ func TestModelsAreListedFromEachLoaderInEitherSchema(t *testing.T) {
 		t.Fatalf("got  %s\nwant %s", raw, want)
 	}
 }
+
+func TestASpeedFileLeftAtBlankNumbersSamplesFourStepsAtCFGOne(t *testing.T) {
+	cases := []struct {
+		name string
+		clip WanClip
+		fast bool
+	}{
+		{"a Lightning LoRA", WanClip{Loras: []WanLora{{Name: "Wan2.2-Lightning_I2V-A14B-4steps-lora_HIGH_fp16.safetensors", Weight: 1}}}, true},
+		{"lightx2v", WanClip{Loras: []WanLora{{Name: "wan/lightx2v_I2V_14B_480p_cfg_step_distill_rank64.safetensors", Weight: 1}}}, true},
+		{"a Rapid AIO merge", WanClip{Model: "wan2.2-rapid-mega-aio-v10.safetensors", Checkpoint: true}, true},
+		{"an AIO by its name alone", WanClip{Model: "Wan22_I2V_AIO_fp8.safetensors", Checkpoint: true}, true},
+		{"a speed LoRA turned off", WanClip{Loras: []WanLora{{Name: "lightx2v.safetensors", Weight: 0}}}, false},
+		{"the plain pair", wan22Pair, false},
+		{"a word that only looks fast", WanClip{Loras: []WanLora{{Name: "radio_14steps_chaos.safetensors", Weight: 1}}}, false},
+	}
+	for _, c := range cases {
+		got := c.clip.Settled()
+		want := WanClip{Steps: 20, CFG: 3.5}
+		if c.fast {
+			want = WanClip{Steps: 4, CFG: 1}
+		}
+		if got.Steps != want.Steps || got.CFG != want.CFG || got.Shift != 8 {
+			t.Errorf("%s: %d steps, CFG %v, shift %v", c.name, got.Steps, got.CFG, got.Shift)
+		}
+	}
+	// Numbers given stand, fast or not.
+	given := WanClip{Steps: 8, CFG: 2, Shift: 5, Loras: []WanLora{{Name: "lightx2v.safetensors", Weight: 1}}}.Settled()
+	if given.Steps != 8 || given.CFG != 2 || given.Shift != 5 {
+		t.Fatalf("given numbers were overridden: %+v", given)
+	}
+}
+
+func TestABuiltPairWithASpeedLoraSplitsItsFourSteps(t *testing.T) {
+	clip := wan22Pair
+	clip.Loras = []WanLora{{Name: "lightx2v_high.safetensors", Weight: 1, Stage: "high"}, {Name: "lightx2v_low.safetensors", Weight: 1, Stage: "low"}}
+	g, err := BuildWanGraph(clip)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range nodes(g, "KSamplerAdvanced") {
+		if s["steps"] != 4 || s["cfg"] != 1.0 || (s["add_noise"] == "enable" && s["end_at_step"] != 2) {
+			t.Fatalf("sampler = %v", s)
+		}
+	}
+	if got := clip.Recipe(); got != "4 steps · CFG 1 · shift 8 · 1 LoRA" {
+		t.Fatalf("recipe = %q", got)
+	}
+}

@@ -42,14 +42,78 @@ export function loraTwin(name: string, offered: readonly string[]): string {
   return offered.includes(twin) ? twin : "";
 }
 
-/** A LoRA that distils Wan down to a handful of steps. It is only right at its own few
-    steps and CFG 1; at Wan's usual 20 and 3.5 it burns the clip. */
-export function isSpeedLora(name: string): boolean {
-  return /lightx2v|lightning|causvid|distill|(?<![0-9])4[\s_-]?steps?/i.test(name);
+/** A LoRA, or a merge with one baked in (the "Rapid" all-in-ones), that distils Wan
+    down to a handful of steps. It is only right at its own few steps and CFG 1; at
+    Wan's usual 20 and 3.5 it burns the clip. The server reads names the same way
+    (imagegen/comfy_wan.go) to settle the numbers left blank. */
+export function isSpeedFile(name: string): boolean {
+  return /lightx2v|lightning|causvid|distill|rapid|fastwan|(?<![a-z])aio(?![a-z])|(?<![0-9])4[\s_-]?steps?/i.test(name);
 }
 
 /** The steps and CFG a speed LoRA wants. */
 export const SPEED_SETTINGS = { steps: 4, cfg: 1 } as const;
+
+/** Whether picked files are a speed one at a CFG that burns it, as the Test says. */
+export function speedAtFullCFG(m: ClipModels): boolean {
+  const files = [m.model, m.lowModel, ...m.loras.filter((l) => l.weight !== 0).map((l) => l.name)];
+  return files.some((n) => n && isSpeedFile(n)) && m.cfg > 1.5;
+}
+
+/** One LoRA as the Video studio offers it: a pair's two halves are one choice. */
+export interface ClipLoraChoice {
+  /** The name it is picked by: the high half's for a pair. */
+  key: string;
+  /** Its name without folder, extension or the word saying which half. */
+  label: string;
+  /** The files it puts on, each with the expert it is for. */
+  files: { name: string; stage: ClipLora["stage"] }[];
+  speed: boolean;
+}
+
+/** ComfyUI's LoRAs as choices, a high/low pair folded into one, in name order. */
+export function clipLoraChoices(names: readonly string[]): ClipLoraChoice[] {
+  const taken = new Set<string>();
+  const out: ClipLoraChoice[] = [];
+  for (const name of names) {
+    if (taken.has(name)) continue;
+    const twin = loraTwin(name, names);
+    let files: ClipLoraChoice["files"] = [{ name, stage: loraStage(name) }];
+    if (twin && !taken.has(twin)) {
+      const pair = [{ name, stage: loraStage(name) }, { name: twin, stage: loraStage(twin) }];
+      files = pair.sort((a) => (a.stage === "high" ? -1 : 1));
+      taken.add(twin);
+    }
+    taken.add(name);
+    out.push({ key: files[0].name, label: choiceLabel(files[0].name, files.length > 1), files, speed: isSpeedFile(name) });
+  }
+  return out.sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: "base", numeric: true }));
+}
+
+function choiceLabel(name: string, pair: boolean): string {
+  // ComfyUI on Windows lists a subfolder with a backslash.
+  let stem = name.split(/[\\/]/).pop()!.replace(/\.(safetensors|ckpt|pt|gguf|bin)$/i, "");
+  const half = pair ? lastStage(stem) : null;
+  if (half) {
+    // The half's word goes, with the "noise" after it and the separator before it.
+    const after = stem.slice(half.at + half.text.length).replace(/^[\s_-]?noise/i, "");
+    stem = stem.slice(0, half.at).replace(/[\s_-]+$/, "") + after;
+  }
+  return stem.replace(/[_]+/g, " ").replace(/\s+/g, " ").trim() || name;
+}
+
+/** The studio's picks as the clip call takes them: every file of each, at its weight.
+    On one model rather than the pair, a pair's LoRA puts on its low-noise half alone —
+    the half that finishes the picture, which is what a single model does all of. */
+export function clipLoraPicks(picked: Record<string, number>, choices: readonly ClipLoraChoice[], pair: boolean): ClipLora[] {
+  const out: ClipLora[] = [];
+  for (const c of choices) {
+    const weight = picked[c.key];
+    if (weight === undefined) continue;
+    const files = pair || c.files.length < 2 ? c.files : c.files.filter((f) => f.stage === "low");
+    for (const f of files) out.push({ name: f.name, weight, stage: pair ? f.stage : "" });
+  }
+  return out;
+}
 
 /** A first guess at the files for one direction from what ComfyUI has, or null when
     nothing there looks like Wan. A pair is preferred to a single model, and an

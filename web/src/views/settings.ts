@@ -4,7 +4,7 @@ import { customElement, property, state } from "lit/decorators.js";
 import { api, mascotSay, type APKInfo, type ClipLora, type ClipModels, type ComfyFolderKind, type ComfyModels, type ComfyPlaces, type Diagnostics, type GenCheck, type ImageGenStatus, type LibbyReferenceSlot, type Passkey, type PasskeyList, type Settings, type ReadOnlyInfo, type Stats, type StorageReport, type Timing, type User } from "../api.js";
 import { passkeyErrorMessage, registerPasskey } from "../passkeys.js";
 import { withViewTransition } from "../motion.js";
-import { isSpeedLora, loraStage, loraTwin, SPEED_SETTINGS, suggestClipModels } from "../clip-models.js";
+import { isSpeedFile, loraStage, loraTwin, SPEED_SETTINGS, speedAtFullCFG, suggestClipModels } from "../clip-models.js";
 import { profileUpdates, resetUIMetrics, uiMetricsSnapshot, type UIMetricsSnapshot } from "../ui-metrics.js";
 import {
   iconStyles,
@@ -2678,7 +2678,7 @@ export class OppaiSettings extends LitElement {
       // A LoRA made for the pair comes as two files; adding one half adds the other.
       const twin = loraTwin(name, loras);
       if (twin && !m.loras.some((l) => l.name === twin)) added.push({ name: twin, weight: 1, stage: loraStage(twin) });
-      const speed = isSpeedLora(name) && !m.steps && !m.cfg ? SPEED_SETTINGS : {};
+      const speed = isSpeedFile(name) && !m.steps && !m.cfg ? SPEED_SETTINGS : {};
       patch({ loras: [...m.loras, ...added], ...speed });
     };
     const guess = c ? suggestClipModels(c, fromImage) : null;
@@ -2748,8 +2748,13 @@ export class OppaiSettings extends LitElement {
               @change=${(e: Event) => patch({ shift: Number((e.target as HTMLInputElement).value) || 0 })} />
           </div>
           <span></span>
-          <div class="field-help" style="margin:0;">Blank is Wan's own: 20 steps, CFG 3.5, shift 8. A speed LoRA
-            (lightx2v, Lightning) wants 4 steps and CFG 1 — adding one sets them.</div>` : nothing}
+          <div class="field-help" style="margin:0;">Blank is Wan's own: 20 steps, CFG 3.5, shift 8 — or 4 steps at
+            CFG 1 when a speed LoRA (lightx2v, Lightning) or a Rapid AIO is picked, which is all they work at.</div>
+          ${speedAtFullCFG(m) ? html`<span></span>
+            <div class="field-status bad" style="margin:0;">A speed file at CFG ${m.cfg} comes out burned and takes many
+              times as long.
+              <button type="button" class="btn-inline" ?disabled=${!this.canEdit} @click=${() => patch(SPEED_SETTINGS)}>Use 4 steps, CFG 1</button>
+            </div>` : nothing}` : nothing}
       </div>
       ${guess && !m.model ? html`<div class="field-control">
         <button type="button" class="btn-inline" ?disabled=${!this.canEdit} @click=${() => set(guess)}>

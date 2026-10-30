@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -253,12 +254,20 @@ func comfyBuiltCheck(c genCheck, m settings.ClipModels, lists imagegen.ComfyMode
 		c.Detail = "A model from diffusion_models needs a text encoder and a VAE picked beside it."
 		return c
 	}
+	clip := clipRecipe{models: m}.wanClip(nil, nil).Settled()
+	// The numbers left blank are settled for a speed file; ones typed in stand, and a
+	// distilled clip at a full-strength CFG is a slow smear of noise.
+	if clip.Distilled() && clip.CFG > 1.5 {
+		c.Detail = fmt.Sprintf("A speed model or LoRA (lightx2v, Lightning, a Rapid AIO) is picked, but CFG is set to %s — it wants 4 steps at CFG 1, and at this it comes out burned and takes many times as long. Blank steps and CFG and save.",
+			strconv.FormatFloat(clip.CFG, 'f', -1, 64))
+		return c
+	}
 	c.OK = true
 	c.Detail = fmt.Sprintf("Wan, built from %d files ComfyUI has", len(picks))
 	if m.LowModel != "" && !m.Checkpoint {
 		c.Detail += ", a high- and low-noise pair"
 	}
-	c.Detail += "."
+	c.Detail += ", at " + clip.Recipe() + "."
 	return c
 }
 

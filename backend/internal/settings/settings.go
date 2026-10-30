@@ -420,8 +420,8 @@ type ClipModels struct {
 	TextEncoder string     `json:"textEncoder"`
 	VAE         string     `json:"vae"`
 	Loras       []ClipLora `json:"loras"`
-	// Zero is Wan's default (20 steps, CFG 3.5, shift 8). A speed-up LoRA such as
-	// lightx2v wants 4 and 1, which the settings screen puts in when one is added.
+	// Zero is Wan's default (20 steps, CFG 3.5, shift 8), or 4 steps at CFG 1 when a
+	// speed-up file such as lightx2v is in the clip (imagegen.WanClip.Settled).
 	Steps int     `json:"steps"`
 	CFG   float64 `json:"cfg"`
 	Shift float64 `json:"shift"`

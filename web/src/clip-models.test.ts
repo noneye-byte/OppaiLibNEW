@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-const { comfyFolderOf, isSpeedLora, loraStage, loraTwin, suggestClipModels } = await import("./clip-models.ts");
+const { clipLoraChoices, clipLoraPicks, comfyFolderOf, isSpeedFile, loraStage, loraTwin, speedAtFullCFG, suggestClipModels } = await import("./clip-models.ts");
 
 test("a LoRA's half of the pair is read off its name however it is written", () => {
   assert.equal(loraStage("Wan2.2-Lightning_I2V-A14B-4steps-lora_HIGH_fp16.safetensors"), "high");
@@ -30,10 +30,13 @@ test("only a name's last half is swapped, so a high in the model's own name stay
   assert.equal(loraTwin("High Rise Dance i2v_low.safetensors", offered), "High Rise Dance i2v_high.safetensors");
 });
 
-test("a speed LoRA is known by its name", () => {
-  assert.ok(isSpeedLora("Wan2.2-Lightning_I2V-A14B-4steps-lora_HIGH_fp16.safetensors"));
-  assert.ok(isSpeedLora("lightx2v_I2V_14B_480p_cfg_step_distill_rank64_bf16.safetensors"));
-  assert.ok(!isSpeedLora("wan_bounce_v2_14steps.safetensors"));
+test("a speed LoRA, or a merge with one in, is known by its name", () => {
+  assert.ok(isSpeedFile("wan2.2-rapid-mega-aio-v10.safetensors"));
+  assert.ok(isSpeedFile("Wan22_I2V_AIO_fp8.safetensors"));
+  assert.ok(!isSpeedFile("wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors"));
+  assert.ok(isSpeedFile("Wan2.2-Lightning_I2V-A14B-4steps-lora_HIGH_fp16.safetensors"));
+  assert.ok(isSpeedFile("lightx2v_I2V_14B_480p_cfg_step_distill_rank64_bf16.safetensors"));
+  assert.ok(!isSpeedFile("wan_bounce_v2_14steps.safetensors"));
 });
 
 const installed = {
@@ -85,4 +88,48 @@ test("a Wan checkpoint goes to diffusion_models unless its name says it carries 
   assert.equal(comfyFolderOf("LyCORIS", "bounce.safetensors"), "loras");
   assert.equal(comfyFolderOf("VAE", "wan_2.1_vae.safetensors"), "vae");
   assert.equal(comfyFolderOf("TextualInversion", "x.pt"), null);
+});
+
+test("a pair's two halves are one choice, named without the word for the half", () => {
+  const choices = clipLoraChoices([
+    "wan\\Wan2.2-Lightning_I2V-A14B-4steps-lora_LOW_fp16.safetensors",
+    "wan\\Wan2.2-Lightning_I2V-A14B-4steps-lora_HIGH_fp16.safetensors",
+    "bounce_HighNoise.safetensors", "bounce_LowNoise.safetensors",
+    "motion.safetensors",
+  ]);
+  assert.deepEqual(choices.map((c) => [c.label, c.files.length, c.speed]), [
+    ["bounce", 2, false], ["motion", 1, false], ["Wan2.2-Lightning I2V-A14B-4steps-lora fp16", 2, true],
+  ]);
+  // Picked by the high half, which comes first.
+  const lightning = choices[2];
+  assert.equal(lightning.key, "wan\\Wan2.2-Lightning_I2V-A14B-4steps-lora_HIGH_fp16.safetensors");
+  assert.deepEqual(lightning.files.map((f) => f.stage), ["high", "low"]);
+});
+
+test("a half with no twin is a choice of its own, still read as its half", () => {
+  const [c] = clipLoraChoices(["solo_high.safetensors"]);
+  assert.equal(c.label, "solo high");
+  assert.deepEqual(c.files, [{ name: "solo_high.safetensors", stage: "high" }]);
+});
+
+test("picks go on as files: both halves on the pair, the low half alone on one model", () => {
+  const choices = clipLoraChoices(["a_high.safetensors", "a_low.safetensors", "b.safetensors"]);
+  const picked = { "a_high.safetensors": 0.8, "b.safetensors": 1 };
+  assert.deepEqual(clipLoraPicks(picked, choices, true), [
+    { name: "a_high.safetensors", weight: 0.8, stage: "high" },
+    { name: "a_low.safetensors", weight: 0.8, stage: "low" },
+    { name: "b.safetensors", weight: 1, stage: "" },
+  ]);
+  assert.deepEqual(clipLoraPicks(picked, choices, false), [
+    { name: "a_low.safetensors", weight: 0.8, stage: "" },
+    { name: "b.safetensors", weight: 1, stage: "" },
+  ]);
+});
+
+test("a speed file at a full-strength CFG is told apart from one at its own", () => {
+  const m = { model: "high.safetensors", checkpoint: false, lowModel: "low.safetensors", textEncoder: "", vae: "", steps: 20, cfg: 3.5, shift: 0,
+    loras: [{ name: "lightx2v_high.safetensors", weight: 1, stage: "high" as const }] };
+  assert.ok(speedAtFullCFG(m));
+  assert.ok(!speedAtFullCFG({ ...m, cfg: 1 }));
+  assert.ok(!speedAtFullCFG({ ...m, loras: [{ ...m.loras[0], weight: 0 }] }));
 });

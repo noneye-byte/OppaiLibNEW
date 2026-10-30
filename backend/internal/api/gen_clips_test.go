@@ -150,7 +150,7 @@ func TestPickedWanFilesWinOverAPastedWorkflowAndKeepStepsOutOfTheDrawer(t *testi
 	s.settings.Set(cur)
 
 	st := clipsStatus(s.settings.Get())
-	if st.Text == nil || strings.Join(st.Text.Takes, ",") != "prompt,negative,seed,width,height,frames,fps" {
+	if st.Text == nil || strings.Join(st.Text.Takes, ",") != "prompt,negative,seed,width,height,frames,fps,loras" {
 		t.Fatalf("status = %+v", st.Text)
 	}
 	rec := do(t, s.Handler(), token, "POST", "/api/imagegen/clip", `{"from":"text","prompt":"rain on a window","width":832,"height":480,"frames":33,"steps":20}`)
@@ -169,5 +169,61 @@ func TestPickedWanFilesWinOverAPastedWorkflowAndKeepStepsOutOfTheDrawer(t *testi
 	}
 	if samplers != 2 {
 		t.Fatalf("%d samplers in the built graph", samplers)
+	}
+}
+
+func TestALoraPickedInTheStudioGoesOnOverSettingsAndASpeedOneBringsItsSteps(t *testing.T) {
+	comfy, graph, _ := fakeComfy(t)
+	s, token := newTestServer(t)
+	cur := s.settings.Get()
+	cur.LibbyClipURL = comfy.URL
+	cur.ClipTextModels = settings.ClipModels{
+		Model: "wan2.2_t2v_high_noise_14B.safetensors", LowModel: "wan2.2_t2v_low_noise_14B.safetensors",
+		TextEncoder: "umt5.safetensors", VAE: "wan_2.1_vae.safetensors", Steps: 20, CFG: 3.5,
+		Loras: []settings.ClipLora{{Name: "motion.safetensors", Weight: 0.8}},
+	}
+	s.settings.Set(cur)
+
+	if st := clipsStatus(s.settings.Get()); st.Text == nil || !st.Text.Pair || len(st.Text.Loras) != 1 {
+		t.Fatalf("status = %+v", st.Text)
+	}
+	rec := do(t, s.Handler(), token, "POST", "/api/imagegen/clip", `{"from":"text","prompt":"rain","loras":[
+		{"name":"motion.safetensors","weight":0.5},
+		{"name":"Wan2.2-Lightning_HIGH.safetensors","weight":1,"stage":"high"},
+		{"name":"Wan2.2-Lightning_LOW.safetensors","weight":1,"stage":"low"}]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("clip: %d %s", rec.Code, rec.Body)
+	}
+	var res genResult
+	_ = json.Unmarshal(rec.Body.Bytes(), &res)
+	if res.Clip == nil || res.Clip.Recipe != "4 steps · CFG 1 · shift 8 · 2 LoRAs" {
+		t.Fatalf("clip = %+v", res.Clip)
+	}
+	weights := map[string]float64{}
+	for _, n := range graph() {
+		node := n.(map[string]any)
+		in := node["inputs"].(map[string]any)
+		switch node["class_type"] {
+		case "LoraLoaderModelOnly":
+			weights[in["lora_name"].(string)] += in["strength_model"].(float64)
+		case "KSamplerAdvanced":
+			if in["steps"] != 4.0 || in["cfg"] != 1.0 {
+				t.Fatalf("a speed LoRA ran at %v steps, CFG %v", in["steps"], in["cfg"])
+			}
+		}
+	}
+	// motion goes on both experts at the studio's weight; each Lightning half on its own.
+	if weights["motion.safetensors"] != 1.0 || weights["Wan2.2-Lightning_HIGH.safetensors"] != 1 || weights["Wan2.2-Lightning_LOW.safetensors"] != 1 {
+		t.Fatalf("LoRA weights = %v", weights)
+	}
+}
+
+func TestSettingsThatAreAlreadyFastKeepTheirOwnNumbers(t *testing.T) {
+	r := clipRecipe{models: settings.ClipModels{
+		Model: "wan2.1_i2v_480p.safetensors", TextEncoder: "umt5.safetensors", VAE: "wan_2.1_vae.safetensors", Steps: 6, CFG: 1,
+		Loras: []settings.ClipLora{{Name: "lightx2v_cfg_step_distill.safetensors", Weight: 1}},
+	}}
+	if got := r.recipe(nil, []settings.ClipLora{{Name: "causvid.safetensors", Weight: 0.5}}); got != "6 steps · CFG 1 · shift 8 · 2 LoRAs" {
+		t.Fatalf("recipe = %q", got)
 	}
 }

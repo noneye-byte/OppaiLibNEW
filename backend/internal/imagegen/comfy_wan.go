@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"image"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -36,7 +37,8 @@ type WanClip struct {
 	TextEncoder string
 	VAE         string
 	Loras       []WanLora
-	// Zero is Wan's own default: 20 steps, CFG 3.5, shift 8.
+	// Zero is Wan's own default, 20 steps, CFG 3.5 and shift 8 — or 4 steps at CFG 1
+	// when anything in the clip is distilled: see Settled.
 	Steps int
 	CFG   float64
 	Shift float64
@@ -86,23 +88,87 @@ func wan22Latent(vae string) bool {
 	return strings.Contains(v, "wan2.2") || strings.Contains(v, "wan2_2") || strings.Contains(v, "wan22")
 }
 
+// speedName is the files that distil Wan down to a handful of steps: the lightx2v,
+// Lightning and CausVid LoRAs, and the merges with one baked in — Civitai's "Rapid"
+// all-in-ones, which is most of what a Wan AIO is, since a one-file fast clip is the
+// point of one. The settings screen reads LoRAs the same way (web/src/clip-models.ts).
+var speedName = regexp.MustCompile(`(?i)lightx2v|lightning|causvid|distill|rapid|fastwan|(^|[^a-z])aio([^a-z]|$)|(^|[^0-9])4[\s_-]?steps?`)
+
+// IsSpeedFile reports whether a model or LoRA, by its name, is one of those.
+func IsSpeedFile(name string) bool { return speedName.MatchString(name) }
+
+// Distilled reports whether anything the clip samples with is a speed file.
+func (w WanClip) Distilled() bool {
+	if IsSpeedFile(w.Model) || IsSpeedFile(w.LowModel) {
+		return true
+	}
+	for _, l := range w.Loras {
+		if l.Weight != 0 && IsSpeedFile(l.Name) {
+			return true
+		}
+	}
+	return false
+}
+
+// Settled is the clip with its blank numbers filled in. A distilled clip is only right
+// at its own few steps and CFG 1: at Wan's 20 and 3.5 it comes out a blown-out smear
+// of noise, and CFG above 1 samples every step twice, so it is ten times slower for
+// it. The settings screen used to be the only thing that knew, and only for a LoRA
+// added through its menu — a file picked any other way ran at 20 and 3.5 and burned.
+// Numbers given stand either way.
+func (w WanClip) Settled() WanClip {
+	fast := w.Distilled()
+	if w.Steps <= 0 {
+		w.Steps = 20
+		if fast {
+			w.Steps = 4
+		}
+	}
+	if w.CFG <= 0 {
+		w.CFG = 3.5
+		if fast {
+			w.CFG = 1
+		}
+	}
+	if w.Shift <= 0 {
+		w.Shift = 8
+	}
+	return w
+}
+
+// Recipe is the numbers a clip ran at, in words, for showing beside the clip: when a
+// clip comes out wrong it is the first thing to look at.
+func (w WanClip) Recipe() string {
+	w = w.Settled()
+	s := fmt.Sprintf("%d steps · CFG %s · shift %s", w.Steps, strconv.FormatFloat(w.CFG, 'f', -1, 64), strconv.FormatFloat(w.Shift, 'f', -1, 64))
+	// Counted as the studio lists them: a pair's two halves are one LoRA.
+	both, halves := 0, map[string]int{}
+	for _, l := range w.Loras {
+		if l.Name == "" || l.Weight == 0 {
+			continue
+		}
+		if l.Stage == "" {
+			both++
+		} else {
+			halves[l.Stage]++
+		}
+	}
+	on := both + max(halves["high"], halves["low"])
+	if on == 1 {
+		s += " · 1 LoRA"
+	} else if on > 1 {
+		s += fmt.Sprintf(" · %d LoRAs", on)
+	}
+	return s
+}
+
 // BuildWanGraph wires a clip as an API-format workflow.
 func BuildWanGraph(w WanClip) (map[string]any, error) {
 	if err := w.check(); err != nil {
 		return nil, err
 	}
-	steps := w.Steps
-	if steps <= 0 {
-		steps = 20
-	}
-	cfg := w.CFG
-	if cfg <= 0 {
-		cfg = 3.5
-	}
-	shift := w.Shift
-	if shift <= 0 {
-		shift = 8
-	}
+	w = w.Settled()
+	steps, cfg, shift := w.Steps, w.CFG, w.Shift
 	negative := strings.TrimSpace(w.Negative)
 	if negative == "" {
 		negative = wanNegative

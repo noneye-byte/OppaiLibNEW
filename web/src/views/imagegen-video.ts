@@ -3,6 +3,7 @@ import { customElement, property, state } from "lit/decorators.js";
 import { iconStyles, motionStyles } from "../theme.js";
 import { api, type ClipParams, type ClipWorkflow, type GenerateResult } from "../api.js";
 import { CLIP_ASPECTS, CLIP_SIDES, clipFrames, clipSize, lastFrameTime, type ClipAspect } from "../clip-shape.js";
+import { clipLoraChoices, clipLoraPicks, type ClipLoraChoice } from "../clip-models.js";
 import { MOTION_PRESETS, hasPhrase, togglePhrase } from "../motion-presets.js";
 import { GALLERY_DRAG_TYPE } from "./imagegen-gallery.js";
 
@@ -51,7 +52,8 @@ interface ClipRun {
   startedAt: number;
   endedAt?: number;
   error?: string;
-  clip?: { id: string; mime: string; seed: number };
+  /** `recipe` is the steps, CFG and shift a built clip ran at. */
+  clip?: { id: string; mime: string; seed: number; recipe?: string };
   /** The library row once saved. */
   savedId?: number;
   saving?: boolean;
@@ -72,6 +74,9 @@ const session = {
   variations: 1,
   /** Reuse the selected clip's seed, to see what a changed prompt does to the same take. */
   keepSeed: false,
+  /** LoRAs put on for the next clips, by choice key, with their weights. */
+  loras: {} as Record<string, number>,
+  loraQuery: "",
   runs: [] as ClipRun[],
   /** The run on the stage. */
   selected: "" as string,
@@ -103,6 +108,35 @@ export function animatePicture(pic: ClipPicture) {
   session.from = "image";
   changed();
 }
+
+/**
+ * ComfyUI's LoRAs, asked for once a page: it is a live call to ComfyUI rather than
+ * something the studio's status carries, since the status is read on every visit and
+ * ComfyUI may be another machine that is asleep.
+ */
+const comfyLoras = {
+  choices: null as ClipLoraChoice[] | null,
+  loading: false,
+  error: "",
+};
+
+async function loadComfyLoras() {
+  if (comfyLoras.loading) return;
+  comfyLoras.loading = true;
+  comfyLoras.error = "";
+  changed();
+  try {
+    comfyLoras.choices = clipLoraChoices((await api.comfyModels()).loras);
+  } catch (e) {
+    comfyLoras.error = (e as Error).message;
+  } finally {
+    comfyLoras.loading = false;
+    changed();
+  }
+}
+
+/** How many choices the list shows before the search has to narrow it. */
+const LORA_LIST = 40;
 
 /** When the workflow takes no frame rate, so the length still has one to count in. */
 const ASSUMED_FPS = 16;
@@ -210,6 +244,45 @@ export class OppaiVideoStudio extends LitElement {
       }
       textarea:focus { outline: none; border-color: var(--oppai-primary); }
       .link { border: none; background: none; padding: 6px 0 0; color: var(--oppai-primary-bright, var(--oppai-primary)); font-size: 12px; cursor: pointer; }
+
+      /* LoRAs, laid out as the Image studio's picker lays them: the ones on, with their
+         weights, above the rest. ComfyUI keeps no pictures of its LoRAs, so the rest
+         are a list of names rather than cards. */
+      .k-btn { border: none; background: none; padding: 0; width: 22px; height: 22px; border-radius: 11px; color: var(--oppai-text-muted); cursor: pointer; display: grid; place-items: center; }
+      .k-btn:hover { color: var(--oppai-text); background: var(--oppai-surface-2); }
+      .k-btn .material-symbols-rounded { font-size: 16px; }
+      .loras-on { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+      .lora-row {
+        display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; column-gap: 8px; row-gap: 2px; align-items: center;
+        padding: 7px 6px 7px 8px; border-radius: 12px; background: var(--oppai-bg); border: 1px solid var(--oppai-border);
+      }
+      .lora-row.fixed { opacity: 0.75; }
+      .lora-ic { grid-row: 1 / 3; width: 28px; height: 28px; border-radius: 9px; display: grid; place-items: center; font-size: 17px; background: var(--oppai-surface-2); color: var(--oppai-text-muted); }
+      .lora-row.speed .lora-ic { color: var(--oppai-primary-bright, var(--oppai-primary)); }
+      .lora-name { min-width: 0; font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .lora-tag { margin-left: 6px; font-size: 10.5px; font-weight: 600; color: var(--oppai-text-muted); }
+      .lora-x { border: none; background: none; width: 26px; height: 26px; border-radius: 13px; color: var(--oppai-text-muted); cursor: pointer; display: grid; place-items: center; }
+      .lora-x:hover { background: var(--oppai-surface-2); color: var(--oppai-text); }
+      .lora-x .material-symbols-rounded { font-size: 17px; }
+      .lora-weight { grid-column: 2 / 4; display: flex; align-items: center; gap: 8px; }
+      .lora-weight input { flex: 1; min-width: 0; accent-color: var(--oppai-primary); }
+      .lora-weight b { min-width: 34px; text-align: right; font-size: 11.5px; font-variant-numeric: tabular-nums; }
+      .lora-search { position: relative; display: block; margin-bottom: 6px; }
+      .lora-search input {
+        width: 100%; box-sizing: border-box; height: 32px; padding: 0 10px 0 32px; border-radius: 16px;
+        border: 1px solid var(--oppai-border-strong); background: var(--oppai-bg); color: var(--oppai-text); font-size: 12.5px; outline: none;
+      }
+      .lora-search input:focus { border-color: var(--oppai-primary); }
+      .lora-search .material-symbols-rounded { position: absolute; left: 9px; top: 50%; transform: translateY(-50%); font-size: 18px; color: var(--oppai-text-muted); pointer-events: none; }
+      .lora-list { display: flex; flex-direction: column; max-height: 232px; overflow-y: auto; scrollbar-width: thin; border-radius: 12px; border: 1px solid var(--oppai-border); }
+      .lora-pick {
+        display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 4px 10px; border: none; border-bottom: 1px solid var(--oppai-border);
+        background: none; color: var(--oppai-text-dim); font-size: 12.5px; text-align: left; cursor: pointer;
+      }
+      .lora-pick:last-child { border-bottom: none; }
+      .lora-pick:hover { background: var(--oppai-surface-2); color: var(--oppai-text); }
+      .lora-pick .material-symbols-rounded { font-size: 17px; flex: none; }
+      .lora-pick .lora-name { flex: 1; font-weight: 500; }
       select {
         height: 30px; padding: 0 8px; border-radius: 15px; border: 1px solid var(--oppai-border-strong);
         background: var(--oppai-bg); color: var(--oppai-text); font-size: 12px;
@@ -341,6 +414,7 @@ export class OppaiVideoStudio extends LitElement {
     this.unsubscribe = onClipsChange(() => this.requestUpdate());
     // A studio that opens on a mode with no workflow behind it opens on the other one.
     if (session.from === "image" && !this.clips.image && this.clips.text) session.from = "text";
+    if (!comfyLoras.choices && (this.clips.image?.takes.includes("loras") || this.clips.text?.takes.includes("loras"))) void loadComfyLoras();
     // Running clips show how long they have taken; a second's tick is enough for that.
     this.ticker = window.setInterval(() => { if (clipsRunning()) this.requestUpdate(); }, 1000);
   }
@@ -462,6 +536,10 @@ export class OppaiVideoStudio extends LitElement {
       if (this.takes("frames")) params.frames = clipFrames(session.seconds, this.fps());
       if (this.takes("fps")) params.fps = session.fps;
       if (this.takes("steps")) params.steps = session.steps;
+      if (this.takes("loras") && comfyLoras.choices) {
+        const loras = clipLoraPicks(session.loras, comfyLoras.choices, !!this.workflow?.pair);
+        if (loras.length) params.loras = loras;
+      }
       // Variations of a kept seed walk along from it, so they are still variations.
       if (kept) params.seed = kept + i;
       if (from === "image" && pic) {
@@ -647,6 +725,8 @@ export class OppaiVideoStudio extends LitElement {
             : html`<button class="link" @click=${() => (this.negOpen = true)}>+ What it should avoid</button>`) : nothing}
         ` : nothing}
 
+        ${this.takes("loras") ? this.renderLoras() : nothing}
+
         ${this.takes("width") || this.takes("height") ? html`
           <div class="k">Shape<small>${size.width}×${size.height}</small></div>
           <div class="row">
@@ -699,6 +779,74 @@ export class OppaiVideoStudio extends LitElement {
         <div class="make-sub">${running ? `${running} clip${running === 1 ? "" : "s"} in the works · ` : ""}${session.seconds}s at ${size.width}×${size.height} · takes minutes</div>
       </div>
     </aside>`;
+  }
+
+  /**
+   * LoRAs for the next clips. Settings' own are listed first, locked, so a speed LoRA
+   * that is always on is not a mystery when a clip comes out fast; a pair's two files
+   * are one choice, put on each at its own expert.
+   */
+  private renderLoras() {
+    const fixed = clipLoraChoices((this.workflow?.loras ?? []).filter((l) => l.weight !== 0).map((l) => l.name));
+    const fixedWeight = (c: ClipLoraChoice) => this.workflow?.loras?.find((l) => l.name === c.key)?.weight ?? 1;
+    const fixedFiles = new Set(fixed.flatMap((c) => c.files.map((f) => f.name)));
+    const all = comfyLoras.choices ?? [];
+    const on = all.filter((c) => session.loras[c.key] !== undefined && !fixedFiles.has(c.key));
+    const q = session.loraQuery.trim().toLowerCase();
+    const rest = all.filter((c) => session.loras[c.key] === undefined && !fixedFiles.has(c.key)
+      && (!q || c.label.toLowerCase().includes(q) || c.key.toLowerCase().includes(q)));
+    const count = on.length + fixed.length;
+    const put = (key: string, weight: number) => this.set("loras", { ...session.loras, [key]: weight });
+    const takeOff = (key: string) => {
+      const next = { ...session.loras };
+      delete next[key];
+      this.set("loras", next);
+    };
+    const speedPicked = on.some((c) => c.speed) && !fixed.some((c) => c.speed);
+    return html`
+      <div class="k">LoRAs<small>${count ? `${count} on` : ""}</small>
+        <button class="k-btn" title="Read ComfyUI's LoRAs again" aria-label="Read ComfyUI's LoRAs again" ?disabled=${comfyLoras.loading}
+          @click=${() => void loadComfyLoras()}><span class="material-symbols-rounded">refresh</span></button>
+      </div>
+      ${count ? html`<div class="loras-on">
+        ${fixed.map((c) => html`<div class="lora-row fixed ${c.speed ? "speed" : ""}" title="Put on for every clip in Settings → Image generation → Video">
+          <span class="lora-ic material-symbols-rounded">lock</span>
+          <span class="lora-name">${c.label}<span class="lora-tag">${c.files.length > 1 ? "high + low · " : ""}${fixedWeight(c)} · Settings</span></span>
+        </div>`)}
+        ${on.map((c) => {
+          const weight = session.loras[c.key];
+          return html`<div class="lora-row ${c.speed ? "speed" : ""}">
+            <span class="lora-ic material-symbols-rounded">${c.speed ? "bolt" : "style"}</span>
+            <span class="lora-name" title=${c.files.map((f) => f.name).join("\n")}>${c.label}${c.files.length > 1 ? html`<span class="lora-tag">high + low</span>` : nothing}</span>
+            <button class="lora-x" title="Take it off" aria-label="Take ${c.label} off" @click=${() => takeOff(c.key)}>
+              <span class="material-symbols-rounded">close</span></button>
+            <label class="lora-weight">
+              <input type="range" min="-1" max="2" step="0.05" .value=${String(weight)} aria-label="${c.label} strength"
+                @input=${(e: Event) => put(c.key, Number((e.target as HTMLInputElement).value))} />
+              <b>${weight.toFixed(2)}</b>
+            </label>
+          </div>`;
+        })}
+      </div>` : nothing}
+      ${speedPicked ? html`<div class="note" style="margin-bottom:10px">A speed LoRA is on, so these clips run at 4 steps and CFG 1, several times faster.</div>` : nothing}
+      ${comfyLoras.error ? html`<div class="err">ComfyUI didn't list its LoRAs: ${comfyLoras.error}</div>`
+        : !comfyLoras.choices ? html`<div class="note">Asking ComfyUI for its LoRAs…</div>`
+        : !all.length ? html`<div class="note">ComfyUI has no LoRAs in models/loras.
+            <button class="link" @click=${() => this.dispatchEvent(new CustomEvent("find-video-models", { bubbles: true, composed: true }))}>Find Wan LoRAs on Civitai</button></div>`
+        : html`
+          ${all.length > 6 ? html`<label class="lora-search"><span class="material-symbols-rounded">search</span>
+            <input type="search" placeholder="Search ${all.length} LoRAs" .value=${session.loraQuery} aria-label="Search LoRAs"
+              @input=${(e: Event) => this.set("loraQuery", (e.target as HTMLInputElement).value)} /></label>` : nothing}
+          ${rest.length ? html`<div class="lora-list">
+            ${rest.slice(0, LORA_LIST).map((c) => html`<button class="lora-pick" title=${c.files.map((f) => f.name).join("\n")} @click=${() => put(c.key, 1)}>
+              <span class="material-symbols-rounded">${c.speed ? "bolt" : "add"}</span>
+              <span class="lora-name">${c.label}</span>
+              ${c.files.length > 1 ? html`<span class="lora-tag">pair</span>` : nothing}
+            </button>`)}
+          </div>
+          ${rest.length > LORA_LIST ? html`<div class="note" style="margin-top:6px">${rest.length - LORA_LIST} more — search to find them.</div>` : nothing}`
+          : html`<div class="note">${q ? "No LoRA by that name." : "Every LoRA ComfyUI has is on."}</div>`}`}
+    `;
   }
 
   private renderFrame() {
@@ -799,7 +947,7 @@ export class OppaiVideoStudio extends LitElement {
           @click=${() => void this.frameToImage(run)}><span class="material-symbols-rounded">screenshot</span>Frame to Image</button>
       ` : html`<span class="t-meta" style="flex:1">${!run.done ? `Started ${elapsed(Date.now() - run.startedAt)} ago` : run.error ? "Didn't finish" : ""}</span>`}
       <span class="toolbar-spacer" style="flex:1"></span>
-      ${run.clip ? html`<span class="t-meta">seed ${run.clip.seed}${took ? ` · ${took}` : ""}</span>` : nothing}
+      ${run.clip ? html`<span class="t-meta">seed ${run.clip.seed}${run.clip.recipe ? ` · ${run.clip.recipe}` : ""}${took ? ` · ${took}` : ""}</span>` : nothing}
       ${!run.done ? html`<button class="chip" @click=${() => void api.cancelGenerate(run.jobId).catch(() => {})}>
         <span class="material-symbols-rounded">stop</span>Stop</button>` : nothing}
       ${run.clip ? html`

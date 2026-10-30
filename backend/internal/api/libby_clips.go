@@ -50,7 +50,7 @@ func (s *Server) makeClip(ctx context.Context, userID int64, imageID, motion str
 	defer cancel()
 	release := s.lendCardToImages(ctx)
 	defer release()
-	outs, err := recipe.run(ctx, s.imagegen, cur.LibbyClipURL, vars, raw, func(p imagegen.Progress) {
+	outs, err := recipe.run(ctx, s.imagegen, cur.LibbyClipURL, vars, nil, raw, func(p imagegen.Progress) {
 		if progress != nil {
 			progress(cameraProgress{Phase: "animating", Percent: p.Percent, Of: 1})
 		}
