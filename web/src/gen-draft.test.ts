@@ -64,7 +64,6 @@ test("a saved draft round-trips", () => {
     outfitUnderwearColor: "red",
     outfitPubicHair: true,
     outfitPubicHairColor: "blonde",
-    open: { models: true, options: false },
     shots: [{ id: "abc", seed: 5, saved: false }],
     scrollTop: 420,
   });
@@ -84,7 +83,6 @@ test("a saved draft round-trips", () => {
   assert.equal(d.outfitUnderwearColor, "red");
   assert.equal(d.outfitPubicHair, true);
   assert.equal(d.outfitPubicHairColor, "blonde");
-  assert.deepEqual(d.open, { models: true, options: false });
   assert.deepEqual(d.shots, [{ id: "abc", seed: 5, saved: false, info: undefined }]);
   assert.equal(d.scrollTop, 420);
 });
@@ -132,7 +130,6 @@ test("fields of the wrong type are dropped rather than restored", () => {
       vaePrecision: "fp8",
       selectedLoras: { a: "heavy" },
       selectedTriggers: ["ok", 5],
-      open: { models: "true" },
       outfitGear: { head: "hat", top: 12 },
     }),
   );
@@ -147,7 +144,6 @@ test("fields of the wrong type are dropped rather than restored", () => {
   assert.equal(d.vaePrecision, undefined);
   assert.equal(d.selectedLoras, undefined);
   assert.equal(d.selectedTriggers, undefined);
-  assert.equal(d.open, undefined);
   // Gear is carried through rather than rejected: a pre-colour draft stores a plain
   // description per slot, and the studio normalizes the shape when it restores. One
   // unusable slot must not cost the user the nine good garments beside it.
@@ -187,15 +183,13 @@ test("an outfit result keeps the emotional state it was generated for", () => {
       id: "preview", seed: 42, saved: false,
       outfitFilename: "date-dress-heated-loving.png", outfitSlot,
       outfitConfig: "white:black:false:dark brown",
-      cutoutReviewed: true, previewVersion: 123, workspaceX: 40, workspaceY: 80,
+      cutoutReviewed: true, previewVersion: 123,
     }],
   });
   assert.deepEqual(loadDraft()?.shots?.[0].outfitSlot, outfitSlot);
   assert.equal(loadDraft()?.shots?.[0].outfitConfig, "white:black:false:dark brown");
   assert.equal(loadDraft()?.shots?.[0].cutoutReviewed, true);
   assert.equal(loadDraft()?.shots?.[0].previewVersion, 123);
-  assert.equal(loadDraft()?.shots?.[0].workspaceX, 40);
-  assert.equal(loadDraft()?.shots?.[0].workspaceY, 80);
 
   const raw = JSON.parse(store.getItem(KEY)!);
   raw.shots[0].outfitSlot.tier = "hot";

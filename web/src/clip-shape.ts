@@ -1,4 +1,4 @@
-// The size and length of a clip, as the Video drawer asks for them.
+// The size and length of a clip, as the Video studio asks for them.
 //
 // Video models are fussier than picture ones. Every one of them wants sides in
 // multiples of 16 for its latent, and Wan wants a frame count of 4n+1 and LTX one of
@@ -34,4 +34,14 @@ export function clipFrames(seconds: number, fps: number): number {
 /** How long a frame count plays for, to a tenth of a second. */
 export function clipSeconds(frames: number, fps: number): number {
   return Math.round(((frames - 1) / Math.max(1, fps)) * 10) / 10;
+}
+
+/**
+ * Where to seek a clip to show its last frame, for carrying a clip on from where it
+ * ended. Not the duration itself: seeking to the very end lands past the last frame in
+ * some browsers and paints nothing, so it stops half a frame short.
+ */
+export function lastFrameTime(duration: number, fps: number): number {
+  if (!(duration > 0)) return 0;
+  return Math.max(0, duration - 0.5 / Math.max(1, fps));
 }

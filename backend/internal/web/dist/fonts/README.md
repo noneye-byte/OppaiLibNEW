@@ -12,8 +12,8 @@ quietly phoning home.
 |------|------|------|
 | `roboto-latin.woff2` | Roboto, variable weight 400–700, latin | 43 kB |
 | `roboto-latin-ext.woff2` | same, latin-ext | 29 kB |
-| `material-symbols-rounded.woff2` | 285 icons, static `wght 400 / FILL 0` | 29 kB |
-| `material-symbols-rounded-fill.woff2` | same 285 icons, static `wght 500 / FILL 1` | 37 kB |
+| `material-symbols-rounded.woff2` | 292 icons, static `wght 400 / FILL 0` | 30 kB |
+| `material-symbols-rounded-fill.woff2` | same 292 icons, static `wght 500 / FILL 1` | 38 kB |
 | `icon-names.txt` | the glyph list both icon files were subset to | — |
 
 Roboto's other seven subsets (cyrillic, greek, vietnamese…) are omitted: Roboto has

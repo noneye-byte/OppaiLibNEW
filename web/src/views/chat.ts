@@ -3362,7 +3362,7 @@ export class OppaiChat extends LitElement {
           <img src=${api.libbyBackgroundURL(bg.id)} alt="" loading="lazy"/><span class="scene-name">${bg.name}${bg.id === this.defaultBackground ? " · default" : ""}</span>
         </button>`)}
       </div>
-      <p>${usable.length ? "She picks a room herself when the scene moves; this overrides her until she moves again." : "No backgrounds yet — add and tag some in the outfit studio, and she'll choose between them."}</p>
+      <p>${usable.length ? "She picks a room herself when the scene moves; this overrides her until she moves again." : "No backgrounds yet — add and tag some in the Sprite studio, and she'll choose between them."}</p>
     </div>`;
   }
 
@@ -4507,7 +4507,7 @@ export class OppaiChat extends LitElement {
               ${(this.outfits ?? []).map((o) => html`<option value=${o.id} ?selected=${o.id === worn}>${o.name}${o.slots ? ` · ${o.slots} squares` : ""}</option>`)}
             </select></label>
           <div class="panel-actions" style="align-self:end">
-            <button class="secondary" @click=${() => this.openSection("studio")}><span class="material-symbols-rounded" style="font-size:16px;vertical-align:-3px">checkroom</span> Open the outfit studio</button>
+            <button class="secondary" @click=${() => this.openSection("studio")}><span class="material-symbols-rounded" style="font-size:16px;vertical-align:-3px">face_retouching_natural</span> Open the Sprite studio</button>
           </div>
         </div>
         ${this.outfits === null ? html`<p class="empty">Loading her wardrobes…</p>` : nothing}

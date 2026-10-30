@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-const { clipFrames, clipSeconds, clipSize } = await import("./clip-shape.ts");
+const { clipFrames, clipSeconds, clipSize, lastFrameTime } = await import("./clip-shape.ts");
 
 test("a clip keeps its picture's shape with the longer side as asked", () => {
   assert.deepEqual(clipSize(1080, 1920, 832), { width: 464, height: 832 });
@@ -36,4 +36,13 @@ test("every length becomes one frame and whole blocks of eight", () => {
 
 test("no length is too short to make a clip of", () => {
   assert.equal(clipFrames(0, 16), 9);
+});
+
+test("the last frame is sought half a frame before the clip ends", () => {
+  assert.equal(lastFrameTime(5, 16), 5 - 0.5 / 16);
+});
+
+test("a clip whose length is not known yet is sought at its start", () => {
+  assert.equal(lastFrameTime(NaN, 16), 0);
+  assert.equal(lastFrameTime(0, 16), 0);
 });

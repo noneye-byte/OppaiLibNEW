@@ -431,7 +431,7 @@ export class OppaiLoraGather extends LitElement {
       const msg = (e as Error).message;
       // Rule34 turns its listing pages away from some addresses outright; its API,
       // with an account's key, answers them.
-      this.error = /403|credentials/.test(msg)
+      this.error = /\b403\b|credentials/.test(msg)
         ? `Rule34 turned the search away (${msg}). Add your Rule34 user id and API key under Settings → Import & scraping — searches then go through its API.`
         : msg;
     } finally {

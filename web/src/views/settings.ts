@@ -1,5 +1,5 @@
 import { speak, stopSpeaking, ttsStatus, type TTSStatus } from "../speech.js";
-import { LitElement, html, css, nothing } from "lit";
+import { LitElement, html, css, nothing, type PropertyValues } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { api, mascotSay, type APKInfo, type ClipLora, type ClipModels, type ComfyFolderKind, type ComfyModels, type ComfyPlaces, type Diagnostics, type GenCheck, type ImageGenStatus, type LibbyReferenceSlot, type Passkey, type PasskeyList, type Settings, type ReadOnlyInfo, type Stats, type StorageReport, type Timing, type User } from "../api.js";
 import { passkeyErrorMessage, registerPasskey } from "../passkeys.js";
@@ -74,6 +74,9 @@ export class OppaiSettings extends LitElement {
   /** Draws one of Libby's sections alone, with its own save bar, for the chat's settings
    *  panel — where all of hers live now, instead of being split across three screens. */
   @property({ attribute: false }) only: LibbySection | "" = "";
+  /** The panel to open on, for a screen that sends someone to one setting — the Video
+   *  studio's "Open Settings" means Image generation, not Appearance. */
+  @property({ attribute: false }) startTab: SettingsTab | "" = "";
 
   @state() private tab: SettingsTab = "appearance";
   @state() private settings: Settings | null = null;
@@ -726,6 +729,10 @@ export class OppaiSettings extends LitElement {
     `,
   ];
 
+  protected willUpdate(changed: PropertyValues) {
+    if (changed.has("startTab") && this.startTab) this.tab = this.startTab;
+  }
+
   connectedCallback() {
     super.connectedCallback();
     profileUpdates(this, "settings");
@@ -1272,7 +1279,7 @@ export class OppaiSettings extends LitElement {
             <button class="btn" @click=${() => this.dispatchEvent(new CustomEvent("open-studio", {
               bubbles: true, composed: true,
             }))}>
-              Open the outfit studio
+              Open the Sprite studio
             </button>
           </div>
         </div>
@@ -1921,7 +1928,7 @@ export class OppaiSettings extends LitElement {
           <div class="field-help">
             She can turn the last picture she sent into a few seconds of video, with the
             picture-to-video workflow under <b>Image generation → Video</b> — the same one
-            Create's Video drawer uses. ${s.libbyClipUrl && (s.libbyClipWorkflow || s.clipImageModels?.model)
+            the Video studio uses. ${s.libbyClipUrl && (s.libbyClipWorkflow || s.clipImageModels?.model)
               ? html`It is set up, so she can.`
               : html`It is not set up yet, so she can't.`}
           </div>
@@ -2463,7 +2470,7 @@ export class OppaiSettings extends LitElement {
   }
 
   /**
-   * ComfyUI, for clips: Create's Video drawer and Libby's own. The setting names say
+   * ComfyUI, for clips: the Video studio and Libby's own. The setting names say
    * "libby" because hers came first; there is one ComfyUI, set up here, for both.
    */
   private renderVideoGen() {
@@ -2488,8 +2495,8 @@ export class OppaiSettings extends LitElement {
       <section class="card">
         <h3><span class="material-symbols-rounded">movie</span>Video</h3>
         <p class="card-sub">
-          A few seconds of video, from words or from a picture, made by ComfyUI — Create's Video
-          drawer, and Libby's clips of herself. Neither Automatic1111 nor InvokeAI makes video.
+          A few seconds of video, from words or from a picture, made by ComfyUI — the Video
+          studio, and Libby's clips of herself. Neither Automatic1111 nor InvokeAI makes video.
         </p>
         ${!s
           ? html`<div class="field-help">Loading…</div>`

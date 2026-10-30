@@ -59,9 +59,6 @@ export interface DraftShot {
       picture is read back from the wardrobe rather than from a preview id that expires
       six hours after it was generated. */
   wipOutfitId?: string;
-  /** Freeform position on the generation workspace, in CSS pixels. */
-  workspaceX?: number;
-  workspaceY?: number;
 }
 
 export interface DraftOutfitSlot {
@@ -157,9 +154,6 @@ export interface GenDraft {
   upscaleUpscaler?: string;
   upscaleBy?: number;
 
-  /** Panels the user had expanded. Restoring these is what makes a return to the tab
-      feel like coming back rather than starting over. */
-  open?: Record<string, boolean>;
   showOptions?: boolean;
 
   shots?: DraftShot[];
@@ -251,7 +245,6 @@ export function loadDraft(): GenDraft | null {
   }
 
   if (isRecordOfNumbers(d.selectedLoras)) out.selectedLoras = d.selectedLoras;
-  if (isRecordOfBooleans(d.open)) out.open = d.open;
   if (isStringArray(d.selectedTriggers)) out.selectedTriggers = d.selectedTriggers;
   if (isStringArray(d.selectedChars)) out.selectedChars = d.selectedChars;
   if (isStringArray(d.selectedPoses)) out.selectedPoses = d.selectedPoses;
@@ -279,12 +272,6 @@ export function loadDraft(): GenDraft | null {
         ...(typeof s.wipOutfitId === "string" ? { wipOutfitId: s.wipOutfitId } : {}),
         ...(typeof s.previewVersion === "number" && Number.isFinite(s.previewVersion)
           ? { previewVersion: s.previewVersion }
-          : {}),
-        ...(typeof s.workspaceX === "number" && Number.isFinite(s.workspaceX)
-          ? { workspaceX: Math.max(0, s.workspaceX) }
-          : {}),
-        ...(typeof s.workspaceY === "number" && Number.isFinite(s.workspaceY)
-          ? { workspaceY: Math.max(0, s.workspaceY) }
           : {}),
       }));
   }
@@ -327,7 +314,3 @@ function isRecordOfNumbers(v: unknown): v is Record<string, number> {
     Object.values(v as object).every((x) => typeof x === "number" && Number.isFinite(x));
 }
 
-function isRecordOfBooleans(v: unknown): v is Record<string, boolean> {
-  return !!v && typeof v === "object" && !Array.isArray(v) &&
-    Object.values(v as object).every((x) => typeof x === "boolean");
-}

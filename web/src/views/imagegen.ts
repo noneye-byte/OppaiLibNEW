@@ -86,8 +86,18 @@ import "./imagegen-gallery.js";
 import { LORA_DRAG_TYPE } from "./imagegen-loras.js";
 import "./rename-dialog.js";
 import "./imagegen-detailer.js";
-import { animatePicture, clipsRunning, onClipsChange } from "./imagegen-video.js";
+import { animatePicture, clipsRunning, onClipsChange, type ClipPicture } from "./imagegen-video.js";
+import { GALLERY_DRAG_TYPE } from "./imagegen-gallery.js";
+import {
+  loadLayout, loadPrompts, moveItem, patchShot, rememberPrompt, rememberShots, saveLayout, savePrompts, stepThrough,
+  type RecentPrompt, type StudioMode,
+} from "../studio-session.js";
+import {
+  BOARD_FILTERS, filterCounts, matchesFilter, moveOnMatrix, nextFilled, sampleLine,
+  type BoardFilter, type BoardKey, type SquareState,
+} from "../sprite-board.js";
 import { RESOLUTIONS, SCHEDULERS } from "../gen-options.js";
+import { studioStyles } from "./studio-styles.js";
 import { aspectLabel, megapixels, previewFrame } from "../size-preview.js";
 import "./civitai.js";
 import type { CivitaiMode } from "./civitai.js";
@@ -169,11 +179,9 @@ interface Shot extends GenPreview {
   /** The wardrobe holding this square as work in progress. Present means the picture
       comes from disk rather than from the expiring preview cache. */
   wipOutfitId?: string;
-  workspaceX?: number;
-  workspaceY?: number;
 }
 
-type CreateTab = "models" | "loras" | "look" | "wildcards" | "detailer" | "video" | "settings";
+type CreateTab = "models" | "loras" | "look" | "wildcards" | "detailer" | "settings";
 
 /** A picture a run starts from instead of noise: the whole of it (image to image),
     the painted part of it (paint to fix), or only its faces (the detailer alone). */
@@ -182,7 +190,7 @@ interface StartPicture {
   name: string;
   width: number;
   height: number;
-  /** Never "animate": a clip's picture is the Video drawer's, not a run's start. */
+  /** Never "animate": a clip's picture is the Video studio's, not a run's start. */
   mode: Exclude<UsePictureMode, "animate">;
   /** Made from a file on this computer, and released when it is let go. */
   objectURL?: boolean;
@@ -191,15 +199,91 @@ interface StartPicture {
   gallery?: string;
 }
 
-/** The Create screen's drawers, down its rail in this order. */
+/** The Image studio's inspector tabs, down its rail in this order. Video used to be one
+    of these; it is a mode of the studio now, with a stage of its own. */
 const CREATE_TABS: { id: CreateTab; label: string; icon: string }[] = [
   { id: "models", label: "Models", icon: "deployed_code" },
   { id: "loras", label: "LoRAs", icon: "style" },
   { id: "look", label: "Look", icon: "face" },
   { id: "wildcards", label: "Wildcards", icon: "category" },
   { id: "detailer", label: "ADetailer", icon: "face_retouching_natural" },
-  { id: "video", label: "Video", icon: "movie" },
   { id: "settings", label: "Settings", icon: "tune" },
+];
+
+/** The Sprites inspector's tabs. The recipe was one accordion of eleven sections, read
+    top to bottom; these are the four things it is actually about. */
+type SpriteTab = "outfit" | "look" | "prompt" | "generator";
+const SPRITE_TABS: { id: SpriteTab; label: string; icon: string }[] = [
+  { id: "outfit", label: "Outfit", icon: "checkroom" },
+  { id: "look", label: "Look", icon: "photo_camera" },
+  { id: "prompt", label: "Prompt", icon: "edit_note" },
+  { id: "generator", label: "Generator", icon: "deployed_code" },
+];
+
+const MODES: { id: StudioMode; label: string; icon: string }[] = [
+  { id: "image", label: "Image", icon: "image" },
+  { id: "video", label: "Video", icon: "movie" },
+  { id: "sprites", label: "Sprites", icon: "face_retouching_natural" },
+];
+
+/** A run made ready while another is drawing: its parameters were read off the form
+    when it was queued, so the form can go on changing without changing it. */
+interface QueuedRun {
+  id: string;
+  label: string;
+  prepared: PreparedRun;
+}
+
+/** Everything a run needs that is read off the form, read at once. */
+interface PreparedRun {
+  params: GenerateParams;
+  from: StartPicture | null;
+  outfit?: { slot: DraftOutfitSlot; filename: string };
+  outfitConfig?: string;
+  /** What the generation record says beyond the parameters, as the form had it. */
+  extras: {
+    triggers: string[];
+    characters: string[];
+    poses: string[];
+    outfit: string;
+    controlImage?: string;
+    startedFrom?: { name: string; mode: Exclude<UsePictureMode, "animate"> };
+  };
+}
+
+/**
+ * The session's pictures and the queue, for the page rather than the element: the
+ * shell rebuilds the studio when it moves between Create and Sprites, and four
+ * pictures or three queued runs must not vanish because someone looked at the board.
+ */
+const store = {
+  history: [] as Shot[],
+  queue: [] as QueuedRun[],
+};
+const storeListeners = new Set<() => void>();
+function storeChanged() {
+  for (const fn of storeListeners) fn();
+}
+function onStoreChange(fn: () => void): () => void {
+  storeListeners.add(fn);
+  return () => storeListeners.delete(fn);
+}
+
+/** The keyboard, as the shortcuts sheet lists it. */
+const SHORTCUTS: { keys: string; what: string; mode?: StudioMode }[] = [
+  { keys: "Ctrl Enter", what: "Generate" },
+  { keys: "Ctrl Shift Enter", what: "Add to the queue", mode: "image" },
+  { keys: "← →", what: "Previous / next picture", mode: "image" },
+  { keys: "C", what: "Compare with the next picture", mode: "image" },
+  { keys: "S", what: "Save the picture on the stage", mode: "image" },
+  { keys: "← → ↑ ↓", what: "Move around the board", mode: "sprites" },
+  { keys: "Enter", what: "Generate the square, then the next", mode: "sprites" },
+  { keys: "R", what: "Review the square's cutout", mode: "sprites" },
+  { keys: "[", what: "Show or hide the inspector" },
+  { keys: "]", what: "Show or hide the gallery / square panel" },
+  { keys: "\\", what: "Focus: hide both panels" },
+  { keys: "Alt 1 · 2 · 3", what: "Image · Video · Sprites" },
+  { keys: "?", what: "This sheet" },
 ];
 
 // ── outfit helper ──────────────────────────────────────────────────────────────
@@ -342,9 +426,10 @@ function newJobId(): string {
 }
 
 /**
- * The image-generation studio: pick a checkpoint (and LoRAs, VAE, templates,
- * characters) in the sidebar, speak or type a prompt, generate, and — only on an
- * explicit Save — keep one in the library.
+ * The studio: Image, Video and Sprites behind one header. As Create it is Image — pick
+ * a checkpoint (and LoRAs, VAE, templates, characters) in the inspector, speak or type
+ * a prompt, generate, and — only on an explicit Save — keep one in the library — and
+ * Video, whose stage is views/imagegen-video.ts. With `studio` set it is Sprites.
  *
  * The *library* gains nothing until Save: the server holds generated previews in
  * memory and streams them from there, so an unsaved batch never touches the library.
@@ -359,15 +444,17 @@ function newJobId(): string {
 @customElement("oppai-imagegen")
 export class OppaiImageGen extends LitElement {
   /**
-   * Outfit studio mode.
+   * The Sprites mode.
    *
    * The same generator, pointed at one job: dressing Libby and rendering her sixty
    * expressions. It is a mode rather than a second component because everything below
    * the outfit board — the checkpoint, the LoRAs, the cutout editor, the draft that
    * survives a reload — is the same machinery, and a copy of it would be a second
    * thing to keep in step for no gain. What changes is what the screen is *about*:
-   * the equipment board and the wardrobe lead, the free-form canvas steps back, and
-   * the outfit controls exist here and nowhere else in the app.
+   * the equipment board and the wardrobe lead, the stage and its strip step back, and
+   * the outfit controls exist here and nowhere else in the app. The shell keeps it as
+   * a second element (library.ts keys it), and the header's mode switch crosses
+   * between the two.
    */
   @property({ type: Boolean }) studio = false;
 
@@ -526,9 +613,6 @@ export class OppaiImageGen extends LitElement {
   @query("input.source-file") private sourceFile?: HTMLInputElement;
   private unwatchClips?: () => void;
 
-  // Which sidebar sections are unfolded. Models start open — it's the choice that
-  // shapes everything else; the rest unfold on demand.
-  @state() private open: Record<string, boolean> = { models: true, settings: true };
 
   @state() private speech = "";
   @state() private listening = false;
@@ -542,14 +626,49 @@ export class OppaiImageGen extends LitElement {
   @state() private completionField: "prompt" | "negative" = "prompt";
   private completionSeq = 0;
   private completionTimer = 0;
-  /** Which drawer the Create screen has open beside the canvas; "" shuts it. A phone
-      starts with it shut, since there it covers the canvas. */
+  /** Which inspector tab the Image studio has open beside the stage; "" puts the
+      inspector away. A phone starts with it away, since there it is a sheet over the
+      stage; elsewhere it opens as it was last left. */
+  private readonly startLayout = loadLayout();
   @state() private createTab: CreateTab | "" =
-    typeof matchMedia === "function" && matchMedia("(max-width: 900px)").matches ? "" : "models";
+    (typeof matchMedia === "function" && matchMedia("(max-width: 900px)").matches) || !this.startLayout.inspector
+      ? "" : CREATE_TABS.find((t) => t.id === this.startLayout.tab)?.id ?? "models";
+  /** Image or Video, when this is the Create element. Sprites is the other element. */
+  @state() private mode: "image" | "video" = this.startLayout.mode;
+  /** The gallery beside the stage (Create) or the selected square's panel (Sprites). */
+  @state() private sidePanel = this.startLayout.gallery;
+  /** Every picture made this session, newest first; the strip under the stage. */
+  @state() private history: Shot[] = store.history;
+  /** The picture on the stage, by id; null is the newest. */
+  @state() private viewing: string | null = null;
+  /** The picture the stage is compared against, by id, while comparing. */
+  @state() private compareWith: string | null = null;
+  /** Where the compare divider sits, as a percentage of the picture's width. */
+  @state() private compareSplit = 50;
+  @state() private queue: QueuedRun[] = store.queue;
+  @state() private queueOpen = false;
+  @state() private recentPrompts: RecentPrompt[] = loadPrompts();
+  @state() private promptsOpen = false;
+  @state() private shortcutsOpen = false;
+  /** A gallery picture or a file is being dragged over the stage. */
+  @state() private stageDrop = false;
+  @state() private spriteTab: SpriteTab = "outfit";
+  /** Whether the Sprites recipe is out beside the board. */
+  @state() private spriteInspector = true;
+  @state() private boardFilter: BoardFilter = "all";
+  /** The selected square drawn cut out on a checkerboard, or as she appears in chat. */
+  @state() private focusView: "cutout" | "scene" = "cutout";
+  /** The tier's expressions played one after another, to see whether they are one girl. */
+  @state() private flipping = false;
+  @state() private flipFace = -1;
+  private flipTimer = 0;
+  private unsubscribeStore?: () => void;
   /** Narrows the Models and LoRAs drawers. */
   @state() private pickerFilter = "";
   /** Set while the Create drawer draws the studio's sections, which then come out flat. */
-  private flatSections = false;
+  /** Set while the Sprites recipe draws its sections, which then carry titles of their
+      own; the Image inspector's header names the one section it shows. */
+  private flatTitles = false;
   @state() private negative = "";
   @state() private showOptions = false;
 
@@ -602,8 +721,6 @@ export class OppaiImageGen extends LitElement {
   private progressTimer = 0;
   private progressSeen = 0;
   @state() private shots: Shot[] = [];
-  @state() private activeNodeId: string | null = null;
-  private draggingNode: { id: string; pointerId: number; clientX: number; clientY: number; x: number; y: number } | null = null;
 
   /** Shown once after a draft is restored, so it is clear the form was filled in from
       last time rather than left in a state the user doesn't remember choosing. */
@@ -644,7 +761,7 @@ export class OppaiImageGen extends LitElement {
   /** Whether the Civitai browser is on screen. */
   @state() private civitaiOpen = false;
   /** What the Civitai browser opens for: the picture generator's models, or Wan's
-      for the Video drawer's clips. */
+      for the Video studio's clips. */
   @state() private civitaiMode: CivitaiMode = "pictures";
   /** The LoRA being dragged from the picker, "" when none: while it is, the canvas
       shows where it can go — the whole picture, or each person's part of it. */
@@ -757,29 +874,6 @@ export class OppaiImageGen extends LitElement {
         gap: 6px;
         flex-wrap: wrap;
       }
-      .layout {
-        display: grid;
-        grid-template-columns: 300px minmax(0, 1fr) 300px;
-        gap: 20px;
-        align-items: start;
-      }
-      @media (max-width: 1220px) {
-        .layout {
-          grid-template-columns: 300px minmax(0, 1fr);
-        }
-        /* The gallery drops under the main column rather than vanishing. */
-        .layout > .right {
-          grid-column: 2;
-        }
-      }
-      @media (max-width: 940px) {
-        .layout {
-          grid-template-columns: minmax(0, 1fr);
-        }
-        .layout > .right {
-          grid-column: 1;
-        }
-      }
       .empty {
         text-align: center;
         padding: 70px 20px;
@@ -791,51 +885,6 @@ export class OppaiImageGen extends LitElement {
         margin-bottom: 12px;
       }
 
-      /* Sidebar: stacked, collapsible sections. */
-      .side {
-        display: flex;
-        flex-direction: column;
-        gap: 10px;
-      }
-      .sec {
-        background: var(--oppai-surface-2);
-        border-radius: 14px;
-        overflow: hidden;
-      }
-      .sec-head {
-        width: 100%;
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        border: none;
-        background: none;
-        color: var(--oppai-text);
-        font: inherit;
-        font-size: 13px;
-        font-weight: 600;
-        letter-spacing: 0.3px;
-        padding: 12px 14px;
-        cursor: pointer;
-        text-align: left;
-      }
-      .sec-head .count {
-        margin-left: auto;
-        font-weight: 400;
-        font-size: 12px;
-        color: var(--oppai-text-muted);
-      }
-      .sec-body {
-        padding: 0 12px 12px;
-      }
-      /* The chevron rotates rather than being swapped for a different glyph: swapping
-         the icon replaces the element, which restarts the font's own paint and reads as
-         a flicker at the exact moment the section is moving. */
-      .sec-chevron {
-        transition: transform 0.22s var(--oppai-ease-emphasized);
-      }
-      .sec-chevron.open {
-        transform: rotate(90deg);
-      }
       .sec-note {
         font-size: 12px;
         color: var(--oppai-text-muted);
@@ -1808,299 +1857,6 @@ export class OppaiImageGen extends LitElement {
         cursor: default;
       }
 
-      /* ── The studio ───────────────────────────────────────────────────────── */
-      .studio-views { display: flex; gap: 4px; margin-left: 4px; }
-      .studio-view {
-        display: inline-flex; align-items: center; gap: 6px;
-        border: 1px solid transparent; border-radius: 999px; padding: 5px 12px;
-        background: transparent; color: var(--oppai-text-muted); font: inherit; font-size: 12px; font-weight: 650; cursor: pointer;
-      }
-      .studio-view:hover { color: var(--oppai-text); }
-      .studio-view.on { background: var(--oppai-surface); border-color: var(--oppai-border-strong); color: var(--oppai-text); }
-      .studio-view-sub { font-weight: 500; color: var(--oppai-text-muted); }
-      .studio-wardrobe { flex: 1; min-height: 0; overflow: auto; padding: 18px 22px 40px; }
-      .side-divider {
-        display: flex; align-items: center; gap: 8px; padding: 14px 12px 4px;
-        color: var(--oppai-text-muted); font-size: 10px; font-weight: 700; letter-spacing: 0.7px; text-transform: uppercase;
-      }
-      .side-divider::before, .side-divider::after { content: ""; flex: 1; height: 1px; background: var(--oppai-border); }
-      .gear-slot .gear-slot-icon { border: 0; cursor: pointer; font: inherit; font-family: "Material Symbols Rounded"; }
-      .gear-slot .gear-slot-icon.inert { cursor: default; }
-      .gear-slot.off { opacity: 0.55; }
-      .gear-slot.off input { text-decoration: line-through; }
-      textarea.num.extras { resize: vertical; min-height: 54px; font-size: 12px; line-height: 1.4; }
-      .studio-toolbar { gap: 10px; }
-      .wardrobe-pick { display: inline-flex; align-items: center; gap: 6px; min-width: 0; color: var(--oppai-text-dim); }
-      .wardrobe-pick select {
-        max-width: 220px; min-width: 0; border: 1px solid var(--oppai-border); border-radius: 8px; padding: 5px 8px;
-        background: var(--oppai-surface-2); color: var(--oppai-text); font: inherit; font-size: 12px;
-      }
-      .sheet-tabs { display: inline-flex; gap: 2px; padding: 2px; border-radius: 999px; background: var(--oppai-surface-2); }
-      .sheet-tab {
-        border: 0; border-radius: 999px; padding: 4px 12px; background: transparent; color: var(--oppai-text-muted);
-        font: inherit; font-size: 12px; font-weight: 650; cursor: pointer;
-      }
-      .sheet-tab.on { background: var(--oppai-primary); color: var(--oppai-on-primary); }
-      .sheet-tab-count { font-weight: 500; opacity: 0.8; font-variant-numeric: tabular-nums; }
-      .zoom-tabs { display: inline-flex; gap: 2px; }
-      .zoom-tab {
-        min-width: 26px; padding: 0 6px; height: 24px; border: 1px solid var(--oppai-border); border-radius: 6px; background: transparent;
-        color: var(--oppai-text-muted); font: inherit; font-size: 11px; font-weight: 700; cursor: pointer;
-      }
-      .zoom-tab.on { background: var(--oppai-surface); color: var(--oppai-text); border-color: var(--oppai-border-strong); }
-      /* The expression matrix: rows are heat tiers, columns are expressions, both
-         headers sticky so a wide sheet scrolled to the edge still says where you are. */
-      .face-matrix {
-        display: grid;
-        grid-template-columns: 92px repeat(${OUTFIT_FACES.length}, var(--cell, 88px));
-        gap: 6px;
-        align-items: stretch;
-        width: max-content;
-        min-width: 100%;
-      }
-      .face-matrix.fit { grid-template-columns: 92px repeat(${OUTFIT_FACES.length}, minmax(0, 1fr)); width: 100%; min-width: 0; }
-      .face-matrix.fit .matrix-col-head { font-size: 10px; padding: 4px 2px; }
-      .face-matrix.fit .cell-foot { padding: 3px 4px; font-size: 9px; }
-      .matrix-corner { position: sticky; top: 0; left: 0; z-index: 3; background: color-mix(in srgb, var(--oppai-bg) 82%, #000); }
-      .matrix-col-head {
-        position: sticky; top: 0; z-index: 2; padding: 6px 4px; text-align: center;
-        background: color-mix(in srgb, var(--oppai-bg) 82%, #000);
-        color: var(--oppai-text-dim); font-size: 11px; font-weight: 700; letter-spacing: 0.3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-      }
-      .matrix-row-head {
-        position: sticky; left: 0; z-index: 2; display: flex; flex-direction: column; justify-content: center; gap: 2px; padding: 8px;
-        border-radius: 10px; background: var(--oppai-surface); border: 1px solid var(--oppai-border);
-        color: var(--oppai-text-dim); font-size: 11px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase;
-      }
-      .matrix-row-count { color: var(--oppai-text-muted); font-weight: 600; font-variant-numeric: tabular-nums; text-transform: none; }
-      .sheet-note { margin: 0; padding: 8px 12px 0; color: var(--oppai-text-muted); font-size: 12px; }
-      .sheet-cell.empty .art-empty { color: var(--oppai-text-muted); }
-      .sheet-cell.current .art-empty { color: var(--oppai-primary-bright); }
-      .sheet-cell .cell-foot { display: flex; align-items: center; gap: 4px; padding: 4px 6px; font-size: 10px; font-weight: 650; }
-      .sheet-cell .cell-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      .cell-state.stale { background: #d9a441; }
-      .sheet-grid { grid-template-columns: repeat(auto-fill, minmax(calc(var(--cell, 88px) + 30px), 1fr)); }
-      /* The focus panel. */
-      .studio-focus { display: flex; flex-direction: column; }
-      .focus-scroll { padding: 12px; display: flex; flex-direction: column; gap: 10px; }
-      .focus-art {
-        flex: 0 0 auto; width: 100%; aspect-ratio: 3 / 4; box-sizing: border-box; border-radius: 12px; overflow: hidden; display: grid; place-items: center;
-        border: 1px solid var(--oppai-border); background-color: #6b6b6b;
-        background-image: linear-gradient(45deg, #5a5a5a 25%, transparent 25%), linear-gradient(-45deg, #5a5a5a 25%, transparent 25%),
-          linear-gradient(45deg, transparent 75%, #5a5a5a 75%), linear-gradient(-45deg, transparent 75%, #5a5a5a 75%);
-        background-size: 16px 16px; background-position: 0 0, 0 8px, 8px -8px, -8px 0;
-      }
-      .focus-art img { width: 100%; height: 100%; object-fit: contain; display: block; }
-      .focus-empty { display: grid; place-items: center; gap: 6px; color: rgba(255,255,255,.7); font-size: 12px; text-align: center; }
-      .focus-empty .material-symbols-rounded { font-size: 30px; }
-      .focus-title { display: grid; gap: 3px; }
-      .focus-title strong { font-size: 14px; }
-      .focus-status { font-size: 12px; color: var(--oppai-text-muted); }
-      .focus-status.ready { color: #6fcf8a; }
-      .focus-status.needs { color: #d9a441; }
-      .focus-status.stale { color: #d9a441; }
-      .focus-actions { display: grid; gap: 6px; }
-      .focus-actions .btn { justify-content: flex-start; width: 100%; box-sizing: border-box; }
-      .focus-actions .btn.danger { color: var(--oppai-error, #f2b8b5); }
-      .focus-actions label.btn.disabled { opacity: 0.55; pointer-events: none; }
-      .focus-meta { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; color: var(--oppai-text-muted); font-size: 11px; }
-      .focus-meta span { display: inline-flex; align-items: center; gap: 3px; }
-      .link-btn { border: 0; background: none; padding: 0; color: var(--oppai-primary-bright); font: inherit; font-size: 11px; cursor: pointer; }
-      .link-btn:disabled { opacity: 0.5; cursor: default; }
-      .focus-prompt { display: grid; gap: 6px; }
-      .focus-tag { font-size: 10px; font-weight: 700; letter-spacing: .55px; text-transform: uppercase; color: var(--oppai-text-muted); }
-      .focus-tag.negative { color: var(--oppai-error, #f2b8b5); }
-      .focus-prompt pre { margin: 0; padding: 8px; border-radius: 8px; background: var(--oppai-surface); font-size: 11px; line-height: 1.4; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow: auto; }
-      /* The batch bar. */
-      .batch-bar {
-        flex: 0 0 auto; display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; padding: 10px 12px;
-        background: var(--oppai-surface-2); border-top: 1px solid var(--oppai-border-strong);
-      }
-      .batch-progress { flex: 1 1 260px; min-width: 200px; display: grid; gap: 4px; }
-      .batch-track { position: relative; height: 6px; border-radius: 3px; background: var(--oppai-surface); overflow: hidden; }
-      .batch-fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px; transition: width .3s ease; }
-      .batch-fill.made { background: color-mix(in srgb, var(--oppai-primary) 45%, transparent); }
-      .batch-fill.reviewed { background: var(--oppai-primary); z-index: 1; }
-      .batch-count { color: var(--oppai-text-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
-      .batch-count em { font-style: normal; color: #d9a441; }
-      .batch-note { flex-basis: 100%; color: var(--oppai-text-muted); font-size: 11px; }
-      .switch.compact { margin: 0; font-size: 12px; white-space: nowrap; }
-
-      /* ── The outfit contact sheet ──────────────────────────────────────────
-         Sixty squares are a set, not sixty independent pictures, so the studio
-         lays them out as the wardrobe grid they will become: one row per heat
-         tier, expressions in the same order everywhere else uses them, and a
-         cell for every slot whether or not it has art yet.
-
-         The free-floating draggable nodes the Create screen uses are right for
-         a handful of variations and wrong for this — twelve columns of them
-         had to be dragged into place by hand to be compared at all, and the
-         gaps in a set are exactly what you need to see. Here an empty cell is
-         a real cell: it says which square is missing and clicking it aims the
-         generator at that slot. */
-      .outfit-sheet { display: grid; gap: 12px; }
-      .sheet-tier {
-        border: 1px solid var(--oppai-border);
-        border-radius: 14px;
-        background: var(--oppai-surface);
-        overflow: hidden;
-      }
-      .sheet-tier-head {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        padding: 8px 12px;
-        border-bottom: 1px solid var(--oppai-border);
-        color: var(--oppai-text-dim);
-        font-size: 11px;
-        font-weight: 700;
-        letter-spacing: 0.7px;
-        text-transform: uppercase;
-      }
-      .sheet-tier-head .tier-count {
-        margin-left: auto;
-        color: var(--oppai-text-muted);
-        font-weight: 600;
-        font-variant-numeric: tabular-nums;
-        letter-spacing: 0.2px;
-        text-transform: none;
-      }
-      /* The MISC block: a framed group of its own tiers under the sixty. Its rows
-         reuse the tier styling so a square reads the same wherever it sits; only the
-         frame says these are the optional ones. */
-      .sheet-block {
-        display: grid;
-        gap: 12px;
-        padding: 12px;
-        margin-top: 6px;
-        border: 1px dashed var(--oppai-border);
-        border-radius: 16px;
-      }
-      .sheet-block-head {
-        display: flex;
-        align-items: center;
-        flex-wrap: wrap;
-        gap: 8px;
-        color: var(--oppai-text);
-        font-size: 13px;
-        font-weight: 700;
-      }
-      .sheet-block-head .sheet-block-note {
-        flex-basis: 100%;
-        color: var(--oppai-text-muted);
-        font-size: 12px;
-        font-weight: 400;
-      }
-      .sheet-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
-        gap: 10px;
-        padding: 12px;
-      }
-      .sheet-cell {
-        position: relative;
-        display: flex;
-        flex-direction: column;
-        border: 1px solid var(--oppai-border);
-        border-radius: 10px;
-        background: var(--oppai-surface-2);
-        overflow: hidden;
-      }
-      .sheet-cell.current {
-        border-color: var(--oppai-primary);
-        box-shadow: 0 0 0 2px color-mix(in srgb, var(--oppai-primary) 28%, transparent);
-      }
-      .sheet-hit {
-        display: block;
-        width: 100%;
-        padding: 0;
-        border: 0;
-        background: none;
-        color: inherit;
-        font: inherit;
-        text-align: left;
-        cursor: pointer;
-      }
-      /* Reviewed squares are transparent PNGs. A checkerboard behind them is the
-         only way the cut edge is visible at thumbnail size. */
-      .sheet-cell .art {
-        display: block;
-        width: 100%;
-        aspect-ratio: 3 / 4;
-        object-fit: contain;
-        background-color: #6b6b6b;
-        background-image:
-          linear-gradient(45deg, #565656 25%, transparent 25%, transparent 75%, #565656 75%),
-          linear-gradient(45deg, #565656 25%, transparent 25%, transparent 75%, #565656 75%);
-        background-size: 14px 14px;
-        background-position: 0 0, 7px 7px;
-      }
-      .sheet-cell .art-empty {
-        display: grid;
-        place-items: center;
-        aspect-ratio: 3 / 4;
-        border-radius: 9px;
-        border: 1px dashed var(--oppai-border-strong);
-        margin: 4px;
-        color: var(--oppai-text-muted);
-        font-size: 11px;
-      }
-      .sheet-cell .cell-label {
-        display: flex;
-        align-items: center;
-        gap: 5px;
-        padding: 6px 8px;
-        border-top: 1px solid var(--oppai-border);
-        color: var(--oppai-text-dim);
-        font-size: 11px;
-      }
-      .sheet-cell .cell-label span:first-child {
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
-      /* Two states worth distinguishing, and only two: a square that still needs
-         its cutout looked at, and one that is finished. */
-      .cell-state {
-        flex: 0 0 auto;
-        margin-left: auto;
-        width: 8px;
-        height: 8px;
-        border-radius: 50%;
-      }
-      .cell-state.needs { background: #f5c469; }
-      .cell-state.ready { background: #6ef7a5; }
-      .sheet-actions {
-        position: absolute;
-        top: 5px;
-        right: 5px;
-        display: flex;
-        gap: 4px;
-        opacity: 0;
-        transition: opacity 0.12s;
-      }
-      .sheet-cell:hover .sheet-actions,
-      .sheet-cell:focus-within .sheet-actions { opacity: 1; }
-      .sheet-act {
-        display: grid;
-        place-items: center;
-        padding: 4px;
-        border: 0;
-        border-radius: 7px;
-        background: rgba(0, 0, 0, 0.62);
-        color: #fff;
-        cursor: pointer;
-      }
-      .sheet-act:hover { background: rgba(0, 0, 0, 0.85); }
-      .sheet-act.danger:hover { color: var(--oppai-error, #f2b8b5); }
-      /* The sheet scrolls as a document; the blueprint grid belongs to the free
-         canvas it replaces. */
-      .canvas-stage.sheet {
-        display: block;
-        padding: 14px;
-        background-image: none;
-      }
-
       /* Result lightbox. */
       .lightbox {
         position: fixed;
@@ -2157,1278 +1913,8 @@ export class OppaiImageGen extends LitElement {
         gap: 6px;
       }
 
-      /* Invoke-style generation workspace. OppaiLib still owns the palette, type and
-         controls; this only adopts the productive three-pane studio geometry. */
-      .wrap {
-        width: 100%;
-        max-width: none;
-        height: 100%;
-        min-height: 0;
-        margin: 0;
-        padding: 0;
-        overflow: hidden;
-      }
-      :host {
-        height: 100%;
-        min-height: 0;
-        overflow: hidden;
-      }
-      .workspace {
-        height: 100%;
-        min-height: 0;
-        display: flex;
-        flex-direction: column;
-        background: var(--oppai-bg);
-      }
-      .workspace-bar {
-        height: 48px;
-        flex: 0 0 48px;
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        padding: 0 12px;
-        box-sizing: border-box;
-        background: var(--oppai-surface-2);
-        border-bottom: 1px solid var(--oppai-border-strong);
-      }
-      .workspace-tab {
-        align-self: stretch;
-        display: flex;
-        align-items: center;
-        gap: 7px;
-        padding: 0 8px;
-        border-bottom: 2px solid var(--oppai-primary);
-        color: var(--oppai-text);
-        font-size: 13px;
-        font-weight: 700;
-      }
-      .workspace-context {
-        margin-left: auto;
-        min-width: 0;
-        display: flex;
-        align-items: center;
-        gap: 8px;
-      }
-      .backend-pill,
-      .model-pill {
-        min-width: 0;
-        height: 30px;
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        padding: 0 10px;
-        border: 1px solid var(--oppai-border-strong);
-        border-radius: 8px;
-        color: var(--oppai-text-dim);
-        font-size: 11px;
-        white-space: nowrap;
-      }
-      .model-pill {
-        max-width: 280px;
-      }
-      .model-pill span:last-child {
-        overflow: hidden;
-        text-overflow: ellipsis;
-      }
-      .status-dot {
-        width: 7px;
-        height: 7px;
-        border-radius: 50%;
-        background: var(--oppai-primary);
-        box-shadow: 0 0 0 3px color-mix(in srgb, var(--oppai-primary) 18%, transparent);
-      }
-      .workspace-bar .ghost {
-        height: 32px;
-        padding: 0 10px;
-        border-radius: 8px;
-        font-size: 12px;
-      }
-      .layout {
-        flex: 1;
-        min-height: 0;
-        display: grid;
-        grid-template-columns: 296px minmax(420px, 1fr) 316px;
-        gap: 0;
-        align-items: stretch;
-      }
-      .layout.no-gallery {
-        grid-template-columns: 296px minmax(420px, 1fr);
-      }
-      /* The studio's panels carry more than the Create screen's: ten equipment rows
-         with two fields each on the left, and a gallery being picked over on the
-         right. Both get room here rather than being asked to wrap inside 296px. */
-      .layout.studio { grid-template-columns: 350px minmax(380px, 1fr) 300px; }
-      .side,
-      .right {
-        min-width: 0;
-        min-height: 0;
-        background: var(--oppai-surface-2);
-      }
-      .side {
-        display: flex;
-        flex-direction: column;
-        gap: 0;
-        border-right: 1px solid var(--oppai-border-strong);
-      }
-      .right {
-        grid-column: auto;
-        border-left: 1px solid var(--oppai-border-strong);
-        overflow: hidden;
-      }
-      .panel-heading {
-        height: 42px;
-        flex: 0 0 42px;
-        box-sizing: border-box;
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        padding: 0 12px;
-        border-bottom: 1px solid var(--oppai-border);
-        color: var(--oppai-text-dim);
-        font-size: 11px;
-        font-weight: 700;
-        letter-spacing: 0.7px;
-        text-transform: uppercase;
-      }
-      .panel-scroll {
-        flex: 1;
-        min-height: 0;
-        overflow-y: auto;
-        overscroll-behavior: contain;
-        scrollbar-width: thin;
-      }
-      .sec {
-        border-radius: 0;
-        background: transparent;
-        border-bottom: 1px solid var(--oppai-border);
-      }
-      .sec-head {
-        min-height: 42px;
-        padding: 9px 12px;
-      }
-      .sec-body {
-        padding: 0 12px 14px;
-      }
-      .sec-models .cards {
-        grid-template-columns: 1fr;
-        gap: 7px;
-      }
-      .sec-models .card {
-        display: grid;
-        grid-template-columns: 52px minmax(0, 1fr);
-        align-items: center;
-        border-width: 1px;
-        border-color: var(--oppai-border);
-        border-radius: 9px;
-      }
-      .sec-models .card-art,
-      .sec-models .card-blank {
-        width: 52px;
-        height: 52px;
-        aspect-ratio: 1;
-      }
-      .sec-models .card-name {
-        padding: 7px 9px;
-        font-size: 12px;
-      }
-      .sec-models .card:hover {
-        transform: none;
-        border-color: var(--oppai-border-strong);
-      }
-      .sec-models .card.on {
-        border-color: var(--oppai-primary);
-        background: color-mix(in srgb, var(--oppai-primary-container) 48%, var(--oppai-surface));
-      }
-      .workbench {
-        min-width: 0;
-        min-height: 0;
-        display: flex;
-        flex-direction: column;
-        background: color-mix(in srgb, var(--oppai-bg) 82%, #000);
-      }
-      .canvas-toolbar {
-        height: 42px;
-        flex: 0 0 42px;
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        padding: 0 12px;
-        box-sizing: border-box;
-        border-bottom: 1px solid var(--oppai-border);
-        background: var(--oppai-surface);
-        color: var(--oppai-text-muted);
-        font-size: 11px;
-        font-variant-numeric: tabular-nums;
-      }
-      .canvas-toolbar .canvas-name {
-        color: var(--oppai-text);
-        font-weight: 700;
-      }
-      .toolbar-spacer { flex: 1; }
-      .toolbar-stat {
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-        white-space: nowrap;
-      }
-      .toolbar-clear {
-        border: 0;
-        background: transparent;
-        color: var(--oppai-text-muted);
-        font: inherit;
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-        cursor: pointer;
-        padding: 5px 7px;
-        border-radius: 7px;
-      }
-      .toolbar-clear:hover { background: var(--oppai-surface-2); color: var(--oppai-text); }
-      .canvas-stage {
-        position: relative;
-        flex: 1;
-        min-height: 260px;
-        overflow: auto;
-        display: grid;
-        place-items: start;
-        padding: 22px;
-        box-sizing: border-box;
-        background-image:
-          linear-gradient(color-mix(in srgb, var(--oppai-border) 34%, transparent) 1px, transparent 1px),
-          linear-gradient(90deg, color-mix(in srgb, var(--oppai-border) 34%, transparent) 1px, transparent 1px);
-        background-size: 24px 24px;
-      }
-      /* The canvas scrolls; a dragged LoRA's drop targets sit over it, still. */
-      .canvas-wrap { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
-      .canvas-wrap > .canvas-stage { flex: 1; }
-      .lora-drop {
-        position: absolute; inset: 0; z-index: 12; display: flex; flex-direction: column; align-items: center; justify-content: center;
-        gap: 12px; padding: 18px; box-sizing: border-box; background: color-mix(in srgb, var(--oppai-bg) 74%, transparent);
-        backdrop-filter: blur(3px); animation: oppai-fade-in 0.12s ease both; container-type: size; overflow: hidden;
-      }
-      .drop-title { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: center; font-size: 13px; color: var(--oppai-text-dim); }
-      .drop-title b { color: var(--oppai-text); }
-      .drop-title .material-symbols-rounded { font-size: 18px; color: var(--oppai-primary-bright, var(--oppai-primary)); }
-      .drop-all {
-        flex: 1 1 auto; width: 100%; max-width: 560px; max-height: 320px; display: flex; align-items: center; justify-content: center; gap: 8px;
-        border: 2px dashed color-mix(in srgb, var(--oppai-primary) 50%, var(--oppai-border-strong)); border-radius: 18px;
-        color: var(--oppai-text-dim); font-size: 15px; font-weight: 600; transition: background 0.12s ease, border-color 0.12s ease;
-      }
-      .drop-all.slim { flex: none; height: 52px; font-size: 13px; }
-      .drop-all.over, .drop-part.over {
-        border-style: solid; border-color: var(--oppai-primary); color: var(--oppai-text);
-        background: color-mix(in srgb, var(--oppai-primary) 16%, transparent);
-      }
-      .people-frame {
-        display: flex; gap: 6px; padding: 6px; box-sizing: border-box; max-height: 100%; border-radius: 14px;
-        border: 1px solid var(--oppai-border-strong); background: color-mix(in srgb, var(--oppai-surface) 72%, transparent);
-      }
-      .people-frame.rows { flex-direction: column; }
-      .drop-part {
-        position: relative; min-width: 0; min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
-        gap: 6px; padding: 26px 6px 8px; box-sizing: border-box; border-radius: 10px; text-align: center; font-size: 12px;
-        color: var(--oppai-text-muted); border: 2px dashed color-mix(in srgb, var(--oppai-primary) 45%, var(--oppai-border-strong));
-        transition: background 0.12s ease, border-color 0.12s ease;
-      }
-      .drop-n { position: absolute; top: 5px; left: 9px; font-size: 13px; font-weight: 700; color: var(--oppai-primary-bright, var(--oppai-primary)); }
-      .drop-lora {
-        display: inline-flex; align-items: center; gap: 4px; max-width: 100%; box-sizing: border-box; padding: 4px 4px 4px 8px;
-        border-radius: 14px; background: var(--oppai-primary-container); color: var(--oppai-text); font-size: 12px; font-weight: 600;
-      }
-      .drop-lora .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      .drop-lora .material-symbols-rounded { font-size: 15px; }
-      .drop-lora button {
-        flex: none; width: 20px; height: 20px; padding: 0; border: none; border-radius: 10px; background: none; color: inherit;
-        display: grid; place-items: center; cursor: pointer;
-      }
-      .people-empty { place-self: center; width: 100%; display: flex; flex-direction: column; align-items: center; gap: 12px; }
-      .people-empty .hint { max-width: 360px; font-size: 12px; line-height: 1.5; color: var(--oppai-text-muted); text-align: center; }
-      .restart-pane { display: flex; align-items: center; gap: 12px; font-size: 12.5px; line-height: 1.45; color: var(--oppai-text-dim); }
-      .restart-pane > span { flex: 1; }
-      .restart-pane .chip { flex: none; display: inline-flex; align-items: center; gap: 5px; }
-      .restart-pane .chip .material-symbols-rounded { font-size: 17px; }
-      .canvas-empty {
-        width: min(420px, 88%);
-        min-height: 260px;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        gap: 8px;
-        border: 1px dashed var(--oppai-border-strong);
-        border-radius: 14px;
-        background: color-mix(in srgb, var(--oppai-surface) 78%, transparent);
-        color: var(--oppai-text-muted);
-        text-align: center;
-        padding: 28px;
-        box-sizing: border-box;
-        place-self: center;
-      }
-      .canvas-empty .material-symbols-rounded { font-size: 38px; }
-      .canvas-empty strong { color: var(--oppai-text-dim); font-size: 14px; }
-      .canvas-empty span:last-child { max-width: 300px; font-size: 12px; line-height: 1.5; }
-      .generating-overlay {
-        position: absolute;
-        inset: 0;
-        z-index: 3;
-        display: grid;
-        place-items: center;
-        background: color-mix(in srgb, var(--oppai-bg) 58%, transparent);
-        backdrop-filter: blur(2px);
-      }
-      .generating-card {
-        display: grid;
-        gap: 10px;
-        padding: 12px 16px;
-        border: 1px solid var(--oppai-border-strong);
-        border-radius: 12px;
-        background: var(--oppai-surface-2);
-        box-shadow: 0 10px 30px rgba(0,0,0,.3);
-        font-size: 13px;
-        font-weight: 600;
-        max-width: min(92%, 420px);
-      }
-      .generating-card.with-preview { padding: 10px; }
-      .progress-preview {
-        display: block;
-        width: 100%;
-        max-height: 52vh;
-        object-fit: contain;
-        border-radius: 8px;
-        background: #000;
-        image-rendering: auto;
-      }
-      .progress-row { display: flex; align-items: center; gap: 10px; }
-      .progress-label { flex: 1; min-width: 0; }
-      .progress-cancel {
-        display: inline-flex; align-items: center; gap: 4px;
-        border: 1px solid var(--oppai-border-strong); border-radius: 999px;
-        padding: 5px 12px 5px 8px; background: transparent; color: inherit;
-        font: inherit; font-size: 12px; cursor: pointer;
-      }
-      .progress-cancel:hover:not(:disabled) { background: color-mix(in srgb, var(--oppai-error, #f66) 18%, transparent); }
-      .progress-cancel:disabled { opacity: .5; cursor: default; }
-      .progress-bar { height: 4px; border-radius: 2px; background: var(--oppai-border); overflow: hidden; }
-      .progress-bar span { display: block; height: 100%; background: var(--oppai-primary); transition: width .4s ease; }
-      .prompt-dock {
-        flex: 0 0 auto;
-        padding: 10px 12px 12px;
-        background: var(--oppai-surface-2);
-        border-top: 1px solid var(--oppai-border-strong);
-      }
-      .prompt-card {
-        border: 1px solid var(--oppai-border-strong);
-        border-radius: 12px;
-        background: var(--oppai-surface);
-        padding: 10px;
-        gap: 9px;
-        box-shadow: 0 5px 18px rgba(0,0,0,.16);
-      }
-      .prompt-head {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        min-height: 24px;
-      }
-      .prompt-title {
-        font-size: 11px;
-        font-weight: 700;
-        letter-spacing: .65px;
-        text-transform: uppercase;
-        color: var(--oppai-text-dim);
-      }
-      .prompt-grid {
-        display: grid;
-        grid-template-columns: minmax(0, 1.45fr) minmax(180px, .75fr);
-        gap: 8px;
-      }
-      .prompt-field {
-        position: relative;
-      }
-      .prompt-field textarea {
-        min-height: 76px;
-        max-height: 180px;
-        resize: vertical;
-        border-radius: 8px;
-        padding-top: 25px;
-        font-size: 13px;
-      }
-      .field-tag {
-        position: absolute;
-        z-index: 1;
-        top: 7px;
-        left: 10px;
-        font-size: 10px;
-        font-weight: 700;
-        letter-spacing: .55px;
-        text-transform: uppercase;
-        color: var(--oppai-text-muted);
-        pointer-events: none;
-      }
-      .field-tag.negative { color: var(--oppai-error, #f2b8b5); }
-      .prompt-footer {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-      }
-      .prompt-summary {
-        color: var(--oppai-text-muted);
-        font-size: 11px;
-        white-space: nowrap;
-      }
-      .prompt-footer .generate.cancel { background: var(--oppai-surface-3, var(--oppai-surface-2)); color: var(--oppai-text); border: 1px solid var(--oppai-border-strong); }
-      .prompt-footer .generate {
-        width: auto;
-        min-width: 142px;
-        height: 40px;
-        margin: 0 0 0 auto;
-        padding: 0 18px;
-        border-radius: 9px;
-        font-size: 13px;
-      }
-      .speech-row { min-height: 24px; gap: 7px; }
-      .speech-hint { font-size: 11px; }
-      .mic {
-        width: 30px;
-        height: 30px;
-        border-radius: 8px;
-        background: var(--oppai-surface-3, var(--oppai-surface-2));
-        color: var(--oppai-text-dim);
-      }
-      .mic .material-symbols-rounded { font-size: 18px; }
-      .prompt-options {
-        max-height: 220px;
-        overflow-y: auto;
-        padding: 9px;
-        border: 1px solid var(--oppai-border);
-        border-radius: 8px;
-        background: var(--oppai-surface-2);
-      }
-      .results {
-        width: 100%;
-        min-width: 100%;
-        min-height: 100%;
-        position: relative;
-        margin: 0;
-      }
-      .shot {
-        position: absolute;
-        width: min(260px, calc(100vw - 56px));
-        border: 1px solid var(--oppai-border-strong);
-        border-radius: 10px;
-        box-shadow: 0 12px 38px rgba(0,0,0,.32);
-      }
-      .shot.active { z-index: 2; box-shadow: 0 18px 48px rgba(0,0,0,.46); }
-      .node-handle {
-        height: 30px;
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        padding: 0 9px;
-        border-bottom: 1px solid var(--oppai-border);
-        background: var(--oppai-surface-3, var(--oppai-surface-2));
-        color: var(--oppai-text-muted);
-        font-size: 11px;
-        cursor: grab;
-        touch-action: none;
-        user-select: none;
-      }
-      .node-handle:active { cursor: grabbing; }
-      .node-handle .node-title {
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
-      .shot img {
-        width: 100%;
-        height: auto;
-        max-height: 360px;
-        min-height: 140px;
-        margin: 0 auto;
-        aspect-ratio: auto;
-        object-fit: contain;
-      }
-      .shot-actions {
-        justify-content: center;
-        flex-wrap: wrap;
-        border-top: 1px solid var(--oppai-border);
-        background: var(--oppai-surface-2);
-      }
-      .shot-slot {
-        padding: 8px 10px 0;
-        color: var(--oppai-text-dim);
-        font-size: 12px;
-        font-weight: 600;
-      }
-      .shot-actions .act { flex: 0 1 auto; min-width: 36px; }
-      .canvas-stage > .banner {
-        position: absolute;
-        top: 10px;
-        left: 50%;
-        z-index: 4;
-        transform: translateX(-50%);
-        margin: 0;
-        max-width: min(560px, 90%);
-        background: var(--oppai-surface-2);
-      }
-      .restored {
-        position: absolute;
-        top: 56px;
-        left: 50%;
-        z-index: 8;
-        width: min(520px, calc(100% - 24px));
-        transform: translateX(-50%);
-        box-sizing: border-box;
-        margin: 0;
-        border: 1px solid var(--oppai-border-strong);
-        box-shadow: 0 10px 30px rgba(0,0,0,.35);
-      }
-      @media (max-width: 1240px) {
-        .layout { grid-template-columns: 270px minmax(380px, 1fr) 270px; }
-        .layout.no-gallery { grid-template-columns: 270px minmax(380px, 1fr); }
-        /* Still wider than the Create screen's, but the workbench keeps a usable
-           middle: the equipment rows tolerate 330px, a 20-square grid does not
-           tolerate 300. */
-        .layout.studio { grid-template-columns: 320px minmax(340px, 1fr) 270px; }
-        .model-pill { display: none; }
-      }
-      @media (max-width: 1020px) {
-        .wrap { overflow-y: auto; }
-        .workspace { height: auto; min-height: 100%; }
-        .layout,
-        .layout.no-gallery,
-        .layout.studio {
-          min-height: 0;
-          grid-template-columns: 280px minmax(0, 1fr);
-        }
-        .side { min-height: 720px; }
-        .workbench { min-height: 720px; }
-        .right {
-          grid-column: 1 / -1;
-          min-height: 420px;
-          border-left: 0;
-          border-top: 1px solid var(--oppai-border-strong);
-        }
-      }
-      @media (max-width: 700px) {
-        .workspace-bar { padding: 0 8px; }
-        .backend-pill { display: none; }
-        .workspace-bar .ghost span:last-child { display: none; }
-        .layout,
-        .layout.no-gallery,
-        .layout.studio { display: flex; flex-direction: column; }
-        .studio-views { margin-left: 0; }
-        .studio-view { padding: 5px 8px; }
-        .studio-view-sub { display: none; }
-        .side,
-        .workbench,
-        .right { min-height: 0; border: 0; }
-        .side { max-height: 52vh; border-bottom: 1px solid var(--oppai-border-strong); }
-        .panel-scroll { max-height: calc(52vh - 42px); }
-        .workbench { min-height: 700px; }
-        .canvas-stage { min-height: 310px; padding: 12px; }
-        .prompt-grid { grid-template-columns: 1fr; }
-        .prompt-footer { flex-wrap: wrap; }
-        .prompt-summary { order: 3; width: 100%; }
-        .prompt-footer .generate { min-width: 126px; }
-        .right { min-height: 430px; border-top: 1px solid var(--oppai-border-strong); }
-        .shot img { max-height: 52vh; }
-      }
-
-      /* ── Create ─────────────────────────────────────────────────────────────
-         The rail, a drawer beside the canvas, the recipe over it and the composer
-         under it. Declared last so it wins over the shared .layout rules above,
-         which still shape the outfit studio. */
-      .create-shell {
-        flex: 1;
-        min-height: 0;
-        display: grid;
-        grid-template-columns: 84px minmax(0, 1fr);
-        background: var(--oppai-bg);
-      }
-      .create-shell.drawer-open { grid-template-columns: 84px 340px minmax(0, 1fr); }
-      .create-shell.with-gallery { grid-template-columns: 84px minmax(0, 1fr) 300px; }
-      .create-shell.drawer-open.with-gallery { grid-template-columns: 84px 340px minmax(0, 1fr) 300px; }
-      .drawer-scrim { display: none; }
-
-      .create-rail {
-        display: flex;
-        flex-direction: column;
-        gap: 6px;
-        padding: 12px 6px;
-        background: var(--oppai-surface);
-        border-right: 1px solid var(--oppai-border-strong);
-        overflow-y: auto;
-        scrollbar-width: none;
-      }
-      .rail-tab {
-        position: relative;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        gap: 4px;
-        padding: 4px 0 6px;
-        border: 0;
-        background: transparent;
-        color: var(--oppai-text-muted);
-        font: inherit;
-        font-size: 11px;
-        font-weight: 600;
-        cursor: pointer;
-      }
-      .rail-icon {
-        width: 56px;
-        height: 32px;
-        display: grid;
-        place-items: center;
-        border-radius: 16px;
-        font-size: 22px;
-        transition: background 0.2s var(--oppai-ease-emphasized), color 0.2s ease;
-      }
-      .rail-tab:hover { color: var(--oppai-text); }
-      .rail-tab:hover .rail-icon { background: var(--oppai-surface-2); }
-      .rail-tab.on { color: var(--oppai-text); }
-      .rail-tab.on .rail-icon {
-        background: var(--oppai-primary-container);
-        color: var(--oppai-on-primary-container, var(--oppai-text));
-      }
-      .rail-badge {
-        position: absolute;
-        top: 0;
-        right: 10px;
-        min-width: 17px;
-        height: 17px;
-        padding: 0 5px;
-        box-sizing: border-box;
-        border-radius: 9px;
-        background: var(--oppai-primary);
-        color: var(--oppai-on-primary);
-        font-size: 10px;
-        font-weight: 700;
-        line-height: 17px;
-        text-align: center;
-      }
-
-      .create-drawer {
-        min-width: 0;
-        min-height: 0;
-        display: flex;
-        flex-direction: column;
-        background: var(--oppai-surface-2);
-        border-right: 1px solid var(--oppai-border-strong);
-        animation: create-drawer-in 0.22s var(--oppai-ease-emphasized) both;
-      }
-      @keyframes create-drawer-in {
-        from { opacity: 0; transform: translateX(-14px); }
-        to { opacity: 1; transform: none; }
-      }
-      .drawer-head {
-        height: 56px;
-        flex: 0 0 56px;
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        padding: 0 8px 0 18px;
-        box-sizing: border-box;
-        font-size: 16px;
-        font-weight: 700;
-        border-bottom: 1px solid var(--oppai-border);
-      }
-      .drawer-head > .material-symbols-rounded { color: var(--oppai-primary-bright, var(--oppai-primary)); }
-      .drawer-action {
-        width: 36px;
-        height: 36px;
-        border-radius: 18px;
-        border: 0;
-        background: transparent;
-        color: var(--oppai-text-muted);
-        display: grid;
-        place-items: center;
-        cursor: pointer;
-      }
-      .drawer-action:hover { background: var(--oppai-surface-3, var(--oppai-surface)); color: var(--oppai-text); }
-      .drawer-scroll {
-        flex: 1;
-        min-height: 0;
-        overflow-y: auto;
-        overscroll-behavior: contain;
-        scrollbar-width: thin;
-        padding: 14px 16px 24px;
-      }
-      .pane { margin-bottom: 18px; }
-      .pane-title {
-        margin: 4px 0 10px;
-        font-size: 11px;
-        font-weight: 700;
-        letter-spacing: 0.7px;
-        text-transform: uppercase;
-        color: var(--oppai-text-muted);
-      }
-      .picker-search {
-        position: relative;
-        display: block;
-        margin-bottom: 14px;
-      }
-      .picker-search input {
-        width: 100%;
-        height: 40px;
-        box-sizing: border-box;
-        padding: 0 14px 0 38px;
-        border: 1px solid var(--oppai-border-strong);
-        border-radius: 20px;
-        background: var(--oppai-surface);
-        color: var(--oppai-text);
-        font: inherit;
-        font-size: 13px;
-        outline: none;
-      }
-      .picker-search input:focus { border-color: var(--oppai-primary); }
-      .picker-search .material-symbols-rounded {
-        position: absolute;
-        left: 12px;
-        top: 10px;
-        font-size: 20px;
-        color: var(--oppai-text-muted);
-        pointer-events: none;
-      }
-      /* Cover cards, two up: a checkpoint or a LoRA is recognised by its picture
-         long before its file name. */
-      .create-drawer .cards,
-      .create-drawer .sec-models .cards {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 12px;
-      }
-      .create-drawer .card,
-      .create-drawer .sec-models .card {
-        display: block;
-        border: 2px solid transparent;
-        border-radius: 16px;
-        background: var(--oppai-surface);
-        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
-      }
-      .create-drawer .card:hover { transform: translateY(-2px); border-color: var(--oppai-border-strong); }
-      .create-drawer .card.on,
-      .create-drawer .sec-models .card.on {
-        border-color: var(--oppai-primary);
-        background: var(--oppai-surface);
-        box-shadow: 0 0 0 3px color-mix(in srgb, var(--oppai-primary) 24%, transparent);
-      }
-      .create-drawer .card-art,
-      .create-drawer .card-blank,
-      .create-drawer .sec-models .card-art,
-      .create-drawer .sec-models .card-blank {
-        width: 100%;
-        height: auto;
-        aspect-ratio: 3 / 4;
-      }
-      .create-drawer .card-name,
-      .create-drawer .sec-models .card-name {
-        padding: 8px 10px 9px;
-        font-size: 12px;
-        font-weight: 600;
-      }
-      .create-drawer .lora-weight { border-radius: 10px; }
-      .manage-note {
-        display: flex;
-        gap: 9px;
-        margin-top: 14px;
-        padding: 11px 12px;
-        border-radius: 12px;
-        background: color-mix(in srgb, var(--oppai-primary) 10%, var(--oppai-surface));
-        border: 1px solid color-mix(in srgb, var(--oppai-primary) 30%, transparent);
-        font-size: 12px;
-        line-height: 1.5;
-        color: var(--oppai-text-dim);
-      }
-      .manage-note .material-symbols-rounded { font-size: 18px; color: var(--oppai-primary-bright, var(--oppai-primary)); }
-      .custom-passes, .people { display: flex; flex-direction: column; gap: 8px; }
-      .pass-card {
-        display: flex; flex-direction: column; gap: 6px; padding: 9px; border-radius: 12px;
-        border: 1px solid var(--oppai-border); background: color-mix(in srgb, var(--oppai-surface-2) 60%, transparent);
-      }
-      .pass-row { display: flex; gap: 6px; align-items: center; }
-      .pass-row select { flex: 1; min-width: 0; }
-      .pass-row .lora-weight { width: 84px; flex: none; }
-      .pass-remove {
-        flex: none; width: 30px; height: 30px; display: grid; place-items: center; border-radius: 8px;
-        border: none; background: none; color: var(--oppai-text-dim); cursor: pointer;
-      }
-      .pass-remove:hover:not(:disabled) { background: var(--oppai-surface-2); color: var(--oppai-text); }
-      .pass-remove:disabled { opacity: 0.35; cursor: default; }
-      .pass-remove .material-symbols-rounded { font-size: 18px; }
-      .person-n { width: 18px; text-align: center; color: var(--oppai-primary-bright, var(--oppai-primary)); }
-      .people-layout {
-        display: flex; height: 54px; gap: 3px; border-radius: 10px; overflow: hidden;
-        border: 1px solid var(--oppai-border);
-      }
-      .people-layout.rows { flex-direction: column; height: 84px; }
-      .people-strip {
-        display: flex; flex-direction: column; gap: 8px; padding: 10px; border-radius: 14px;
-        border: 1px solid var(--oppai-border); background: color-mix(in srgb, var(--oppai-primary) 5%, transparent);
-      }
-      .people-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-      .people-advice { display: flex; flex-direction: column; gap: 6px; }
-      .advice-row {
-        display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 10px; font-size: 12px; line-height: 1.4;
-        color: var(--oppai-text-dim); background: color-mix(in srgb, var(--oppai-accent) 12%, var(--oppai-surface));
-        border: 1px solid color-mix(in srgb, var(--oppai-accent) 35%, transparent);
-      }
-      .advice-row > span:nth-child(2) { flex: 1; min-width: 0; }
-      .advice-row b { color: var(--oppai-text); }
-      .advice-row > .material-symbols-rounded { font-size: 18px; color: var(--oppai-accent); }
-      .advice-row .chip { flex: none; }
-      .people-head .people-layout { width: 64px; height: 40px; flex: none; }
-      .people-head .people-layout.rows { height: 48px; width: 48px; }
-      .people-hint { font-size: 12px; color: var(--oppai-text-dim); flex: 1; min-width: 200px; line-height: 1.4; }
-      .people-grid { display: grid; grid-template-columns: repeat(var(--people, 2), minmax(0, 1fr)); gap: 8px; }
-      .person-words { resize: vertical; min-height: 44px; font: inherit; font-size: 13px; line-height: 1.35; }
-      .pass-row .lora-weight.share { width: 58px; }
-      .people-seg { align-items: center; }
-      .people-cycle { display: none; }
-      .people-seg > .material-symbols-rounded { font-size: 17px; color: var(--oppai-text-dim); padding: 0 4px 0 6px; }
-      .people-layout span {
-        display: grid; place-items: center; font-size: 12px; font-weight: 600; color: var(--oppai-text-dim);
-        background: color-mix(in srgb, var(--oppai-primary) 14%, var(--oppai-surface));
-      }
-
-      .create-stage {
-        min-width: 0;
-        min-height: 0;
-        display: flex;
-        flex-direction: column;
-        background: color-mix(in srgb, var(--oppai-bg) 86%, #000);
-      }
-      .create-gallery { border-left: 1px solid var(--oppai-border-strong); }
-
-      .recipe {
-        flex: 0 0 auto;
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        min-width: 0;
-        padding: 10px 14px;
-        background: var(--oppai-surface);
-        border-bottom: 1px solid var(--oppai-border);
-      }
-      .recipe-model {
-        flex: 0 1 auto;
-        min-width: 0;
-        max-width: 320px;
-        display: flex;
-        align-items: center;
-        gap: 11px;
-        padding: 5px 12px 5px 5px;
-        border: 1px solid var(--oppai-border-strong);
-        border-radius: 16px;
-        background: var(--oppai-surface-2);
-        color: var(--oppai-text);
-        font: inherit;
-        text-align: left;
-        cursor: pointer;
-        transition: border-color 0.15s ease, background 0.15s ease;
-      }
-      .recipe-model:hover { border-color: var(--oppai-primary); }
-      .recipe-model img,
-      .recipe-model-icon {
-        flex: 0 0 44px;
-        width: 44px;
-        height: 44px;
-        border-radius: 11px;
-        object-fit: cover;
-        display: grid;
-        place-items: center;
-        background: var(--oppai-surface-3, var(--oppai-surface));
-        color: var(--oppai-text-muted);
-      }
-      .recipe-model-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-      .recipe-kicker {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        font-size: 10px;
-        font-weight: 700;
-        letter-spacing: 0.55px;
-        text-transform: uppercase;
-        color: var(--oppai-text-muted);
-        white-space: nowrap;
-      }
-      .recipe-model-name {
-        font-size: 14px;
-        font-weight: 700;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-      }
-      .recipe-caret { color: var(--oppai-text-muted); font-size: 20px; }
-      .recipe-chips {
-        flex: 1 1 auto;
-        min-width: 0;
-        display: flex;
-        align-items: center;
-        gap: 7px;
-        overflow-x: auto;
-        scrollbar-width: none;
-        padding: 2px 0;
-      }
-      .recipe-chip,
-      .recipe-civitai,
-      .recipe-ghost {
-        flex: 0 0 auto;
-        height: 34px;
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        padding: 0 12px;
-        border: 1px solid var(--oppai-border-strong);
-        border-radius: 17px;
-        background: transparent;
-        color: var(--oppai-text-dim);
-        font: inherit;
-        font-size: 12.5px;
-        font-variant-numeric: tabular-nums;
-        white-space: nowrap;
-        cursor: pointer;
-      }
-      .recipe-chip .material-symbols-rounded,
-      .recipe-civitai .material-symbols-rounded,
-      .recipe-ghost .material-symbols-rounded { font-size: 17px; }
-      .recipe-chip:hover,
-      .recipe-ghost:hover { background: var(--oppai-surface-2); color: var(--oppai-text); }
-      .recipe-chip.on { border-color: var(--oppai-primary); color: var(--oppai-text); }
-      .recipe-chip.add { border-style: dashed; }
-      .recipe-chip.lora {
-        padding: 0;
-        gap: 0;
-        border-color: color-mix(in srgb, var(--oppai-primary) 50%, transparent);
-        background: color-mix(in srgb, var(--oppai-primary) 14%, transparent);
-        color: var(--oppai-text);
-      }
-      .recipe-chip-main,
-      .recipe-chip-x {
-        height: 100%;
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        border: 0;
-        background: transparent;
-        color: inherit;
-        font: inherit;
-        cursor: pointer;
-      }
-      .recipe-chip-main { padding: 0 4px 0 11px; }
-      .recipe-chip-main b { font-weight: 700; opacity: 0.75; }
-      .recipe-chip-x { padding: 0 9px 0 3px; opacity: 0.65; }
-      .recipe-chip-x:hover { opacity: 1; }
-      .recipe-ghost { width: 34px; padding: 0; justify-content: center; }
-      .recipe-civitai {
-        border-color: transparent;
-        background: var(--oppai-primary-container);
-        color: var(--oppai-on-primary-container, var(--oppai-text));
-        font-weight: 600;
-      }
-      .recipe-civitai:hover { filter: brightness(1.08); }
-
-      .create-stage .canvas-stage { padding: 26px; }
-      .create-stage .canvas-empty {
-        border-radius: 22px;
-        border-style: solid;
-        border-color: var(--oppai-border);
-        background: color-mix(in srgb, var(--oppai-surface) 70%, transparent);
-      }
-
-      .create-stage .prompt-dock {
-        padding: 12px 16px 16px;
-        background: linear-gradient(to bottom, transparent, color-mix(in srgb, var(--oppai-surface) 65%, transparent) 40%);
-        border-top: 0;
-      }
-      .composer {
-        gap: 10px;
-        padding: 12px;
-        border: 1px solid var(--oppai-border-strong);
-        border-radius: 22px;
-        background: var(--oppai-surface-2);
-        box-shadow: 0 -4px 30px rgba(0, 0, 0, 0.22);
-        transition: border-color 0.2s ease, box-shadow 0.2s ease;
-      }
-      .composer:focus-within {
-        border-color: color-mix(in srgb, var(--oppai-primary) 65%, var(--oppai-border-strong));
-        box-shadow: 0 -4px 30px rgba(0, 0, 0, 0.22), 0 0 0 3px color-mix(in srgb, var(--oppai-primary) 14%, transparent);
-      }
-      .composer-fields {
-        display: grid;
-        grid-template-columns: minmax(0, 1.7fr) minmax(200px, 0.8fr);
-        gap: 10px;
-      }
-      .composer .prompt-field textarea {
-        min-height: 96px;
-        max-height: 240px;
-        padding: 12px 14px;
-        border-radius: 15px;
-        border-color: var(--oppai-border);
-        background: var(--oppai-surface);
-        font-size: 14px;
-        line-height: 1.55;
-      }
-      .composer .prompt-field textarea:focus { border-color: var(--oppai-primary); }
-      .composer .prompt-field.negative textarea { padding-top: 29px; font-size: 13px; }
-      .composer .field-tag { top: 9px; left: 14px; }
-      .trigger-row {
-        display: flex;
-        flex-wrap: wrap;
-        align-items: center;
-        gap: 6px;
-      }
-      .trigger-label {
-        font-size: 11px;
-        font-weight: 700;
-        letter-spacing: 0.5px;
-        text-transform: uppercase;
-        color: var(--oppai-text-muted);
-        margin-right: 4px;
-      }
-      .chip.small { min-height: 28px; padding: 2px 11px; font-size: 12px; border-radius: 14px; }
-      .composer-bar {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        min-height: 46px;
-      }
-      .composer .mic {
-        width: 40px;
-        height: 40px;
-        border-radius: 20px;
-        background: var(--oppai-surface);
-        border: 1px solid var(--oppai-border-strong);
-      }
-      .composer .mic.live { border-color: transparent; }
-      .composer .speech-hint { font-size: 13px; }
-      .count-seg {
-        display: inline-flex;
-        border: 1px solid var(--oppai-border-strong);
-        border-radius: 13px;
-        overflow: hidden;
-      }
-      .count-seg button {
-        width: 38px;
-        height: 36px;
-        border: 0;
-        background: transparent;
-        color: var(--oppai-text-dim);
-        font: inherit;
-        font-size: 13px;
-        font-weight: 700;
-        cursor: pointer;
-      }
-      .count-seg button + button { border-left: 1px solid var(--oppai-border); }
-      .count-seg button:hover:not(:disabled) { background: var(--oppai-surface); }
-      .count-seg button.on {
-        background: var(--oppai-primary-container);
-        color: var(--oppai-on-primary-container, var(--oppai-text));
-      }
-      .count-seg button:disabled { cursor: default; opacity: 0.5; }
-      .composer .prompt-summary { font-size: 12px; }
-      .composer .generate {
-        width: auto;
-        min-width: 176px;
-        height: 48px;
-        margin: 0 0 0 auto;
-        padding: 0 26px;
-        border-radius: 24px;
-        font-size: 15px;
-        font-weight: 700;
-        letter-spacing: 0.2px;
-        background: linear-gradient(135deg, var(--oppai-primary), color-mix(in srgb, var(--oppai-primary) 62%, var(--oppai-accent, #c58af9)));
-        box-shadow: 0 8px 22px color-mix(in srgb, var(--oppai-primary) 34%, transparent);
-        transition: transform 0.16s var(--oppai-ease-spring), box-shadow 0.16s ease, filter 0.16s ease;
-      }
-      .composer .generate:hover:not(:disabled) { transform: translateY(-1px); filter: brightness(1.06); }
-      .composer .generate:disabled { box-shadow: none; }
-      .composer .generate.cancel {
-        background: var(--oppai-surface);
-        color: var(--oppai-text);
-        border: 1px solid var(--oppai-border-strong);
-        box-shadow: none;
-      }
-
-      /* The suggestion list opens upward: the composer sits at the bottom of the
-         screen, and a list that opened down would be off it. */
-      .complete {
-        position: absolute;
-        left: 0;
-        right: 0;
-        bottom: calc(100% + 8px);
-        z-index: 20;
-        max-height: 340px;
-        overflow-y: auto;
-        padding: 6px;
-        border: 1px solid var(--oppai-border-strong);
-        border-radius: 16px;
-        background: var(--oppai-surface-2);
-        box-shadow: 0 16px 44px rgba(0, 0, 0, 0.45);
-        animation: oppai-fade-in-up 0.14s ease both;
-      }
-      .complete-row {
-        width: 100%;
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        padding: 8px 10px;
-        border: 0;
-        border-radius: 10px;
-        background: transparent;
-        color: var(--oppai-text);
-        font: inherit;
-        font-size: 13px;
-        text-align: left;
-        cursor: pointer;
-      }
-      .complete-row.on { background: color-mix(in srgb, var(--oppai-primary) 22%, transparent); }
-      /* Danbooru's own colours for its categories, so a character or an artist reads
-         as one before its name does. */
-      .complete-dot { flex: 0 0 9px; width: 9px; height: 9px; border-radius: 50%; background: #8ab4f8; }
-      .complete-dot.cat-1 { background: #f28b82; }
-      .complete-dot.cat-3 { background: #c58af9; }
-      .complete-dot.cat-4 { background: #81c995; }
-      .complete-dot.cat-5 { background: #fdd663; }
-      .complete-dot.cat-100 { background: var(--oppai-primary); }
-      .complete-dot.cat-lora,
-      .complete-dot.cat-wildcard,
-      .complete-dot.cat-trigger { border-radius: 3px; }
-      .complete-dot.cat-lora { background: var(--oppai-primary); }
-      .complete-dot.cat-wildcard { background: #78d9ec; }
-      .complete-dot.cat-trigger { background: #fdd663; }
-      .complete-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      .complete-detail { color: var(--oppai-text-muted); font-size: 11.5px; white-space: nowrap; }
-      .complete-count {
-        min-width: 38px;
-        color: var(--oppai-text-muted);
-        font-size: 11.5px;
-        font-variant-numeric: tabular-nums;
-        text-align: right;
-      }
-      .complete-hint {
-        margin-top: 4px;
-        padding: 7px 10px 3px;
-        border-top: 1px solid var(--oppai-border);
-        color: var(--oppai-text-muted);
-        font-size: 11px;
-      }
-
-      /* Narrower than a drawer, a canvas and a gallery side by side: the drawer
-         floats over the canvas instead of pushing it. */
-      @media (max-width: 1240px) {
-        .create-shell,
-        .create-shell.drawer-open { grid-template-columns: 84px minmax(0, 1fr); position: relative; }
-        .create-shell.with-gallery,
-        .create-shell.drawer-open.with-gallery { grid-template-columns: 84px minmax(0, 1fr) 280px; }
-        .create-drawer {
-          position: absolute;
-          z-index: 30;
-          top: 0;
-          bottom: 0;
-          left: 84px;
-          width: 340px;
-          box-shadow: 18px 0 46px rgba(0, 0, 0, 0.42);
-        }
-        /* filter, not opacity: the drawer's entrance animation fills forwards and
-           would hold its opacity at 1. */
-        .create-shell.lora-dragging .create-drawer { filter: opacity(0.35); pointer-events: none; transition: filter 0.15s ease; }
-        .create-shell.lora-dragging .drawer-scrim { pointer-events: none; }
-      }
-      /* A tablet or a phone: one column that scrolls — the rail across the top, the
-         canvas and composer, then the gallery — and the drawer a sheet from below. */
-      @media (max-width: 900px) {
-        .workspace.create { height: auto; min-height: 100%; }
-        .create-shell,
-        .create-shell.drawer-open,
-        .create-shell.with-gallery,
-        .create-shell.drawer-open.with-gallery { display: flex; flex-direction: column; }
-        .create-rail {
-          position: sticky;
-          top: 0;
-          z-index: 25;
-          flex-direction: row;
-          gap: 2px;
-          padding: 6px 8px;
-          overflow-x: auto;
-          border-right: 0;
-          border-bottom: 1px solid var(--oppai-border-strong);
-        }
-        .rail-tab { flex: 1 0 64px; }
-        .rail-icon { width: 48px; height: 28px; font-size: 20px; }
-        .rail-badge { right: calc(50% - 26px); }
-        .create-stage { min-height: 0; }
-        /* The composer stays in reach while the canvas scrolls under it: on a phone
-           the picture fills the screen, and the prompt is what is changed next. */
-        .create-stage .prompt-dock {
-          position: sticky;
-          bottom: 0;
-          z-index: 6;
-          padding: 8px 10px 10px;
-          background: linear-gradient(to bottom, transparent, var(--oppai-bg) 22%);
-        }
-        .create-gallery { min-height: 440px; border-left: 0; border-top: 1px solid var(--oppai-border-strong); }
-        .drawer-scrim {
-          display: block;
-          position: fixed;
-          inset: 0;
-          z-index: 90;
-          background: rgba(0, 0, 0, 0.5);
-          animation: oppai-fade-in 0.2s ease both;
-        }
-        .create-drawer {
-          position: fixed;
-          z-index: 91;
-          left: 0;
-          right: 0;
-          top: auto;
-          bottom: 0;
-          width: auto;
-          max-height: 78vh;
-          border: 1px solid var(--oppai-border-strong);
-          border-bottom: 0;
-          border-radius: 26px 26px 0 0;
-          box-shadow: 0 -18px 50px rgba(0, 0, 0, 0.5);
-          animation: create-sheet-in 0.28s var(--oppai-ease-emphasized) both;
-        }
-        @keyframes create-sheet-in {
-          from { transform: translateY(40px); opacity: 0; }
-          to { transform: none; opacity: 1; }
-        }
-        .drawer-scroll { padding-bottom: calc(24px + env(safe-area-inset-bottom, 0px)); }
-        .create-drawer .cards,
-        .create-drawer .sec-models .cards { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
-        .recipe { flex-wrap: wrap; padding: 10px 12px; gap: 8px; }
-        .recipe-model { flex: 1 1 auto; max-width: none; }
-        .recipe-chips { flex: 1 1 100%; order: 3; }
-        .create-stage .canvas-stage { min-height: 52vh; padding: 14px; }
-        .composer { gap: 8px; padding: 9px; border-radius: 18px; }
-        .composer-fields { grid-template-columns: 1fr; gap: 6px; }
-        /* A row to scroll sideways, one person tall: stacked, three of them pushed
-           the canvas off a phone's screen. */
-        .people-grid {
-          grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: 86%;
-          overflow-x: auto; scroll-snap-type: x mandatory; overscroll-behavior-x: contain; padding-bottom: 2px;
-        }
-        .people-grid > .pass-card { scroll-snap-align: start; }
-        .people-hint { display: none; }
-        .people-seg { display: none; }
-        .people-cycle {
-          display: inline-flex; align-items: center; gap: 4px; flex: none; height: 40px; padding: 0 12px;
-          border: 1px solid var(--oppai-border-strong); border-radius: 999px; background: transparent;
-          color: var(--oppai-text-dim); font: inherit; font-size: 14px; font-weight: 600; cursor: pointer;
-        }
-        .people-cycle .material-symbols-rounded { font-size: 18px; }
-        .people-cycle.on { background: var(--oppai-primary-container); color: var(--oppai-text); border-color: transparent; }
-        .composer .prompt-field textarea { min-height: 58px; font-size: 14px; }
-        .composer .prompt-field.negative textarea { min-height: 40px; height: 40px; padding-top: 22px; }
-        .composer .field-tag { top: 6px; }
-        .composer .prompt-summary { display: none; }
-        .composer .mic { width: 38px; height: 38px; }
-        .count-seg button { width: 32px; }
-        .composer .generate { flex: 1 1 auto; min-width: 0; height: 44px; margin: 0; padding: 0 16px; }
-      }
     `,
+    studioStyles,
   ];
 
   connectedCallback() {
@@ -3442,27 +1928,39 @@ export class OppaiImageGen extends LitElement {
     void this.loadPoses();
     void this.loadWildcards();
     if (this.studio) this.enterStudio();
-    // The rail counts the clips being made, which go on with their drawer shut.
+    // The mode switch counts the clips being made, which go on in any mode.
     this.unwatchClips = onClipsChange(() => this.requestUpdate());
+    this.unsubscribeStore = onStoreChange(() => {
+      this.history = store.history;
+      this.queue = store.queue;
+    });
+    // A draft from before the strip existed still has its last run: that is the
+    // session so far, as far as anyone can tell.
+    if (!store.history.length && !this.studio && this.shots.length) {
+      store.history = rememberShots([], this.shots);
+      this.history = store.history;
+    }
+    window.addEventListener("keydown", this.onKey);
   }
 
   /**
    * Sets the screen up for the job it exists to do.
    *
    * The outfit fragment is switched on because a studio with it off is a blank screen
-   * with a checkbox, and the outfit panel is opened because it is the thing the user
-   * came here for. Neither is forced afterwards — turning the fragment off to check a
+   * with a checkbox. It is not forced afterwards — turning the fragment off to check a
    * plain prompt against the same model stays possible.
    */
   private enterStudio() {
     this.outfitOn = true;
-    this.open = { ...this.open, outfit: true, loadouts: true, models: false, settings: false };
     void this.loadStudio();
   }
 
   disconnectedCallback() {
     super.disconnectedCallback();
     this.unwatchClips?.();
+    this.unsubscribeStore?.();
+    window.removeEventListener("keydown", this.onKey);
+    this.stopFlip();
     // A full wardrobe can take a while. Leaving Creation finishes only the request
     // already accepted by the generator, then stops the client-side queue.
     this.stopOutfitBatch = true;
@@ -3493,7 +1991,7 @@ export class OppaiImageGen extends LitElement {
     "detailerConfidence", "detailerDenoise", "detailerMaskBlur", "detailerFaces", "detailerHands", "detailerCustom",
     "regionsOn", "regionsRows", "regionPeople",
     "hiresEnabled", "hiresUpscaler", "hiresScale", "hiresDenoise", "hiresSteps", "upscaleUpscaler", "upscaleBy",
-    "open", "showOptions", "shots",
+    "showOptions", "shots",
   ]);
 
   /**
@@ -3540,6 +2038,120 @@ export class OppaiImageGen extends LitElement {
         break;
       }
     }
+    // The panels and the mode are per device, and kept as they are left. Sprites has
+    // no inspector toggle of its own to remember, so only Create writes the tab.
+    if (changed.has("createTab") || changed.has("mode") || changed.has("sidePanel")) {
+      const was = loadLayout();
+      saveLayout({
+        inspector: this.studio ? was.inspector : this.createTab !== "",
+        tab: this.createTab || was.tab,
+        gallery: this.sidePanel,
+        mode: this.studio ? was.mode : this.mode,
+      });
+    }
+  }
+
+  // ── the keyboard ────────────────────────────────────────────────────────────
+  //
+  // Read off the window, because the studio is a whole screen: arrows step through the
+  // pictures or the board wherever the pointer is. A key typed into a field is the
+  // field's, and nothing here fires while a dialog is over the studio.
+
+  private onKey = (e: KeyboardEvent) => {
+    if (!this.isConnected || e.defaultPrevented) return;
+    const target = e.composedPath()[0] as HTMLElement | undefined;
+    const typing = !!target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName));
+    if (e.key === "Escape") {
+      if (this.shortcutsOpen || this.queueOpen || this.promptsOpen) {
+        this.shortcutsOpen = this.queueOpen = this.promptsOpen = false;
+        e.preventDefault();
+      } else if (this.compareWith && !typing) {
+        this.compareWith = null;
+        e.preventDefault();
+      }
+      return;
+    }
+    if (typing || e.ctrlKey || e.metaKey) return;
+    if (this.charDraft || this.poseDraft || this.wildcardDraft || this.metaDraft || this.expandedShot
+      || this.cutout || this.paintOpen || this.civitaiOpen || this.trainOpen || this.renamingLoras) return;
+    if (e.altKey) {
+      const mode = MODES[Number(e.key) - 1];
+      if (mode) {
+        e.preventDefault();
+        this.switchMode(mode.id);
+      }
+      return;
+    }
+    const studioMode = this.currentMode;
+    let handled = true;
+    switch (e.key) {
+      case "?": this.shortcutsOpen = !this.shortcutsOpen; break;
+      case "[": this.toggleInspector(); break;
+      case "]": this.sidePanel = !this.sidePanel; break;
+      case "\\": this.toggleFocus(); break;
+      default: handled = false;
+    }
+    if (!handled && studioMode === "image") {
+      handled = true;
+      switch (e.key) {
+        case "ArrowLeft": this.stepViewer(-1); break;
+        case "ArrowRight": this.stepViewer(1); break;
+        case "c": case "C": this.toggleCompare(); break;
+        case "s": case "S": { const shot = this.viewedShot; if (shot) void this.save(shot); break; }
+        default: handled = false;
+      }
+    }
+    if (!handled && studioMode === "sprites" && this.studioView === "build") {
+      handled = true;
+      switch (e.key) {
+        case "ArrowLeft": case "ArrowRight": case "ArrowUp": case "ArrowDown": this.moveOnBoard(e.key); break;
+        case "Enter": if (!this.generating) void this.generateOutfitAndNext(); break;
+        case "r": case "R": {
+          const shot = this.shotAt(this.outfitSlot().slot);
+          if (shot) void this.openCutout(this.previewURL(shot), `seed-${shot.seed}`, shot.outfitFilename, shot.id);
+          break;
+        }
+        default: handled = false;
+      }
+    }
+    if (handled) e.preventDefault();
+  };
+
+  /** Which of the three modes is on screen. */
+  private get currentMode(): StudioMode {
+    return this.studio ? "sprites" : this.mode;
+  }
+
+  /** Changes mode: within this element between Image and Video, or by asking the shell
+      for the other element. The shell rebuilds the studio, which opens on the mode
+      written to the layout here. */
+  private switchMode(next: StudioMode) {
+    if (next === this.currentMode) return;
+    if (next !== "sprites" && !this.studio) {
+      this.mode = next;
+      return;
+    }
+    if (next !== "sprites") saveLayout({ ...loadLayout(), mode: next });
+    this.dispatchEvent(new CustomEvent("studio-mode", {
+      detail: { section: next === "sprites" ? "studio" : "imagegen" }, bubbles: true, composed: true,
+    }));
+  }
+
+  private toggleInspector() {
+    if (this.studio) {
+      this.spriteInspector = !this.spriteInspector;
+      return;
+    }
+    this.openCreateTab(this.createTab ? this.createTab : (CREATE_TABS.find((t) => t.id === loadLayout().tab)?.id ?? "models"), true);
+  }
+
+  /** Both panels away for the stage alone, or both back. */
+  private toggleFocus() {
+    const anyOut = this.sidePanel || (this.studio ? this.spriteInspector : this.createTab !== "");
+    this.sidePanel = !anyOut;
+    if (this.studio) this.spriteInspector = !anyOut;
+    else if (anyOut) this.createTab = "";
+    else this.toggleInspector();
   }
 
   /** Persists the draft, coalescing bursts of typing.
@@ -3619,14 +2231,12 @@ export class OppaiImageGen extends LitElement {
       hiresSteps: this.hiresSteps,
       upscaleUpscaler: this.upscaleUpscaler,
       upscaleBy: this.upscaleBy,
-      open: this.open,
       showOptions: this.showOptions,
       shots: this.shots.map((s) => ({
         id: s.id, seed: s.seed, saved: s.saved, info: s.info,
         outfitFilename: s.outfitFilename, outfitSlot: s.outfitSlot,
         outfitConfig: s.outfitConfig,
         cutoutReviewed: s.cutoutReviewed, previewVersion: s.previewVersion,
-        workspaceX: s.workspaceX, workspaceY: s.workspaceY,
       })),
       scrollTop: this.scrollHost?.scrollTop ?? 0,
     });
@@ -3715,7 +2325,6 @@ export class OppaiImageGen extends LitElement {
     if (d.hiresSteps !== undefined) this.hiresSteps = d.hiresSteps;
     if (d.upscaleUpscaler !== undefined) this.upscaleUpscaler = d.upscaleUpscaler;
     if (d.upscaleBy !== undefined) this.upscaleBy = d.upscaleBy;
-    if (d.open) this.open = d.open;
     if (d.showOptions !== undefined) this.showOptions = d.showOptions;
     if (d.shots) this.shots = d.shots.map((s) => ({ ...s }));
 
@@ -4363,14 +2972,8 @@ export class OppaiImageGen extends LitElement {
     this.persistDraft();
   }
 
-  private defaultNodePosition(index: number): { workspaceX: number; workspaceY: number } {
-    return {
-      workspaceX: 18 + (index % 4) * 282,
-      workspaceY: 18 + Math.floor(index / 4) * 430,
-    };
-  }
-
   private selectOutfitSlot(index: number) {
+    this.stopFlip();
     const { tier, face, misc } = squareAddress(index);
     this.outfitMisc = misc;
     if (misc) {
@@ -4479,49 +3082,54 @@ export class OppaiImageGen extends LitElement {
   /** Makes one request using a snapshot of the selected outfit square. `from` is a
       picture to start from other than the composer's own (a face pass, run at once). */
   private async generateOne(appendOutfit: boolean, from?: StartPicture): Promise<number> {
+    return this.executeRun(await this.prepareRun(from), appendOutfit);
+  }
+
+  /**
+   * Reads everything a run needs off the form, at once.
+   *
+   * Split from sending it so the queue can hold a run while the form goes on changing:
+   * a run queued with one prompt must be drawn with that prompt, not with whatever the
+   * box says by the time its turn comes. The picture it starts from is read into bytes
+   * here for the same reason — a canvas result expires.
+   */
+  private async prepareRun(from?: StartPicture): Promise<PreparedRun> {
     const src = from ?? this.source;
     let { prompt, negative } = this.assemblePrompts();
     // A face pass needs no prompt of its own: the faces are already there.
     if (!prompt.trim() && src?.mode === "faces") prompt = "detailed face, best quality";
-    const capturedOutfitText = this.outfitText.trim();
     const outfit = this.outfitOn ? this.outfitSlot() : undefined;
-    const capturedOutfitConfig = outfit ? this.outfitConfigKey() : undefined;
-    const superseded = outfit ? this.shotAt(outfit.slot) : undefined;
-    const supersededPosition = superseded
-      ? this.nodePosition(superseded, this.shots.indexOf(superseded))
-      : undefined;
-    const startedAt = performance.now();
     // The parameters are built once and kept, so the record attached to each image
     // describes what was actually sent. Re-reading the sliders afterwards would make
     // the "copy generation data" of an image change as soon as a control moved.
     const params: GenerateParams = {
       prompt,
-        negativePrompt: negative || undefined,
-        checkpoint: this.checkpoint || undefined,
-        vae: this.vae || undefined,
-        sampler: this.scheduler || undefined,
-        steps: this.steps,
-        width: this.width,
-        height: this.height,
-        cfgScale: this.cfg,
-        cfgRescale: this.cfgRescale,
-        clipSkip: this.clipSkip,
-        seamlessX: this.seamlessX,
-        seamlessY: this.seamlessY,
-        vaePrecision: this.vaePrecision,
-        cpuNoise: this.cpuNoise,
-        board: this.board,
-        // A wardrobe square needs one final image. Multiple variants with the same
-        // state cannot be named or imported unambiguously, so outfit runs are 1-up.
-        count: this.outfitOn ? 1 : this.count,
-        seed: this.seed,
-        loras: Object.entries(!src && this.regionsActive ? sharedLoras(this.selectedLoras, this.regionPeople) : this.selectedLoras)
-          .map(([name, weight]) => ({ name, weight })),
-        detailer: this.status?.detailerAvailable && this.detailerEnabled && this.detailerHasPasses
-          ? this.detailerParams() : undefined,
-        upscale: src ? undefined : this.hiresParams(),
-        regions: src || !this.regionsActive ? undefined
-          : regionParams(true, this.regionsRows, this.regionPeople, this.characters, this.status?.loras ?? []),
+      negativePrompt: negative || undefined,
+      checkpoint: this.checkpoint || undefined,
+      vae: this.vae || undefined,
+      sampler: this.scheduler || undefined,
+      steps: this.steps,
+      width: this.width,
+      height: this.height,
+      cfgScale: this.cfg,
+      cfgRescale: this.cfgRescale,
+      clipSkip: this.clipSkip,
+      seamlessX: this.seamlessX,
+      seamlessY: this.seamlessY,
+      vaePrecision: this.vaePrecision,
+      cpuNoise: this.cpuNoise,
+      board: this.board,
+      // A wardrobe square needs one final image. Multiple variants with the same
+      // state cannot be named or imported unambiguously, so outfit runs are 1-up.
+      count: this.outfitOn ? 1 : this.count,
+      seed: this.seed,
+      loras: Object.entries(!src && this.regionsActive ? sharedLoras(this.selectedLoras, this.regionPeople) : this.selectedLoras)
+        .map(([name, weight]) => ({ name, weight })),
+      detailer: this.status?.detailerAvailable && this.detailerEnabled && this.detailerHasPasses
+        ? this.detailerParams() : undefined,
+      upscale: src ? undefined : this.hiresParams(),
+      regions: src || !this.regionsActive ? undefined
+        : regionParams(true, this.regionsRows, this.regionPeople, this.characters, this.status?.loras ?? []),
     };
     if (src) {
       // A run from a picture comes out the picture's shape, not the size controls'.
@@ -4546,6 +3154,29 @@ export class OppaiImageGen extends LitElement {
         }
       }
     }
+    return {
+      params,
+      from: src ?? null,
+      outfit,
+      outfitConfig: outfit ? this.outfitConfigKey() : undefined,
+      extras: {
+        triggers: [...this.selectedTriggers],
+        characters: this.selectedChars.map((id) => this.characters.find((c) => c.id === id)?.name ?? "").filter(Boolean),
+        poses: this.outfitOn ? [] : this.selectedPoses.map((id) => this.poses.find((p) => p.id === id)?.name ?? "").filter(Boolean),
+        outfit: this.outfitOn ? this.outfitText.trim() : "",
+        controlImage: this.cutout?.name,
+        startedFrom: src ? { name: src.name, mode: src.mode === "inpaint" && !params.mask ? "img2img" : src.mode } : undefined,
+      },
+    };
+  }
+
+  /** Sends a prepared run and puts what comes back on the board, the stage and the
+      session strip. */
+  private async executeRun(run: PreparedRun, appendOutfit: boolean): Promise<number> {
+    const params: GenerateParams = { ...run.params };
+    const outfit = run.outfit;
+    const superseded = outfit ? this.shotAt(outfit.slot) : undefined;
+    const startedAt = performance.now();
     // Named, so the overlay can watch the picture form and the user can stop it.
     params.jobId = newJobId();
     this.startProgressWatch(params.jobId, params.count ?? 1);
@@ -4564,15 +3195,12 @@ export class OppaiImageGen extends LitElement {
       params.negativePrompt = res.negative || undefined;
     }
     const seconds = (performance.now() - startedAt) / 1000;
-    const made: Shot[] = res.images.map((g: GenPreview, index: number) => ({
+    const made: Shot[] = res.images.map((g: GenPreview) => ({
         ...g,
         saved: false,
         outfitFilename: outfit?.filename,
         outfitSlot: outfit?.slot,
-        outfitConfig: capturedOutfitConfig,
-        ...(supersededPosition && outfit
-          ? { workspaceX: supersededPosition.x, workspaceY: supersededPosition.y }
-          : this.defaultNodePosition((appendOutfit ? this.shots.length : 0) + index)),
+        outfitConfig: run.outfitConfig,
         // The seed that came back, not the one submitted: a submitted -1 means
         // "surprise me", and it is the returned value that reproduces this image.
         info: buildGenInfo(params, {
@@ -4582,16 +3210,7 @@ export class OppaiImageGen extends LitElement {
           loraHashes: Object.fromEntries(
             (this.status?.loras ?? []).filter((lora) => lora.hash).map((lora) => [lora.name, lora.hash!]),
           ),
-          triggers: this.selectedTriggers,
-          characters: this.selectedChars
-            .map((id) => this.characters.find((c) => c.id === id)?.name ?? "")
-            .filter(Boolean),
-          poses: this.outfitOn ? [] : this.selectedPoses
-            .map((id) => this.poses.find((p) => p.id === id)?.name ?? "")
-            .filter(Boolean),
-          outfit: this.outfitOn ? capturedOutfitText : "",
-          controlImage: this.cutout?.name,
-          startedFrom: src ? { name: src.name, mode: src.mode === "inpaint" && !params.mask ? "img2img" : src.mode } : undefined,
+          ...run.extras,
           seconds,
         }),
       }));
@@ -4623,9 +3242,18 @@ export class OppaiImageGen extends LitElement {
         ...made,
       ];
     } else {
-      // Ordinary generation remains a canvas for the newest request. Outfit work is
-      // the exception because all sixty named squares are one deliverable.
+      // The draft keeps the newest run; the strip keeps the session. Outfit squares
+      // stay off the strip: they are one deliverable, and the board is where they live.
       this.shots = made;
+      if (made.length && !outfit) {
+        store.history = rememberShots(store.history, made);
+        storeChanged();
+        this.viewing = made[0].id;
+        this.recentPrompts = rememberPrompt(this.recentPrompts, {
+          prompt: run.params.prompt, negative: run.params.negativePrompt ?? "", at: Date.now(),
+        });
+        savePrompts(this.recentPrompts);
+      }
     }
     void this.galleryPanel?.refresh();
     return made.length;
@@ -4720,6 +3348,69 @@ export class OppaiImageGen extends LitElement {
       // keystroke: the output history is the part of the draft it would hurt to lose.
       this.persistDraft();
     }
+    void this.drainQueue();
+  }
+
+  // ── the queue ───────────────────────────────────────────────────────────────
+  //
+  // The generator draws one run at a time, and the wait is when the next idea arrives.
+  // A queued run is read off the form when it is queued (prepareRun), so the prompt can
+  // be rewritten for the run after it straight away. Outfit squares are not queued:
+  // the board has its own batch, which walks the squares in order.
+
+  /** Queues the form as it is now, or starts it at once when nothing is drawing. */
+  private async enqueue() {
+    if (this.outfitOn || !this.assemblePrompts().prompt.trim()) return;
+    if (!this.generating) {
+      void this.generate();
+      return;
+    }
+    let prepared: PreparedRun;
+    try {
+      prepared = await this.prepareRun();
+    } catch (e) {
+      this.showToast((e as Error).message);
+      return;
+    }
+    const label = prepared.params.prompt.replace(/\s+/g, " ").trim().slice(0, 90);
+    store.queue = [...store.queue, { id: newJobId(), label, prepared }];
+    storeChanged();
+    this.showToast(`Queued — ${store.queue.length} waiting`);
+  }
+
+  /** Runs what is queued, one after another, until it is empty or a run fails. */
+  private async drainQueue() {
+    while (store.queue.length && !this.generating && this.isConnected) {
+      const [next, ...rest] = store.queue;
+      store.queue = rest;
+      storeChanged();
+      this.generating = true;
+      this.error = "";
+      try {
+        await this.executeRun(next.prepared, false);
+      } catch (e) {
+        if (/cancelled/i.test((e as Error).message)) this.showToast("Generation cancelled.");
+        else this.error = (e as Error).message;
+        // A failure that would fail the next run the same way (the generator gone)
+        // should not burn through the queue; it waits for the next Generate.
+        this.generating = false;
+        return;
+      } finally {
+        this.generating = false;
+        this.persistDraft();
+      }
+    }
+  }
+
+  private unqueue(id: string) {
+    store.queue = store.queue.filter((q) => q.id !== id);
+    storeChanged();
+  }
+
+  private moveQueued(id: string, dir: -1 | 1) {
+    const at = store.queue.findIndex((q) => q.id === id);
+    store.queue = moveItem(store.queue, at, at + dir);
+    storeChanged();
   }
 
   // ── starting from a picture ───────────────────────────────────────────────
@@ -4738,11 +3429,13 @@ export class OppaiImageGen extends LitElement {
       return;
     }
     if (mode === "animate") {
-      // A clip is not the next picture's start: the Video drawer keeps its own.
-      animatePicture({ url, name, width: img.naturalWidth, height: img.naturalHeight, gallery });
-      this.openCreateTab("video");
+      // A clip is not the next picture's start: the Video studio keeps its own.
+      animatePicture({ url, name, width: img.naturalWidth, height: img.naturalHeight, gallery, objectURL });
+      this.switchMode("video");
       return;
     }
+    // A picture to start from is the Image studio's, whichever mode handed it over.
+    if (!this.studio) this.mode = "image";
     const pic: StartPicture = { url, name, width: img.naturalWidth, height: img.naturalHeight, mode, objectURL, gallery };
     if (mode === "faces" || mode === "upscale") {
       void this.runOnPicture(pic, mode);
@@ -5205,6 +3898,8 @@ export class OppaiImageGen extends LitElement {
     const res = await api.saveGenerated({ id: shot.id, title: name, tags, info: shot.info });
     // Saving moved its gallery copy into the library: it is no longer there to start from.
     this.shots = this.shots.map((s) => (s.id === shot.id ? { ...s, saved: true, gallery: undefined } : s));
+    store.history = patchShot(store.history, shot.id, { saved: true, gallery: undefined });
+    storeChanged();
     if (shot.gallery) void this.galleryPanel?.refresh();
     this.dispatchEvent(new CustomEvent("imported", { bubbles: true, composed: true }));
     return res.id;
@@ -5451,10 +4146,6 @@ export class OppaiImageGen extends LitElement {
       : [...this.selectedChars, id];
   }
 
-  private toggleSection(id: string) {
-    this.open = { ...this.open, [id]: !this.open[id] };
-  }
-
   // ── character editor ────────────────────────────────────────────────────────
 
   private onCharThumbFile(e: Event) {
@@ -5630,7 +4321,6 @@ export class OppaiImageGen extends LitElement {
     this.outfitWardrobeId = "";
     this.outfitProgress = "";
     this.shots = [];
-    this.activeNodeId = null;
     this.seed = -1;
     this.restoredNotice = false;
     // The reactive updates above will queue a save of the now-empty state, which is
@@ -5851,57 +4541,10 @@ export class OppaiImageGen extends LitElement {
     const invoke = st.backend === "invokeai";
     // InvokeAI keeps a gallery; on A1111 the server keeps one of everything made here.
     const gallery = st.gallery ?? (invoke ? "invokeai" : "oppailib");
-    const activeModel = (st.models ?? []).find((model) => model.title === this.checkpoint);
-    const modelName = activeModel?.model_name || this.checkpoint || "Choose a model";
-    if (this.studio) return this.renderStudio(st, invoke, modelName);
-    const tab = this.createTab;
     return html`
-      <div class="workspace create">
-        <div class="create-shell ${tab ? "drawer-open" : ""} ${gallery ? "with-gallery" : ""} ${this.loraDrag ? "lora-dragging" : ""}">
-          ${this.renderCreateRail()}
-          ${tab
-            ? html`<div class="drawer-scrim" @click=${() => (this.createTab = "")}></div>
-                <aside class="create-drawer" aria-label=${CREATE_TABS.find((t) => t.id === tab)?.label ?? ""}>
-                  ${this.renderCreateDrawer(st, invoke)}
-                </aside>`
-            : nothing}
-          <section class="create-stage">
-            ${this.renderRecipeStrip(st, invoke)}
-            <div class="canvas-wrap">
-              <div class="canvas-stage">
-                ${this.renderResults()}
-                ${this.restarting || this.error
-                  ? html`<div class="banner">${this.restarting ? "Restarting Automatic1111 — it takes a minute or two…" : this.error}</div>`
-                  : nothing}
-                ${this.generating ? this.renderGenerating(invoke) : nothing}
-              </div>
-              ${this.loraDrag ? this.renderLoraDrop() : nothing}
-            </div>
-            <div class="prompt-dock">${this.renderPrompt()}</div>
-          </section>
-          ${gallery
-            ? html`<aside class="right create-gallery">
-                <oppai-invoke-gallery workspace backend=${gallery}
-                  .startBoard=${this.board}
-                  .canPaint=${!invoke}
-                  .canFixFaces=${!invoke && !!st.detailerAvailable}
-                  .fixLabel=${fixLabel(this.detailerPasses)}
-                  .upscaleLabel=${this.canUpscale ? `Upscale ${this.upscaleBy}×` : ""}
-                  .canAnimate=${!!st.clips?.image}
-                  .canSetCovers=${invoke || !!st.manageModels}
-                  .loras=${(st.loras ?? []).map((l) => l.name)}
-                  @covers-changed=${() => this.bumpThumbs()}
-                  @use-picture=${(e: CustomEvent<UsePicture>) =>
-                    void this.usePicture(e.detail.url, e.detail.name, e.detail.mode, false, e.detail.gallery)}
-                  @boards-changed=${() => this.loadStatus()}
-                  @board-changed=${(e: CustomEvent<{ board: string }>) => (this.board = e.detail.board)}
-                  @cut-out=${(e: CustomEvent<{ url: string; name: string }>) =>
-                    void this.openCutout(e.detail.url, e.detail.name)}
-                  @reuse-generation=${(e: CustomEvent<GenInfo>) => this.reuseGenInfo(e.detail)}
-                ></oppai-invoke-gallery>
-              </aside>`
-            : nothing}
-        </div>
+      <div class="studio mode-${this.currentMode}">
+        ${this.renderStudioHeader(st, invoke)}
+        ${this.studio ? this.renderSprites(st, invoke) : this.renderCreate(st, invoke, gallery)}
       </div>
       ${this.paintOpen && this.source
         ? html`<oppai-paint-mask .src=${this.source.url} .name=${this.source.name}
@@ -5921,7 +4564,214 @@ export class OppaiImageGen extends LitElement {
             @renamed=${(e: CustomEvent<{ renamed: ModelRename[] }>) => this.onLorasRenamed(e.detail.renamed)}
             @close=${() => (this.renamingLoras = null)}></oppai-rename-dialog>`
         : nothing}
+      ${this.shortcutsOpen ? this.renderShortcuts() : nothing}
     `;
+  }
+
+  // ── the studio's header ─────────────────────────────────────────────────────
+  //
+  // Three modes behind one header: Image and Video are this element, Sprites is the
+  // other one the shell keeps, and the switch hides that seam. The generator, the
+  // queue and the panels sit on the right, the same in every mode, so nothing moves
+  // when the mode does.
+
+  private renderStudioHeader(st: ImageGenStatus, invoke: boolean) {
+    const mode = this.currentMode;
+    const model = (st.models ?? []).find((m) => m.title === this.checkpoint);
+    const thumb = model ? `${api.modelThumbURL(model.title)}&v=${this.thumbVersion}` : "";
+    const running = clipsRunning();
+    const inspectorOut = this.studio ? this.spriteInspector : this.createTab !== "";
+    const busy = (m: StudioMode) => (m === "video" ? running > 0 : m === "sprites" ? this.studio && this.generating : !this.studio && this.generating);
+    const wardrobe = this.wardrobes.find((o) => o.id === this.outfitWardrobeId);
+    return html`<header class="studio-head">
+      <div class="mode-switch" role="tablist" aria-label="Studio">
+        ${MODES.map((m, i) => html`<button role="tab" class="mode ${mode === m.id ? "on" : ""}"
+          aria-selected=${mode === m.id ? "true" : "false"} title=${`${m.label} studio (Alt+${i + 1})`}
+          @click=${() => this.switchMode(m.id)}>
+          <span class="material-symbols-rounded">${m.icon}</span><span class="mode-label">${m.label}</span>
+          ${m.id === "video" && running ? html`<span class="mode-badge" title=${`${running} clip${running === 1 ? "" : "s"} in the works`}>${running}</span>`
+            : busy(m.id) ? html`<span class="mode-dot" title="Working"></span>` : nothing}
+        </button>`)}
+      </div>
+      ${this.studio ? html`<div class="sub-switch" role="tablist" aria-label="Sprites view">
+        <button role="tab" class=${this.studioView === "build" ? "on" : ""} aria-selected=${this.studioView === "build" ? "true" : "false"}
+          @click=${() => (this.studioView = "build")}>
+          <span class="material-symbols-rounded">grid_view</span>Board${wardrobe ? html`<span class="sub-note">${wardrobe.name}</span>` : nothing}
+        </button>
+        <button role="tab" class=${this.studioView === "wardrobe" ? "on" : ""} aria-selected=${this.studioView === "wardrobe" ? "true" : "false"}
+          @click=${() => { this.studioView = "wardrobe"; void this.renderRoot.querySelector("oppai-outfit-wardrobe")?.refresh(); }}>
+          <span class="material-symbols-rounded">styler</span>Wardrobe &amp; rooms
+        </button>
+      </div>` : nothing}
+      <span class="head-spacer"></span>
+      ${mode === "video"
+        ? html`<span class="gen-pill static" title="Clips are made by ComfyUI"><span class="gen-icon"><span class="material-symbols-rounded">movie</span></span>
+            <span class="gen-text"><span class="gen-kicker"><span class="status-dot ${st.clips?.image || st.clips?.text ? "" : "off"}"></span>ComfyUI</span>
+            <span class="gen-name">${st.clips?.image || st.clips?.text ? "Wan video" : "Not set up"}</span></span></span>`
+        : html`<button class="gen-pill" title=${model?.title ?? "Choose a model"}
+            @click=${() => { if (this.studio) { this.spriteTab = "generator"; this.spriteInspector = true; } else this.openCreateTab("models"); }}>
+            ${thumb && !this.failedThumbs.has(thumb)
+              ? html`<img src=${thumb} alt="" @error=${() => (this.failedThumbs = new Set(this.failedThumbs).add(thumb))} />`
+              : html`<span class="gen-icon"><span class="material-symbols-rounded">deployed_code</span></span>`}
+            <span class="gen-text">
+              <span class="gen-kicker"><span class="status-dot"></span>${invoke ? "InvokeAI" : "Automatic1111"}${model?.base ? html` · ${model.base}` : nothing}</span>
+              <span class="gen-name">${model?.model_name || this.checkpoint || "Choose a model"}</span>
+            </span>
+            <span class="material-symbols-rounded gen-caret">expand_more</span>
+          </button>`}
+      ${mode === "image" ? html`<button class="head-btn ${this.queue.length ? "lit" : ""}" aria-expanded=${this.queueOpen ? "true" : "false"}
+          title="Runs waiting their turn" @click=${() => (this.queueOpen = !this.queueOpen)}>
+          <span class="material-symbols-rounded">queue</span><span class="head-label">Queue</span>
+          ${this.queue.length ? html`<span class="head-count">${this.queue.length}</span>` : nothing}
+        </button>` : nothing}
+      ${st.civitai ? html`<button class="head-btn" title=${mode === "video" ? "Find Wan models and LoRAs on Civitai" : "Find models and LoRAs on Civitai"}
+          @click=${() => { this.civitaiMode = mode === "video" ? "video" : "pictures"; this.civitaiOpen = true; }}>
+          <span class="material-symbols-rounded">travel_explore</span><span class="head-label">Civitai</span>
+        </button>` : nothing}
+      ${mode !== "video" ? html`<button class="head-btn" title="Train a LoRA on your own pictures" @click=${() => (this.trainOpen = true)}>
+          <span class="material-symbols-rounded">model_training</span><span class="head-label">Train</span>
+        </button>` : nothing}
+      <span class="head-sep"></span>
+      ${mode !== "video" ? html`<button class="head-icon ${inspectorOut ? "on" : ""}" aria-pressed=${inspectorOut ? "true" : "false"}
+          title=${this.studio ? "The recipe ([)" : "The inspector ([)"} @click=${() => this.toggleInspector()}>
+          <span class="material-symbols-rounded">${inspectorOut ? "left_panel_close" : "left_panel_open"}</span>
+        </button>` : nothing}
+      <button class="head-icon ${this.sidePanel ? "on" : ""}" aria-pressed=${this.sidePanel ? "true" : "false"}
+        title=${this.studio ? "The selected square (])" : "The gallery (])"} @click=${() => (this.sidePanel = !this.sidePanel)}>
+        <span class="material-symbols-rounded">${this.sidePanel ? "right_panel_close" : "right_panel_open"}</span>
+      </button>
+      <button class="head-icon" title="Keyboard shortcuts (?)" @click=${() => (this.shortcutsOpen = true)}>
+        <span class="material-symbols-rounded">keyboard</span>
+      </button>
+      ${this.queueOpen && mode === "image" ? this.renderQueue() : nothing}
+    </header>`;
+  }
+
+  /** The queue, dropped from its header button: what is waiting, in order. */
+  private renderQueue() {
+    return html`<div class="pop queue-pop" role="dialog" aria-label="The queue">
+      <div class="pop-head">
+        <span class="material-symbols-rounded">queue</span>Queue
+        <span class="pop-note">${this.generating ? "Drawing now; these follow" : "Nothing drawing"}</span>
+        <button class="pop-x" aria-label="Close" @click=${() => (this.queueOpen = false)}><span class="material-symbols-rounded">close</span></button>
+      </div>
+      ${this.queue.length
+        ? html`<ol class="queue-list">${this.queue.map((q, i) => html`<li>
+            <span class="q-n">${i + 1}</span>
+            <span class="q-what" title=${q.prepared.params.prompt}>${q.label || "(no prompt)"}
+              <small>${q.prepared.params.width}×${q.prepared.params.height} · ${q.prepared.params.count ?? 1} picture${(q.prepared.params.count ?? 1) === 1 ? "" : "s"}${q.prepared.from ? ` · from ${q.prepared.from.name}` : ""}</small></span>
+            <button class="q-btn" title="Sooner" aria-label="Move up" ?disabled=${i === 0} @click=${() => this.moveQueued(q.id, -1)}><span class="material-symbols-rounded">arrow_upward</span></button>
+            <button class="q-btn" title="Later" aria-label="Move down" ?disabled=${i === this.queue.length - 1} @click=${() => this.moveQueued(q.id, 1)}><span class="material-symbols-rounded">arrow_downward</span></button>
+            <button class="q-btn" title="Take it out" aria-label="Remove" @click=${() => this.unqueue(q.id)}><span class="material-symbols-rounded">close</span></button>
+          </li>`)}</ol>`
+        : html`<p class="pop-empty">While a picture draws, press <b>Queue</b> beside Generate (or Ctrl+Shift+Enter) and the form as it is goes in line.
+            Change the prompt and queue again — each run keeps the settings it was queued with.</p>`}
+    </div>`;
+  }
+
+  private renderShortcuts() {
+    const mode = this.currentMode;
+    return html`<div class="overlay" @click=${(e: Event) => { if (e.target === e.currentTarget) this.shortcutsOpen = false; }}>
+      <div class="dialog shortcuts" role="dialog" aria-label="Keyboard shortcuts">
+        <h3><span class="material-symbols-rounded">keyboard</span> Keyboard shortcuts</h3>
+        <div class="keys">
+          ${SHORTCUTS.filter((k) => !k.mode || k.mode === mode).map((k) => html`<div class="key-row">
+            <span class="key-caps">${k.keys.split(" ").map((c) => html`<kbd>${c}</kbd>`)}</span><span>${k.what}</span>
+          </div>`)}
+        </div>
+        <div class="dialog-actions"><button class="btn" @click=${() => (this.shortcutsOpen = false)}>Close</button></div>
+      </div>
+    </div>`;
+  }
+
+  // ── the Image and Video studios ─────────────────────────────────────────────
+
+  private renderCreate(st: ImageGenStatus, invoke: boolean, gallery: string) {
+    const tab = this.createTab;
+    const video = this.mode === "video";
+    const galleryOut = !!gallery && this.sidePanel;
+    return html`<div class="workspace create">
+      <div class="create-shell ${video ? "video" : "image"} ${tab && !video ? "drawer-open" : ""} ${galleryOut ? "with-gallery" : ""} ${this.loraDrag ? "lora-dragging" : ""}">
+        ${video
+          ? html`<oppai-video-studio .clips=${st.clips ?? {}}
+              @use-frame=${(e: CustomEvent<ClipPicture>) => void this.usePicture(e.detail.url, e.detail.name, "img2img", true)}
+              @find-video-models=${() => { this.civitaiMode = "video"; this.civitaiOpen = true; }}></oppai-video-studio>`
+          : html`${this.renderCreateRail()}
+            ${tab
+              ? html`<div class="drawer-scrim" @click=${() => (this.createTab = "")}></div>
+                  <aside class="create-drawer" aria-label=${CREATE_TABS.find((t) => t.id === tab)?.label ?? ""}>
+                    ${this.renderCreateDrawer(st, invoke)}
+                  </aside>`
+              : nothing}
+            <section class="create-stage">
+              ${this.renderRecipeStrip(st)}
+              <div class="canvas-wrap">
+                <div class="canvas-stage viewer-stage ${this.stageDrop ? "drop" : ""}"
+                  @dragover=${(e: DragEvent) => this.onStageDragOver(e)} @dragleave=${(e: DragEvent) => { if (e.target === e.currentTarget) this.stageDrop = false; }}
+                  @drop=${(e: DragEvent) => this.onStageDrop(e)}>
+                  ${this.renderViewer()}
+                  ${this.restarting || this.error
+                    ? html`<div class="banner">${this.restarting ? "Restarting Automatic1111 — it takes a minute or two…" : this.error}</div>`
+                    : nothing}
+                  ${this.generating ? this.renderGenerating(invoke) : nothing}
+                </div>
+                ${this.loraDrag ? this.renderLoraDrop() : nothing}
+              </div>
+              ${this.renderSessionStrip()}
+              <div class="prompt-dock">${this.renderPrompt()}</div>
+            </section>`}
+        ${gallery
+          ? html`<aside class="right create-gallery ${galleryOut ? "" : "stowed"}" aria-hidden=${galleryOut ? "false" : "true"}>
+              <oppai-invoke-gallery workspace backend=${gallery}
+                .startBoard=${this.board}
+                .canPaint=${!invoke}
+                .canFixFaces=${!invoke && !!st.detailerAvailable}
+                .fixLabel=${fixLabel(this.detailerPasses)}
+                .upscaleLabel=${this.canUpscale ? `Upscale ${this.upscaleBy}×` : ""}
+                .canAnimate=${!!st.clips?.image}
+                .canSetCovers=${invoke || !!st.manageModels}
+                .loras=${(st.loras ?? []).map((l) => l.name)}
+                @covers-changed=${() => this.bumpThumbs()}
+                @use-picture=${(e: CustomEvent<UsePicture>) =>
+                  void this.usePicture(e.detail.url, e.detail.name, e.detail.mode, false, e.detail.gallery)}
+                @boards-changed=${() => this.loadStatus()}
+                @board-changed=${(e: CustomEvent<{ board: string }>) => (this.board = e.detail.board)}
+                @cut-out=${(e: CustomEvent<{ url: string; name: string }>) =>
+                  void this.openCutout(e.detail.url, e.detail.name)}
+                @reuse-generation=${(e: CustomEvent<GenInfo>) => this.reuseGenInfo(e.detail)}
+              ></oppai-invoke-gallery>
+            </aside>`
+          : nothing}
+      </div>
+    </div>`;
+  }
+
+  /** A gallery tile or a file dragged over the stage: the next run starts from it. */
+  private onStageDragOver(e: DragEvent) {
+    const types = e.dataTransfer?.types ?? [];
+    if (!types.includes(GALLERY_DRAG_TYPE) && !types.includes("Files")) return;
+    e.preventDefault();
+    // The gallery offers its tiles as a move (onto folders); a copy would be refused.
+    if (e.dataTransfer) e.dataTransfer.dropEffect = types.includes(GALLERY_DRAG_TYPE) ? "move" : "copy";
+    this.stageDrop = true;
+  }
+
+  private onStageDrop(e: DragEvent) {
+    const names = e.dataTransfer?.getData(GALLERY_DRAG_TYPE);
+    const file = e.dataTransfer?.files?.[0];
+    if (!names && !file) return;
+    e.preventDefault();
+    this.stageDrop = false;
+    if (names) {
+      try {
+        const name = (JSON.parse(names) as string[])[0];
+        if (name) void this.usePicture(api.galleryFullURL(name), name, "img2img", false, name);
+      } catch {
+        // Not a gallery payload after all.
+      }
+      return;
+    }
+    if (file?.type.startsWith("image/")) void this.usePicture(URL.createObjectURL(file), file.name, "img2img", true);
   }
 
   // ── the Create screen ───────────────────────────────────────────────────────
@@ -5948,7 +4798,6 @@ export class OppaiImageGen extends LitElement {
       detailer: this.status?.detailerAvailable && this.detailerEnabled && this.detailerHasPasses
         ? detailerModels(this.detailerPasses).length + (this.status?.detectors?.length ? customPassParams(this.detailerCustom).length : 0)
         : 0,
-      video: clipsRunning(),
       settings: this.templateId ? 1 : 0,
     };
     return html`<nav class="create-rail" aria-label="Generation setup">
@@ -5983,11 +4832,10 @@ export class OppaiImageGen extends LitElement {
   private renderCreateDrawer(st: ImageGenStatus, invoke: boolean) {
     const tab = this.createTab as CreateTab;
     const meta = CREATE_TABS.find((t) => t.id === tab)!;
-    // The sections are the studio's accordion sections; drawn flat here, with no
-    // header of their own, because the drawer's header already says what this is.
-    this.flatSections = true;
+    // The sections come out with no title of their own: the inspector's header
+    // already says what this is.
     let body: unknown = nothing;
-    try {
+    {
       switch (tab) {
         case "models":
           body = html`${this.renderPickerSearch("Search models")}
@@ -6009,9 +4857,6 @@ export class OppaiImageGen extends LitElement {
         case "detailer":
           body = this.renderDetailerSection(invoke);
           break;
-        case "video":
-          body = html`<oppai-clip-panel .clips=${st.clips ?? {}}></oppai-clip-panel>`;
-          break;
         case "settings":
           // Saved prompt styles were a rail tab of their own, and read as LoRA styles
           // beside the LoRA categories; they are a setting, and an occasional one.
@@ -6022,8 +4867,6 @@ export class OppaiImageGen extends LitElement {
             ${this.renderGeneratorPane(st, invoke)}`;
           break;
       }
-    } finally {
-      this.flatSections = false;
     }
     return html`
       <div class="drawer-head">
@@ -6035,9 +4878,9 @@ export class OppaiImageGen extends LitElement {
               <span class="material-symbols-rounded">model_training</span>
             </button>`
           : nothing}
-        ${tab === "models" || tab === "loras" || tab === "video"
-          ? html`<button class="drawer-action" title=${tab === "video" ? "Find Wan models and LoRAs on Civitai" : "Find more on Civitai"}
-              @click=${() => { this.civitaiMode = tab === "video" ? "video" : "pictures"; this.civitaiOpen = true; }}>
+        ${tab === "models" || tab === "loras"
+          ? html`<button class="drawer-action" title="Find more on Civitai"
+              @click=${() => { this.civitaiMode = "pictures"; this.civitaiOpen = true; }}>
               <span class="material-symbols-rounded">travel_explore</span>
             </button>`
           : nothing}
@@ -6052,26 +4895,16 @@ export class OppaiImageGen extends LitElement {
   /**
    * The recipe: what the next generation will be made with, readable at a glance and
    * each part a button to where it is changed. The LoRAs that are on show here with
-   * their weights and can be taken off without opening anything.
+   * their weights and can be taken off without opening anything. The model is in the
+   * studio's header, which every mode shares.
    */
-  private renderRecipeStrip(st: ImageGenStatus, invoke: boolean) {
-    const model = (st.models ?? []).find((m) => m.title === this.checkpoint);
+  private renderRecipeStrip(st: ImageGenStatus) {
     const loras = (st.loras ?? []).filter((l) => l.name in this.selectedLoras);
-    const thumb = model ? `${api.modelThumbURL(model.title)}&v=${this.thumbVersion}` : "";
+    const detailer = st.detailerAvailable && this.detailerEnabled && this.detailerHasPasses;
     return html`<div class="recipe">
-      <button class="recipe-model" title=${model?.title ?? "Choose a model"} @click=${() => this.openCreateTab("models")}>
-        ${thumb && !this.failedThumbs.has(thumb)
-          ? html`<img src=${thumb} alt="" @error=${() => (this.failedThumbs = new Set(this.failedThumbs).add(thumb))} />`
-          : html`<span class="recipe-model-icon"><span class="material-symbols-rounded">deployed_code</span></span>`}
-        <span class="recipe-model-text">
-          <span class="recipe-kicker"><span class="status-dot"></span>${invoke ? "InvokeAI" : "Automatic1111"}${model?.base ? html` · ${model.base}` : nothing}</span>
-          <span class="recipe-model-name">${model?.model_name || this.checkpoint || "Choose a model"}</span>
-        </span>
-        <span class="material-symbols-rounded recipe-caret">expand_more</span>
-      </button>
       <div class="recipe-chips">
         ${loras.map((l) => html`<span class="recipe-chip lora">
-          <button class="recipe-chip-main" title="Change the weight in the LoRAs drawer" @click=${() => this.openCreateTab("loras")}>
+          <button class="recipe-chip-main" title="Change the weight in the LoRAs tab" @click=${() => this.openCreateTab("loras")}>
             <span class="material-symbols-rounded">style</span>${l.alias || l.name}<b>${this.selectedLoras[l.name]}</b>
           </button>
           <button class="recipe-chip-x" title="Take this LoRA off" aria-label=${`Remove ${l.alias || l.name}`} @click=${() => this.toggleLora(l.name)}>
@@ -6090,27 +4923,25 @@ export class OppaiImageGen extends LitElement {
         ${loras.length ? nothing : html`<button class="recipe-chip add" @click=${() => this.openCreateTab("loras")}>
           <span class="material-symbols-rounded">add</span>LoRA
         </button>`}
+        <span class="recipe-sep"></span>
         <button class="recipe-chip" title="Output size" @click=${() => this.openCreateTab("settings")}>
-          <span class="material-symbols-rounded">aspect_ratio</span>${this.width}×${this.height}
+          <span class="material-symbols-rounded">aspect_ratio</span>${this.sizeLabel()}
         </button>
         <button class="recipe-chip" title="Sampling settings" @click=${() => this.openCreateTab("settings")}>
           <span class="material-symbols-rounded">tune</span>${this.steps} steps · CFG ${this.cfg}
         </button>
+        ${this.hiresEnabled && this.canUpscale ? html`<button class="recipe-chip on" title="Hires fix is on" @click=${() => this.openCreateTab("settings")}>
+          <span class="material-symbols-rounded">open_in_full</span>Hires ${this.hiresScale}×
+        </button>` : nothing}
+        ${detailer ? html`<button class="recipe-chip on" title="ADetailer runs after each picture" @click=${() => this.openCreateTab("detailer")}>
+          <span class="material-symbols-rounded">face_retouching_natural</span>${fixLabel(this.detailerPasses)}
+        </button>` : nothing}
         <button class="recipe-chip ${this.seed >= 0 ? "on" : ""}"
           title=${this.seed < 0 ? "A new seed every time — click to keep the last picture's" : "This seed is kept — click to go back to random"}
           @click=${() => this.toggleSeedLock()}>
           <span class="material-symbols-rounded">${this.seed < 0 ? "casino" : "lock"}</span>${this.seed < 0 ? "Random seed" : this.seed}
         </button>
       </div>
-      ${this.shots.length ? html`<button class="recipe-ghost" title="Clear the canvas" @click=${() => this.clearWorkspace()}>
-        <span class="material-symbols-rounded">delete_sweep</span>
-      </button>` : nothing}
-      ${st.civitai ? html`<button class="recipe-civitai" @click=${() => { this.civitaiMode = "pictures"; this.civitaiOpen = true; }}>
-        <span class="material-symbols-rounded">travel_explore</span><span>Civitai</span>
-      </button>` : nothing}
-      <button class="recipe-civitai" title="Train a LoRA on your own pictures" @click=${() => (this.trainOpen = true)}>
-        <span class="material-symbols-rounded">model_training</span><span>Train</span>
-      </button>
     </div>`;
   }
 
@@ -6312,105 +5143,111 @@ export class OppaiImageGen extends LitElement {
     this.seed = last;
   }
 
-  // ── the studio ──────────────────────────────────────────────────────────────
+  // ── the Sprites studio ──────────────────────────────────────────────────────
   //
-  // Two screens. "Build" is the board: the recipe down the left, the sheet of squares
-  // in the middle, and the square that is selected on the right with everything that
-  // can be done to it. "Wardrobe" is what she actually wears and where she stands —
-  // the finished outfits and the rooms — full width, because it is a gallery and was
-  // never a sidebar section.
-  //
-  // The generator's own plumbing (model, LoRAs, sampler) sits under the recipe,
-  // folded, because it is set once per wardrobe and then left alone.
+  // Two views. The board is the recipe on the left — in four tabs rather than one
+  // accordion of eleven sections — the sheet of squares in the middle, and the square
+  // that is selected on the right with everything that can be done to it. "Wardrobe &
+  // rooms" is what she actually wears and where she stands, full width, because it is
+  // a gallery and was never a sidebar section.
 
-  private renderStudio(st: ImageGenStatus, invoke: boolean, modelName: string) {
-    const wardrobe = this.wardrobes.find((o) => o.id === this.outfitWardrobeId);
-    return html`
-      <div class="workspace">
-        <div class="workspace-bar">
-          <div class="workspace-tab">
-            <span class="material-symbols-rounded" style="font-size:18px;">checkroom</span>
-            Outfit studio
+  private renderSprites(st: ImageGenStatus, invoke: boolean) {
+    if (this.studioView === "wardrobe") {
+      return html`<div class="workspace"><div class="studio-wardrobe">
+        <oppai-outfit-wardrobe
+          @edit-slot=${(e: CustomEvent<{ outfitId: string; slot: string; level: number }>) =>
+            void this.editWardrobeSlot(e.detail.outfitId, e.detail.slot, e.detail.level)}
+          @build-outfit=${(e: CustomEvent<{ outfitId: string }>) => {
+            this.outfitWardrobeId = e.detail.outfitId;
+            this.persistDraft();
+            this.studioView = "build";
+            void this.loadWipBoard(e.detail.outfitId);
+          }}
+        ></oppai-outfit-wardrobe>
+      </div></div>`;
+    }
+    return html`<div class="workspace">
+      <div class="sprite-shell ${this.spriteInspector ? "with-inspector" : ""} ${this.sidePanel ? "with-focus" : ""}">
+        ${this.spriteInspector ? html`<aside class="sprite-inspector">
+          <div class="ins-tabs" role="tablist" aria-label="The recipe">
+            ${SPRITE_TABS.map((t) => html`<button role="tab" class=${this.spriteTab === t.id ? "on" : ""}
+              aria-selected=${this.spriteTab === t.id ? "true" : "false"} @click=${() => (this.spriteTab = t.id)}>
+              <span class="material-symbols-rounded">${t.icon}</span>${t.label}
+            </button>`)}
           </div>
-          <div class="studio-views" role="tablist">
-            <button class="studio-view ${this.studioView === "build" ? "on" : ""}" role="tab" aria-selected=${this.studioView === "build" ? "true" : "false"}
-              @click=${() => (this.studioView = "build")}>
-              <span class="material-symbols-rounded" style="font-size:16px;">grid_view</span>
-              Build${wardrobe ? html` <span class="studio-view-sub">· ${wardrobe.name}</span>` : nothing}
-            </button>
-            <button class="studio-view ${this.studioView === "wardrobe" ? "on" : ""}" role="tab" aria-selected=${this.studioView === "wardrobe" ? "true" : "false"}
-              @click=${() => { this.studioView = "wardrobe"; void this.renderRoot.querySelector("oppai-outfit-wardrobe")?.refresh(); }}>
-              <span class="material-symbols-rounded" style="font-size:16px;">styler</span>
-              Wardrobe &amp; rooms
-            </button>
+          <div class="panel-scroll ins-body">${this.renderSpriteTab(st, invoke)}</div>
+        </aside>` : nothing}
+        <section class="workbench">
+          ${this.renderStudioToolbar()}
+          <div class="canvas-stage sheet">
+            ${this.renderStudioSheet()}
+            ${this.error ? html`<div class="banner">${this.error}</div>` : nothing}
           </div>
-          <div class="workspace-context">
-            <div class="backend-pill" title="Connected generation backend">
-              <span class="status-dot"></span>
-              ${invoke ? "InvokeAI" : "A1111 / SD.Next"}
-            </div>
-            <div class="model-pill" title=${modelName}>
-              <span class="material-symbols-rounded" style="font-size:15px;">deployed_code</span>
-              <span>${modelName}</span>
-            </div>
-          </div>
-        </div>
-        ${this.studioView === "wardrobe"
-          ? html`<div class="studio-wardrobe">
-              <oppai-outfit-wardrobe
-                @edit-slot=${(e: CustomEvent<{ outfitId: string; slot: string; level: number }>) =>
-                  void this.editWardrobeSlot(e.detail.outfitId, e.detail.slot, e.detail.level)}
-                @build-outfit=${(e: CustomEvent<{ outfitId: string }>) => {
-                  this.outfitWardrobeId = e.detail.outfitId;
-                  this.persistDraft();
-                  this.studioView = "build";
-                  void this.loadWipBoard(e.detail.outfitId);
-                }}
-              ></oppai-outfit-wardrobe>
-            </div>`
-          : html`<div class="layout studio">
-              <aside class="side">
-                <div class="panel-heading">
-                  <span class="material-symbols-rounded" style="font-size:16px;">checkroom</span>
-                  The recipe
-                </div>
-                <div class="panel-scroll">
-                  ${this.renderDressSection()}
-                  ${this.renderLookSection()}
-                  ${this.renderLoadoutSection()}
-                  ${this.renderPromptExtrasSection()}
-                  <div class="side-divider"><span>Generator</span></div>
-                  ${this.renderModelSection(st.models ?? [])}
-                  ${this.renderLoraSection(st.loras ?? [], st.loraError)}
-                  ${this.renderVaeSection(st.vaes ?? [])}
-                  ${this.renderSettingsSection(invoke, st.boards ?? [])}
-                  ${this.renderDetailerSection(invoke)}
-                  ${this.renderTemplateSection(st.templates ?? [])}
-                  ${this.renderCharacterSection()}
-                </div>
-              </aside>
-              <section class="workbench">
-                ${this.renderStudioToolbar()}
-                <div class="canvas-stage sheet">
-                  ${this.renderStudioSheet()}
-                  ${this.error ? html`<div class="banner">${this.error}</div>` : nothing}
-                </div>
-                ${this.renderBatchBar()}
-              </section>
-              <aside class="right studio-focus">${this.renderFocusPanel()}</aside>
-            </div>`}
+          ${this.generating ? this.renderSheetProgress() : nothing}
+          ${this.renderBatchBar()}
+        </section>
+        ${this.sidePanel ? html`<aside class="right studio-focus">${this.renderFocusPanel()}</aside>` : nothing}
       </div>
-    `;
+    </div>`;
+  }
+
+  /** One tab of the recipe. The sections are the same ones the old accordion had,
+      drawn under titles of their own. */
+  private renderSpriteTab(st: ImageGenStatus, invoke: boolean) {
+    this.flatTitles = true;
+    try {
+      switch (this.spriteTab) {
+        case "outfit":
+          return html`${this.renderDressSection()}${this.renderLoadoutSection()}`;
+        case "look":
+          return this.renderLookSection();
+        case "prompt":
+          return html`${this.renderPromptExtrasSection()}${this.renderCharacterSection()}${this.renderTemplateSection(st.templates ?? [])}`;
+        case "generator":
+          return html`${this.renderModelSection(st.models ?? [])}
+            ${this.renderLoraSection(st.loras ?? [], st.loraError)}
+            ${this.renderVaeSection(st.vaes ?? [])}
+            ${this.renderSettingsSection(invoke, st.boards ?? [])}
+            ${this.renderDetailerSection(invoke)}
+            ${this.renderGeneratorPane(st, invoke)}`;
+      }
+    } finally {
+      this.flatTitles = false;
+    }
+  }
+
+  /** While a square draws: the picture forming, small, over the top of the sheet. */
+  private renderSheetProgress() {
+    const p = this.progress;
+    const percent = p ? Math.max(0, Math.min(1, p.percent)) : 0;
+    const { slot } = this.outfitSlot();
+    return html`<div class="sheet-progress">
+      ${p?.image ? html`<img src=${p.image} alt="" />` : html`<md-circular-progress indeterminate style="--md-circular-progress-size:22px;"></md-circular-progress>`}
+      <span class="sp-text"><b>${slot.tierLabel === "Misc" ? slot.emotionLabel : `${slot.tierLabel} · ${slot.emotionLabel}`}</b>
+        ${p?.cancelled ? "Stopping…" : p?.total ? `Step ${p.step} of ${p.total}` : "Starting…"}
+        <span class="sp-bar"><span style=${`width:${Math.round(percent * 100)}%`}></span></span></span>
+      <button class="icon-btn" title="Stop this square" aria-label="Stop" ?disabled=${p?.cancelled} @click=${() => void this.cancelGeneration()}>
+        <span class="material-symbols-rounded">close</span></button>
+    </div>`;
+  }
+
+  /** Every square of the open block, with the state each is in. */
+  private sheetStates(): SquareState[] {
+    const slots = this.sheetTab === "misc"
+      ? OUTFIT_ACTIVITIES.map((item) => this.outfitSlot(0, 0, item.id).slot)
+      : OUTFIT_TIERS.flatMap((_, tier) => OUTFIT_FACES.map((__, face) => this.outfitSlot(tier, face, "").slot));
+    return slots.map((slot) => this.squareStatus(this.shotAt(slot)).tone as SquareState);
   }
 
   /**
    * The strip above the sheet: which wardrobe the squares go into, which block is
-   * open, how big the squares are drawn.
+   * open, what is being looked for, and how big the squares are drawn.
    */
   private renderStudioToolbar() {
     const shots = this.currentOutfitShots();
     const expressions = shots.filter((shot) => (shot.outfitSlot?.index ?? 0) < EXPRESSION_SQUARES).length;
     const misc = shots.length - expressions;
+    const counts = filterCounts(this.sheetStates());
     return html`<div class="canvas-toolbar studio-toolbar">
       <label class="wardrobe-pick" title="Every square is saved into this wardrobe as it is generated">
         <span class="material-symbols-rounded" style="font-size:16px;">inventory_2</span>
@@ -6437,6 +5274,13 @@ export class OppaiImageGen extends LitElement {
           Misc <span class="sheet-tab-count">${misc}/${MISC_SQUARES}</span>
         </button>
       </div>
+      <div class="board-filters" role="group" aria-label="Show">
+        ${BOARD_FILTERS.map((f) => html`<button class="bf ${this.boardFilter === f.id ? "on" : ""} bf-${f.id}"
+          aria-pressed=${this.boardFilter === f.id ? "true" : "false"} ?disabled=${f.id !== "all" && !counts[f.id]}
+          @click=${() => (this.boardFilter = this.boardFilter === f.id ? "all" : f.id)}>
+          ${f.id === "all" ? nothing : html`<span class="bf-dot"></span>`}${f.label}${f.id === "all" ? nothing : html`<b>${counts[f.id]}</b>`}
+        </button>`)}
+      </div>
       <span class="toolbar-spacer"></span>
       <div class="zoom-tabs" title="Square size">
         ${SHEET_ZOOMS.map((_, index) => html`<button class="zoom-tab ${this.sheetZoom === index ? "on" : ""}"
@@ -6452,7 +5296,7 @@ export class OppaiImageGen extends LitElement {
       return html`<div class="canvas-empty">
         <span class="material-symbols-rounded">checkroom</span>
         <strong>Outfit terms are switched off</strong>
-        <span>Turn them back on in the recipe to build a wardrobe.</span>
+        <span>Turn them back on under Outfit to build a wardrobe.</span>
       </div>`;
     }
     const cell = SHEET_ZOOMS[this.sheetZoom];
@@ -6469,17 +5313,18 @@ export class OppaiImageGen extends LitElement {
     const selected = slotKeyOf(this.outfitSlot().slot);
     return html`<div class="face-matrix ${fit ? "fit" : ""}" style=${style}>
       <div class="matrix-corner"></div>
-      ${OUTFIT_FACES.map((face) => html`<div class="matrix-col-head" title=${face.face}>${face.label}</div>`)}
+      ${OUTFIT_FACES.map((face, i) => html`<div class="matrix-col-head ${i === this.outfitFace && !this.outfitMisc ? "on" : ""}" title=${face.face}>${face.label}</div>`)}
       ${OUTFIT_TIERS.map((tier, tierIndex) => {
         const row = OUTFIT_FACES.map((_, faceIndex) => this.outfitSlot(tierIndex, faceIndex, "").slot);
         const made = row.filter((slot) => this.shotAt(slot)).length;
         return html`
-          <div class="matrix-row-head">
-            <span class="material-symbols-rounded" style="font-size:14px;">local_fire_department</span>
+          <div class="matrix-row-head ${tierIndex === this.outfitTier && !this.outfitMisc ? "on" : ""}">
+            <span class="row-heat">${[0, 1, 2, 3, 4].map((h) => html`<i class=${h <= tierIndex ? "lit" : ""}></i>`)}</span>
             <span class="matrix-row-name">${tier.label}</span>
             <span class="matrix-row-count">${made}/${row.length}</span>
+            <span class="row-bar"><span style=${`width:${(made / row.length) * 100}%`}></span></span>
           </div>
-          ${row.map((slot) => this.renderSheetCell(slot, slotKeyOf(slot) === selected, this.sheetTab === "faces" && !this.outfitMisc))}
+          ${row.map((slot) => this.renderSheetCell(slot, slotKeyOf(slot) === selected))}
         `;
       })}
     </div>`;
@@ -6499,7 +5344,7 @@ export class OppaiImageGen extends LitElement {
         <div class="sheet-grid" style=${style}>
           ${items.map((item) => {
             const slot = this.outfitSlot(0, 0, item.id).slot;
-            return this.renderSheetCell(slot, slotKeyOf(slot) === selected, !!this.outfitMisc);
+            return this.renderSheetCell(slot, slotKeyOf(slot) === selected);
           })}
         </div>
       </section>`;
@@ -6512,26 +5357,28 @@ export class OppaiImageGen extends LitElement {
   }
 
   /**
-   * One square on the sheet. Clicking it selects it — the focus panel on the right
-   * is where things are done to it — so the cell itself carries only the picture and
-   * its state: empty, generated, reviewed, or on an older recipe.
+   * One square on the sheet. Clicking it selects it — the panel on the right is where
+   * things are done to it — so the cell itself carries only the picture and its state:
+   * empty, generated, reviewed, or on an older recipe. A square the filter is not
+   * looking for is dimmed, not hidden, so the matrix keeps its shape.
    */
-  private renderSheetCell(slot: DraftOutfitSlot, current: boolean, _tabActive: boolean) {
+  private renderSheetCell(slot: DraftOutfitSlot, current: boolean) {
     const shot = this.shotAt(slot);
-    const stale = shot ? !this.shotMatchesCurrentOutfit(shot) : false;
+    const state = this.squareStatus(shot).tone as SquareState;
     const label = slot.tier === 0 && slot.tierLabel === "Misc" ? slot.emotionLabel : `${slot.tierLabel} · ${slot.emotionLabel}`;
+    const dim = !matchesFilter(this.boardFilter, state);
     return html`<button
-      class="sheet-cell ${current ? "current" : ""} ${shot ? "" : "empty"}"
-      title=${shot ? `${label}${stale ? " — older recipe" : shot.cutoutReviewed ? " — reviewed" : " — needs a cutout review"}` : `${label} — not generated yet`}
+      class="sheet-cell ${current ? "current" : ""} ${shot ? "" : "empty"} ${dim ? "dim" : ""} st-${state}"
+      title=${shot ? `${label}${state === "stale" ? " — older recipe" : state === "ready" ? " — reviewed" : " — needs a cutout review"}` : `${label} — not generated yet`}
       @click=${() => this.selectOutfitSlot(slot.index)}
       @dblclick=${() => { this.selectOutfitSlot(slot.index); void this.generateOutfitAndNext(); }}
     >
       ${shot
         ? html`<img class="art" src=${this.previewURL(shot)} alt=${label} loading="lazy" />`
-        : html`<span class="art-empty"><span class="material-symbols-rounded">add_photo_alternate</span></span>`}
+        : html`<span class="art-empty"><span class="material-symbols-rounded">add</span></span>`}
       <span class="cell-foot">
-        <span class="cell-name">${slot.tierLabel === "Misc" ? slot.emotionLabel : slot.emotionLabel}</span>
-        ${shot ? html`<span class="cell-state ${stale ? "stale" : shot.cutoutReviewed ? "ready" : "needs"}"></span>` : nothing}
+        <span class="cell-name">${slot.emotionLabel}</span>
+        ${shot ? html`<span class="cell-state ${state}"></span>` : nothing}
       </span>
     </button>`;
   }
@@ -6544,13 +5391,60 @@ export class OppaiImageGen extends LitElement {
     return { label: "Generated — the cutout needs a look", tone: "needs" };
   }
 
+  /** The arrow keys on the board: through the matrix, or along the MISC states. */
+  private moveOnBoard(key: BoardKey) {
+    this.stopFlip();
+    if (this.sheetTab === "misc") {
+      const at = OUTFIT_ACTIVITIES.findIndex((item) => item.id === this.outfitMisc);
+      const step = key === "ArrowLeft" || key === "ArrowUp" ? -1 : 1;
+      const next = at < 0 ? 0 : Math.min(OUTFIT_ACTIVITIES.length - 1, Math.max(0, at + step));
+      this.selectOutfitSlot(squareIndex(0, 0, OUTFIT_ACTIVITIES[next].id));
+    } else {
+      const next = this.outfitMisc
+        ? { face: this.outfitFace, tier: this.outfitTier }
+        : moveOnMatrix(this.outfitFace, this.outfitTier, key, OUTFIT_FACES.length, OUTFIT_TIERS.length);
+      this.selectOutfitSlot(squareIndex(next.tier, next.face, ""));
+    }
+    void this.updateComplete.then(() =>
+      this.renderRoot.querySelector(".sheet-cell.current")?.scrollIntoView({ block: "nearest", inline: "nearest" }));
+  }
+
+  // ── the flip-through ────────────────────────────────────────────────────────
+  //
+  // Twelve expressions of one girl should read as one girl. Playing the tier's squares
+  // one after another, in place, shows a face that drifts — a different jaw, a hair
+  // colour a shade off — far faster than comparing thumbnails side by side does.
+
+  private toggleFlip() {
+    if (this.flipping) {
+      this.stopFlip();
+      return;
+    }
+    this.flipping = true;
+    this.flipFace = this.outfitFace;
+    this.flipTimer = window.setInterval(() => {
+      const filled = OUTFIT_FACES.map((_, i) => !!this.shotAt(this.outfitSlot(this.outfitTier, i, "").slot));
+      const next = nextFilled(filled, this.flipFace);
+      if (next < 0) this.stopFlip();
+      else this.flipFace = next;
+    }, 450);
+  }
+
+  private stopFlip() {
+    window.clearInterval(this.flipTimer);
+    this.flipTimer = 0;
+    this.flipping = false;
+    this.flipFace = -1;
+  }
+
   /**
    * The selected square, large, with everything that can be done to it.
    *
-   * This is where the old design's twelve buttons in the sidebar went: a square's
-   * actions belong beside the square. Generate or redo, review the cutout, drop in a
-   * picture of your own, or throw it away — plus the prompt that would be sent for it,
-   * which is the thing to read when a square keeps coming out wrong.
+   * The picture can be shown as it will be seen — beside her speech box, saying a line
+   * in that mood — because an expression is right or wrong next to its words, not on a
+   * checkerboard. Under it, the same expression up the heat tiers, the one comparison
+   * a set most often needs. Generating sits first; the square's other tools are a row
+   * of icons rather than six full-width buttons.
    */
   private renderFocusPanel() {
     const { slot } = this.outfitSlot();
@@ -6561,58 +5455,78 @@ export class OppaiImageGen extends LitElement {
     const face = isMisc ? undefined : OUTFIT_FACES[this.outfitFace];
     const { prompt, negative } = this.assemblePrompts();
     const busy = this.generating;
+    const canGenerate = !busy && this.outfitOn && !!prompt.trim();
+    const flipSlot = this.flipping && this.flipFace >= 0 ? this.outfitSlot(this.outfitTier, this.flipFace, "").slot : undefined;
+    const shown = flipSlot ? this.shotAt(flipSlot) : shot;
+    const shownSlot = flipSlot ?? slot;
     return html`
-      <div class="panel-heading">
-        <span class="material-symbols-rounded" style="font-size:16px;">crop_square</span>
-        Selected square
-      </div>
-      <div class="panel-scroll focus-scroll">
-        <div class="focus-art">
-          ${shot
-            ? html`<img src=${this.previewURL(shot)} alt=${slot.emotionLabel} style="cursor:zoom-in" title="Expand"
-                @click=${() => (this.expandedShot = shot)} @contextmenu=${(e: MouseEvent) => this.openShotMenu(shot, e)} />`
-            : html`<span class="focus-empty"><span class="material-symbols-rounded">add_photo_alternate</span>Nothing here yet</span>`}
-        </div>
+      <div class="focus-head">
         <div class="focus-title">
           <strong>${isMisc ? slot.emotionLabel : `${slot.tierLabel} · ${slot.emotionLabel}`}</strong>
-          <span class="focus-status ${status.tone}">${status.label}</span>
+          <span class="focus-status ${status.tone}"><i></i>${status.label}</span>
         </div>
-        <div class="sec-note">${activity ? `${activity.face}; ${activity.pose}.` : face ? `${face.face}; ${face.pose}.` : nothing}</div>
-        <div class="focus-actions">
-          <button class="btn primary" ?disabled=${busy || !this.outfitOn || !prompt.trim()} @click=${() => void this.generateOutfitAndNext()}>
+        <div class="seg small" role="group" aria-label="Show the square">
+          <button class=${this.focusView === "cutout" ? "on" : ""} aria-pressed=${this.focusView === "cutout" ? "true" : "false"}
+            title="The cutout, on a checkerboard" @click=${() => (this.focusView = "cutout")}>Cutout</button>
+          <button class=${this.focusView === "scene" ? "on" : ""} aria-pressed=${this.focusView === "scene" ? "true" : "false"}
+            title="As she appears in chat, saying something in that mood" @click=${() => (this.focusView = "scene")}>In chat</button>
+        </div>
+      </div>
+      <div class="panel-scroll focus-scroll">
+        <div class="focus-art ${this.focusView}">
+          ${shown
+            ? html`<img src=${this.previewURL(shown)} alt=${shownSlot.emotionLabel} style="cursor:zoom-in" title="Expand"
+                @click=${() => (this.expandedShot = shown)} @contextmenu=${(e: MouseEvent) => this.openShotMenu(shown, e)} />`
+            : html`<span class="focus-empty"><span class="material-symbols-rounded">add_photo_alternate</span>Nothing here yet</span>`}
+          ${this.focusView === "scene" ? html`<div class="scene-speech">${sampleLine(shownSlot.emotion, shownSlot.emotionLabel)}</div>` : nothing}
+          ${!isMisc ? html`<button class="flip-btn ${this.flipping ? "on" : ""}" title="Play this tier's expressions one after another, to check they are one face"
+            @click=${() => this.toggleFlip()}>
+            <span class="material-symbols-rounded">${this.flipping ? "stop" : "play_arrow"}</span>${this.flipping ? shownSlot.emotionLabel : "Flip through"}
+          </button>` : nothing}
+        </div>
+        ${!isMisc ? this.renderHeatLadder() : nothing}
+        <div class="focus-primary">
+          <button class="btn primary" ?disabled=${!canGenerate} title="Enter" @click=${() => void this.generateOutfitAndNext()}>
             <span class="material-symbols-rounded" style="font-size:17px;">${shot ? "refresh" : "auto_awesome"}</span>
             ${shot ? "Redo, then next" : "Generate, then next"}
           </button>
-          <button class="btn" ?disabled=${busy || !this.outfitOn || !prompt.trim()} @click=${() => void this.generate()}>
+          <button class="btn" ?disabled=${!canGenerate} title=${shot ? "Redo this square and stay on it" : "Generate this square and stay on it"}
+            @click=${() => void this.generate()}>
             <span class="material-symbols-rounded" style="font-size:17px;">${shot ? "replay" : "add"}</span>
-            ${shot ? "Redo, stay here" : "Generate this one"}
+            ${shot ? "Redo" : "Just this"}
           </button>
-          <button class="btn" ?disabled=${!shot || busy}
+        </div>
+        <div class="focus-tools">
+          <button class="tool" ?disabled=${!shot || busy} title=${shot?.cutoutReviewed ? "Adjust the cutout (R)" : "Review the cutout (R)"}
             @click=${() => { if (shot) void this.openCutout(this.previewURL(shot), `seed-${shot.seed}`, shot.outfitFilename, shot.id); }}>
-            <span class="material-symbols-rounded" style="font-size:17px;">background_replace</span>
-            ${shot?.cutoutReviewed ? "Adjust the cutout" : "Review the cutout"}
+            <span class="material-symbols-rounded">background_replace</span><span>${shot?.cutoutReviewed ? "Adjust" : "Review"}</span>
           </button>
-          <label class="btn ${busy ? "disabled" : ""}" title="Use a picture of your own for this square">
-            <span class="material-symbols-rounded" style="font-size:17px;">upload</span>
-            ${shot ? "Replace with my own image" : "Use my own image"}
+          <label class="tool ${busy ? "disabled" : ""}" title=${shot ? "Replace with a picture of your own" : "Use a picture of your own for this square"}>
+            <span class="material-symbols-rounded">upload</span><span>Own image</span>
             <input type="file" accept="image/*" style="display:none;" ?disabled=${busy}
               @change=${(e: Event) => { const input = e.target as HTMLInputElement; void this.uploadSquare(input.files?.[0]); input.value = ""; }} />
           </label>
-          <button class="btn" ?disabled=${!shot || busy} title="Just this square, as a PNG under its wardrobe filename"
+          <button class="tool" ?disabled=${!shot || busy} title="Just this square, as a PNG under its wardrobe filename"
             @click=${() => { if (shot) void this.exportOutfitSquare(shot); }}>
-            <span class="material-symbols-rounded" style="font-size:17px;">download</span>
-            Export this square
+            <span class="material-symbols-rounded">download</span><span>Export</span>
           </button>
-          <button class="btn danger" ?disabled=${!shot || busy} @click=${() => { if (shot) void this.deleteOutfitSquare(shot); }}>
-            <span class="material-symbols-rounded" style="font-size:17px;">delete</span>
-            Delete this square
+          <button class="tool" ?disabled=${!shot?.info} title="Copy this square's generation data"
+            @click=${() => { if (shot) void this.copyGenInfo(shot, "text"); }}>
+            <span class="material-symbols-rounded">content_copy</span><span>Data</span>
+          </button>
+          ${this.outfitLoadoutId ? html`<button class="tool" ?disabled=${!shot || this.loadoutBusy} title="Use this square as the loadout's cover"
+            @click=${() => void this.setLoadoutCoverFromSelection()}>
+            <span class="material-symbols-rounded">photo_camera</span><span>Cover</span>
+          </button>` : nothing}
+          <button class="tool danger" ?disabled=${!shot || busy} title="Delete this square"
+            @click=${() => { if (shot) void this.deleteOutfitSquare(shot); }}>
+            <span class="material-symbols-rounded">delete</span><span>Delete</span>
           </button>
         </div>
+        <div class="sec-note focus-desc">${activity ? `${activity.face}; ${activity.pose}.` : face ? `${face.face}; ${face.pose}.` : nothing}</div>
         ${shot ? html`<div class="focus-meta">
           <span title="Seed"><span class="material-symbols-rounded" style="font-size:14px;">casino</span>${shot.seed}</span>
           ${shot.info?.model ? html`<span title="Model"><span class="material-symbols-rounded" style="font-size:14px;">deployed_code</span>${shot.info.model}</span>` : nothing}
-          <button class="link-btn" ?disabled=${!shot.info} @click=${() => void this.copyGenInfo(shot, "text")}>Copy generation data</button>
-          ${this.outfitLoadoutId ? html`<button class="link-btn" ?disabled=${this.loadoutBusy} @click=${() => void this.setLoadoutCoverFromSelection()}>Use as loadout cover</button>` : nothing}
         </div>` : nothing}
         <button class="adv-toggle" @click=${() => (this.showSquarePrompt = !this.showSquarePrompt)}>
           <span class="material-symbols-rounded" style="font-size:17px;">${this.showSquarePrompt ? "expand_less" : "code"}</span>
@@ -6629,6 +5543,22 @@ export class OppaiImageGen extends LitElement {
     `;
   }
 
+  /** The selected expression at every heat, Calm to Peak: how it climbs. */
+  private renderHeatLadder() {
+    return html`<div class="heat-ladder" role="group" aria-label="This expression up the heat tiers">
+      ${OUTFIT_TIERS.map((tier, t) => {
+        const slot = this.outfitSlot(t, this.outfitFace, "").slot;
+        const shot = this.shotAt(slot);
+        const on = t === this.outfitTier;
+        return html`<button class="rung ${on ? "on" : ""}" title=${`${tier.label} · ${slot.emotionLabel}`}
+          @click=${() => { this.stopFlip(); this.selectOutfitSlot(squareIndex(t, this.outfitFace, "")); }}>
+          ${shot ? html`<img src=${this.previewURL(shot)} alt="" loading="lazy" />` : html`<span class="rung-empty"></span>`}
+          <span class="rung-label">${tier.label}</span>
+        </button>`;
+      })}
+    </div>`;
+  }
+
   /** The bar under the sheet: the whole set's progress, and the batch controls. */
   private renderBatchBar() {
     const shots = this.currentOutfitShots();
@@ -6640,12 +5570,18 @@ export class OppaiImageGen extends LitElement {
     const have = expressions + (this.outfitMiscBatch ? misc : 0);
     const missing = Math.max(0, total - have);
     const canRun = !this.generating && this.outfitOn && !!this.assemblePrompts().prompt.trim();
+    const c = 2 * Math.PI * 17;
+    const made = total ? Math.min(1, have / total) : 0;
+    const done = total ? Math.min(1, reviewed / total) : 0;
     return html`<div class="batch-bar">
-      <div class="batch-progress" title=${`${reviewed} of ${shots.length} generated squares reviewed`}>
-        <div class="batch-track">
-          <div class="batch-fill reviewed" style=${`width:${total ? Math.min(100, (reviewed / total) * 100) : 0}%`}></div>
-          <div class="batch-fill made" style=${`width:${total ? Math.min(100, (have / total) * 100) : 0}%`}></div>
-        </div>
+      <div class="batch-ring" title=${`${have} of ${total} made, ${reviewed} reviewed`}>
+        <svg viewBox="0 0 40 40"><circle class="r-track" cx="20" cy="20" r="17" />
+          <circle class="r-made" cx="20" cy="20" r="17" stroke-dasharray=${c} stroke-dashoffset=${c * (1 - made)} />
+          <circle class="r-done" cx="20" cy="20" r="17" stroke-dasharray=${c} stroke-dashoffset=${c * (1 - done)} /></svg>
+        <b>${Math.round(made * 100)}<small>%</small></b>
+      </div>
+      <div class="batch-progress">
+        <span class="batch-head">${have === total && total ? "The set is complete" : `${missing} square${missing === 1 ? "" : "s"} to go`}</span>
         <span class="batch-count">${expressions}/${EXPRESSION_SQUARES} expressions · ${misc}/${MISC_SQUARES} misc · ${reviewed} reviewed${stale ? html` · <em>${stale} on an older recipe</em>` : nothing}</span>
       </div>
       <label class="switch compact" title="Whether Generate missing also renders the Misc states">
@@ -6893,28 +5829,13 @@ export class OppaiImageGen extends LitElement {
     this.onCivitaiClose();
   }
 
+  /** One part of the recipe, as a pane. The panes were an accordion once, read top to
+      bottom in a 300px sidebar; the inspector's tabs do that job now. */
   private section(id: string, label: string, count: string, body: unknown) {
-    if (this.flatSections) return html`<div class="pane sec-${id}">${body}</div>`;
-    const open = !!this.open[id];
-    return html`
-      <div class="sec sec-${id}">
-        <button class="sec-head" @click=${() => this.toggleSection(id)}>
-          <span class="material-symbols-rounded sec-chevron ${open ? "open" : ""}" style="font-size:18px;"
-            >chevron_right</span
-          >
-          ${label}
-          <span class="count">${count}</span>
-        </button>
-        <!-- The body stays in the tree and is collapsed by a 0fr grid row rather than
-             being removed. That is what makes the open/close animate at all, and it
-             animates without measuring a height or reflowing everything below on each
-             frame. See .collapsible in theme.ts. Kept out of the tab order and out of
-             the accessibility tree while shut, since it is still rendered. -->
-        <div class="collapsible ${open ? "open" : ""}">
-          <div class="sec-body" ?inert=${!open} aria-hidden=${open ? "false" : "true"}>${body}</div>
-        </div>
-      </div>
-    `;
+    if (this.flatTitles) {
+      return html`<div class="pane-title">${label}<span class="pane-count">${count}</span></div><div class="pane sec-${id}">${body}</div>`;
+    }
+    return html`<div class="pane sec-${id}">${body}</div>`;
   }
 
   private renderModelSection(models: GenModel[]) {
@@ -6928,7 +5849,7 @@ export class OppaiImageGen extends LitElement {
         </div>`,
       );
     }
-    const filter = this.flatSections ? this.pickerFilter.trim().toLowerCase() : "";
+    const filter = this.pickerFilter.trim().toLowerCase();
     const shown = filter
       ? models.filter((m) => `${m.model_name} ${m.title} ${m.base ?? ""}`.toLowerCase().includes(filter))
       : models;
@@ -7092,7 +6013,7 @@ export class OppaiImageGen extends LitElement {
 
   /**
    * ADetailer: the passes that redo faces, hands and anything else a detector finds,
-   * after a picture is drawn — views/imagegen-detailer.ts. Its own drawer on the rail;
+   * after a picture is drawn — views/imagegen-detailer.ts. Its own tab on the rail;
    * it was the bottom of Settings, under the sampler, where it was only found by
    * scrolling past it.
    */
@@ -8325,9 +7246,14 @@ export class OppaiImageGen extends LitElement {
             @click=${() => this.toggleTrigger(phrase)}>${phrase}</button>`)}
         </div>` : nothing}
 
+        ${this.promptsOpen ? this.renderRecentPrompts() : nothing}
         <div class="composer-bar">
           <button class="mic" title="Start from a picture on this computer" @click=${() => this.sourceFile?.click()}>
             <span class="material-symbols-rounded">add_photo_alternate</span>
+          </button>
+          <button class="mic ${this.promptsOpen ? "on" : ""}" title="Recent prompts" aria-expanded=${this.promptsOpen ? "true" : "false"}
+            @click=${() => (this.promptsOpen = !this.promptsOpen)}>
+            <span class="material-symbols-rounded">history</span>
           </button>
           <input class="source-file" type="file" accept="image/png,image/jpeg,image/webp" hidden
             @change=${(e: Event) => this.onSourceFile(e)} />
@@ -8357,6 +7283,11 @@ export class OppaiImageGen extends LitElement {
                 <span class="material-symbols-rounded" style="font-size:20px;">auto_awesome</span>
                 ${this.source?.mode === "inpaint" && this.sourceMask ? "Repaint" : this.status?.backend === "invokeai" ? "Invoke" : "Generate"}
               </button>`}
+          ${this.outfitOn ? nothing : html`<button class="queue-btn ${this.generating ? "hot" : ""}" title="Add to the queue (Ctrl+Shift+Enter) — it keeps these settings"
+            ?disabled=${!this.assemblePrompts().prompt.trim()} @click=${() => void this.enqueue()}>
+            <span class="material-symbols-rounded">playlist_add</span><span class="queue-label">Queue</span>
+            ${this.queue.length ? html`<b>${this.queue.length}</b>` : nothing}
+          </button>`}
         </div>
       </div>
     `;
@@ -8720,7 +7651,8 @@ export class OppaiImageGen extends LitElement {
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
       this.closeCompletions();
-      if (!this.generating && this.assemblePrompts().prompt.trim()) void this.generate();
+      if (e.shiftKey) void this.enqueue();
+      else if (!this.generating && this.assemblePrompts().prompt.trim()) void this.generate();
       return;
     }
     if (!this.completions.length || this.completionField !== field) return;
@@ -8878,55 +7810,18 @@ export class OppaiImageGen extends LitElement {
     `;
   }
 
-  private nodePosition(shot: Shot, index: number) {
-    const fallback = this.defaultNodePosition(index);
-    return {
-      x: shot.workspaceX ?? fallback.workspaceX,
-      y: shot.workspaceY ?? fallback.workspaceY,
-    };
-  }
-
-  private beginNodeDrag(shot: Shot, index: number, e: PointerEvent) {
-    if (e.button !== 0) return;
-    e.preventDefault();
-    const at = this.nodePosition(shot, index);
-    this.activeNodeId = shot.id;
-    this.draggingNode = {
-      id: shot.id,
-      pointerId: e.pointerId,
-      clientX: e.clientX,
-      clientY: e.clientY,
-      x: at.x,
-      y: at.y,
-    };
-    (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
-  }
-
-  private moveNode(e: PointerEvent) {
-    const drag = this.draggingNode;
-    if (!drag || drag.pointerId !== e.pointerId) return;
-    e.preventDefault();
-    const workspaceX = Math.max(0, Math.round(drag.x + e.clientX - drag.clientX));
-    const workspaceY = Math.max(0, Math.round(drag.y + e.clientY - drag.clientY));
-    this.shots = this.shots.map((shot) => shot.id === drag.id
-      ? { ...shot, workspaceX, workspaceY }
-      : shot);
-  }
-
-  private endNodeDrag(e: PointerEvent) {
-    if (!this.draggingNode || this.draggingNode.pointerId !== e.pointerId) return;
-    this.draggingNode = null;
-    this.persistDraft();
-  }
-
-  /** Clears result nodes only. Prompt, model and outfit controls deliberately remain in
-   * place so this behaves like clearing a canvas rather than starting the studio over. */
+  /** Clears the stage and the session strip. Prompt, model and outfit controls stay as
+   * they are, so this is clearing a table rather than starting the studio over; the
+   * pictures themselves are still in the gallery. */
   private clearWorkspace() {
-    if (!this.shots.length || !confirm("Clear every generated image from this workspace? Unsaved previews will no longer be shown.")) return;
+    if (!this.history.length || !confirm("Clear this session's pictures off the stage? They stay in the gallery; unsaved ones are still there until the gallery is tidied.")) return;
     this.shots = [];
+    store.history = [];
+    storeChanged();
+    this.viewing = null;
+    this.compareWith = null;
     this.expandedShot = null;
     this.infoFor = null;
-    this.activeNodeId = null;
     this.outfitProgress = "";
     this.persistDraft();
   }
@@ -8961,99 +7856,219 @@ export class OppaiImageGen extends LitElement {
     }
   }
 
-  private renderResults() {
-    if (!this.shots.length && this.regionsActive) {
+  // ── the stage ───────────────────────────────────────────────────────────────
+  //
+  // One picture large, with its tools under it, and the session in a strip below. It
+  // was a canvas of draggable cards, which suited nothing: four results had to be
+  // dragged apart to be compared, and a new run cleared the lot.
+
+  /** The picture on the stage: the one picked, else the newest. */
+  private get viewedShot(): Shot | undefined {
+    return this.history.find((s) => s.id === this.viewing) ?? this.history[0];
+  }
+
+  /** Left is newer and right is older, as the strip lays them out. */
+  private stepViewer(dir: 1 | -1) {
+    this.viewing = stepThrough(this.history, this.viewedShot?.id ?? null, dir);
+    this.infoFor = null;
+  }
+
+  /** Compares the stage with the picture beside it in the strip, or stops comparing. */
+  private toggleCompare() {
+    if (this.compareWith) {
+      this.compareWith = null;
+      return;
+    }
+    const current = this.viewedShot;
+    if (!current || this.history.length < 2) {
+      this.showToast("Make another picture first — there is nothing to compare this one with");
+      return;
+    }
+    const older = stepThrough(this.history, current.id, 1);
+    this.compareWith = older && older !== current.id ? older : stepThrough(this.history, current.id, -1);
+    this.compareSplit = 50;
+  }
+
+  /** A click on the strip views a picture; with Shift it becomes the one compared. */
+  private pickFromStrip(shot: Shot, e: MouseEvent) {
+    if (e.shiftKey || e.altKey) {
+      if (shot.id === this.viewedShot?.id) return;
+      this.compareWith = this.compareWith === shot.id ? null : shot.id;
+      this.compareSplit = 50;
+      return;
+    }
+    if (this.compareWith === shot.id) this.compareWith = null;
+    this.viewing = shot.id;
+    this.infoFor = null;
+  }
+
+  private renderViewer() {
+    const list = this.history;
+    if (!list.length && this.regionsActive) {
       return html`<div class="people-empty">
         <span class="hint">${this.regionPeople.length} people, ${this.regionsRows ? "stacked" : "side by side"}. Drag a LoRA from the
-          LoRAs drawer onto a person to put it on them alone.</span>
+          LoRAs tab onto a person to put it on them alone.</span>
         ${this.renderPeopleFrame(false)}
       </div>`;
     }
-    if (!this.shots.length) {
-      return html`<div class="canvas-empty">
-        <span class="material-symbols-rounded">image</span>
-        <strong>Your generation canvas</strong>
-        <span>Pick a model, write a prompt, and press ${this.status?.backend === "invokeai" ? "Invoke" : "Generate"} — or Ctrl+Enter from the prompt.</span>
+    const shot = this.viewedShot;
+    if (!shot) {
+      const go = this.status?.backend === "invokeai" ? "Invoke" : "Generate";
+      return html`<div class="canvas-empty welcome">
+        <span class="welcome-glyph"><span class="material-symbols-rounded">auto_awesome</span></span>
+        <strong>What are we making?</strong>
+        <span>Write a prompt below and press ${go} — or Ctrl+Enter from the prompt.</span>
+        <div class="welcome-tips">
+          <span><span class="material-symbols-rounded">add_photo_alternate</span>Drop a gallery picture here to start from it</span>
+          <span><span class="material-symbols-rounded">queue</span>Queue the next idea while one draws</span>
+          <span><span class="material-symbols-rounded">compare</span>Compare two takes with C</span>
+        </div>
+        ${this.recentPrompts.length ? html`<div class="welcome-recent">
+          <span class="welcome-k">Pick up a recent prompt</span>
+          ${this.recentPrompts.slice(0, 3).map((r) => html`<button class="recent-line" title=${r.prompt} @click=${() => this.useRecentPrompt(r)}>
+            <span class="material-symbols-rounded">history</span><span>${r.prompt}</span></button>`)}
+        </div>` : nothing}
       </div>`;
     }
-    const positions = this.shots.map((shot, index) => this.nodePosition(shot, index));
-    const extentX = Math.max(600, ...positions.map((p) => p.x + 290));
-    const extentY = Math.max(480, ...positions.map((p) => p.y + 450));
-    return html`
-      <div class="results" style=${`width:${extentX}px;height:${extentY}px;`}>
-        ${this.shots.map(
-          (shot, index) => {
-            const at = positions[index];
-            return html`
-            <div class="shot ${this.activeNodeId === shot.id ? "active" : ""}"
-              style=${`left:${at.x}px;top:${at.y}px;`}>
-              <div class="node-handle"
-                title="Drag to move this image"
-                @pointerdown=${(e: PointerEvent) => this.beginNodeDrag(shot, index, e)}
-                @pointermove=${(e: PointerEvent) => this.moveNode(e)}
-                @pointerup=${(e: PointerEvent) => this.endNodeDrag(e)}
-                @pointercancel=${(e: PointerEvent) => this.endNodeDrag(e)}>
-                <span class="material-symbols-rounded" style="font-size:16px;">drag_indicator</span>
-                <span class="node-title">${shot.outfitSlot
-                  ? `${shot.outfitSlot.tierLabel} · ${shot.outfitSlot.emotionLabel}`
-                  : `Seed ${shot.seed}`}</span>
-              </div>
-              <img
-                src=${this.previewURL(shot)}
-                alt="Generated image"
-                loading="lazy"
-                style="cursor: zoom-in;"
-                title="Expand"
-                @click=${() => (this.expandedShot = shot)}
-                @contextmenu=${(e: MouseEvent) => this.openShotMenu(shot, e)}
-              />
-              ${shot.outfitSlot ? html`<div class="shot-slot">
-                ${shot.outfitSlot.tierLabel} · ${shot.outfitSlot.emotionLabel}
-              </div>` : nothing}
-              <div class="shot-actions">
-                <button class="act primary" ?disabled=${shot.saved} @click=${() => this.save(shot)}>
-                  <span class="material-symbols-rounded" style="font-size:16px;"
-                    >${shot.saved ? "check" : "save"}</span
-                  >
-                  ${shot.saved ? "Saved" : "Save"}
-                </button>
-                <button class="act" title=${shot.outfitSlot
-                  ? shot.cutoutReviewed ? "Review or adjust this outfit cutout again" : "Review the automatic cutout by hand"
-                  : "Cut the background out"}
-                  @click=${() => void this.openCutout(
-                    this.previewURL(shot), `seed-${shot.seed}`, shot.outfitFilename,
-                    shot.outfitSlot ? shot.id : undefined,
-                  )}>
-                  <span class="material-symbols-rounded" style="font-size:16px;">background_replace</span>
-                  ${shot.outfitSlot ? (shot.cutoutReviewed ? "Reviewed" : "Review cutout") : nothing}
-                </button>
-                ${this.status?.manageModels ? html`<button class="act"
-                  title="Use as this model's cover" @click=${() => this.useAsModelThumb(shot)}>
-                  <span class="material-symbols-rounded" style="font-size:16px;">photo_camera</span>
-                </button>` : nothing}
-                ${shot.outfitSlot ? nothing : html`<button class="act" title="Start the next picture from this one"
-                  @click=${() => void this.usePicture(this.previewURL(shot), `seed ${shot.seed}`, "img2img", false, shot.gallery)}>
-                  <span class="material-symbols-rounded" style="font-size:16px;">add_photo_alternate</span>
-                </button>`}
-                ${shot.outfitSlot || this.status?.backend === "invokeai" ? nothing : html`<button class="act" title="Paint over a part to redo it"
-                  @click=${() => void this.usePicture(this.previewURL(shot), `seed ${shot.seed}`, "inpaint", false, shot.gallery)}>
-                  <span class="material-symbols-rounded" style="font-size:16px;">brush</span>
-                </button>`}
-                <button class="act" title="Copy this image's generation data"
-                  @click=${() => (this.infoFor = this.infoFor === shot.id ? null : shot.id)}>
-                  <span class="material-symbols-rounded" style="font-size:16px;">content_copy</span>
-                </button>
-                <button class="act" title="Export PNG with Civitai-compatible metadata"
-                  @click=${() => void this.exportShot(shot)}>
-                  <span class="material-symbols-rounded" style="font-size:16px;">download</span>
-                </button>
-              </div>
-              ${this.infoFor === shot.id ? this.renderGenInfo(shot) : nothing}
-            </div>
-          `; },
-        )}
+    const other = this.compareWith ? list.find((s) => s.id === this.compareWith) : undefined;
+    if (other && other.id !== shot.id) return this.renderCompare(shot, other);
+    const at = list.indexOf(shot);
+    const info = shot.info;
+    return html`<div class="viewer">
+      <button class="view-nav prev" ?disabled=${at <= 0} title="Newer (←)" aria-label="Newer picture" @click=${() => this.stepViewer(-1)}>
+        <span class="material-symbols-rounded">chevron_left</span></button>
+      <figure class="view-frame">
+        <img class="view-img" src=${this.previewURL(shot)} alt="Generated image" title="Expand"
+          @click=${() => (this.expandedShot = shot)} @contextmenu=${(e: MouseEvent) => this.openShotMenu(shot, e)} />
+        <figcaption class="view-cap">
+          <span>${at + 1} of ${list.length}</span>
+          <span><span class="material-symbols-rounded">casino</span>${shot.seed}</span>
+          ${info ? html`<span>${info.width}×${info.height}</span>` : nothing}
+          ${info?.seconds ? html`<span>${info.seconds.toFixed(1)}s</span>` : nothing}
+          ${shot.saved ? html`<span class="cap-saved"><span class="material-symbols-rounded">check</span>In the library</span>` : nothing}
+        </figcaption>
+      </figure>
+      <button class="view-nav next" ?disabled=${at >= list.length - 1} title="Older (→)" aria-label="Older picture" @click=${() => this.stepViewer(1)}>
+        <span class="material-symbols-rounded">chevron_right</span></button>
+      ${this.renderViewBar(shot)}
+      ${this.infoFor === shot.id ? html`<div class="view-info">${this.renderGenInfo(shot)}</div>` : nothing}
+    </div>`;
+  }
+
+  /** The tools for the picture on the stage, in the order they are reached for. */
+  private renderViewBar(shot: Shot) {
+    const a1111 = this.status?.backend !== "invokeai";
+    const url = this.previewURL(shot);
+    const name = `seed ${shot.seed}`;
+    const tool = (icon: string, label: string, run: () => void, on = false) => html`<button class="vb ${on ? "on" : ""}" title=${label} aria-label=${label} @click=${run}>
+      <span class="material-symbols-rounded">${icon}</span></button>`;
+    return html`<div class="view-bar">
+      <button class="vb save ${shot.saved ? "done" : ""}" ?disabled=${shot.saved} title="Keep this picture in the library (S)" @click=${() => void this.save(shot)}>
+        <span class="material-symbols-rounded">${shot.saved ? "check" : "save"}</span>${shot.saved ? "Saved" : "Save"}
+      </button>
+      <span class="vb-sep"></span>
+      ${tool("add_photo_alternate", "Start the next picture from this one", () => void this.usePicture(url, name, "img2img", false, shot.gallery))}
+      ${a1111 ? tool("brush", "Paint over a part to redo it", () => void this.usePicture(url, name, "inpaint", false, shot.gallery)) : nothing}
+      ${a1111 && this.status?.detailerAvailable ? tool("face_retouching_natural", fixLabel(this.detailerPasses), () => void this.usePicture(url, name, "faces", false, shot.gallery)) : nothing}
+      ${this.canUpscale ? tool("open_in_full", `Upscale ${this.upscaleBy}×`, () => void this.usePicture(url, name, "upscale", false, shot.gallery)) : nothing}
+      ${this.status?.clips?.image ? tool("animation", "Animate it in the Video studio", () => void this.usePicture(url, name, "animate", false, shot.gallery)) : nothing}
+      ${tool("background_replace", "Cut the background out", () => void this.openCutout(url, `seed-${shot.seed}`))}
+      <span class="vb-sep"></span>
+      ${tool("compare", this.compareWith ? "Stop comparing (C)" : "Compare with the picture beside it (C) — or Shift-click one in the strip", () => this.toggleCompare(), !!this.compareWith)}
+      ${tool("data_object", "Generation data", () => (this.infoFor = this.infoFor === shot.id ? null : shot.id), this.infoFor === shot.id)}
+      ${tool("download", "Export a PNG with Civitai-compatible metadata", () => void this.exportShot(shot))}
+      ${this.status?.manageModels ? tool("photo_camera", "Use as this model's cover", () => void this.useAsModelThumb(shot)) : nothing}
+      <button class="vb" title="More" aria-label="More" @click=${(e: MouseEvent) => {
+        const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+        this.openShotMenu(shot, new MouseEvent("contextmenu", { clientX: r.left, clientY: r.top }));
+      }}><span class="material-symbols-rounded">more_horiz</span></button>
+    </div>`;
+  }
+
+  /** Two pictures in one frame, a divider between them to drag. */
+  private renderCompare(a: Shot, b: Shot) {
+    const drag = (e: PointerEvent) => {
+      const frame = e.currentTarget as HTMLElement;
+      const img = frame.querySelector(".cmp-b") as HTMLElement;
+      const r = img.getBoundingClientRect();
+      this.compareSplit = Math.max(0, Math.min(100, ((e.clientX - r.left) / r.width) * 100));
+    };
+    return html`<div class="viewer compare">
+      <figure class="view-frame cmp-frame" style=${`--split:${this.compareSplit}%`}
+        @pointerdown=${(e: PointerEvent) => { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); drag(e); }}
+        @pointermove=${(e: PointerEvent) => { if ((e.currentTarget as HTMLElement).hasPointerCapture(e.pointerId)) drag(e); }}>
+        <img class="view-img cmp-b" src=${this.previewURL(b)} alt="Compared picture" draggable="false" />
+        <img class="view-img cmp-a" src=${this.previewURL(a)} alt="Picture on the stage" draggable="false" />
+        <span class="cmp-line"><span class="cmp-knob"><span class="material-symbols-rounded">swap_horiz</span></span></span>
+        <span class="cmp-tag left">A · ${a.seed}</span>
+        <span class="cmp-tag right">B · ${b.seed}</span>
+      </figure>
+      <div class="view-bar">
+        <span class="vb-note">Drag across the picture</span>
+        <button class="vb" title="Swap the two" aria-label="Swap" @click=${() => { this.viewing = b.id; this.compareWith = a.id; }}>
+          <span class="material-symbols-rounded">swap_horiz</span></button>
+        <button class="vb save" @click=${() => (this.compareWith = null)}><span class="material-symbols-rounded">close</span>Done</button>
       </div>
-    `;
+    </div>`;
+  }
+
+  /** The session, newest first, with the run drawing now at its head. */
+  private renderSessionStrip() {
+    if (!this.history.length && !this.generating && !this.queue.length) return nothing;
+    const current = this.viewedShot?.id;
+    const p = this.progress;
+    return html`<div class="session-strip">
+      <span class="strip-label">This session<b>${this.history.length}</b></span>
+      <div class="strip-scroll" role="listbox" aria-label="Pictures this session">
+        ${this.queue.length ? html`<button class="strip-q" title="Runs waiting their turn" @click=${() => (this.queueOpen = true)}>
+          <span class="material-symbols-rounded">queue</span>${this.queue.length}</button>` : nothing}
+        ${this.generating ? html`<div class="strip-live" title="Drawing now">
+          ${p?.image ? html`<img src=${p.image} alt="" />` : nothing}
+          <span>${p?.total ? `${Math.round(Math.max(0, Math.min(1, p.percent)) * 100)}%` : "…"}</span>
+        </div>` : nothing}
+        ${this.history.map((s) => {
+          const url = this.previewURL(s);
+          return html`<button class="strip-thumb ${s.id === current ? "on" : ""} ${s.id === this.compareWith ? "cmp" : ""}" role="option"
+            aria-selected=${s.id === current ? "true" : "false"} title=${`Seed ${s.seed} — Shift-click to compare`}
+            @click=${(e: MouseEvent) => this.pickFromStrip(s, e)}>
+            ${this.failedThumbs.has(url)
+              ? html`<span class="strip-gone" title="This preview has expired — it is still in the gallery"><span class="material-symbols-rounded">hourglass_empty</span></span>`
+              : html`<img src=${url} alt="" loading="lazy" @error=${() => (this.failedThumbs = new Set(this.failedThumbs).add(url))} />`}
+            ${s.saved ? html`<span class="strip-saved"><span class="material-symbols-rounded">check</span></span>` : nothing}
+            ${s.id === this.compareWith ? html`<span class="strip-b">B</span>` : nothing}
+          </button>`;
+        })}
+      </div>
+      ${this.history.length ? html`<button class="strip-clear" title="Clear the session off the stage" aria-label="Clear the session" @click=${() => this.clearWorkspace()}>
+        <span class="material-symbols-rounded">delete_sweep</span></button>` : nothing}
+    </div>`;
+  }
+
+  /** Puts a remembered prompt back in the box. */
+  private useRecentPrompt(r: RecentPrompt) {
+    this.prompt = r.prompt;
+    this.negative = r.negative;
+    this.templateId = "";
+    this.selectedTriggers = [];
+    this.promptsOpen = false;
+    void this.updateComplete.then(() => this.renderRoot.querySelector<HTMLTextAreaElement>(".prompt-area")?.focus());
+  }
+
+  private renderRecentPrompts() {
+    return html`<div class="pop prompts-pop" role="dialog" aria-label="Recent prompts">
+      <div class="pop-head">
+        <span class="material-symbols-rounded">history</span>Recent prompts
+        <span class="pop-note">On this device</span>
+        <button class="pop-x" aria-label="Close" @click=${() => (this.promptsOpen = false)}><span class="material-symbols-rounded">close</span></button>
+      </div>
+      ${this.recentPrompts.length
+        ? html`<div class="recent-list">${this.recentPrompts.map((r) => html`<button class="recent-row" @click=${() => this.useRecentPrompt(r)}>
+            <span class="recent-text">${r.prompt}</span>
+            ${r.negative ? html`<span class="recent-neg">− ${r.negative}</span>` : nothing}
+            <span class="recent-when">${new Date(r.at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span>
+          </button>`)}</div>`
+        : html`<p class="pop-empty">Every prompt you generate with is remembered here, so a good one edited into a bad one is a click away.</p>`}
+    </div>`;
   }
 }
 

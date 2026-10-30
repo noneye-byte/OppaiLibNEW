@@ -156,10 +156,11 @@ const NAV_SECTIONS: NavSection[] = [
   // Image generation. Like Browse, nothing is in the library until saved; it's another
   // way things get *into* it, so it sits alongside.
   { id: "imagegen", label: "Create", icon: "auto_awesome" },
-  // The outfit studio: the same generator pointed at one job, dressing Libby and
+  // The Sprite studio: the same generator pointed at one job, dressing Libby and
   // rendering her sixty expressions. It owns every outfit surface in the app — the
-  // Create screen and Settings deliberately have none.
-  { id: "studio", label: "Studio", icon: "checkroom" },
+  // Create screen and Settings deliberately have none. Create's header switches
+  // between the two, so they read as one studio with three modes.
+  { id: "studio", label: "Sprites", icon: "face_retouching_natural" },
   { id: "chat", label: "Chat", icon: "chat_bubble" },
 ];
 
@@ -242,6 +243,8 @@ export class OppaiLibrary extends LitElement {
   @state() private selectedId: number | null = null;
   /** A library picture handed to the Create screen to be redone. See studioEditable. */
   @state() private editMediaId = 0;
+  /** The Settings panel to open on, when another screen sends someone to one. */
+  @state() private settingsTab: "imagegen" | "" = "";
   @state() private search = "";
   @state() private filters: Record<string, string> = {};
   /** The header's Filters menu: kind, favourites and a minimum rating, on top of
@@ -1434,7 +1437,7 @@ export class OppaiLibrary extends LitElement {
       { label: "Favorites", icon: "favorite", run: () => this.selectSection("favorites") },
       { label: "Chat", icon: "chat_bubble", run: () => this.selectSection("chat") },
       { label: "Create", icon: "auto_awesome", run: () => this.selectSection("imagegen") },
-      { label: "Outfit studio", icon: "checkroom", run: () => this.selectSection("studio") },
+      { label: "Sprite studio", icon: "face_retouching_natural", run: () => this.selectSection("studio") },
       menuDivider,
       { label: dark ? "Switch to light theme" : "Switch to dark theme", icon: dark ? "light_mode" : "dark_mode", run: () => this.flipTheme() },
       { label: "Settings", icon: "settings", run: () => this.selectSection("settings") },
@@ -1668,8 +1671,19 @@ export class OppaiLibrary extends LitElement {
   }
 
   // --- Navigation / state -------------------------------------------------
+  /** The studio's mode switch crossing between Create and Sprites, which are two
+      elements behind one header. */
+  private onStudioMode = (e: CustomEvent<{ section: "imagegen" | "studio" }>) => this.selectSection(e.detail.section);
+
+  /** The Video studio's setup card, sending someone to where ComfyUI is set up. */
+  private openImageGenSettings = () => {
+    this.selectSection("settings");
+    this.settingsTab = "imagegen";
+  };
+
   private selectSection(id: Section) {
     if (id === this.section) return;
+    this.settingsTab = "";
     // A picture being edited belongs to one visit to Create; coming back later
     // should not reopen it.
     if (id !== "imagegen") this.editMediaId = 0;
@@ -2277,7 +2291,7 @@ export class OppaiLibrary extends LitElement {
     else if (isSettings) headerTitle = "Settings";
     else if (isBrowse) headerTitle = "Browse sources";
     else if (isImageGen) headerTitle = "Create";
-    else if (isStudio) headerTitle = "Outfit studio";
+    else if (isStudio) headerTitle = "Sprite studio";
     // Named after her because she is who you are usually talking to.
     else if (isChat) headerTitle = "Chat with Libby";
     else if (isFavorites) headerTitle = "Favorites";
@@ -2289,11 +2303,11 @@ export class OppaiLibrary extends LitElement {
       ${this.renderNav()}
       <div class="main-col">
         ${this.renderHeader(headerTitle, hasSearch, isViewer, isSettings)}
-        <main class=${isChat || isImageGen ? "flush" : ""}>
+        <main class=${isChat || isImageGen || isStudio ? "flush" : ""}>
           ${isHome ? this.renderHome() : nothing}
           ${isSettings
             ? this.ready("settings")
-              ? html`<oppai-settings .user=${this.user}
+              ? html`<oppai-settings .user=${this.user} .startTab=${this.settingsTab}
                   @open-studio=${() => this.selectSection("studio")}></oppai-settings>`
               : this.renderViewLoading()
             : nothing}
@@ -2311,7 +2325,8 @@ export class OppaiLibrary extends LitElement {
           ${isImageGen
             ? this.ready("imagegen")
               ? html`<oppai-imagegen .editMedia=${this.editMediaId} @imported=${() => this.refresh()}
-                  @open-chat=${() => this.selectSection("chat")}></oppai-imagegen>`
+                  @open-chat=${() => this.selectSection("chat")} @studio-mode=${this.onStudioMode}
+                  @open-settings=${this.openImageGenSettings}></oppai-imagegen>`
               : this.renderViewLoading()
             : nothing}
           <!-- Keyed so switching between Create and the studio rebuilds the element
@@ -2321,7 +2336,7 @@ export class OppaiLibrary extends LitElement {
           ${isStudio
             ? this.ready("studio")
               ? keyed("studio", html`<oppai-imagegen studio @imported=${() => this.refresh()}
-                  @open-chat=${() => this.selectSection("chat")}></oppai-imagegen>`)
+                  @open-chat=${() => this.selectSection("chat")} @studio-mode=${this.onStudioMode}></oppai-imagegen>`)
               : this.renderViewLoading()
             : nothing}
           ${chatMounted

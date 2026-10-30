@@ -541,7 +541,7 @@ export function libbyWhere(section: string): string {
   if (section === "favorites") return "their favorites";
   if (section === "browse") return "an outside site they are browsing";
   if (section === "imagegen") return "the image studio, making pictures";
-  if (section === "studio") return "the outfit studio, dressing me up";
+  if (section === "studio") return "the sprite studio, dressing me up";
   if (section === "settings") return "the settings screen";
   const label = KIND_META[section as Kind]?.label;
   return label ? `their ${label.toLowerCase()}` : "their library";

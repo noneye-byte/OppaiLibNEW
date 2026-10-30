@@ -13,7 +13,10 @@ import { isPickClick, pickClick } from "../pick-range.js";
 import { groupByDay } from "../gallery-days.js";
 
 const PAGE = 40;
-const DRAG_TYPE = "application/x-oppai-gallery";
+/** What a gallery tile carries when dragged: the JSON list of its picture names. Folders
+    take it to move them; the studios take the first to start from. */
+export const GALLERY_DRAG_TYPE = "application/x-oppai-gallery";
+const DRAG_TYPE = GALLERY_DRAG_TYPE;
 const SIZE_KEY = "oppai.gallerySize";
 
 /**
