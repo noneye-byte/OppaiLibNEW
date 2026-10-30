@@ -312,7 +312,7 @@ func (s *Server) buildTurnPrompt(ctx context.Context, cur settings.Settings, v *
 		camera:     canCamera,
 		edit:       canCamera && lastMine != "",
 		pose:       canCamera && theirs != "" && cur.LibbyPoseModel != "",
-		clip:       isLibby && lastMine != "" && clipsEnabled(cur.LibbyClipURL, cur.LibbyClipWorkflow),
+		clip:       isLibby && lastMine != "" && clipRecipeFor(cur, true).ready(cur.LibbyClipURL),
 		saved:      isLibby && (len(p.selfPics) > 0 || hasSelfImages(v.ws)),
 		voice:      isLibby && cur.TTSEngine != "off",
 		onCall:     in.Call,

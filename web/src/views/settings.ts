@@ -1,9 +1,10 @@
 import { speak, stopSpeaking, ttsStatus, type TTSStatus } from "../speech.js";
 import { LitElement, html, css, nothing } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
-import { api, mascotSay, type APKInfo, type Diagnostics, type GenCheck, type ImageGenStatus, type LibbyReferenceSlot, type Passkey, type PasskeyList, type Settings, type ReadOnlyInfo, type Stats, type StorageReport, type Timing, type User } from "../api.js";
+import { api, mascotSay, type APKInfo, type ClipLora, type ClipModels, type ComfyModels, type Diagnostics, type GenCheck, type ImageGenStatus, type LibbyReferenceSlot, type Passkey, type PasskeyList, type Settings, type ReadOnlyInfo, type Stats, type StorageReport, type Timing, type User } from "../api.js";
 import { passkeyErrorMessage, registerPasskey } from "../passkeys.js";
 import { withViewTransition } from "../motion.js";
+import { isSpeedLora, loraStage, loraTwin, SPEED_SETTINGS, suggestClipModels } from "../clip-models.js";
 import { profileUpdates, resetUIMetrics, uiMetricsSnapshot, type UIMetricsSnapshot } from "../ui-metrics.js";
 import {
   iconStyles,
@@ -132,6 +133,12 @@ export class OppaiSettings extends LitElement {
   /** Automatic1111 was asked to restart: what became of it, "" before. */
   @state() private genRestart = "";
   @state() private genCheckErr = "";
+  /** What the saved ComfyUI has for the Video pickers; null until it has answered. */
+  @state() private comfy: ComfyModels | null = null;
+  @state() private comfyErr = "";
+  @state() private comfyBusy = false;
+  /** Where Civitai's video mode installs to, or why nowhere; null until asked. */
+  @state() private comfyFolder: { dir: string; problem: string } | null = null;
 
   @state() private pwCurrent = "";
   @state() private pwNew = "";
@@ -351,6 +358,33 @@ export class OppaiSettings extends LitElement {
       .voice-list li > span:first-child { flex: 1; min-width: 0; display: grid; }
       .voice-list small, .voice-list .hint { color: var(--md-sys-color-on-surface-variant); font-size: 11px; }
       .voice-list .voice-error { flex-basis: 100%; color: var(--md-sys-color-error); font-size: 11px; font-style: normal; }
+
+      /* Video: one direction's Wan files, a label beside each picker. */
+      .clip-grid {
+        display: grid; grid-template-columns: 136px minmax(0, 1fr); gap: 8px 12px; align-items: center;
+        margin-top: 10px; font-size: 13px;
+      }
+      .clip-grid > span { color: var(--oppai-text-dim); }
+      .clip-grid > span small { display: block; font-size: 11px; color: var(--oppai-text-muted); }
+      .clip-grid select {
+        min-width: 0; width: 100%; height: 40px; padding: 0 10px; border-radius: 12px; font: inherit; font-size: 13px;
+        background: var(--oppai-surface-2); border: 1px solid var(--oppai-border-strong); color: var(--oppai-text);
+      }
+      .clip-grid select:focus { outline: none; border-color: var(--oppai-primary); }
+      .clip-loras { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+      .clip-lora { display: flex; gap: 6px; align-items: center; min-width: 0; }
+      .clip-lora select { flex: 1; min-width: 0; }
+      .clip-lora select.stage { flex: none; width: auto; }
+      .clip-lora input[type="number"] { width: 80px; flex: none; }
+      @media (max-width: 560px) {
+        .clip-grid { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+        .clip-grid > span:not(:first-child) { margin-top: 6px; }
+        /* A LoRA's file name is the part worth reading; its own line, the controls under it. */
+        .clip-lora { flex-wrap: wrap; }
+        .clip-lora select:first-child { flex-basis: 100%; }
+      }
+      .clip-paste { margin: 2px 0 14px; font-size: 12px; color: var(--oppai-text-muted); }
+      .clip-paste summary { cursor: pointer; padding: 4px 0; }
 
       input[type="text"],
       input[type="number"],
@@ -693,6 +727,7 @@ export class OppaiSettings extends LitElement {
     profileUpdates(this, "settings");
     this.load();
     void this.loadGenLists();
+    void this.loadComfy();
     void this.loadTTS();
     void this.loadDescribe();
     void this.loadReferences();
@@ -843,6 +878,7 @@ export class OppaiSettings extends LitElement {
       void this.loadTTS(true);
       void this.loadDescribe();
       void this.loadGenLists();
+      void this.loadComfy();
     } catch (e) {
       this.loadError = (e as Error).message;
     } finally {
@@ -1881,7 +1917,7 @@ export class OppaiSettings extends LitElement {
           <div class="field-help">
             She can turn the last picture she sent into a few seconds of video, with the
             picture-to-video workflow under <b>Image generation → Video</b> — the same one
-            Create's Video drawer uses. ${s.libbyClipUrl && s.libbyClipWorkflow
+            Create's Video drawer uses. ${s.libbyClipUrl && (s.libbyClipWorkflow || s.clipImageModels?.model)
               ? html`It is set up, so she can.`
               : html`It is not set up yet, so she can't.`}
           </div>
@@ -2428,18 +2464,22 @@ export class OppaiSettings extends LitElement {
    */
   private renderVideoGen() {
     const s = this.settings;
-    const workflow = (label: string, help: unknown, value: string, set: (v: string) => void) => html`
-      <div class="field stack">
-        <div class="field-text">
-          <div class="field-label">${label}</div>
-          <div class="field-help">${help}</div>
+    const workflow = (value: string, set: (v: string) => void, used: boolean) => html`
+      <details class="clip-paste" ?open=${used && !!value}>
+        <summary>Or paste a workflow of your own${value ? (used ? " (in use)" : " (not used while a model is picked)") : ""}</summary>
+        <div class="field-help" style="margin:8px 0 6px;">
+          For a model OppaiLib doesn't wire itself (LTX-Video, AnimateDiff, Hunyuan…): build it in ComfyUI, export it
+          with <em>Workflow → Export (API)</em> and paste it here, with placeholders where a run varies, each as a whole
+          value in quotes — <code>"{{prompt}}"</code>, <code>"{{negative}}"</code>, <code>"{{seed}}"</code>,
+          <code>"{{image}}"</code> in a Load Image node, and optionally <code>"{{width}}"</code>, <code>"{{height}}"</code>,
+          <code>"{{frames}}"</code>, <code>"{{fps}}"</code>, <code>"{{steps}}"</code>.
         </div>
-        <div class="field-control">
-          <textarea rows="4" style="width:100%;font-family:monospace;font-size:11px;" placeholder='{"3": {"class_type": "KSampler", …}}'
-            .value=${value} ?disabled=${!this.canEdit}
-            @change=${(e: Event) => set((e.target as HTMLTextAreaElement).value)}></textarea>
-        </div>
-      </div>`;
+        <textarea rows="4" style="width:100%;font-family:monospace;font-size:11px;" placeholder='{"3": {"class_type": "KSampler", …}}'
+          .value=${value} ?disabled=${!this.canEdit}
+          @change=${(e: Event) => set((e.target as HTMLTextAreaElement).value)}></textarea>
+      </details>`;
+    const image = s?.clipImageModels;
+    const text = s?.clipTextModels;
     return html`
       <section class="card">
         <h3><span class="material-symbols-rounded">movie</span>Video</h3>
@@ -2455,32 +2495,200 @@ export class OppaiSettings extends LitElement {
                   <div class="field-label">ComfyUI</div>
                   <div class="field-help">
                     The address of a ComfyUI server on your network, e.g. <code>http://192.168.1.10:8188</code>.
-                    Blank turns clips off.
+                    Blank turns clips off. Save it, and the files ComfyUI has are offered below.
+                    ${this.comfyLine()}
                   </div>
                 </div>
                 <div class="field-control">
                   <input type="text" autocomplete="off" placeholder="http://comfyui:8188"
                     .value=${s.libbyClipUrl ?? ""} ?disabled=${!this.canEdit}
                     @change=${(e: Event) => this.edit({ libbyClipUrl: (e.target as HTMLInputElement).value })} />
+                  <button type="button" class="btn-inline" ?disabled=${this.comfyBusy || !s.libbyClipUrl}
+                    title="Read the lists again, after putting new files in ComfyUI's models folders"
+                    @click=${() => void this.loadComfy()}>${this.comfyBusy ? "Reading…" : "Refresh"}</button>
+                </div>
+              </div>
+              <div class="field stack">
+                <div class="field-text">
+                  <div class="field-label">ComfyUI models folder</div>
+                  <div class="field-help">
+                    For installing Wan models and LoRAs from Civitai (Create → Video → <em>Find on Civitai</em>): ComfyUI has
+                    no API that takes a download, so they are written into its <code>models</code> folder. Map that folder
+                    into this container at <code>/comfy-models</code> and it is found by itself; give a path here only if you
+                    mapped it somewhere else.
+                    ${this.comfyFolder?.dir
+                      ? html`<div class="field-status ok">Installing into ${this.comfyFolder.dir}.</div>`
+                      : this.comfyFolder?.problem
+                        ? html`<div class="field-status bad">${this.comfyFolder.problem}</div>`
+                        : this.comfyFolder ? html`<div class="field-status">Nothing is mounted at /comfy-models, so Civitai's video mode can browse but not install.</div>` : nothing}
+                  </div>
+                </div>
+                <div class="field-control">
+                  <input type="text" autocomplete="off" placeholder="/comfy-models"
+                    .value=${s.comfyModelsDir ?? ""} ?disabled=${!this.canEdit}
+                    @change=${(e: Event) => this.edit({ comfyModelsDir: (e.target as HTMLInputElement).value })} />
                 </div>
               </div>
               <div class="field-help" style="margin:0 0 4px;">
-                Build each workflow in ComfyUI until it makes the clip you want (Wan 2.x, LTX-Video,
-                AnimateDiff — any of them), then export it with <em>Workflow → Export (API)</em> (<em>Save (API Format)</em> in older versions) and paste it
-                below. Put placeholders where a run varies, each as a whole value in quotes:
-                <code>"{{prompt}}"</code> and <code>"{{negative}}"</code> in the text nodes,
-                <code>"{{seed}}"</code> as the seed, and in a picture workflow <code>"{{image}}"</code> in its
-                Load Image node. Optional ones put a control in the drawer: <code>"{{width}}"</code>,
-                <code>"{{height}}"</code>, <code>"{{frames}}"</code> (a length — Wan's <code>length</code>),
-                <code>"{{fps}}"</code> and <code>"{{steps}}"</code>. Anything left out keeps the value in the workflow.
+                Wan is wired here: pick its files and OppaiLib builds the workflow. Wan 2.2's 14B models come as a
+                pair — a <b>high-noise</b> model that sets out the motion over the first half of the steps and a
+                <b>low-noise</b> one that finishes the detail — and each direction has its own pair
+                (<code>i2v</code> from a picture, <code>t2v</code> from words). Beside them go the text encoder
+                (<code>umt5_xxl</code>) and the VAE (<code>wan_2.1_vae</code>; only the 5B model uses
+                <code>wan2.2_vae</code>). An all-in-one checkpoint has both inside and needs nothing beside it.
               </div>
-              ${workflow("From a picture", html`Image to video: brings a still to life — what Animate on a
-                picture and Libby's clips run.`, s.libbyClipWorkflow ?? "", (v) => this.edit({ libbyClipWorkflow: v }))}
-              ${workflow("From words", html`Text to video: a clip from a description alone. Optional.`,
-                s.clipTextWorkflow ?? "", (v) => this.edit({ clipTextWorkflow: v }))}
+              ${this.renderClipModels("From a picture", html`Image to video: brings a still to life — what Animate on a
+                picture and Libby's clips run.`, true, image, (m) => this.edit({ clipImageModels: m }))}
+              ${workflow(s.libbyClipWorkflow ?? "", (v) => this.edit({ libbyClipWorkflow: v }), !image?.model)}
+              ${this.renderClipModels("From words", html`Text to video: a clip from a description alone. Optional.`,
+                false, text, (m) => this.edit({ clipTextModels: m }))}
+              ${workflow(s.clipTextWorkflow ?? "", (v) => this.edit({ clipTextWorkflow: v }), !text?.model)}
             `}
       </section>
     `;
+  }
+
+  /** What the saved ComfyUI answered, under its address. */
+  private comfyLine() {
+    if (this.comfyErr) return html`<div class="field-status bad">${this.comfyErr}</div>`;
+    const c = this.comfy;
+    if (!c) return nothing;
+    if (c.missing.length) {
+      return html`<div class="field-status bad">This ComfyUI has no ${c.missing.join(", ")} — it is older than Wan 2.2.
+        Update it (<em>Manager → Update ComfyUI</em>, or <code>git pull</code> in its folder) and press Refresh.</div>`;
+    }
+    const n = c.diffusion.length + c.checkpoints.length;
+    return html`<div class="field-status ok">Found ${n} model${n === 1 ? "" : "s"}, ${c.textEncoders.length} text
+      encoder${c.textEncoders.length === 1 ? "" : "s"}, ${c.vaes.length} VAE${c.vaes.length === 1 ? "" : "s"} and
+      ${c.loras.length} LoRA${c.loras.length === 1 ? "" : "s"}.</div>`;
+  }
+
+  private async loadComfy() {
+    this.comfyBusy = true;
+    this.comfyErr = "";
+    void api.comfyInstalls().then(({ dir, problem }) => (this.comfyFolder = { dir, problem }), () => {});
+    try {
+      this.comfy = await api.comfyModels();
+    } catch (e) {
+      this.comfy = null;
+      // No address yet is not a failure worth a red line.
+      if (this.settings?.libbyClipUrl) this.comfyErr = (e as Error).message;
+    } finally {
+      this.comfyBusy = false;
+    }
+  }
+
+  /**
+   * One direction's Wan files. A saved name ComfyUI no longer lists stays choosable,
+   * so opening settings with ComfyUI down does not quietly blank the choice.
+   */
+  private renderClipModels(label: string, help: unknown, fromImage: boolean, value: ClipModels | undefined, set: (m: ClipModels) => void) {
+    const m: ClipModels = value ?? { model: "", checkpoint: false, lowModel: "", textEncoder: "", vae: "", loras: [], steps: 0, cfg: 0, shift: 0 };
+    const c = this.comfy;
+    const patch = (p: Partial<ClipModels>) => set({ ...m, ...p });
+    const options = (list: readonly string[], current: string, blank: string) => html`
+      <option value="" ?selected=${!current}>${blank}</option>
+      ${(current && !list.includes(current) ? [current, ...list] : list).map((n) =>
+        html`<option value=${n} ?selected=${n === current}>${n}</option>`)}`;
+    const pick = (aria: string, list: readonly string[], current: string, blank: string, onPick: (v: string) => void) => html`
+      <select aria-label=${aria} ?disabled=${!this.canEdit}
+        @change=${(e: Event) => onPick((e.target as HTMLSelectElement).value)}>${options(list, current, blank)}</select>`;
+    const diffusion = c?.diffusion ?? [];
+    const checkpoints = c?.checkpoints ?? [];
+    const loras = c?.loras ?? [];
+    const pair = !!m.lowModel && !m.checkpoint;
+
+    const pickModel = (v: string) => {
+      const checkpoint = checkpoints.includes(v) && !diffusion.includes(v);
+      // Picking a high-noise model brings its low-noise twin along when ComfyUI has it.
+      const high = !checkpoint && loraStage(v) === "high";
+      patch({ model: v, checkpoint, lowModel: high ? loraTwin(v, diffusion) || m.lowModel : "" });
+    };
+    const editLora = (i: number, p: Partial<ClipLora>) =>
+      patch({ loras: m.loras.map((l, j) => (j === i ? { ...l, ...p } : l)) });
+    const addLora = (name: string) => {
+      const added: ClipLora[] = [{ name, weight: 1, stage: loraStage(name) }];
+      // A LoRA made for the pair comes as two files; adding one half adds the other.
+      const twin = loraTwin(name, loras);
+      if (twin && !m.loras.some((l) => l.name === twin)) added.push({ name: twin, weight: 1, stage: loraStage(twin) });
+      const speed = isSpeedLora(name) && !m.steps && !m.cfg ? SPEED_SETTINGS : {};
+      patch({ loras: [...m.loras, ...added], ...speed });
+    };
+    const guess = c ? suggestClipModels(c, fromImage) : null;
+
+    return html`<div class="field stack">
+      <div class="field-text">
+        <div class="field-label">${label}</div>
+        <div class="field-help">${help}</div>
+      </div>
+      <div class="clip-grid">
+        <span>Model${pair ? html`<small>high noise</small>` : nothing}</span>
+        <select aria-label="${label}: model" ?disabled=${!this.canEdit} @change=${(e: Event) => pickModel((e.target as HTMLSelectElement).value)}>
+          <option value="" ?selected=${!m.model}>None — ${fromImage ? "a pasted workflow, or no clips" : "no clips from words"}</option>
+          ${m.model && !diffusion.includes(m.model) && !checkpoints.includes(m.model)
+            ? html`<option value=${m.model} selected>${m.model}</option>` : nothing}
+          ${diffusion.length ? html`<optgroup label="Diffusion models">${diffusion.map((n) =>
+            html`<option value=${n} ?selected=${n === m.model}>${n}</option>`)}</optgroup>` : nothing}
+          ${checkpoints.length ? html`<optgroup label="Checkpoints (all-in-one)">${checkpoints.map((n) =>
+            html`<option value=${n} ?selected=${n === m.model}>${n}</option>`)}</optgroup>` : nothing}
+        </select>
+        ${m.model && !m.checkpoint ? html`
+          <span>Low noise</span>
+          ${pick(`${label}: low-noise model`, diffusion, m.lowModel, "None — one model does it all (Wan 2.1, 5B)", (v) => patch({ lowModel: v }))}
+          <span>Text encoder</span>
+          ${pick(`${label}: text encoder`, c?.textEncoders ?? [], m.textEncoder, "Pick one (umt5_xxl)", (v) => patch({ textEncoder: v }))}
+          <span>VAE</span>
+          ${pick(`${label}: VAE`, c?.vaes ?? [], m.vae, "Pick one (wan_2.1_vae)", (v) => patch({ vae: v }))}` : nothing}
+        ${m.model && m.checkpoint ? html`
+          <span>Text encoder</span>
+          ${pick(`${label}: text encoder`, c?.textEncoders ?? [], m.textEncoder, "The checkpoint's own", (v) => patch({ textEncoder: v }))}
+          <span>VAE</span>
+          ${pick(`${label}: VAE`, c?.vaes ?? [], m.vae, "The checkpoint's own", (v) => patch({ vae: v }))}` : nothing}
+        ${m.model ? html`
+          <span>LoRAs</span>
+          <div class="clip-loras">
+            ${m.loras.map((l, i) => html`<div class="clip-lora">
+              ${pick(`${label}: LoRA ${i + 1}`, loras, l.name, "Pick a LoRA", (v) => editLora(i, { name: v, stage: loraStage(v) }))}
+              <input type="number" step="0.05" min="-2" max="2" aria-label="${label}: LoRA ${i + 1} strength"
+                .value=${String(l.weight)} ?disabled=${!this.canEdit}
+                @change=${(e: Event) => editLora(i, { weight: Number((e.target as HTMLInputElement).value) })} />
+              ${pair ? html`<select class="stage" aria-label="${label}: LoRA ${i + 1} goes on" ?disabled=${!this.canEdit}
+                @change=${(e: Event) => editLora(i, { stage: (e.target as HTMLSelectElement).value as ClipLora["stage"] })}>
+                <option value="" ?selected=${!l.stage}>Both</option>
+                <option value="high" ?selected=${l.stage === "high"}>High noise</option>
+                <option value="low" ?selected=${l.stage === "low"}>Low noise</option>
+              </select>` : nothing}
+              <button class="btn-inline" title="Remove" aria-label="Remove LoRA ${i + 1}" ?disabled=${!this.canEdit}
+                @click=${() => patch({ loras: m.loras.filter((_, j) => j !== i) })}>
+                <span class="material-symbols-rounded" style="font-size:18px;">delete</span></button>
+            </div>`)}
+            ${loras.length ? html`<select aria-label="${label}: add a LoRA" ?disabled=${!this.canEdit || m.loras.length >= 8}
+              @change=${(e: Event) => { const el = e.target as HTMLSelectElement; if (el.value) addLora(el.value); el.value = ""; }}>
+              <option value="" selected>${m.loras.length ? "Add another LoRA…" : "Add a LoRA…"}</option>
+              ${loras.filter((n) => !m.loras.some((l) => l.name === n)).map((n) => html`<option value=${n}>${n}</option>`)}
+            </select>` : html`<span class="field-help">${c ? "ComfyUI has no LoRAs in models/loras." : "LoRAs are listed once ComfyUI answers."}</span>`}
+          </div>
+          <span>Steps · CFG · shift</span>
+          <div class="clip-lora">
+            <input type="number" min="0" max="100" step="1" placeholder="20" aria-label="${label}: steps"
+              .value=${m.steps ? String(m.steps) : ""} ?disabled=${!this.canEdit}
+              @change=${(e: Event) => patch({ steps: Number((e.target as HTMLInputElement).value) || 0 })} />
+            <input type="number" min="0" max="30" step="0.5" placeholder="3.5" aria-label="${label}: CFG"
+              .value=${m.cfg ? String(m.cfg) : ""} ?disabled=${!this.canEdit}
+              @change=${(e: Event) => patch({ cfg: Number((e.target as HTMLInputElement).value) || 0 })} />
+            <input type="number" min="0" max="50" step="0.5" placeholder="8" aria-label="${label}: shift"
+              .value=${m.shift ? String(m.shift) : ""} ?disabled=${!this.canEdit}
+              @change=${(e: Event) => patch({ shift: Number((e.target as HTMLInputElement).value) || 0 })} />
+          </div>
+          <span></span>
+          <div class="field-help" style="margin:0;">Blank is Wan's own: 20 steps, CFG 3.5, shift 8. A speed LoRA
+            (lightx2v, Lightning) wants 4 steps and CFG 1 — adding one sets them.</div>` : nothing}
+      </div>
+      ${guess && !m.model ? html`<div class="field-control">
+        <button type="button" class="btn-inline" ?disabled=${!this.canEdit} @click=${() => set(guess)}>
+          Pick from what's installed: ${guess.model}${guess.lowModel ? " + its low-noise twin" : ""}</button>
+      </div>` : nothing}
+    </div>`;
   }
 
   private async runGenCheck() {

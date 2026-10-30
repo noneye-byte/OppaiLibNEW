@@ -42,11 +42,17 @@ import { promptSettingsFrom, type PromptSettings } from "../civitai-prompt.js";
  * is deleted once the new one is in. The install log stays folded away until
  * asked for: a finished download is not news the next time the browser opens.
  *
+ * Video mode is the same browser for ComfyUI's clips: the catalogue narrowed to Wan's
+ * models and LoRAs, installed into ComfyUI's mounted models folder rather than the
+ * picture generator, and a Wan 2.2 version with the other half of its high/low pair,
+ * since half a pair makes no clip (civitai_wan.go on the server).
+ *
  * The host mounts it conditionally; closing dispatches "close", and picking a
  * prompt dispatches "use-prompt" with PromptSettings.
  */
 
 type Tab = "browse" | "account" | "installed";
+export type CivitaiMode = "pictures" | "video";
 type AccountTab = "models" | "posts" | "images" | "collections";
 
 const TYPES: { id: string; label: string }[] = [
@@ -58,6 +64,26 @@ const TYPES: { id: string; label: string }[] = [
   { id: "controlnet", label: "ControlNet" },
   { id: "upscaler", label: "Upscalers" },
   { id: "detection", label: "Detectors" },
+];
+
+/** Video mode's types: "video" is models and LoRAs together, without the workflows
+    the catalogue files under the same base models. */
+const VIDEO_TYPES: { id: string; label: string }[] = [
+  { id: "video", label: "Models & LoRAs" },
+  { id: "checkpoint", label: "Models" },
+  { id: "lora", label: "LoRAs" },
+];
+
+/** Wan's base models as the catalogue names them, newest first. With none picked,
+    video mode searches all of them. */
+const VIDEO_BASES: { id: string; label: string }[] = [
+  { id: "Wan Video 2.2 I2V-A14B", label: "Wan 2.2 · picture to video" },
+  { id: "Wan Video 2.2 T2V-A14B", label: "Wan 2.2 · words to video" },
+  { id: "Wan Video 2.2 TI2V-5B", label: "Wan 2.2 5B" },
+  { id: "Wan Video 14B i2v 480p", label: "Wan 2.1 · picture to video, 480p" },
+  { id: "Wan Video 14B i2v 720p", label: "Wan 2.1 · picture to video, 720p" },
+  { id: "Wan Video 14B t2v", label: "Wan 2.1 · words to video" },
+  { id: "Wan Video", label: "Wan, unspecified" },
 ];
 
 const SORTS: { id: string; label: string }[] = [
@@ -94,6 +120,9 @@ export class OppaiCivitai extends LitElement {
   /** Why not, when canManage is off: what the server found wrong with A1111's models
       folder, or where to mount it. See model-manage.ts. */
   @property() manageNote = "";
+  /** "video" browses Wan's models and LoRAs for ComfyUI instead; a toggle in the top
+      bar switches between the two. */
+  @property() mode: CivitaiMode = "pictures";
 
   private get genName(): string {
     return this.backend === "invokeai" ? "InvokeAI" : "Automatic1111";
@@ -138,6 +167,13 @@ export class OppaiCivitai extends LitElement {
   @state() private installing = false;
   /** The install log is folded by default; a chip in the top bar opens it. */
   @state() private jobsOpen = false;
+  /** Video mode: ComfyUI's models folder, or why there is none to install into. */
+  @state() private comfyDir = "";
+  @state() private comfyProblem = "";
+  /** The mode the browse page was last loaded for; see willUpdate. */
+  private shownMode: CivitaiMode | "" = "";
+  /** Bumped by each fresh search, so a slow answer for the last mode is dropped. */
+  private searchGen = 0;
 
   // ── the account ──
   @state() private me: CivitaiMe | null = null;
@@ -557,9 +593,8 @@ export class OppaiCivitai extends LitElement {
 
   connectedCallback() {
     super.connectedCallback();
-    void this.search(true);
+    // The first search waits for willUpdate, which knows the mode the host asked for.
     void this.loadCategories();
-    void this.pollJobs();
     this.jobTimer = window.setInterval(() => void this.pollJobs(), 5000);
   }
 
@@ -577,7 +612,42 @@ export class OppaiCivitai extends LitElement {
     }
   }
 
+  protected willUpdate() {
+    if (this.mode !== this.shownMode) this.applyMode();
+  }
+
+  private get video(): boolean {
+    return this.mode === "video";
+  }
+
+  /** Starts the browse page over for the mode: its own types and base models, and
+      its own install log. */
+  private applyMode() {
+    this.shownMode = this.mode;
+    this.type = this.video ? "video" : "";
+    this.base = "";
+    this.category = "";
+    this.tab = "browse";
+    this.items = [];
+    this.cursor = "";
+    this.jobs = [];
+    this.closeDetail();
+    void this.search(true);
+    void this.pollJobs();
+  }
+
   private async pollJobs() {
+    if (this.video) {
+      try {
+        const res = await api.comfyInstalls();
+        this.comfyDir = res.dir;
+        this.comfyProblem = res.problem;
+        this.jobs = res.jobs.slice(0, 5);
+      } catch {
+        /* the strip just stays as it was */
+      }
+      return;
+    }
     try {
       const res = await api.civitaiInstalls();
       const jobs = res.jobs.filter((j) => j.status !== "cancelled").slice(0, 5);
@@ -594,7 +664,10 @@ export class OppaiCivitai extends LitElement {
   // ── browse ──
 
   private async search(reset: boolean) {
-    if (this.loading) return;
+    // A fresh search goes ahead over one still running, whose answer is then dropped;
+    // only "load more" waits its turn.
+    if (this.loading && !reset) return;
+    const gen = reset ? ++this.searchGen : this.searchGen;
     this.loading = true;
     this.error = "";
     try {
@@ -604,17 +677,18 @@ export class OppaiCivitai extends LitElement {
         category: this.category || undefined,
         sort: this.sort || undefined,
         period: this.period || undefined,
-        base: this.base || undefined,
+        base: this.base || (this.video ? VIDEO_BASES.map((b) => b.id) : undefined),
         creator: this.creator || undefined,
         nsfw: this.nsfw,
         cursor: reset ? undefined : this.cursor || undefined,
       });
+      if (gen !== this.searchGen) return;
       this.items = reset ? res.items : [...this.items, ...res.items];
       this.cursor = res.nextCursor ?? "";
     } catch (e) {
-      this.error = (e as Error).message;
+      if (gen === this.searchGen) this.error = (e as Error).message;
     } finally {
-      this.loading = false;
+      if (gen === this.searchGen) this.loading = false;
     }
   }
 
@@ -687,7 +761,9 @@ export class OppaiCivitai extends LitElement {
     this.installing = true;
     this.error = "";
     try {
-      await api.civitaiInstall(v.downloadUrl, { modelId: this.detail.id, versionId: v.id });
+      await api.civitaiInstall(v.downloadUrl, this.video
+        ? { modelId: this.detail.id, versionId: v.id, target: "comfy", pair: true }
+        : { modelId: this.detail.id, versionId: v.id });
       await this.pollJobs();
     } catch (e) {
       this.error = (e as Error).message;
@@ -1013,8 +1089,18 @@ export class OppaiCivitai extends LitElement {
       <div class="wrap">
         <div class="topbar">
           <h2><span class="material-symbols-rounded">travel_explore</span> Civitai</h2>
+          <div class="tabs" role="radiogroup" aria-label="What for">
+            ${(["pictures", "video"] as CivitaiMode[]).map(
+              (m) => html`<button role="radio" aria-checked=${this.mode === m ? "true" : "false"}
+                class=${this.mode === m ? "on" : ""} title=${m === "video" ? "Wan models and LoRAs for ComfyUI's clips" : `Models for ${this.genName}`}
+                @click=${() => (this.mode = m)}>
+                <span class="material-symbols-rounded" style="font-size:16px; vertical-align:-3px;">${m === "video" ? "movie" : "image"}</span>
+                ${m === "video" ? "Video" : "Pictures"}
+              </button>`,
+            )}
+          </div>
           <div class="tabs" role="tablist">
-            ${(["browse", "account", "installed"] as Tab[]).map(
+            ${(this.video ? ["browse", "account"] as Tab[] : ["browse", "account", "installed"] as Tab[]).map(
               (t) => html`<button role="tab" aria-selected=${this.tab === t ? "true" : "false"}
                 class=${this.tab === t ? "on" : ""} @click=${() => this.selectTab(t)}>
                 ${t === "browse" ? "Browse" : t === "account" ? "My account" : "Installed"}
@@ -1083,8 +1169,11 @@ export class OppaiCivitai extends LitElement {
           ${PERIODS.map((p) => html`<option value=${p.id} ?selected=${p.id === this.period}>${p.label}</option>`)}
         </select>
         <select aria-label="Base model" .value=${this.base} @change=${(e: Event) => this.setAnd("base", (e.target as HTMLSelectElement).value)}>
-          <option value="">Any base model</option>
-          ${BASES.map((b) => html`<option value=${b} ?selected=${b === this.base}>${b}</option>`)}
+          ${this.video
+            ? html`<option value="">Any Wan</option>
+                ${VIDEO_BASES.map((b) => html`<option value=${b.id} ?selected=${b.id === this.base}>${b.label}</option>`)}`
+            : html`<option value="">Any base model</option>
+                ${BASES.map((b) => html`<option value=${b} ?selected=${b === this.base}>${b}</option>`)}`}
         </select>
         <select aria-label="Category" .value=${this.category} @change=${(e: Event) => this.setAnd("category", (e.target as HTMLSelectElement).value)}>
           <option value="">All categories</option>
@@ -1096,7 +1185,7 @@ export class OppaiCivitai extends LitElement {
         </button>
       </div>
       <div class="controls">
-        ${TYPES.map((t) => html`<button class="chip ${this.type === t.id ? "on" : ""}" @click=${() => this.setAnd("type", t.id)}>${t.label}</button>`)}
+        ${(this.video ? VIDEO_TYPES : TYPES).map((t) => html`<button class="chip ${this.type === t.id ? "on" : ""}" @click=${() => this.setAnd("type", t.id)}>${t.label}</button>`)}
         ${this.creator
           ? html`<button class="chip on" title="Showing one creator's models" @click=${() => this.setAnd("creator", "")}>
               <span class="material-symbols-rounded" style="font-size:15px;">person</span> ${this.creator}
@@ -1123,7 +1212,7 @@ export class OppaiCivitai extends LitElement {
         ${img
           ? html`<img src=${api.civitaiImageURL(img)} alt=${m.name} loading="lazy" />`
           : html`<div class="noimg"><span class="material-symbols-rounded" style="font-size:34px;">image</span></div>`}
-        ${m.installed ? html`<span class="badge ok"><span class="material-symbols-rounded" style="font-size:13px;">check</span> Installed</span>` : nothing}
+        ${m.installed && !this.video ? html`<span class="badge ok"><span class="material-symbols-rounded" style="font-size:13px;">check</span> Installed</span>` : nothing}
         ${m.nsfw ? html`<span class="badge right">18+</span>` : nothing}
         <div class="meta">
           <div class="name">${m.name}</div>
@@ -1195,7 +1284,7 @@ export class OppaiCivitai extends LitElement {
                   <div class="versions">
                     ${m.versions.map(
                       (ver) => html`<button class="chip small ${ver.id === this.versionId ? "on" : ""}" @click=${() => this.pickVersion(ver)}>
-                        ${ver.installed ? html`<span class="material-symbols-rounded" style="font-size:14px;">check</span>` : nothing}
+                        ${ver.installed && !this.video ? html`<span class="material-symbols-rounded" style="font-size:14px;">check</span>` : nothing}
                         ${ver.name}<span style="opacity:.7;"> · ${ver.base}</span>
                       </button>`,
                     )}
@@ -1231,7 +1320,9 @@ export class OppaiCivitai extends LitElement {
                   <div class="desc">${unsafeHTML(v.description)}</div>`
               : nothing}
             <div class="actions">
-              ${v
+              ${v && this.video
+                ? this.renderComfyInstall(m, v)
+                : v
                 ? v.installed
                   ? html`<button class="primary" disabled>
                       <span class="material-symbols-rounded" style="font-size:18px;">check_circle</span> Installed in ${this.genName}
@@ -1250,7 +1341,14 @@ export class OppaiCivitai extends LitElement {
             </div>
             ${this.galleryOpen ? this.renderGallery() : nothing}
             <div class="sub" style="margin-top:10px;">
-              ${!this.canManage
+              ${this.video
+                ? this.comfyDir
+                  ? html`The server downloads into ComfyUI's models folder — a model into <code>diffusion_models</code>, a LoRA
+                      into <code>loras</code> — named so the high- and low-noise halves read as a pair. Press <b>Refresh</b>
+                      under Settings → Image generation → Video to pick them.`
+                  : this.comfyProblem || html`ComfyUI has no API that takes a download, so installing from here needs its models
+                      folder mapped into the OppaiLib container at <code>/comfy-models</code>.`
+                : !this.canManage
                 ? this.manageNote || "Automatic1111 has no API that takes a download, so installing from here needs its models folder mapped into the OppaiLib container."
                 : this.backend === "invokeai"
                   ? "InvokeAI downloads the file itself; the cover, description and trigger words follow once it is in."
@@ -1260,6 +1358,22 @@ export class OppaiCivitai extends LitElement {
         </div>
       </div>
     `;
+  }
+
+  /** Video mode's install: into ComfyUI, the other half of a Wan 2.2 pair with it. */
+  private renderComfyInstall(m: CivitaiModel, v: CivitaiVersion) {
+    if (!this.comfyDir) return nothing;
+    const twin = v.twin ? m.versions.find((x) => x.id === v.twin) : undefined;
+    const size = (v.sizeMB ?? 0) + (twin?.sizeMB ?? 0);
+    const label = twin
+      ? `Install the pair to ComfyUI — ${v.stage} and ${twin.stage} noise`
+      : v.stage
+        ? `Install the ${v.stage}-noise half to ComfyUI`
+        : "Install to ComfyUI";
+    return html`<button class="primary" ?disabled=${this.installing || !v.downloadUrl} @click=${() => this.install(v)}>
+      <span class="material-symbols-rounded" style="font-size:18px;">download</span>
+      ${label}${size ? ` (${fmtSize(size)})` : ""}
+    </button>`;
   }
 
   private renderGallery() {

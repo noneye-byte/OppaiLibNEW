@@ -295,9 +295,8 @@ export class OppaiClipPanel extends LitElement {
     const { image, text } = this.clips;
     if (!image && !text) {
       return html`<div class="callout"><span class="material-symbols-rounded">movie</span>
-        <span>Clips are made by ComfyUI. In <b>Settings → Image generation → Video</b>, give its address and paste the
-        workflows you use (Wan, LTX, AnimateDiff), exported with <em>Save (API Format)</em> — one that starts from a
-        picture, one from words, or both.</span></div>`;
+        <span>Clips are made by ComfyUI. In <b>Settings → Image generation → Video</b>, give its address and pick
+        the Wan model, text encoder and VAE it has — or paste a workflow of your own.</span></div>`;
     }
     const from = session.from;
     const size = this.size();

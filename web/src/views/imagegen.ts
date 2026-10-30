@@ -90,6 +90,7 @@ import { animatePicture, clipsRunning, onClipsChange } from "./imagegen-video.js
 import { RESOLUTIONS, SCHEDULERS } from "../gen-options.js";
 import { aspectLabel, megapixels, previewFrame } from "../size-preview.js";
 import "./civitai.js";
+import type { CivitaiMode } from "./civitai.js";
 import "./lora-train.js";
 import type { PromptSettings } from "../civitai-prompt.js";
 import {
@@ -642,6 +643,9 @@ export class OppaiImageGen extends LitElement {
 
   /** Whether the Civitai browser is on screen. */
   @state() private civitaiOpen = false;
+  /** What the Civitai browser opens for: the picture generator's models, or Wan's
+      for the Video drawer's clips. */
+  @state() private civitaiMode: CivitaiMode = "pictures";
   /** The LoRA being dragged from the picker, "" when none: while it is, the canvas
       shows where it can go — the whole picture, or each person's part of it. */
   @state() private loraDrag = "";
@@ -5907,7 +5911,7 @@ export class OppaiImageGen extends LitElement {
             @close=${() => this.closePainter()}></oppai-paint-mask>`
         : nothing}
       ${this.civitaiOpen
-        ? html`<oppai-civitai backend=${this.status?.backend ?? "invokeai"} .canManage=${!!this.status?.manageModels}
+        ? html`<oppai-civitai backend=${this.status?.backend ?? "invokeai"} .mode=${this.civitaiMode} .canManage=${!!this.status?.manageModels}
             .manageNote=${manageModelsNote(this.status)}
             @close=${() => this.onCivitaiClose()}
             @use-prompt=${(e: CustomEvent<PromptSettings>) => this.onCivitaiPrompt(e.detail)}></oppai-civitai>`
@@ -6031,8 +6035,9 @@ export class OppaiImageGen extends LitElement {
               <span class="material-symbols-rounded">model_training</span>
             </button>`
           : nothing}
-        ${tab === "models" || tab === "loras"
-          ? html`<button class="drawer-action" title="Find more on Civitai" @click=${() => (this.civitaiOpen = true)}>
+        ${tab === "models" || tab === "loras" || tab === "video"
+          ? html`<button class="drawer-action" title=${tab === "video" ? "Find Wan models and LoRAs on Civitai" : "Find more on Civitai"}
+              @click=${() => { this.civitaiMode = tab === "video" ? "video" : "pictures"; this.civitaiOpen = true; }}>
               <span class="material-symbols-rounded">travel_explore</span>
             </button>`
           : nothing}
@@ -6100,7 +6105,7 @@ export class OppaiImageGen extends LitElement {
       ${this.shots.length ? html`<button class="recipe-ghost" title="Clear the canvas" @click=${() => this.clearWorkspace()}>
         <span class="material-symbols-rounded">delete_sweep</span>
       </button>` : nothing}
-      ${st.civitai ? html`<button class="recipe-civitai" @click=${() => (this.civitaiOpen = true)}>
+      ${st.civitai ? html`<button class="recipe-civitai" @click=${() => { this.civitaiMode = "pictures"; this.civitaiOpen = true; }}>
         <span class="material-symbols-rounded">travel_explore</span><span>Civitai</span>
       </button>` : nothing}
       <button class="recipe-civitai" title="Train a LoRA on your own pictures" @click=${() => (this.trainOpen = true)}>

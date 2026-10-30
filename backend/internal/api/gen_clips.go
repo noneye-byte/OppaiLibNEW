@@ -16,7 +16,8 @@ import (
 // Clips from the studio: a few seconds of video, from words or from a picture.
 //
 // The work is ComfyUI's, through the two workflows set up under Settings → Image
-// generation → Video, and imagegen/comfy.go runs them; this side picks the workflow,
+// generation → Video — each either Wan files picked there, which imagegen/comfy_wan.go
+// wires, or a pasted workflow imagegen/comfy.go fills in; this side picks the workflow,
 // fills in what the studio asked for and keeps the result as a preview like any other
 // run, so nothing reaches the library until it is saved. Her own clips
 // (libby_clips.go) use the same server and the same picture workflow.
@@ -66,13 +67,84 @@ type clipWorkflowStatus struct {
 
 func clipsStatus(set settings.Settings) clipStatus {
 	var out clipStatus
-	if clipsEnabled(set.LibbyClipURL, set.LibbyClipWorkflow) {
-		out.Image = &clipWorkflowStatus{Takes: imagegen.ComfyPlaceholders(set.LibbyClipWorkflow)}
+	if r := clipRecipeFor(set, true); r.ready(set.LibbyClipURL) {
+		out.Image = &clipWorkflowStatus{Takes: r.takes(true)}
 	}
-	if clipsEnabled(set.LibbyClipURL, set.ClipTextWorkflow) {
-		out.Text = &clipWorkflowStatus{Takes: imagegen.ComfyPlaceholders(set.ClipTextWorkflow)}
+	if r := clipRecipeFor(set, false); r.ready(set.LibbyClipURL) {
+		out.Text = &clipWorkflowStatus{Takes: r.takes(false)}
 	}
 	return out
+}
+
+// clipRecipe is how one direction of clip is made: Wan files picked in settings, or
+// failing those a pasted workflow.
+type clipRecipe struct {
+	models   settings.ClipModels
+	workflow string
+}
+
+func clipRecipeFor(set settings.Settings, fromImage bool) clipRecipe {
+	if fromImage {
+		return clipRecipe{set.ClipImageModels, set.LibbyClipWorkflow}
+	}
+	return clipRecipe{set.ClipTextModels, set.ClipTextWorkflow}
+}
+
+func (r clipRecipe) built() bool { return r.models.Model != "" }
+
+func (r clipRecipe) ready(clipURL string) bool {
+	return strings.TrimSpace(clipURL) != "" && (r.built() || strings.TrimSpace(r.workflow) != "")
+}
+
+// takes is what the drawer may set. A built clip takes every knob but steps, which
+// belong with the models: a speed-up LoRA is only right at its own few steps, and a
+// slider left at 20 in the drawer would undo it.
+func (r clipRecipe) takes(fromImage bool) []string {
+	if !r.built() {
+		return imagegen.ComfyPlaceholders(r.workflow)
+	}
+	knobs := []string{"prompt", "negative", "seed", "width", "height", "frames", "fps"}
+	if fromImage {
+		return append([]string{"image"}, knobs...)
+	}
+	return knobs
+}
+
+// run makes the clip, from the same vars a pasted workflow's placeholders take.
+func (r clipRecipe) run(ctx context.Context, gen *imagegen.Client, clipURL string, vars map[string]string, init []byte, progress func(imagegen.Progress)) ([]imagegen.ComfyOutput, error) {
+	if !r.built() {
+		return gen.RunComfyWorkflow(ctx, clipURL, r.workflow, vars, init, progress)
+	}
+	m := r.models
+	clip := imagegen.WanClip{
+		Model: m.Model, Checkpoint: m.Checkpoint, LowModel: m.LowModel, TextEncoder: m.TextEncoder, VAE: m.VAE,
+		Steps: m.Steps, CFG: m.CFG, Shift: m.Shift, Prompt: vars["prompt"], Negative: vars["negative"],
+	}
+	for _, l := range m.Loras {
+		clip.Loras = append(clip.Loras, imagegen.WanLora{Name: l.Name, Weight: l.Weight, Stage: l.Stage})
+	}
+	clip.Seed, _ = strconv.ParseInt(vars["seed"], 10, 64)
+	clip.Width, _ = strconv.Atoi(vars["width"])
+	clip.Height, _ = strconv.Atoi(vars["height"])
+	clip.Frames, _ = strconv.Atoi(vars["frames"])
+	clip.FPS, _ = strconv.Atoi(vars["fps"])
+	return gen.RunWanClip(ctx, clipURL, clip, init, progress)
+}
+
+// handleComfyModels lists what the saved ComfyUI has for the settings screen's pickers.
+// Unreachable is a 502, never a 401: see the web client's sign-out on 401.
+func (s *Server) handleComfyModels(w http.ResponseWriter, r *http.Request) {
+	set := s.settings.Get()
+	if strings.TrimSpace(set.LibbyClipURL) == "" {
+		writeErr(w, http.StatusConflict, "give ComfyUI's address and save first")
+		return
+	}
+	models, err := s.imagegen.ListComfyModels(r.Context(), set.LibbyClipURL)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, models)
 }
 
 // clipVars is what fills the workflow's placeholders. Sizes go down to a multiple of
@@ -106,11 +178,8 @@ func (s *Server) handleImageGenClip(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fromImage := req.From == "image"
-	workflow := set.ClipTextWorkflow
-	if fromImage {
-		workflow = set.LibbyClipWorkflow
-	}
-	if !clipsEnabled(set.LibbyClipURL, workflow) {
+	recipe := clipRecipeFor(set, fromImage)
+	if !recipe.ready(set.LibbyClipURL) {
 		what := "words"
 		if fromImage {
 			what = "a picture"
@@ -152,7 +221,7 @@ func (s *Server) handleImageGenClip(w http.ResponseWriter, r *http.Request) {
 	// does not stop ComfyUI, and her model must not come back onto the card mid-render.
 	release := s.lendCardToImages(ctx)
 	defer release()
-	outs, err := s.imagegen.RunComfyWorkflow(ctx, set.LibbyClipURL, workflow, clipVars(req), init, func(p imagegen.Progress) {
+	outs, err := recipe.run(ctx, s.imagegen, set.LibbyClipURL, clipVars(req), init, func(p imagegen.Progress) {
 		if job != nil {
 			job.report(p)
 		}

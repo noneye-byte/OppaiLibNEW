@@ -69,8 +69,9 @@ type Client struct {
 	// HashCachePath is where the hashes of that folder's files are remembered.
 	HashCachePath string
 
-	fileHashes *fileHashes
-	installs   *a1111Jobs
+	fileHashes    *fileHashes
+	installs      *a1111Jobs
+	comfyInstalls *a1111Jobs
 }
 
 // New returns a Client. Generation is slow (tens of seconds on CPU), so the timeout

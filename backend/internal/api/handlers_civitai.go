@@ -8,9 +8,12 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"path"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/youruser/oppailib/internal/imagegen"
 )
 
 // ── Civitai browser ──────────────────────────────────────────────────────────
@@ -228,6 +231,10 @@ type civitaiVersionOut struct {
 	// and InstalledKey is its record — what "open in the studio" needs.
 	Installed    bool   `json:"installed"`
 	InstalledKey string `json:"installedKey,omitempty"`
+	// Stage is which half of a Wan 2.2 pair the version is, "high" or "low", and Twin
+	// the version that is the other half (civitai_wan.go). Wan versions only.
+	Stage string `json:"stage,omitempty"`
+	Twin  int64  `json:"twin,omitempty"`
 }
 
 type civitaiModelOut struct {
@@ -256,17 +263,51 @@ type civitaiCategoryOut struct {
 func civitaiPreviewURLs(images []civitaiRawImage, max int) []string {
 	out := []string{}
 	for _, img := range images {
-		if img.Type != "" && img.Type != "image" {
+		u := img.URL
+		switch img.Type {
+		case "", "image":
+		case "video":
+			// Wan's showcases are all clips; their first frame stands in for them.
+			if u = civitaiVideoStill(u); u == "" {
+				continue
+			}
+		default:
 			continue
 		}
-		if civitaiHostAllowed(img.URL) {
-			out = append(out, img.URL)
+		if civitaiHostAllowed(u) {
+			out = append(out, u)
 		}
 		if len(out) >= max {
 			break
 		}
 	}
 	return out
+}
+
+// civitaiVideoStill is the address of a showcase clip's first frame as a JPEG. The
+// image CDN takes its options as the path segment before the file's name —
+// ".../{uuid}/original=true/123.mp4" — and with "anim=false,transcode=true" and a
+// .jpeg name it answers with a frame rather than the video. "" for an address not
+// in that shape.
+func civitaiVideoStill(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+	if len(parts) < 3 {
+		return ""
+	}
+	name := parts[len(parts)-1]
+	name = strings.TrimSuffix(name, path.Ext(name)) + ".jpeg"
+	const opts = "anim=false,transcode=true,width=720"
+	if strings.Contains(parts[len(parts)-2], "=") {
+		parts = append(parts[:len(parts)-2], opts, name)
+	} else {
+		parts = append(parts[:len(parts)-1], opts, name)
+	}
+	u.Path = "/" + strings.Join(parts, "/")
+	return u.String()
 }
 
 // civitaiVersionOutOf converts a version, marking it installed when one of its
@@ -326,6 +367,9 @@ func civitaiModelOutOf(m civitaiRawModel, installed map[string]string, detail bo
 	}
 	for _, v := range m.ModelVersions {
 		ver := civitaiVersionOutOf(v, installed, detail)
+		if twin := wanTwin(m.ModelVersions, v); twin != nil {
+			ver.Stage, ver.Twin = wanStage(v.Name), twin.ID
+		}
 		model.Installed = model.Installed || ver.Installed
 		model.Versions = append(model.Versions, ver)
 	}
@@ -482,6 +526,9 @@ var civitaiTypes = map[string][]string{
 	"controlnet": {"Controlnet"},
 	"upscaler":   {"Upscaler"},
 	"detection":  {"Detection"},
+	// What a Wan clip can use, for the browser's video mode: the catalogue files Wan's
+	// workflows under the same base models, and they are no use to ComfyUI here.
+	"video": {"Checkpoint", "LORA", "LoCon", "DoRA"},
 }
 
 var civitaiSorts = map[string]string{
@@ -504,7 +551,7 @@ var civitaiPeriods = map[string]string{
 //	q=…            words in the name and description
 //	type=lora      checkpoint | lora | embedding | vae | controlnet | upscaler | detection
 //	category=…     one of the catalogue's tags (see /categories)
-//	base=SDXL 1.0  one base model, as the catalogue names them
+//	base=SDXL 1.0  a base model, as the catalogue names them; repeated for any of several
 //	period=month   day | week | month | year | all (the window the sort ranks in)
 //	sort=rated     downloaded (default) | rated | newest | liked | discussed | collected | images
 //	creator=…      one username
@@ -521,8 +568,10 @@ func (s *Server) handleCivitaiSearch(w http.ResponseWriter, r *http.Request) {
 	if tag := strings.TrimSpace(q.Get("category")); tag != "" {
 		params.Set("tag", tag)
 	}
-	if base := strings.TrimSpace(q.Get("base")); base != "" {
-		params.Set("baseModels", base)
+	for _, base := range q["base"] {
+		if base = strings.TrimSpace(base); base != "" {
+			params.Add("baseModels", base)
+		}
 	}
 	if creator := strings.TrimSpace(q.Get("creator")); creator != "" {
 		params.Set("username", creator)
@@ -899,6 +948,10 @@ type civitaiInstallReq struct {
 	// Optional: an older client sends just the URL and gets a bare install.
 	ModelID   int64 `json:"modelId"`
 	VersionID int64 `json:"versionId"`
+	// Target "comfy" downloads into ComfyUI's models folder for clips rather than
+	// into the picture generator, and Pair brings the other half of a Wan 2.2 pair.
+	Target string `json:"target"`
+	Pair   bool   `json:"pair"`
 }
 
 // handleCivitaiInstall asks InvokeAI to download and register a model. The
@@ -912,6 +965,10 @@ func (s *Server) handleCivitaiInstall(w http.ResponseWriter, r *http.Request) {
 	}
 	if !civitaiHostAllowed(req.URL) {
 		writeErr(w, http.StatusBadRequest, "not a Civitai download URL")
+		return
+	}
+	if req.Target == "comfy" {
+		s.civitaiComfyInstall(w, r, req)
 		return
 	}
 	base, ok := s.galleryBase(w)
@@ -939,6 +996,13 @@ func (s *Server) handleCivitaiInstall(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCivitaiInstalls(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Get("target") == "comfy" {
+		// ComfyUI's downloads, with where they go: the browser's video mode offers
+		// installs only when there is a folder to put them in.
+		dir, problem := imagegen.ComfyModelsDir(s.settings.Get().ComfyModelsDir)
+		writeJSON(w, http.StatusOK, map[string]any{"jobs": s.imagegen.ComfyInstallJobs(), "dir": dir, "problem": problem})
+		return
+	}
 	base, ok := s.galleryBase(w)
 	if !ok {
 		return

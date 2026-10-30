@@ -587,6 +587,13 @@ export interface Settings {
   /** ComfyUI's words-to-video workflow, for the studio's clips that start from nothing.
       The address and the picture workflow are the two above, shared with her. */
   clipTextWorkflow?: string;
+  /** The same two directions as Wan files picked from that ComfyUI, wired by the
+      server itself. A picked model wins over a pasted workflow. */
+  clipImageModels?: ClipModels;
+  clipTextModels?: ClipModels;
+  /** ComfyUI's models folder as the container sees it, for installing from Civitai's
+      video mode; blank uses the template's /comfy-models mount. */
+  comfyModelsDir?: string;
   /** Whether she posts stories while you are away, and at most how many a day. */
   libbyStories: boolean;
   libbyStoriesPerDay: number;
@@ -1592,6 +1599,40 @@ export interface ClipWorkflow {
   takes: string[];
 }
 
+/** A Wan clip as files, named exactly as ComfyUI lists them. `model` is Wan 2.2's
+    high-noise expert when `lowModel` is set, the whole model when not; `checkpoint`
+    says it came from checkpoints/ with its own text encoder and VAE inside. Zero steps,
+    CFG or shift is Wan's default (20, 3.5, 8). */
+export interface ClipModels {
+  model: string;
+  checkpoint: boolean;
+  lowModel: string;
+  textEncoder: string;
+  vae: string;
+  loras: ClipLora[];
+  steps: number;
+  cfg: number;
+  shift: number;
+}
+
+/** A LoRA on a clip, and which of Wan 2.2's experts it is for: "high", "low", or "" for both. */
+export interface ClipLora {
+  name: string;
+  weight: number;
+  stage: "" | "high" | "low";
+}
+
+/** What a ComfyUI has to fill a ClipModels with, folder by folder, and which core
+    nodes it lacks (an old ComfyUI has no Wan 2.2 nodes). */
+export interface ComfyModels {
+  diffusion: string[];
+  checkpoints: string[];
+  textEncoders: string[];
+  vaes: string[];
+  loras: string[];
+  missing: string[];
+}
+
 /** One clip, from words or from a picture. Knobs left out keep the workflow's own. */
 export interface ClipParams {
   jobId?: string;
@@ -2020,6 +2061,9 @@ export interface CivitaiVersion {
   installed: boolean;
   /** InvokeAI's key for the installed file, for opening it in the studio. */
   installedKey?: string;
+  /** Which half of a Wan 2.2 pair this version is, and the version that is the other. */
+  stage?: "high" | "low";
+  twin?: number;
 }
 
 export interface CivitaiFile {
@@ -2122,7 +2166,8 @@ export interface CivitaiSearchOpts {
   category?: string;
   sort?: string;
   period?: string;
-  base?: string;
+  /** One base model, or any of several. */
+  base?: string | string[];
   creator?: string;
   nsfw?: boolean;
   cursor?: string;
@@ -3207,6 +3252,9 @@ export const api = {
   makeClip: (params: ClipParams) =>
     request<GenerateResult>("/api/imagegen/clip", { method: "POST", body: JSON.stringify(params) }, 16 * 60_000),
 
+  /** The model files the saved ComfyUI offers, for the Video settings' pickers. */
+  comfyModels: () => request<ComfyModels>("/api/imagegen/comfy/models"),
+
   /**
    * What the generator has drawn so far of a run named by jobId: the step count and,
    * when it published one, a small preview as a data: URL. `seen` is the last seq the
@@ -3473,7 +3521,7 @@ export const api = {
     if (opts.category) p.set("category", opts.category);
     if (opts.sort) p.set("sort", opts.sort);
     if (opts.period) p.set("period", opts.period);
-    if (opts.base) p.set("base", opts.base);
+    for (const b of [opts.base ?? []].flat()) if (b) p.append("base", b);
     if (opts.creator) p.set("creator", opts.creator);
     if (opts.nsfw === false) p.set("nsfw", "0");
     if (opts.cursor) p.set("cursor", opts.cursor);
@@ -3521,12 +3569,18 @@ export const api = {
   },
   /** Install a version into InvokeAI. The ids let the server dress the model with
    *  the catalogue's cover, description and trigger words once the file is in. */
-  civitaiInstall: (url: string, ids?: { modelId: number; versionId: number }) =>
+  /** With target "comfy" the file goes into ComfyUI's models folder for clips, and
+      pair brings the other half of a Wan 2.2 pair with it. */
+  civitaiInstall: (url: string, ids?: { modelId: number; versionId: number; target?: "comfy"; pair?: boolean }) =>
     request<InstallJob>("/api/imagegen/civitai/install", {
       method: "POST",
       body: JSON.stringify({ url, ...ids }),
     }, 30_000),
   civitaiInstalls: () => request<{ jobs: InstallJob[] }>("/api/imagegen/civitai/installs", {}, 20_000),
+  /** Downloads into ComfyUI, and its models folder: "" with `problem` saying why
+      when there is none to install into. */
+  comfyInstalls: () =>
+    request<{ jobs: InstallJob[]; dir: string; problem: string }>("/api/imagegen/civitai/installs?target=comfy", {}, 20_000),
   /** The studio's models with their Civitai records, matched by file hash. The
    *  first call after new models arrive asks the catalogue, so it is given time. */
   civitaiInstalled: (refresh = false) =>

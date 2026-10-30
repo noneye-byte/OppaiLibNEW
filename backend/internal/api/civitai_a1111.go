@@ -45,18 +45,7 @@ func (s *Server) civitaiInstallSpec(ctx context.Context, source string, modelID,
 		if versionID > 0 && v.ID != versionID {
 			continue
 		}
-		var primary *civitaiRawFile
-		for i := range v.Files {
-			f := &v.Files[i]
-			if f.DownloadURL == source {
-				primary = f
-				break
-			}
-			if primary == nil && (f.Primary || f.Type == "Model") {
-				primary = f
-			}
-		}
-		if primary != nil {
+		if primary := civitaiPrimaryFile(v, source); primary != nil {
 			spec.FileName = primary.Name
 			// A LoRA is picked and prompted by its file's name, so it arrives named
 			// after what it is rather than whatever its uploader called the file.
@@ -69,6 +58,22 @@ func (s *Server) civitaiInstallSpec(ctx context.Context, source string, modelID,
 		break
 	}
 	return spec, nil
+}
+
+// civitaiPrimaryFile is the file of v that source downloads, or failing that the
+// version's main one.
+func civitaiPrimaryFile(v civitaiRawVersion, source string) *civitaiRawFile {
+	var primary *civitaiRawFile
+	for i := range v.Files {
+		f := &v.Files[i]
+		if source != "" && f.DownloadURL == source {
+			return f
+		}
+		if primary == nil && (f.Primary || f.Type == "Model") {
+			primary = f
+		}
+	}
+	return primary
 }
 
 // civitaiInstallType reads the catalogue's model type as the search filter names it,

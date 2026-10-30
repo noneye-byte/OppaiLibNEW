@@ -5,7 +5,6 @@ import (
 	"errors"
 	"math/rand"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/youruser/oppailib/internal/imagegen"
@@ -15,22 +14,19 @@ import (
 //
 // The clip starts from her last picture rather than from words, because that is what
 // keeps it her: image-to-video models hold a face and an outfit they are shown far
-// better than ones they are told about. The workflow is the operator's own (see
-// imagegen/comfy.go); this side fills in what moves, checks it against the same line
+// better than ones they are told about. The workflow is the studio's picture one (see
+// gen_clips.go); this side fills in what moves, checks it against the same line
 // every picture of her is held to, and files what comes back in her gallery as a video.
 
 // clipTimeout bounds a clip. Image-to-video on a consumer card is minutes, not seconds;
 // past a quarter of an hour something is stuck.
 const clipTimeout = 15 * time.Minute
 
-func clipsEnabled(clipURL, workflow string) bool {
-	return strings.TrimSpace(clipURL) != "" && strings.TrimSpace(workflow) != ""
-}
-
 // makeClip animates one of her pictures and files the result.
 func (s *Server) makeClip(ctx context.Context, userID int64, imageID, motion string, progress func(cameraProgress)) (chatImage, error) {
 	cur := s.settings.Get()
-	if !clipsEnabled(cur.LibbyClipURL, cur.LibbyClipWorkflow) {
+	recipe := clipRecipeFor(cur, true)
+	if !recipe.ready(cur.LibbyClipURL) {
 		return chatImage{}, errors.New("clips are not set up")
 	}
 	if shotIsRefused(motion) {
@@ -54,7 +50,7 @@ func (s *Server) makeClip(ctx context.Context, userID int64, imageID, motion str
 	defer cancel()
 	release := s.lendCardToImages(ctx)
 	defer release()
-	outs, err := s.imagegen.RunComfyWorkflow(ctx, cur.LibbyClipURL, cur.LibbyClipWorkflow, vars, raw, func(p imagegen.Progress) {
+	outs, err := recipe.run(ctx, s.imagegen, cur.LibbyClipURL, vars, raw, func(p imagegen.Progress) {
 		if progress != nil {
 			progress(cameraProgress{Phase: "animating", Percent: p.Percent, Of: 1})
 		}

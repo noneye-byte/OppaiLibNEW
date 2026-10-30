@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/youruser/oppailib/internal/settings"
 )
 
 // fakeMP4 is enough of an MP4 for the kind sniffer: a box whose type is ftyp.
@@ -131,5 +133,41 @@ func TestAClipsKnobsAreSentOnlyWhenSetAndSizesFallToSixteens(t *testing.T) {
 	}
 	if _, sent := vars["fps"]; sent {
 		t.Fatal("an unset fps was sent, overriding the workflow's own")
+	}
+}
+
+func TestPickedWanFilesWinOverAPastedWorkflowAndKeepStepsOutOfTheDrawer(t *testing.T) {
+	comfy, graph, _ := fakeComfy(t)
+	s, token := newTestServer(t)
+	cur := s.settings.Get()
+	cur.LibbyClipURL = comfy.URL
+	cur.LibbyClipWorkflow = pictureWorkflow
+	cur.ClipTextModels = settings.ClipModels{
+		Model: "wan2.2_t2v_high_noise_14B.safetensors", LowModel: "wan2.2_t2v_low_noise_14B.safetensors",
+		TextEncoder: "umt5.safetensors", VAE: "wan_2.1_vae.safetensors", Steps: 4, CFG: 1,
+		Loras: []settings.ClipLora{{Name: "lightx2v_high.safetensors", Weight: 1, Stage: "high"}},
+	}
+	s.settings.Set(cur)
+
+	st := clipsStatus(s.settings.Get())
+	if st.Text == nil || strings.Join(st.Text.Takes, ",") != "prompt,negative,seed,width,height,frames,fps" {
+		t.Fatalf("status = %+v", st.Text)
+	}
+	rec := do(t, s.Handler(), token, "POST", "/api/imagegen/clip", `{"from":"text","prompt":"rain on a window","width":832,"height":480,"frames":33,"steps":20}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("clip: %d %s", rec.Code, rec.Body)
+	}
+	samplers := 0
+	for _, n := range graph() {
+		node := n.(map[string]any)
+		if node["class_type"] == "KSamplerAdvanced" {
+			samplers++
+			if steps := node["inputs"].(map[string]any)["steps"]; steps != 4.0 {
+				t.Fatalf("the drawer's steps overrode the settings' four: %v", steps)
+			}
+		}
+	}
+	if samplers != 2 {
+		t.Fatalf("%d samplers in the built graph", samplers)
 	}
 }

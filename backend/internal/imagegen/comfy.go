@@ -35,6 +35,9 @@ import (
 // The runner uploads the picture, fills the placeholders, queues the prompt, waits for
 // its history entry and fetches whatever files the workflow saved. Which node saved
 // them, and in what format, is the workflow's business.
+//
+// The exception is Wan, which is settled enough to be built rather than pasted: see
+// comfy_wan.go, which hands its graph to the same runner.
 
 // ComfyOutput is one file a workflow produced.
 type ComfyOutput struct {
@@ -69,6 +72,11 @@ func (c *Client) RunComfyWorkflow(ctx context.Context, base, workflow string, va
 	if err != nil {
 		return nil, err
 	}
+	return c.runComfyGraph(ctx, base, graph, progress)
+}
+
+// runComfyGraph queues a filled-in workflow and waits for what it saved.
+func (c *Client) runComfyGraph(ctx context.Context, base string, graph map[string]any, progress func(Progress)) ([]ComfyOutput, error) {
 	clientID := comfyClientID()
 	var queued struct {
 		PromptID string         `json:"prompt_id"`

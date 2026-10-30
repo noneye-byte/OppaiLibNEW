@@ -160,11 +160,55 @@ func (c *Client) a1111Download(base, dir string, folder a1111Folder, spec Instal
 	fail := func(err error) {
 		jobs.update(job, func(j *InstallJob) { j.Status, j.Error = "error", err.Error() })
 	}
-	ctx := context.Background()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, spec.Source, nil)
+	var key string
+	target, sum, n, err := fetchModelFile(spec, jobs, job, func(name string) (string, string) {
+		key = folder.Folder + "/" + name
+		return localPath(dir, key), key
+	})
 	if err != nil {
 		fail(err)
 		return
+	}
+	var files []string
+	if folder.Type == a1111DetectorFolder.Type && strings.EqualFold(path.Ext(target), ".zip") {
+		// ADetailer reads .pt files and nothing else; see a1111_detectors.go.
+		unpacked, err := unpackDetectors(target, filepath.Dir(target))
+		_ = removeSoon(target)
+		if err != nil {
+			fail(err)
+			return
+		}
+		for _, d := range unpacked {
+			files = append(files, d.Name)
+			if d.SHA256 != "" {
+				c.hashes().record(filepath.Join(filepath.Dir(target), d.Name), d.SHA256)
+			}
+		}
+		key = folder.Folder + "/" + unpacked[0].Name
+	} else {
+		c.hashes().record(target, sum)
+	}
+
+	rctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	c.a1111Refresh(rctx, base, folder.Type)
+	cancel()
+	jobs.update(job, func(j *InstallJob) {
+		j.Status, j.ModelKey, j.Bytes, j.Files = "completed", key, n, files
+		if j.TotalBytes == 0 {
+			j.TotalBytes = n
+		}
+	})
+}
+
+// fetchModelFile streams spec's file to where place puts it, hashing it as it arrives
+// and renaming it into place only once it is whole, and keeps job's progress up to
+// date on the way. place is given the file's name — the catalogue's, or the one the
+// download itself gives — and returns the path to write and how to name it in a
+// refusal. A1111 and ComfyUI both take their downloads this way.
+func fetchModelFile(spec InstallSpec, jobs *a1111Jobs, job *InstallJob, place func(name string) (target, shown string)) (target, sum string, n int64, err error) {
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, spec.Source, nil)
+	if err != nil {
+		return "", "", 0, err
 	}
 	req.Header.Set("User-Agent", "OppaiLib")
 	if spec.Token != "" {
@@ -181,22 +225,18 @@ func (c *Client) a1111Download(base, dir string, folder a1111Folder, spec Instal
 	}
 	resp, err := downloadHTTP.Do(req)
 	if err != nil {
-		fail(fmt.Errorf("%s is unreachable: %w", from, err))
-		return
+		return "", "", 0, fmt.Errorf("%s is unreachable: %w", from, err)
 	}
 	defer resp.Body.Close()
 	switch {
 	case (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) && from == "Civitai":
-		fail(errors.New("Civitai wants an account for this file; add an API key under Settings"))
-		return
+		return "", "", 0, errors.New("Civitai wants an account for this file; add an API key under Settings")
 	case resp.StatusCode != http.StatusOK:
-		fail(fmt.Errorf("%s returned %d", from, resp.StatusCode))
-		return
+		return "", "", 0, fmt.Errorf("%s returned %d", from, resp.StatusCode)
 	}
 	// A sign-in page instead of a file is the other way a missing key shows.
 	if ct := resp.Header.Get("Content-Type"); strings.HasPrefix(ct, "text/html") {
-		fail(errors.New("Civitai sent a web page instead of the file; it probably needs an API key"))
-		return
+		return "", "", 0, errors.New("Civitai sent a web page instead of the file; it probably needs an API key")
 	}
 
 	name := spec.FileName
@@ -212,14 +252,11 @@ func (c *Client) a1111Download(base, dir string, folder a1111Folder, spec Instal
 	}
 	name = safeFileName(name)
 	if name == "" || path.Ext(name) == "" {
-		fail(errors.New("Civitai did not say what the file is called"))
-		return
+		return "", "", 0, errors.New("Civitai did not say what the file is called")
 	}
-	key := folder.Folder + "/" + name
-	target := localPath(dir, key)
+	target, shown := place(name)
 	if _, err := os.Stat(target); err == nil {
-		fail(fmt.Errorf("%s is already in the models folder", key))
-		return
+		return "", "", 0, fmt.Errorf("%s is already in the models folder", shown)
 	}
 
 	jobs.update(job, func(j *InstallJob) {
@@ -231,57 +268,26 @@ func (c *Client) a1111Download(base, dir string, folder a1111Folder, spec Instal
 	part := target + ".part"
 	out, err := os.Create(part)
 	if err != nil {
-		fail(fmt.Errorf("can't write to the models folder: %w", err))
-		return
+		return "", "", 0, fmt.Errorf("can't write to the models folder: %w", err)
 	}
-	sum := sha256.New()
+	hash := sha256.New()
 	counter := &progressWriter{report: func(n int64) {
 		jobs.update(job, func(j *InstallJob) { j.Bytes = n })
 	}}
-	_, copyErr := io.Copy(io.MultiWriter(out, sum, counter), resp.Body)
+	_, copyErr := io.Copy(io.MultiWriter(out, hash, counter), resp.Body)
 	closeErr := out.Close()
 	if copyErr != nil || closeErr != nil {
 		_ = os.Remove(part)
 		if copyErr == nil {
 			copyErr = closeErr
 		}
-		fail(fmt.Errorf("the download broke off: %w", copyErr))
-		return
+		return "", "", 0, fmt.Errorf("the download broke off: %w", copyErr)
 	}
 	if err := os.Rename(part, target); err != nil {
 		_ = os.Remove(part)
-		fail(err)
-		return
+		return "", "", 0, err
 	}
-	var files []string
-	if folder.Type == a1111DetectorFolder.Type && strings.EqualFold(path.Ext(name), ".zip") {
-		// ADetailer reads .pt files and nothing else; see a1111_detectors.go.
-		unpacked, err := unpackDetectors(target, filepath.Dir(target))
-		_ = removeSoon(target)
-		if err != nil {
-			fail(err)
-			return
-		}
-		for _, d := range unpacked {
-			files = append(files, d.Name)
-			if d.SHA256 != "" {
-				c.hashes().record(filepath.Join(filepath.Dir(target), d.Name), d.SHA256)
-			}
-		}
-		key = folder.Folder + "/" + unpacked[0].Name
-	} else {
-		c.hashes().record(target, hex.EncodeToString(sum.Sum(nil)))
-	}
-
-	rctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-	c.a1111Refresh(rctx, base, folder.Type)
-	cancel()
-	jobs.update(job, func(j *InstallJob) {
-		j.Status, j.ModelKey, j.Bytes, j.Files = "completed", key, counter.n, files
-		if j.TotalBytes == 0 {
-			j.TotalBytes = counter.n
-		}
-	})
+	return target, hex.EncodeToString(hash.Sum(nil)), counter.n, nil
 }
 
 // progressWriter counts what has been written and reports it at most a few times a

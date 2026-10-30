@@ -222,6 +222,16 @@ type Settings struct {
 	// the studio's too, despite their names: one ComfyUI, set up once. See
 	// api/gen_clips.go.
 	ClipTextWorkflow string `json:"clipTextWorkflow"`
+	// ClipImageModels and ClipTextModels are the same two directions as files picked
+	// from what that ComfyUI has, for a Wan workflow OppaiLib builds itself
+	// (imagegen/comfy_wan.go). A picked model wins over a pasted workflow.
+	ClipImageModels ClipModels `json:"clipImageModels"`
+	ClipTextModels  ClipModels `json:"clipTextModels"`
+	// ComfyModelsDir is that ComfyUI's models folder as this container sees it, for
+	// installing Wan models and LoRAs from Civitai: ComfyUI has no API that takes a
+	// download. Blank falls back to the template's /comfy-models mount when there is
+	// one. See imagegen/comfy_install.go.
+	ComfyModelsDir string `json:"comfyModelsDir"`
 	// LibbyStories lets her post a picture and a line while they are away, at most
 	// LibbyStoriesPerDay a day. See api.libby_stories.go.
 	LibbyStories       bool `json:"libbyStories"`
@@ -323,6 +333,9 @@ const (
 	keyLibbyClipURL       = "libby.clip.url"
 	keyLibbyClipWorkflow  = "libby.clip.workflow"
 	keyClipTextWorkflow   = "clip.text_workflow"
+	keyClipImageModels    = "clip.image_models"
+	keyClipTextModels     = "clip.text_models"
+	keyComfyModelsDir     = "clip.comfy_models_dir"
 	keyLibbyStories       = "libby.stories"
 	keyLibbyStoriesPerDay = "libby.stories.per_day"
 	keyChatToolMode       = "chat.tool_mode"
@@ -362,6 +375,8 @@ func Defaults(cfg *config.Config) Settings {
 		TempStaleHours:        24,
 		LibbyGenLoras:         []LoraChoice{},
 		LibbyCameraLoras:      []CameraLora{},
+		ClipImageModels:       ClipModels{Loras: []ClipLora{}},
+		ClipTextModels:        ClipModels{Loras: []ClipLora{}},
 		LibbyCameraCandidates: 2,
 		LibbyPoseModule:       "openpose_full",
 		LibbyFaceModule:       "ip-adapter-auto",
@@ -389,6 +404,30 @@ type CameraLora struct {
 // maxCameraLoras bounds what she chooses from. Every one is a line in her take_photo
 // tool, which every turn pays for in context.
 const maxCameraLoras = 12
+
+// ClipModels is a Wan clip workflow as files: names exactly as ComfyUI lists them,
+// relative to its models folders. See imagegen.WanClip for what each one is.
+type ClipModels struct {
+	Model       string     `json:"model"`
+	Checkpoint  bool       `json:"checkpoint"`
+	LowModel    string     `json:"lowModel"`
+	TextEncoder string     `json:"textEncoder"`
+	VAE         string     `json:"vae"`
+	Loras       []ClipLora `json:"loras"`
+	// Zero is Wan's default (20 steps, CFG 3.5, shift 8). A speed-up LoRA such as
+	// lightx2v wants 4 and 1, which the settings screen puts in when one is added.
+	Steps int     `json:"steps"`
+	CFG   float64 `json:"cfg"`
+	Shift float64 `json:"shift"`
+}
+
+// ClipLora is a LoRA on a clip, and which of Wan 2.2's two experts it is for: "high",
+// "low", or blank for both.
+type ClipLora struct {
+	Name   string  `json:"name"`
+	Weight float64 `json:"weight"`
+	Stage  string  `json:"stage"`
+}
 
 // maxLibbyGenLoras bounds the list. Past a handful, LoRAs fight each other more than
 // they add anything, and every one is another model the generator has to load.
@@ -553,6 +592,12 @@ func Merge(base Settings, stored map[string]string) Settings {
 			s.LibbyCameraLoras = loras
 		}
 	}
+	for key, into := range map[string]*ClipModels{keyClipImageModels: &s.ClipImageModels, keyClipTextModels: &s.ClipTextModels} {
+		var m ClipModels
+		if v, ok := stored[key]; ok && json.Unmarshal([]byte(v), &m) == nil {
+			*into = m
+		}
+	}
 	if v, ok := stored[keyLibbyGenBoard]; ok {
 		s.LibbyGenBoard = v
 	}
@@ -571,7 +616,7 @@ func Merge(base Settings, stored map[string]string) Settings {
 	for key, field := range map[string]*string{
 		keyLibbyPoseModule: &s.LibbyPoseModule, keyLibbyPoseModel: &s.LibbyPoseModel,
 		keyLibbyFaceModule: &s.LibbyFaceModule, keyLibbyFaceModel: &s.LibbyFaceModel,
-		keyLibbyClipURL: &s.LibbyClipURL, keyLibbyClipWorkflow: &s.LibbyClipWorkflow,
+		keyLibbyClipURL: &s.LibbyClipURL, keyLibbyClipWorkflow: &s.LibbyClipWorkflow, keyComfyModelsDir: &s.ComfyModelsDir,
 		keyClipTextWorkflow: &s.ClipTextWorkflow,
 		keyChatToolMode:     &s.ChatToolMode,
 	} {
@@ -654,6 +699,9 @@ func (s Settings) Map() map[string]string {
 		keyLibbyClipURL:       s.LibbyClipURL,
 		keyLibbyClipWorkflow:  s.LibbyClipWorkflow,
 		keyClipTextWorkflow:   s.ClipTextWorkflow,
+		keyClipImageModels:    clipModelsJSON(s.ClipImageModels),
+		keyClipTextModels:     clipModelsJSON(s.ClipTextModels),
+		keyComfyModelsDir:     s.ComfyModelsDir,
 		keyLibbyStories:       strconv.FormatBool(s.LibbyStories),
 		keyLibbyStoriesPerDay: strconv.Itoa(s.LibbyStoriesPerDay),
 		keyChatToolMode:       s.ChatToolMode,
@@ -834,6 +882,9 @@ func (s *Settings) Clamp() {
 	if len(s.ClipTextWorkflow) > 256<<10 {
 		s.ClipTextWorkflow = ""
 	}
+	s.ClipImageModels = cleanClipModels(s.ClipImageModels)
+	s.ClipTextModels = cleanClipModels(s.ClipTextModels)
+	s.ComfyModelsDir = strings.TrimRight(strings.TrimSpace(s.ComfyModelsDir), "/")
 	if s.LibbyStoriesPerDay < 1 {
 		s.LibbyStoriesPerDay = 1
 	} else if s.LibbyStoriesPerDay > 6 {
@@ -883,6 +934,45 @@ func cleanCameraLoras(in []CameraLora) []CameraLora {
 		}
 	}
 	return out
+}
+
+// cleanClipModels trims the names and keeps the numbers where a typo cannot queue an
+// hour's render. A checkpoint carries its own pair of nothing, so a low-noise model left
+// over from before one was picked is dropped rather than silently ignored.
+func cleanClipModels(m ClipModels) ClipModels {
+	m.Model = strings.TrimSpace(m.Model)
+	m.LowModel = strings.TrimSpace(m.LowModel)
+	if m.Checkpoint || m.Model == "" {
+		m.LowModel = ""
+	}
+	m.TextEncoder = strings.TrimSpace(m.TextEncoder)
+	m.VAE = strings.TrimSpace(m.VAE)
+	loras := []ClipLora{}
+	for _, l := range m.Loras {
+		l.Name = strings.TrimSpace(l.Name)
+		if l.Name == "" {
+			continue
+		}
+		l.Weight = min(max(l.Weight, -2), 2)
+		l.Stage = oneOf(l.Stage, "high", "low")
+		loras = append(loras, l)
+		if len(loras) == maxLibbyGenLoras {
+			break
+		}
+	}
+	m.Loras = loras
+	m.Steps = min(max(m.Steps, 0), 100)
+	m.CFG = min(max(m.CFG, 0), 30)
+	m.Shift = min(max(m.Shift, 0), 50)
+	return m
+}
+
+func clipModelsJSON(m ClipModels) string {
+	raw, err := json.Marshal(cleanClipModels(m))
+	if err != nil {
+		return "{}"
+	}
+	return string(raw)
 }
 
 // cutLine folds whitespace (newlines included) to single spaces and cuts to n runes.
