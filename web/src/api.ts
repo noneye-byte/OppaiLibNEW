@@ -594,6 +594,11 @@ export interface Settings {
   /** ComfyUI's models folder as the container sees it, for installing from Civitai's
       video mode; blank uses the template's /comfy-models mount. */
   comfyModelsDir?: string;
+  /** Where Wan models and LoRAs go when they are kept apart from that models folder;
+      blank means its diffusion_models and loras (or the template's
+      /comfy-diffusion-models and /comfy-loras mounts, when mapped). */
+  comfyDiffusionDir?: string;
+  comfyLoraDir?: string;
   /** Whether she posts stories while you are away, and at most how many a day. */
   libbyStories: boolean;
   libbyStoriesPerDay: number;
@@ -1624,6 +1629,18 @@ export interface ClipLora {
 
 /** What a ComfyUI has to fill a ClipModels with, folder by folder, and which core
     nodes it lacks (an old ComfyUI has no Wan 2.2 nodes). */
+/** Where installs into ComfyUI go: `dir` its models folder, `modelDir` and `loraDir`
+    the folders a Wan model and a LoRA land in. Each is "" with its problem saying why
+    when there is none (blank when nothing is set or mounted). */
+export interface ComfyPlaces {
+  dir: string;
+  problem: string;
+  modelDir: string;
+  modelProblem: string;
+  loraDir: string;
+  loraProblem: string;
+}
+
 export interface ComfyModels {
   diffusion: string[];
   checkpoints: string[];
@@ -3577,10 +3594,9 @@ export const api = {
       body: JSON.stringify({ url, ...ids }),
     }, 30_000),
   civitaiInstalls: () => request<{ jobs: InstallJob[] }>("/api/imagegen/civitai/installs", {}, 20_000),
-  /** Downloads into ComfyUI, and its models folder: "" with `problem` saying why
-      when there is none to install into. */
+  /** Downloads into ComfyUI, and the folders they go to. */
   comfyInstalls: () =>
-    request<{ jobs: InstallJob[]; dir: string; problem: string }>("/api/imagegen/civitai/installs?target=comfy", {}, 20_000),
+    request<{ jobs: InstallJob[] } & ComfyPlaces>("/api/imagegen/civitai/installs?target=comfy", {}, 20_000),
   /** The studio's models with their Civitai records, matched by file hash. The
    *  first call after new models arrive asks the catalogue, so it is given time. */
   civitaiInstalled: (refresh = false) =>

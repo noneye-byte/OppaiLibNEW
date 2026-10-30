@@ -1,4 +1,4 @@
-import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap as oe,aq as ne,ar as re,as as G,at as le,x as de,au as ce,av as pe,aw as he,ax as ue,ay as ve,az as ge,aA as fe,aB as me,aC as be,aD as F,v as Q}from"./index-hKufL5e3.js";import{r as ye,p as we}from"./passkeys-DMhkrz_n.js";import{l as $e,a as ke,s as T,b as z,D as xe,d as Le}from"./launchy-xyl1VS8H.js";const Ee=160,Se=220;function Ae(e){var u;const t=e.trim();if(t.length<=Ee)return t?[t]:[];const s=((u=t.match(/[^.!?…\n]+(?:[.!?…]+["”')]*|\n|$)/g))==null?void 0:u.map(f=>f.trim()).filter(Boolean))??[t],[o,...n]=s,r=[o];let a="";for(const f of n)a&&a.length+f.length+1>Se&&(r.push(a),a=""),a=a?`${a} ${f}`:f;return a&&r.push(a),r}const X="oppai_libby_speak";function Je(){try{return localStorage.getItem(X)==="1"}catch{return!1}}function Qe(e){try{localStorage.setItem(X,e?"1":"0")}catch{}e||ee(),window.dispatchEvent(new CustomEvent("oppai-libby-speak",{detail:{on:e}}))}let C=null,V=0;async function Z(e=!1){if(!e&&C&&Date.now()-V<6e4)return C;try{const t=await fetch("/api/tts/status",{credentials:"same-origin"});if(!t.ok)throw new Error(String(t.status));C=await t.json(),V=Date.now()}catch{C=null}return C}const I=[];let S=null,D=!1,A=0,O=Promise.resolve();function Ce(e,t=0){const s=Ae(e);if(!s.length)return Promise.resolve();const o=A,n=s.map(r=>new Promise(a=>{const u=O.then(()=>o===A?Me(r,t):null);O=u.catch(()=>null),I.push({text:r,heat:t,audio:u,done:a})}));return Re(),Promise.all(n).then(()=>{})}function ee(){var e;A++,O=Promise.resolve();for(const t of I.splice(0))t.done();S&&(S.pause(),S.src="",S=null);try{(e=window.speechSynthesis)==null||e.cancel()}catch{}}async function Re(){if(!D){D=!0;try{for(;I.length;){const e=I.shift(),t=A;try{await Pe(e,t)}catch{}finally{e.done()}}}finally{D=!1}}}async function Pe(e,t){const s=await e.audio.catch(()=>null);if(t===A){if(s){await Te(s,t);return}await Ie(e.text,t)}}async function Me(e,t){const s=await Z();if(s&&!s.engine)return null;try{const o=await fetch("/api/tts/speak",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify({text:e,heat:t||void 0})});return o.status===503?(C=null,null):o.ok?await o.blob():null}catch{return null}}function Te(e,t){return new Promise(s=>{const o=URL.createObjectURL(e),n=new Audio(o);S=n;const r=()=>{S===n&&(S=null),URL.revokeObjectURL(o),s()};n.addEventListener("ended",r,{once:!0}),n.addEventListener("error",r,{once:!0}),n.play().catch(()=>{r()}),t!==A&&r()})}function Ie(e,t){const s=window.speechSynthesis;return!s||typeof SpeechSynthesisUtterance>"u"?Promise.resolve():new Promise(o=>{const n=new SpeechSynthesisUtterance(e),r=Be(s.getVoices());if(r&&(n.voice=r),n.rate=1.02,n.pitch=1.05,n.onend=()=>o(),n.onerror=()=>o(),t!==A){o();return}s.speak(n)})}function Be(e){const t=e.filter(n=>/^en/i.test(n.lang)),s=t.length?t:e,o=n=>{let r=0;const a=n.name.toLowerCase();return/natural|neural|premium|enhanced/.test(a)&&(r+=4),/female|woman|aria|jenny|samantha|zira|karen|moira|tessa|fiona|libby|sonia|ava|allison|susan|emma/.test(a)&&(r+=3),/google/.test(a)&&(r+=1),n.default&&(r+=1),r};return[...s].sort((n,r)=>o(r)-o(n))[0]}const Ne=new RegExp("(high|low)[\\s_-]?noise|(?<![a-z])(high|low)(?![a-z])","gi");function te(e){let t=null;for(const s of e.matchAll(Ne)){const o=s[1]??s[2],n=s.index+s[0].toLowerCase().indexOf(o.toLowerCase());t={stage:o.toLowerCase(),at:n,text:o}}return t}function L(e){var t;return((t=te(e))==null?void 0:t.stage)??""}function _(e,t){const s=te(e);if(!s)return"";const o=s.stage==="high"?"low":"high",n=s.text,r=n===n.toUpperCase()?o.toUpperCase():n[0]===n[0].toUpperCase()?o[0].toUpperCase()+o.slice(1):o,a=e.slice(0,s.at)+r+e.slice(s.at+n.length);return t.includes(a)?a:""}function ze(e){return new RegExp("lightx2v|lightning|causvid|distill|(?<![0-9])4[\\s_-]?steps?","i").test(e)}const De={steps:4,cfg:1};function Oe(e,t){const s=t?/i2v/i:/t2v|ti2v/i,o=m=>(/wan/i.test(m)||!!L(m))&&s.test(m),n=e.diffusion.find(m=>o(m)&&L(m)==="high"),r=n?_(n,e.diffusion)||e.diffusion.find(m=>o(m)&&L(m)==="low"):void 0,u={model:"",checkpoint:!1,lowModel:"",textEncoder:e.textEncoders.find(m=>/umt5/i.test(m))??"",vae:"",loras:[],steps:0,cfg:0,shift:0};if(n&&r)return{...u,model:n,lowModel:r,vae:W(e.vaes,!1)};const f=e.diffusion.find(m=>o(m)&&!L(m));if(f)return{...u,model:f,vae:W(e.vaes,/5b/i.test(f))};const y=e.checkpoints.find(o);return y?{...u,model:y,checkpoint:!0,textEncoder:""}:null}function W(e,t){const s=n=>/wan[\s_.-]?2[._]?2/i.test(n);return e.filter(n=>/wan/i.test(n)&&s(n)===t)[0]??""}var _e=Object.defineProperty,Ue=Object.getOwnPropertyDescriptor,E=(e,t,s,o)=>{for(var n=o>1?void 0:o?Ue(t,s):t,r=e.length-1,a;r>=0;r--)(a=e[r])&&(n=(o?a(t,s,n):a(n))||n);return o&&n&&_e(t,s,n),n};const Ge={itch:"itch.io",f95:"F95zone"},Fe=4e3;let $=class extends Y{constructor(){super(...arguments),this.status=null,this.keys=null,this.loadError="",this.link="",this.linkExpires=0,this.linking=!1,this.busy={},this.timer=null,this.linkIssuedAt=0}connectedCallback(){super.connectedCallback(),this.refresh(),this.loadKeys(),this.timer=window.setInterval(()=>void this.refresh(),Fe)}disconnectedCallback(){super.disconnectedCallback(),this.timer!=null&&clearInterval(this.timer),this.timer=null}async refresh(){try{this.status=await v.launchyStatus(),this.loadError=""}catch(e){this.loadError=e.message}if(this.link)if(Date.now()/1e3>this.linkExpires)this.link="";else{await this.loadKeys();const e=(this.keys??[]).find(t=>t.createdAt>=this.linkIssuedAt);e&&(this.link="",k(`Launchy on ${e.name} is linked.`))}}async loadKeys(){try{this.keys=(await v.launchyKeys()).items}catch(e){this.loadError=e.message}}async makeLink(){this.linking=!0;try{const{code:e,expiresAt:t}=await v.launchyPairing();this.linkIssuedAt=Math.floor(Date.now()/1e3)-5,this.link=$e(location.origin,e),this.linkExpires=t,window.location.assign(this.link)}catch(e){k(e.message,"error")}finally{this.linking=!1}}async copyLink(e){var s;const t=(s=e.currentTarget.parentElement)==null?void 0:s.querySelector("input");try{await navigator.clipboard.writeText(this.link),k("Copied the link.")}catch{t==null||t.select(),k("Press Ctrl+C to copy the selected link.")}}async revoke(e){if(confirm(`Unlink Launchy on ${e.name}? It stops syncing until it is linked again.`))try{await v.revokeLaunchyKey(e.id),await this.loadKeys()}catch(t){k(t.message,"error")}}async run(e,t,s){this.busy={...this.busy,[e]:!0};try{const o=await v.launchyRequest(t),n=await ke(v.launchyRequestStatus,o.id,{timeout:t.action==="sync"?18e4:6e4});n.status==="done"?k(n.message||s):k(n.error||"Launchy could not do that.","error")}catch(o){k(o.message,"error")}finally{this.busy={...this.busy,[e]:!1},this.refresh()}}render(){return i`
+import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap as oe,aq as ne,ar as re,as as F,at as le,x as de,au as ce,av as pe,aw as he,ax as ue,ay as ve,az as fe,aA as ge,aB as me,aC as ye,aD as G,v as Q}from"./index-C5YPaA3S.js";import{r as be,p as we}from"./passkeys-V-LCJrh0.js";import{l as $e,a as ke,s as T,b as D,D as xe,d as Le}from"./launchy-xyl1VS8H.js";const Ee=160,Ae=220;function Se(e){var u;const t=e.trim();if(t.length<=Ee)return t?[t]:[];const s=((u=t.match(/[^.!?…\n]+(?:[.!?…]+["”')]*|\n|$)/g))==null?void 0:u.map(g=>g.trim()).filter(Boolean))??[t],[n,...o]=s,r=[n];let a="";for(const g of o)a&&a.length+g.length+1>Ae&&(r.push(a),a=""),a=a?`${a} ${g}`:g;return a&&r.push(a),r}const X="oppai_libby_speak";function Je(){try{return localStorage.getItem(X)==="1"}catch{return!1}}function Qe(e){try{localStorage.setItem(X,e?"1":"0")}catch{}e||ee(),window.dispatchEvent(new CustomEvent("oppai-libby-speak",{detail:{on:e}}))}let C=null,W=0;async function Z(e=!1){if(!e&&C&&Date.now()-W<6e4)return C;try{const t=await fetch("/api/tts/status",{credentials:"same-origin"});if(!t.ok)throw new Error(String(t.status));C=await t.json(),W=Date.now()}catch{C=null}return C}const I=[];let A=null,z=!1,S=0,_=Promise.resolve();function Ce(e,t=0){const s=Se(e);if(!s.length)return Promise.resolve();const n=S,o=s.map(r=>new Promise(a=>{const u=_.then(()=>n===S?Me(r,t):null);_=u.catch(()=>null),I.push({text:r,heat:t,audio:u,done:a})}));return Re(),Promise.all(o).then(()=>{})}function ee(){var e;S++,_=Promise.resolve();for(const t of I.splice(0))t.done();A&&(A.pause(),A.src="",A=null);try{(e=window.speechSynthesis)==null||e.cancel()}catch{}}async function Re(){if(!z){z=!0;try{for(;I.length;){const e=I.shift(),t=S;try{await Pe(e,t)}catch{}finally{e.done()}}}finally{z=!1}}}async function Pe(e,t){const s=await e.audio.catch(()=>null);if(t===S){if(s){await Te(s,t);return}await Ie(e.text,t)}}async function Me(e,t){const s=await Z();if(s&&!s.engine)return null;try{const n=await fetch("/api/tts/speak",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify({text:e,heat:t||void 0})});return n.status===503?(C=null,null):n.ok?await n.blob():null}catch{return null}}function Te(e,t){return new Promise(s=>{const n=URL.createObjectURL(e),o=new Audio(n);A=o;const r=()=>{A===o&&(A=null),URL.revokeObjectURL(n),s()};o.addEventListener("ended",r,{once:!0}),o.addEventListener("error",r,{once:!0}),o.play().catch(()=>{r()}),t!==S&&r()})}function Ie(e,t){const s=window.speechSynthesis;return!s||typeof SpeechSynthesisUtterance>"u"?Promise.resolve():new Promise(n=>{const o=new SpeechSynthesisUtterance(e),r=Be(s.getVoices());if(r&&(o.voice=r),o.rate=1.02,o.pitch=1.05,o.onend=()=>n(),o.onerror=()=>n(),t!==S){n();return}s.speak(o)})}function Be(e){const t=e.filter(o=>/^en/i.test(o.lang)),s=t.length?t:e,n=o=>{let r=0;const a=o.name.toLowerCase();return/natural|neural|premium|enhanced/.test(a)&&(r+=4),/female|woman|aria|jenny|samantha|zira|karen|moira|tessa|fiona|libby|sonia|ava|allison|susan|emma/.test(a)&&(r+=3),/google/.test(a)&&(r+=1),o.default&&(r+=1),r};return[...s].sort((o,r)=>n(r)-n(o))[0]}const Ne=new RegExp("(high|low)[\\s_-]?noise|(?<![a-z])(high|low)(?![a-z])","gi");function te(e){let t=null;for(const s of e.matchAll(Ne)){const n=s[1]??s[2],o=s.index+s[0].toLowerCase().indexOf(n.toLowerCase());t={stage:n.toLowerCase(),at:o,text:n}}return t}function L(e){var t;return((t=te(e))==null?void 0:t.stage)??""}function O(e,t){const s=te(e);if(!s)return"";const n=s.stage==="high"?"low":"high",o=s.text,r=o===o.toUpperCase()?n.toUpperCase():o[0]===o[0].toUpperCase()?n[0].toUpperCase()+n.slice(1):n,a=e.slice(0,s.at)+r+e.slice(s.at+o.length);return t.includes(a)?a:""}function De(e){return new RegExp("lightx2v|lightning|causvid|distill|(?<![0-9])4[\\s_-]?steps?","i").test(e)}const ze={steps:4,cfg:1};function _e(e,t){const s=t?/i2v/i:/t2v|ti2v/i,n=m=>(/wan/i.test(m)||!!L(m))&&s.test(m),o=e.diffusion.find(m=>n(m)&&L(m)==="high"),r=o?O(o,e.diffusion)||e.diffusion.find(m=>n(m)&&L(m)==="low"):void 0,u={model:"",checkpoint:!1,lowModel:"",textEncoder:e.textEncoders.find(m=>/umt5/i.test(m))??"",vae:"",loras:[],steps:0,cfg:0,shift:0};if(o&&r)return{...u,model:o,lowModel:r,vae:V(e.vaes,!1)};const g=e.diffusion.find(m=>n(m)&&!L(m));if(g)return{...u,model:g,vae:V(e.vaes,/5b/i.test(g))};const b=e.checkpoints.find(n);return b?{...u,model:b,checkpoint:!0,textEncoder:""}:null}function V(e,t){const s=o=>/wan[\s_.-]?2[._]?2/i.test(o);return e.filter(o=>/wan/i.test(o)&&s(o)===t)[0]??""}var Oe=Object.defineProperty,Ue=Object.getOwnPropertyDescriptor,E=(e,t,s,n)=>{for(var o=n>1?void 0:n?Ue(t,s):t,r=e.length-1,a;r>=0;r--)(a=e[r])&&(o=(n?a(t,s,o):a(o))||o);return n&&o&&Oe(t,s,o),o};const Fe={itch:"itch.io",f95:"F95zone"},Ge=4e3;let $=class extends Y{constructor(){super(...arguments),this.status=null,this.keys=null,this.loadError="",this.link="",this.linkExpires=0,this.linking=!1,this.busy={},this.timer=null,this.linkIssuedAt=0}connectedCallback(){super.connectedCallback(),this.refresh(),this.loadKeys(),this.timer=window.setInterval(()=>void this.refresh(),Ge)}disconnectedCallback(){super.disconnectedCallback(),this.timer!=null&&clearInterval(this.timer),this.timer=null}async refresh(){try{this.status=await v.launchyStatus(),this.loadError=""}catch(e){this.loadError=e.message}if(this.link)if(Date.now()/1e3>this.linkExpires)this.link="";else{await this.loadKeys();const e=(this.keys??[]).find(t=>t.createdAt>=this.linkIssuedAt);e&&(this.link="",k(`Launchy on ${e.name} is linked.`))}}async loadKeys(){try{this.keys=(await v.launchyKeys()).items}catch(e){this.loadError=e.message}}async makeLink(){this.linking=!0;try{const{code:e,expiresAt:t}=await v.launchyPairing();this.linkIssuedAt=Math.floor(Date.now()/1e3)-5,this.link=$e(location.origin,e),this.linkExpires=t,window.location.assign(this.link)}catch(e){k(e.message,"error")}finally{this.linking=!1}}async copyLink(e){var s;const t=(s=e.currentTarget.parentElement)==null?void 0:s.querySelector("input");try{await navigator.clipboard.writeText(this.link),k("Copied the link.")}catch{t==null||t.select(),k("Press Ctrl+C to copy the selected link.")}}async revoke(e){if(confirm(`Unlink Launchy on ${e.name}? It stops syncing until it is linked again.`))try{await v.revokeLaunchyKey(e.id),await this.loadKeys()}catch(t){k(t.message,"error")}}async run(e,t,s){this.busy={...this.busy,[e]:!0};try{const n=await v.launchyRequest(t),o=await ke(v.launchyRequestStatus,n.id,{timeout:t.action==="sync"?18e4:6e4});o.status==="done"?k(o.message||s):k(o.error||"Launchy could not do that.","error")}catch(n){k(n.message,"error")}finally{this.busy={...this.busy,[e]:!1},this.refresh()}}render(){return i`
       ${this.loadError?i`<div class="banner error"><span class="material-symbols-rounded" style="font-size:18px;">error</span>${this.loadError}</div>`:l}
       ${this.renderLink()}
       ${this.renderPC()}
@@ -48,7 +48,7 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
             </button>
           </div>`)}
       </section>
-    `}renderPC(){var s,o,n,r;const e=this.status;if(!e)return l;const t=!!e.reportedAt;return i`
+    `}renderPC(){var s,n,o,r;const e=this.status;if(!e)return l;const t=!!e.reportedAt;return i`
       <section class="card">
         <h3><span class="material-symbols-rounded">sports_esports</span>The PC</h3>
         <div class="row">
@@ -60,12 +60,12 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
               ${e.connected&&!t?i` · <span class="warn">an older Launchy — update it to control it from here</span>`:l}
             </div>
           </div>
-          ${z(e,"sync")?i`<button class="btn-inline" ?disabled=${this.busy.sync||((s=e.sync)==null?void 0:s.running)}
+          ${D(e,"sync")?i`<button class="btn-inline" ?disabled=${this.busy.sync||((s=e.sync)==null?void 0:s.running)}
                 @click=${()=>void this.run("sync",{action:"sync"},"Synced.")}>
-                <span class="material-symbols-rounded">sync</span>${this.busy.sync||(o=e.sync)!=null&&o.running?"Syncing…":"Sync now"}
+                <span class="material-symbols-rounded">sync</span>${this.busy.sync||(n=e.sync)!=null&&n.running?"Syncing…":"Sync now"}
               </button>`:l}
         </div>
-        ${(n=e.sync)!=null&&n.lastSync||(r=e.sync)!=null&&r.lastError?i`<div class="row"><div class="grow">
+        ${(o=e.sync)!=null&&o.lastSync||(r=e.sync)!=null&&r.lastError?i`<div class="row"><div class="grow">
               <div class="label">Library sync</div>
               <div class="help">
                 ${e.sync.lastSync?`Last synced ${T(e.sync.lastSync)}`:"Not synced yet"}
@@ -75,7 +75,7 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
         ${(e.accounts??[]).map(a=>i`<div class="row">
             <span class="dot ${a.challenged?"warn":a.signedIn?"on":""}"></span>
             <div class="grow">
-              <div class="label">${Ge[a.site]??a.site}</div>
+              <div class="label">${Fe[a.site]??a.site}</div>
               <div class="help">
                 ${a.challenged?i`<span class="warn">Wants a person to prove they are one — press Verify next to it in Launchy on the PC.</span>`:a.signedIn?`Signed in${a.user?` as ${a.user}`:""} in Launchy`:"Not signed in in Launchy — sign in there, under Settings → Accounts"}
               </div>
@@ -86,29 +86,29 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
       <section class="card">
         <h3><span class="material-symbols-rounded">play_arrow</span>Running</h3>
         ${t.length===0?i`<div class="empty">Nothing is running on the PC.</div>`:l}
-        ${t.map(s=>{const o=`stop:${s.gameId}`;return i`<div class="row">
+        ${t.map(s=>{const n=`stop:${s.gameId}`;return i`<div class="row">
             <div class="grow">
               <div class="label">${s.title||"A game"}</div>
               <div class="help">Started ${T(s.startedAt)}</div>
             </div>
-            ${z(e,"stop")?i`<button class="btn-inline" ?disabled=${this.busy[o]}
-                  @click=${()=>{confirm(`Close ${s.title||"this game"} on the PC? Anything unsaved in it is lost.`)&&this.run(o,{action:"stop",gameId:s.gameId},"Closed.")}}>
-                  <span class="material-symbols-rounded">stop_circle</span>${this.busy[o]?"Closing…":"Close"}
+            ${D(e,"stop")?i`<button class="btn-inline" ?disabled=${this.busy[n]}
+                  @click=${()=>{confirm(`Close ${s.title||"this game"} on the PC? Anything unsaved in it is lost.`)&&this.run(n,{action:"stop",gameId:s.gameId},"Closed.")}}>
+                  <span class="material-symbols-rounded">stop_circle</span>${this.busy[n]?"Closing…":"Close"}
                 </button>`:l}
           </div>`})}
       </section>
     `}renderDownloads(){const e=this.status;if(!(e!=null&&e.connected)||!e.reportedAt)return l;const t=e.downloads??[];return t.length?i`
       <section class="card">
         <h3><span class="material-symbols-rounded">download</span>Downloads on the PC</h3>
-        ${t.map(s=>{const o=`cancel:${s.id}`;return i`<div class="row">
+        ${t.map(s=>{const n=`cancel:${s.id}`;return i`<div class="row">
             <div class="grow">
               <div class="label">${s.title}${s.label?i` <span class="help">· ${s.label}</span>`:l}</div>
               <div class="help">
                 ${xe[s.status]??s.status}${s.message?` — ${s.message}`:""}
               </div>
             </div>
-            ${Le(s)&&z(e,"download")?i`<button class="btn-inline" ?disabled=${this.busy[o]}
-                  @click=${()=>void this.run(o,{action:"cancel-download",downloadId:s.id},"Cancelled.")}>
+            ${Le(s)&&D(e,"download")?i`<button class="btn-inline" ?disabled=${this.busy[n]}
+                  @click=${()=>void this.run(n,{action:"cancel-download",downloadId:s.id},"Cancelled.")}>
                   <span class="material-symbols-rounded">close</span>Cancel
                 </button>`:l}
           </div>`})}
@@ -176,7 +176,7 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
       .banner.error { background: color-mix(in srgb, var(--oppai-fav) 18%, transparent); color: var(--oppai-fav); }
       .banner.info { background: var(--oppai-surface-2); color: var(--oppai-text-dim); }
       .empty { font-size: 13px; color: var(--oppai-text-muted); padding: 6px 0 10px; }
-    `];E([d()],$.prototype,"status",2);E([d()],$.prototype,"keys",2);E([d()],$.prototype,"loadError",2);E([d()],$.prototype,"link",2);E([d()],$.prototype,"linkExpires",2);E([d()],$.prototype,"linking",2);E([d()],$.prototype,"busy",2);$=E([J("oppai-launchy-panel")],$);var Ve=Object.defineProperty,We=Object.getOwnPropertyDescriptor,h=(e,t,s,o)=>{for(var n=o>1?void 0:o?We(t,s):t,r=e.length-1,a;r>=0;r--)(a=e[r])&&(n=(o?a(t,s,n):a(n))||n);return o&&n&&Ve(t,s,n),n};const Ke=[{id:"appearance",label:"Appearance",icon:"palette",group:"You"},{id:"account",label:"Account",icon:"account_circle",group:"You"},{id:"library",label:"Library",icon:"inventory_2",group:"Library"},{id:"scraping",label:"Import & scraping",icon:"travel_explore",group:"Library",server:!0},{id:"ai",label:"Tagging & descriptions",icon:"smart_toy",group:"AI",server:!0},{id:"imagegen",label:"Image generation",icon:"auto_awesome",group:"AI",server:!0},{id:"android",label:"Android app",icon:"android",group:"Apps"},{id:"launchy",label:"Launchy",icon:"sports_esports",group:"Apps"},{id:"storage",label:"Storage",icon:"hard_drive",group:"Server"},{id:"privacy",label:"Privacy",icon:"visibility_off",group:"Server",server:!0,adminOnly:!0},{id:"diagnostics",label:"Diagnostics",icon:"speed",group:"Server",adminOnly:!0},{id:"about",label:"About",icon:"info",group:"Server"}];let c=class extends Y{constructor(){super(...arguments),this.only="",this.tab="appearance",this.settings=null,this.info=null,this.stats=null,this.apk=null,this.loadError="",this.passkeyList=null,this.passkeyBusy=!1,this.passkeyError="",this.passkeyMsg="",this.passkeyName="",this.passkeyRenaming=null,this.passkeyRevoking=null,this.passkeyPassword="",this.diag=null,this.uiDiag=null,this.storage=null,this.storageBusy=!1,this.storageErr="",this.diagBusy=!1,this.diagErr="",this.dirty=!1,this.saving=!1,this.saved=!1,this.theme=oe(),this.fit=ne(),this.hideLibby=re(),this.genModels=[],this.genLoras=[],this.genLoraTriggers={},this.genBoards=[],this.genError="",this.genStatus=null,this.genChecks=null,this.genCheckBusy=!1,this.genRestart="",this.genCheckErr="",this.comfy=null,this.comfyErr="",this.comfyBusy=!1,this.comfyFolder=null,this.pwCurrent="",this.pwNew="",this.pwConfirm="",this.pwBusy=!1,this.pwMsg="",this.pwErr="",this.refs=null,this.refStamp=Date.now(),this.refNote="",this.tts=void 0,this.describe=null,this.describeBusy=!1,this.describeNote="",this.ttsErrors={},this.addPasskey=async()=>{this.passkeyBusy=!0,this.passkeyError="",this.passkeyMsg="";try{const e=await ye(this.passkeyName.trim());this.passkeyName="",this.passkeyMsg=`Added “${e.name}”. You can sign in with it now.`,await this.loadPasskeys()}catch(e){const t=we(e);t&&(this.passkeyError=t)}finally{this.passkeyBusy=!1}},this.cancelRevoke=()=>{this.passkeyRevoking=null,this.passkeyPassword=""},this.loadStorage=async()=>{this.storageBusy=!0,this.storageErr="";try{this.storage=await v.storage()}catch(e){this.storageErr=e.message}finally{this.storageBusy=!1}},this.runCleanup=async()=>{this.storageBusy=!0,this.storageErr="";try{const e=await v.cleanupStorage(["uploads","temp"]);this.storage=e.storage,k(`Reclaimed ${e.freedHuman}.`,"success")}catch(e){this.storageErr=e.message}finally{this.storageBusy=!1}},this.loadDiagnostics=async()=>{this.diagBusy=!0,this.diagErr="";try{this.diag=await v.diagnostics(),this.uiDiag=G()}catch(e){this.diagErr=e.message}finally{this.diagBusy=!1}},this.resetDiagnostics=async()=>{this.diagBusy=!0,this.diagErr="";try{le(),await v.resetDiagnostics(),this.diag=await v.diagnostics(),this.uiDiag=G()}catch(e){this.diagErr=e.message}finally{this.diagBusy=!1}}}connectedCallback(){super.connectedCallback(),de(this,"settings"),this.load(),this.loadGenLists(),this.loadComfy(),this.loadTTS(),this.loadDescribe(),this.loadReferences()}async loadReferences(){try{this.refs=await v.libbyReferences()}catch{this.refs=null}}async setReference(e,t){var n;const s=(n=t.files)==null?void 0:n[0];if(t.value="",!s)return;const o=await new Promise((r,a)=>{const u=new FileReader;u.onload=()=>r(String(u.result)),u.onerror=()=>a(u.error),u.readAsDataURL(s)});try{await v.setLibbyReference(e,o),this.refNote="",this.refStamp=Date.now(),await this.loadReferences()}catch(r){this.refNote=r.message}}async clearReference(e){try{await v.deleteLibbyReference(e),this.refNote="",await this.loadReferences()}catch(t){this.refNote=t.message}}referenceTile(e,t){var o;const s=!!((o=this.refs)!=null&&o[e]);return i`<div style="display:flex;flex-direction:column;gap:6px;align-items:center;width:132px;">
+    `];E([d()],$.prototype,"status",2);E([d()],$.prototype,"keys",2);E([d()],$.prototype,"loadError",2);E([d()],$.prototype,"link",2);E([d()],$.prototype,"linkExpires",2);E([d()],$.prototype,"linking",2);E([d()],$.prototype,"busy",2);$=E([J("oppai-launchy-panel")],$);var We=Object.defineProperty,Ve=Object.getOwnPropertyDescriptor,h=(e,t,s,n)=>{for(var o=n>1?void 0:n?Ve(t,s):t,r=e.length-1,a;r>=0;r--)(a=e[r])&&(o=(n?a(t,s,o):a(o))||o);return n&&o&&We(t,s,o),o};const Ke=[{id:"appearance",label:"Appearance",icon:"palette",group:"You"},{id:"account",label:"Account",icon:"account_circle",group:"You"},{id:"library",label:"Library",icon:"inventory_2",group:"Library"},{id:"scraping",label:"Import & scraping",icon:"travel_explore",group:"Library",server:!0},{id:"ai",label:"Tagging & descriptions",icon:"smart_toy",group:"AI",server:!0},{id:"imagegen",label:"Image generation",icon:"auto_awesome",group:"AI",server:!0},{id:"android",label:"Android app",icon:"android",group:"Apps"},{id:"launchy",label:"Launchy",icon:"sports_esports",group:"Apps"},{id:"storage",label:"Storage",icon:"hard_drive",group:"Server"},{id:"privacy",label:"Privacy",icon:"visibility_off",group:"Server",server:!0,adminOnly:!0},{id:"diagnostics",label:"Diagnostics",icon:"speed",group:"Server",adminOnly:!0},{id:"about",label:"About",icon:"info",group:"Server"}];let c=class extends Y{constructor(){super(...arguments),this.only="",this.tab="appearance",this.settings=null,this.info=null,this.stats=null,this.apk=null,this.loadError="",this.passkeyList=null,this.passkeyBusy=!1,this.passkeyError="",this.passkeyMsg="",this.passkeyName="",this.passkeyRenaming=null,this.passkeyRevoking=null,this.passkeyPassword="",this.diag=null,this.uiDiag=null,this.storage=null,this.storageBusy=!1,this.storageErr="",this.diagBusy=!1,this.diagErr="",this.dirty=!1,this.saving=!1,this.saved=!1,this.theme=oe(),this.fit=ne(),this.hideLibby=re(),this.genModels=[],this.genLoras=[],this.genLoraTriggers={},this.genBoards=[],this.genError="",this.genStatus=null,this.genChecks=null,this.genCheckBusy=!1,this.genRestart="",this.genCheckErr="",this.comfy=null,this.comfyErr="",this.comfyBusy=!1,this.comfyFolder=null,this.pwCurrent="",this.pwNew="",this.pwConfirm="",this.pwBusy=!1,this.pwMsg="",this.pwErr="",this.refs=null,this.refStamp=Date.now(),this.refNote="",this.tts=void 0,this.describe=null,this.describeBusy=!1,this.describeNote="",this.ttsErrors={},this.addPasskey=async()=>{this.passkeyBusy=!0,this.passkeyError="",this.passkeyMsg="";try{const e=await be(this.passkeyName.trim());this.passkeyName="",this.passkeyMsg=`Added “${e.name}”. You can sign in with it now.`,await this.loadPasskeys()}catch(e){const t=we(e);t&&(this.passkeyError=t)}finally{this.passkeyBusy=!1}},this.cancelRevoke=()=>{this.passkeyRevoking=null,this.passkeyPassword=""},this.loadStorage=async()=>{this.storageBusy=!0,this.storageErr="";try{this.storage=await v.storage()}catch(e){this.storageErr=e.message}finally{this.storageBusy=!1}},this.runCleanup=async()=>{this.storageBusy=!0,this.storageErr="";try{const e=await v.cleanupStorage(["uploads","temp"]);this.storage=e.storage,k(`Reclaimed ${e.freedHuman}.`,"success")}catch(e){this.storageErr=e.message}finally{this.storageBusy=!1}},this.loadDiagnostics=async()=>{this.diagBusy=!0,this.diagErr="";try{this.diag=await v.diagnostics(),this.uiDiag=F()}catch(e){this.diagErr=e.message}finally{this.diagBusy=!1}},this.resetDiagnostics=async()=>{this.diagBusy=!0,this.diagErr="";try{le(),await v.resetDiagnostics(),this.diag=await v.diagnostics(),this.uiDiag=F()}catch(e){this.diagErr=e.message}finally{this.diagBusy=!1}}}connectedCallback(){super.connectedCallback(),de(this,"settings"),this.load(),this.loadGenLists(),this.loadComfy(),this.loadTTS(),this.loadDescribe(),this.loadReferences()}async loadReferences(){try{this.refs=await v.libbyReferences()}catch{this.refs=null}}async setReference(e,t){var o;const s=(o=t.files)==null?void 0:o[0];if(t.value="",!s)return;const n=await new Promise((r,a)=>{const u=new FileReader;u.onload=()=>r(String(u.result)),u.onerror=()=>a(u.error),u.readAsDataURL(s)});try{await v.setLibbyReference(e,n),this.refNote="",this.refStamp=Date.now(),await this.loadReferences()}catch(r){this.refNote=r.message}}async clearReference(e){try{await v.deleteLibbyReference(e),this.refNote="",await this.loadReferences()}catch(t){this.refNote=t.message}}referenceTile(e,t){var n;const s=!!((n=this.refs)!=null&&n[e]);return i`<div style="display:flex;flex-direction:column;gap:6px;align-items:center;width:132px;">
       <div style="width:132px;height:176px;border-radius:12px;overflow:hidden;display:grid;place-items:center;
         background:var(--md-sys-color-surface-container-highest);color:var(--md-sys-color-on-surface-variant);font-size:12px;text-align:center;">
         ${s?i`<img src=${v.libbyReferenceURL(e,this.refStamp)} alt=${`Libby, ${t.toLowerCase()}`} style="width:100%;height:100%;object-fit:cover;"/>`:i`<span>No picture</span>`}
@@ -186,22 +186,22 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
         <label class="btn-inline">
           ${s?"Replace":"Upload"}
           <input type="file" accept="image/*" hidden ?disabled=${!this.canEdit}
-            @change=${n=>void this.setReference(e,n.target)}/>
+            @change=${o=>void this.setReference(e,o.target)}/>
         </label>
         ${s?i`<button class="btn-inline" ?disabled=${!this.canEdit}
           @click=${()=>void this.clearReference(e)}>Remove</button>`:l}
       </div>
-    </div>`}async load(){try{const[e,t]=await Promise.all([v.getSettings(),v.stats()]);this.settings=e.settings,this.info=e.readOnly,this.stats=t}catch(e){this.loadError=e.message}try{this.apk=await v.apkInfo()}catch{this.apk={available:!1}}}get canEdit(){var e;return!!((e=this.user)!=null&&e.isAdmin)}openTab(e){ce(()=>{this.tab=e}),e==="diagnostics"&&!this.diag&&!this.diagBusy&&this.loadDiagnostics(),e==="storage"&&!this.storage&&!this.storageBusy&&this.loadStorage(),e==="account"&&!this.passkeyList&&this.loadPasskeys()}editLora(e,t){var o;const s=[...((o=this.settings)==null?void 0:o.libbyGenLoras)??[]];s[e]&&(s[e]={...s[e],...t},this.edit({libbyGenLoras:s}))}editCameraLora(e,t){var n;const s=[...((n=this.settings)==null?void 0:n.libbyCameraLoras)??[]];if(!s[e])return;const o={...s[e],...t};t.name&&!s[e].trigger&&(o.trigger=this.genLoraTriggers[t.name]??""),s[e]=o,this.edit({libbyCameraLoras:s})}edit(e){!this.settings||!this.canEdit||(this.settings={...this.settings,...e},this.dirty=!0,this.saved=!1)}async save(){if(this.settings){this.saving=!0;try{const e=await v.saveSettings(this.settings);this.settings=e.settings,this.info=e.readOnly,this.dirty=!1,this.saved=!0,pe(!!e.settings.incognito),this.loadTTS(!0),this.loadDescribe(),this.loadGenLists(),this.loadComfy()}catch(e){this.loadError=e.message}finally{this.saving=!1}}}pickTheme(e){this.theme=e,he(e),ue(e)}pickFit(e){this.fit=e,ve(e)}async changePassword(){if(this.pwMsg="",this.pwErr="",this.pwNew!==this.pwConfirm){this.pwErr="The new passwords don't match.";return}if(this.pwNew.length<8){this.pwErr="Use at least 8 characters.";return}this.pwBusy=!0;try{await v.changePassword(this.pwCurrent,this.pwNew),this.pwMsg="Password changed.",this.pwCurrent=this.pwNew=this.pwConfirm=""}catch(e){this.pwErr=e.message}finally{this.pwBusy=!1}}render(){if(this.only)return this.renderOnly(this.only);const e=Ke.filter(n=>!n.adminOnly||this.canEdit),t=e.find(n=>n.id===this.tab)??e[0],s=this.dirty||this.saved;let o="";return i`
+    </div>`}async load(){try{const[e,t]=await Promise.all([v.getSettings(),v.stats()]);this.settings=e.settings,this.info=e.readOnly,this.stats=t}catch(e){this.loadError=e.message}try{this.apk=await v.apkInfo()}catch{this.apk={available:!1}}}get canEdit(){var e;return!!((e=this.user)!=null&&e.isAdmin)}openTab(e){ce(()=>{this.tab=e}),e==="diagnostics"&&!this.diag&&!this.diagBusy&&this.loadDiagnostics(),e==="storage"&&!this.storage&&!this.storageBusy&&this.loadStorage(),e==="account"&&!this.passkeyList&&this.loadPasskeys()}editLora(e,t){var n;const s=[...((n=this.settings)==null?void 0:n.libbyGenLoras)??[]];s[e]&&(s[e]={...s[e],...t},this.edit({libbyGenLoras:s}))}editCameraLora(e,t){var o;const s=[...((o=this.settings)==null?void 0:o.libbyCameraLoras)??[]];if(!s[e])return;const n={...s[e],...t};t.name&&!s[e].trigger&&(n.trigger=this.genLoraTriggers[t.name]??""),s[e]=n,this.edit({libbyCameraLoras:s})}edit(e){!this.settings||!this.canEdit||(this.settings={...this.settings,...e},this.dirty=!0,this.saved=!1)}async save(){if(this.settings){this.saving=!0;try{const e=await v.saveSettings(this.settings);this.settings=e.settings,this.info=e.readOnly,this.dirty=!1,this.saved=!0,pe(!!e.settings.incognito),this.loadTTS(!0),this.loadDescribe(),this.loadGenLists(),this.loadComfy()}catch(e){this.loadError=e.message}finally{this.saving=!1}}}pickTheme(e){this.theme=e,he(e),ue(e)}pickFit(e){this.fit=e,ve(e)}async changePassword(){if(this.pwMsg="",this.pwErr="",this.pwNew!==this.pwConfirm){this.pwErr="The new passwords don't match.";return}if(this.pwNew.length<8){this.pwErr="Use at least 8 characters.";return}this.pwBusy=!0;try{await v.changePassword(this.pwCurrent,this.pwNew),this.pwMsg="Password changed.",this.pwCurrent=this.pwNew=this.pwConfirm=""}catch(e){this.pwErr=e.message}finally{this.pwBusy=!1}}render(){if(this.only)return this.renderOnly(this.only);const e=Ke.filter(o=>!o.adminOnly||this.canEdit),t=e.find(o=>o.id===this.tab)??e[0],s=this.dirty||this.saved;let n="";return i`
       <div class="shell">
         <nav class="cat-rail" aria-label="Settings categories">
-          ${e.map(n=>{const r=n.group===o?l:i`<div class="cat-head">${n.group}</div>`;return o=n.group,i`${r}
+          ${e.map(o=>{const r=o.group===n?l:i`<div class="cat-head">${o.group}</div>`;return n=o.group,i`${r}
               <button
-                class="cat-row ${n.id===this.tab?"on":""}"
-                aria-current=${n.id===this.tab?"page":"false"}
-                @click=${()=>this.openTab(n.id)}
+                class="cat-row ${o.id===this.tab?"on":""}"
+                aria-current=${o.id===this.tab?"page":"false"}
+                @click=${()=>this.openTab(o.id)}
               >
-                <span class="material-symbols-rounded">${n.icon}</span>
-                <span class="cat-label">${n.label}</span>
+                <span class="material-symbols-rounded">${o.icon}</span>
+                <span class="cat-label">${o.label}</span>
               </button>`})}
           <div class="cat-sep"></div>
           <button class="cat-row danger" @click=${()=>this.dispatchEvent(new CustomEvent("logout",{bubbles:!0,composed:!0}))}>
@@ -389,7 +389,7 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
               role="switch"
               aria-checked=${this.hideLibby?"true":"false"}
               aria-label="Hide Libby"
-              @click=${()=>{this.hideLibby=!this.hideLibby,ge(this.hideLibby)}}
+              @click=${()=>{this.hideLibby=!this.hideLibby,fe(this.hideLibby)}}
             ></button>
           </div>
         </div>
@@ -403,9 +403,9 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
             </div>
           </div>
           <div class="field-control seg">
-            ${fe.map(e=>i`<button
+            ${ge.map(e=>i`<button
               class=${me()===e?"on":""}
-              @click=${()=>{be(e),this.requestUpdate()}}
+              @click=${()=>{ye(e),this.requestUpdate()}}
             >${e}×</button>`)}
           </div>
         </div>
@@ -426,7 +426,7 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
           </div>
         </div>
       </section>
-    `}renderLibbyVoice(){const e=this.settings;if(!e)return l;const t=this.tts,s=(t==null?void 0:t.voices)??[],o=s.filter(a=>a.installed),n=s.filter(a=>!a.installed),r=new Set((t==null?void 0:t.downloading)??[]);return i`<section class="card">
+    `}renderLibbyVoice(){const e=this.settings;if(!e)return l;const t=this.tts,s=(t==null?void 0:t.voices)??[],n=s.filter(a=>a.installed),o=s.filter(a=>!a.installed),r=new Set((t==null?void 0:t.downloading)??[]);return i`<section class="card">
       <h3><span class="material-symbols-rounded">record_voice_over</span>Libby’s voice</h3>
       <p class="card-sub">
         ${t===void 0?"Checking the server…":t?t.engine==="kokoro"&&t.ready?i`Speaking with <strong>Kokoro</strong>, the natural voice, on the server’s CPU. Turn playback on per device with the speaker button in Chat.`:t.engine==="piper"&&t.ready?i`Speaking with <strong>piper</strong> on the server’s CPU. Turn playback on per device with the speaker button in Chat.`:t.engine==="openai"&&t.ready?i`Speaking through the speech server at <code>${e.ttsUrl}</code>.`:i`Not speaking from the server${t.detail?i` — ${t.detail}`:l}. Devices fall back to their own voices.`:"The server did not answer about speech."}
@@ -447,13 +447,13 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
       <div class="field">
         <div class="field-text">
           <div class="field-label">Voice</div>
-          <div class="field-help">${o.length?"Installed voices. Downloaded ones can be removed below.":"No voice is installed yet — download one below."}</div>
+          <div class="field-help">${n.length?"Installed voices. Downloaded ones can be removed below.":"No voice is installed yet — download one below."}</div>
         </div>
         <div class="field-control" style="display:flex; gap:8px; align-items:center;">
           <select ?disabled=${!this.canEdit} @change=${a=>this.edit({ttsVoice:a.target.value})}>
             <option value="" ?selected=${!e.ttsVoice}>Engine’s default</option>
-            ${o.map(a=>i`<option value=${a.id} ?selected=${a.id===e.ttsVoice}>${a.label}${a.bundled?" · bundled":""}</option>`)}
-            ${e.ttsVoice&&!o.some(a=>a.id===e.ttsVoice)?i`<option value=${e.ttsVoice} selected>${e.ttsVoice} (not installed)</option>`:l}
+            ${n.map(a=>i`<option value=${a.id} ?selected=${a.id===e.ttsVoice}>${a.label}${a.bundled?" · bundled":""}</option>`)}
+            ${e.ttsVoice&&!n.some(a=>a.id===e.ttsVoice)?i`<option value=${e.ttsVoice} selected>${e.ttsVoice} (not installed)</option>`:l}
           </select>
           <button class="btn" ?disabled=${!(t!=null&&t.ready)} title="Hear the current voice" @click=${()=>void this.testVoice()}>Test</button>
         </div>
@@ -477,9 +477,9 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
         </div>
         <div class="field-control">
           <ul class="voice-list">
-            ${o.map(a=>i`<li><span>${a.label}<small>${a.quality??""}${a.bundled?" · bundled":""}</small></span>
+            ${n.map(a=>i`<li><span>${a.label}<small>${a.quality??""}${a.bundled?" · bundled":""}</small></span>
               ${!a.bundled&&this.canEdit?i`<button class="btn" @click=${()=>void this.deleteVoice(a.id)}>Remove</button>`:l}</li>`)}
-            ${n.map(a=>i`<li><span>${a.label}<small>${a.quality??""}${a.bytes?` · ${Math.round(a.bytes/1e6)} MB`:""}</small></span>
+            ${o.map(a=>i`<li><span>${a.label}<small>${a.quality??""}${a.bytes?` · ${Math.round(a.bytes/1e6)} MB`:""}</small></span>
               ${this.ttsErrors[a.id]?i`<em class="voice-error">${this.ttsErrors[a.id]}</em>`:l}
               ${r.has(a.id)?i`<span class="hint">Downloading…</span>`:this.canEdit?i`<button class="btn" @click=${()=>void this.downloadVoice(a.id)}>Download</button>`:l}</li>`)}
           </ul>
@@ -733,7 +733,7 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
           pictures for you in chat. She always asks first — nothing is generated or saved until
           you press Allow.
         </p>
-      </section>`;const t=this.genModels,s=this.genLoras,o=e.libbyGenLoras??[],n=this.genBoards;return i`<section class="card">
+      </section>`;const t=this.genModels,s=this.genLoras,n=e.libbyGenLoras??[],o=this.genBoards;return i`<section class="card">
       <h3><span class="material-symbols-rounded">auto_awesome</span>Libby’s image generation</h3>
       <p class="card-sub">
         What she uses when she offers to make you a picture. She always asks first — nothing is
@@ -766,34 +766,34 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
             LoRAs you like her drawn with.</div>
         </div>
         <div class="field-control" style="display:flex; flex-direction:column; gap:8px; align-items:stretch;">
-          ${o.map((a,u)=>i`<div style="display:flex; gap:8px; align-items:center;">
+          ${n.map((a,u)=>i`<div style="display:flex; gap:8px; align-items:center;">
             ${s.length?i`<select style="flex:1; min-width:0;" ?disabled=${!this.canEdit}
                   aria-label="LoRA ${u+1}"
-                  @change=${f=>this.editLora(u,{name:f.target.value})}>
-                  ${(s.includes(a.name)?s:[a.name,...s]).map(f=>i`<option value=${f} ?selected=${f===a.name}>${f}</option>`)}
+                  @change=${g=>this.editLora(u,{name:g.target.value})}>
+                  ${(s.includes(a.name)?s:[a.name,...s]).map(g=>i`<option value=${g} ?selected=${g===a.name}>${g}</option>`)}
                 </select>`:i`<input type="text" autocomplete="off" placeholder="LoRA name" style="flex:1; min-width:0;"
                   aria-label="LoRA ${u+1}"
                   .value=${a.name} ?disabled=${!this.canEdit}
-                  @change=${f=>this.editLora(u,{name:f.target.value})} />`}
+                  @change=${g=>this.editLora(u,{name:g.target.value})} />`}
             <input type="number" step="0.05" min="-2" max="2" style="width:90px;"
               aria-label="LoRA ${u+1} strength"
               .value=${String(a.weight)} ?disabled=${!this.canEdit}
-              @change=${f=>this.editLora(u,{weight:Number(f.target.value)})} />
+              @change=${g=>this.editLora(u,{weight:Number(g.target.value)})} />
             <button class="btn-inline" title="Remove" aria-label="Remove LoRA ${u+1}" ?disabled=${!this.canEdit}
-              @click=${()=>this.edit({libbyGenLoras:o.filter((f,y)=>y!==u)})}>
+              @click=${()=>this.edit({libbyGenLoras:n.filter((g,b)=>b!==u)})}>
               <span class="material-symbols-rounded" style="font-size:18px;">delete</span>
             </button>
           </div>`)}
           <button class="btn-inline" style="align-self:flex-start; display:inline-flex; align-items:center; gap:6px;"
-            ?disabled=${!this.canEdit||o.length>=8}
-            @click=${()=>this.edit({libbyGenLoras:[...o,{name:s.find(a=>!o.some(u=>u.name===a))??"",weight:1}]})}>
+            ?disabled=${!this.canEdit||n.length>=8}
+            @click=${()=>this.edit({libbyGenLoras:[...n,{name:s.find(a=>!n.some(u=>u.name===a))??"",weight:1}]})}>
             <span class="material-symbols-rounded" style="font-size:18px;">add</span>
-            ${o.length?"Add another LoRA":"Add a LoRA"}
+            ${n.length?"Add another LoRA":"Add a LoRA"}
           </button>
         </div>
       </div>
 
-      ${n.length?i`<div class="field">
+      ${o.length?i`<div class="field">
             <div class="field-text">
               <div class="field-label">Board</div>
               <div class="field-help">The InvokeAI board her pictures are filed into, so what she
@@ -803,7 +803,7 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
               <select ?disabled=${!this.canEdit}
                 @change=${a=>this.edit({libbyGenBoard:a.target.value})}>
                 <option value="" ?selected=${!e.libbyGenBoard}>Uncategorized</option>
-                ${n.map(a=>i`<option value=${a} ?selected=${a===e.libbyGenBoard}>${a}</option>`)}
+                ${o.map(a=>i`<option value=${a} ?selected=${a===e.libbyGenBoard}>${a}</option>`)}
               </select>
             </div>
           </div>`:l}
@@ -959,32 +959,32 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
         </div>
       </div>
       <div class="field-control" style="display:flex; flex-direction:column; gap:12px; align-items:stretch;">
-        ${s.map((o,n)=>i`<div style="display:flex; flex-direction:column; gap:6px;">
+        ${s.map((n,o)=>i`<div style="display:flex; flex-direction:column; gap:6px;">
           <div style="display:flex; gap:8px; align-items:center;">
-            ${t.length?i`<select style="flex:1; min-width:0;" ?disabled=${!this.canEdit} aria-label="Optional LoRA ${n+1}"
-                  @change=${r=>this.editCameraLora(n,{name:r.target.value})}>
-                  ${(t.includes(o.name)?t:[o.name,...t]).map(r=>i`<option value=${r} ?selected=${r===o.name}>${r}</option>`)}
+            ${t.length?i`<select style="flex:1; min-width:0;" ?disabled=${!this.canEdit} aria-label="Optional LoRA ${o+1}"
+                  @change=${r=>this.editCameraLora(o,{name:r.target.value})}>
+                  ${(t.includes(n.name)?t:[n.name,...t]).map(r=>i`<option value=${r} ?selected=${r===n.name}>${r}</option>`)}
                 </select>`:i`<input type="text" autocomplete="off" placeholder="LoRA name" style="flex:1; min-width:0;"
-                  aria-label="Optional LoRA ${n+1}" .value=${o.name} ?disabled=${!this.canEdit}
-                  @change=${r=>this.editCameraLora(n,{name:r.target.value})} />`}
+                  aria-label="Optional LoRA ${o+1}" .value=${n.name} ?disabled=${!this.canEdit}
+                  @change=${r=>this.editCameraLora(o,{name:r.target.value})} />`}
             <input type="number" step="0.05" min="-2" max="2" style="width:90px;"
-              aria-label="Optional LoRA ${n+1} strength" .value=${String(o.weight)} ?disabled=${!this.canEdit}
-              @change=${r=>this.editCameraLora(n,{weight:Number(r.target.value)})} />
-            <button class="btn-inline" title="Remove" aria-label="Remove optional LoRA ${n+1}" ?disabled=${!this.canEdit}
-              @click=${()=>this.edit({libbyCameraLoras:s.filter((r,a)=>a!==n)})}>
+              aria-label="Optional LoRA ${o+1} strength" .value=${String(n.weight)} ?disabled=${!this.canEdit}
+              @change=${r=>this.editCameraLora(o,{weight:Number(r.target.value)})} />
+            <button class="btn-inline" title="Remove" aria-label="Remove optional LoRA ${o+1}" ?disabled=${!this.canEdit}
+              @click=${()=>this.edit({libbyCameraLoras:s.filter((r,a)=>a!==o)})}>
               <span class="material-symbols-rounded" style="font-size:18px;">delete</span>
             </button>
           </div>
           <input type="text" autocomplete="off" maxlength="160" placeholder="When it helps — e.g. POV shots from above"
-            aria-label="When optional LoRA ${n+1} helps" .value=${o.when} ?disabled=${!this.canEdit}
-            @change=${r=>this.editCameraLora(n,{when:r.target.value})} />
+            aria-label="When optional LoRA ${o+1} helps" .value=${n.when} ?disabled=${!this.canEdit}
+            @change=${r=>this.editCameraLora(o,{when:r.target.value})} />
           <input type="text" autocomplete="off" maxlength="200" placeholder="Trigger words (optional)"
-            aria-label="Optional LoRA ${n+1} trigger words" .value=${o.trigger} ?disabled=${!this.canEdit}
-            @change=${r=>this.editCameraLora(n,{trigger:r.target.value})} />
+            aria-label="Optional LoRA ${o+1} trigger words" .value=${n.trigger} ?disabled=${!this.canEdit}
+            @change=${r=>this.editCameraLora(o,{trigger:r.target.value})} />
         </div>`)}
         <button class="btn-inline" style="align-self:flex-start; display:inline-flex; align-items:center; gap:6px;"
           ?disabled=${!this.canEdit||s.length>=12}
-          @click=${()=>{const o=t.find(n=>!s.some(r=>r.name===n))??"";this.edit({libbyCameraLoras:[...s,{name:o,weight:1,when:"",trigger:this.genLoraTriggers[o]??""}]})}}>
+          @click=${()=>{const n=t.find(o=>!s.some(r=>r.name===o))??"";this.edit({libbyCameraLoras:[...s,{name:n,weight:1,when:"",trigger:this.genLoraTriggers[n]??""}]})}}>
           <span class="material-symbols-rounded" style="font-size:18px;">add</span>
           ${s.length?"Add another":"Add one she can choose"}
         </button>
@@ -1327,9 +1327,9 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
               </div>
             `:i`<div class="field-help">Loading…</div>`}
       </section>
-    `}renderVideoGen(){var n,r;const e=this.settings,t=(a,u,f)=>i`
-      <details class="clip-paste" ?open=${f&&!!a}>
-        <summary>Or paste a workflow of your own${a?f?" (in use)":" (not used while a model is picked)":""}</summary>
+    `}renderVideoGen(){const e=this.settings,t=(o,r,a)=>i`
+      <details class="clip-paste" ?open=${a&&!!o}>
+        <summary>Or paste a workflow of your own${o?a?" (in use)":" (not used while a model is picked)":""}</summary>
         <div class="field-help" style="margin:8px 0 6px;">
           For a model OppaiLib doesn't wire itself (LTX-Video, AnimateDiff, Hunyuan…): build it in ComfyUI, export it
           with <em>Workflow → Export (API)</em> and paste it here, with placeholders where a run varies, each as a whole
@@ -1338,9 +1338,9 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
           <code>"{{frames}}"</code>, <code>"{{fps}}"</code>, <code>"{{steps}}"</code>.
         </div>
         <textarea rows="4" style="width:100%;font-family:monospace;font-size:11px;" placeholder='{"3": {"class_type": "KSampler", …}}'
-          .value=${a} ?disabled=${!this.canEdit}
-          @change=${y=>u(y.target.value)}></textarea>
-      </details>`,s=e==null?void 0:e.clipImageModels,o=e==null?void 0:e.clipTextModels;return i`
+          .value=${o} ?disabled=${!this.canEdit}
+          @change=${u=>r(u.target.value)}></textarea>
+      </details>`,s=e==null?void 0:e.clipImageModels,n=e==null?void 0:e.clipTextModels;return i`
       <section class="card">
         <h3><span class="material-symbols-rounded">movie</span>Video</h3>
         <p class="card-sub">
@@ -1360,29 +1360,24 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
                 <div class="field-control">
                   <input type="text" autocomplete="off" placeholder="http://comfyui:8188"
                     .value=${e.libbyClipUrl??""} ?disabled=${!this.canEdit}
-                    @change=${a=>this.edit({libbyClipUrl:a.target.value})} />
+                    @change=${o=>this.edit({libbyClipUrl:o.target.value})} />
                   <button type="button" class="btn-inline" ?disabled=${this.comfyBusy||!e.libbyClipUrl}
                     title="Read the lists again, after putting new files in ComfyUI's models folders"
                     @click=${()=>void this.loadComfy()}>${this.comfyBusy?"Reading…":"Refresh"}</button>
                 </div>
               </div>
-              <div class="field stack">
-                <div class="field-text">
-                  <div class="field-label">ComfyUI models folder</div>
-                  <div class="field-help">
-                    For installing Wan models and LoRAs from Civitai (Create → Video → <em>Find on Civitai</em>): ComfyUI has
-                    no API that takes a download, so they are written into its <code>models</code> folder. Map that folder
-                    into this container at <code>/comfy-models</code> and it is found by itself; give a path here only if you
-                    mapped it somewhere else.
-                    ${(n=this.comfyFolder)!=null&&n.dir?i`<div class="field-status ok">Installing into ${this.comfyFolder.dir}.</div>`:(r=this.comfyFolder)!=null&&r.problem?i`<div class="field-status bad">${this.comfyFolder.problem}</div>`:this.comfyFolder?i`<div class="field-status">Nothing is mounted at /comfy-models, so Civitai's video mode can browse but not install.</div>`:l}
-                  </div>
-                </div>
-                <div class="field-control">
-                  <input type="text" autocomplete="off" placeholder="/comfy-models"
-                    .value=${e.comfyModelsDir??""} ?disabled=${!this.canEdit}
-                    @change=${a=>this.edit({comfyModelsDir:a.target.value})} />
-                </div>
-              </div>
+              ${this.renderComfyFolder("ComfyUI models folder",i`For installing Wan models and LoRAs from Civitai
+                  (Create → Video → <em>Find on Civitai</em>): ComfyUI has no API that takes a download, so they are
+                  written into its <code>models</code> folder. Map that folder into this container at
+                  <code>/comfy-models</code> and it is found by itself; give a path here only if you mapped it somewhere
+                  else.`,"/comfy-models",e.comfyModelsDir,o=>this.edit({comfyModelsDir:o}),this.comfyFolder&&{dir:this.comfyFolder.dir,problem:this.comfyFolder.problem,ok:i`Installing into ${this.comfyFolder.dir}.`,none:this.comfyFolder.modelDir||this.comfyFolder.loraDir?"Nothing is mounted at /comfy-models; the folders below are enough for Wan models and LoRAs.":"Nothing is mounted at /comfy-models, so Civitai's video mode can browse but not install."})}
+              ${this.renderComfyFolder("Wan models folder",i`Where Wan diffusion models go, if they are not in the
+                  models folder's <code>diffusion_models</code> — kept on another share through ComfyUI's
+                  <code>extra_model_paths.yaml</code>, say. Map it at <code>/comfy-diffusion-models</code>, or give its
+                  path here. Blank uses <code>diffusion_models</code>.`,"/comfy-diffusion-models",e.comfyDiffusionDir,o=>this.edit({comfyDiffusionDir:o}),this.comfyFolder&&{dir:this.comfyFolder.modelDir,problem:this.comfyFolder.modelProblem,ok:i`Wan models go into ${this.comfyFolder.modelDir}.`,none:"No folder for Wan models yet — set the models folder or this one."})}
+              ${this.renderComfyFolder("LoRA folder",i`Where Wan LoRAs go, if they are not in the models folder's
+                  <code>loras</code>. Map it at <code>/comfy-loras</code>, or give its path here. Blank uses
+                  <code>loras</code>.`,"/comfy-loras",e.comfyLoraDir,o=>this.edit({comfyLoraDir:o}),this.comfyFolder&&{dir:this.comfyFolder.loraDir,problem:this.comfyFolder.loraProblem,ok:i`LoRAs go into ${this.comfyFolder.loraDir}.`,none:"No folder for LoRAs yet — set the models folder or this one."})}
               <div class="field-help" style="margin:0 0 4px;">
                 Wan is wired here: pick its files and OppaiLib builds the workflow. Wan 2.2's 14B models come as a
                 pair — a <b>high-noise</b> model that sets out the motion over the first half of the steps and a
@@ -1392,20 +1387,33 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
                 <code>wan2.2_vae</code>). An all-in-one checkpoint has both inside and needs nothing beside it.
               </div>
               ${this.renderClipModels("From a picture",i`Image to video: brings a still to life — what Animate on a
-                picture and Libby's clips run.`,!0,s,a=>this.edit({clipImageModels:a}))}
-              ${t(e.libbyClipWorkflow??"",a=>this.edit({libbyClipWorkflow:a}),!(s!=null&&s.model))}
-              ${this.renderClipModels("From words",i`Text to video: a clip from a description alone. Optional.`,!1,o,a=>this.edit({clipTextModels:a}))}
-              ${t(e.clipTextWorkflow??"",a=>this.edit({clipTextWorkflow:a}),!(o!=null&&o.model))}
+                picture and Libby's clips run.`,!0,s,o=>this.edit({clipImageModels:o}))}
+              ${t(e.libbyClipWorkflow??"",o=>this.edit({libbyClipWorkflow:o}),!(s!=null&&s.model))}
+              ${this.renderClipModels("From words",i`Text to video: a clip from a description alone. Optional.`,!1,n,o=>this.edit({clipTextModels:o}))}
+              ${t(e.clipTextWorkflow??"",o=>this.edit({clipTextWorkflow:o}),!(n!=null&&n.model))}
             `:i`<div class="field-help">Loading…</div>`}
       </section>
     `}comfyLine(){if(this.comfyErr)return i`<div class="field-status bad">${this.comfyErr}</div>`;const e=this.comfy;if(!e)return l;if(e.missing.length)return i`<div class="field-status bad">This ComfyUI has no ${e.missing.join(", ")} — it is older than Wan 2.2.
         Update it (<em>Manager → Update ComfyUI</em>, or <code>git pull</code> in its folder) and press Refresh.</div>`;const t=e.diffusion.length+e.checkpoints.length;return i`<div class="field-status ok">Found ${t} model${t===1?"":"s"}, ${e.textEncoders.length} text
       encoder${e.textEncoders.length===1?"":"s"}, ${e.vaes.length} VAE${e.vaes.length===1?"":"s"} and
-      ${e.loras.length} LoRA${e.loras.length===1?"":"s"}.</div>`}async loadComfy(){var e;this.comfyBusy=!0,this.comfyErr="",v.comfyInstalls().then(({dir:t,problem:s})=>this.comfyFolder={dir:t,problem:s},()=>{});try{this.comfy=await v.comfyModels()}catch(t){this.comfy=null,(e=this.settings)!=null&&e.libbyClipUrl&&(this.comfyErr=t.message)}finally{this.comfyBusy=!1}}renderClipModels(e,t,s,o,n){const r=o??{model:"",checkpoint:!1,lowModel:"",textEncoder:"",vae:"",loras:[],steps:0,cfg:0,shift:0},a=this.comfy,u=p=>n({...r,...p}),f=(p,g,b)=>i`
-      <option value="" ?selected=${!g}>${b}</option>
-      ${(g&&!p.includes(g)?[g,...p]:p).map(w=>i`<option value=${w} ?selected=${w===g}>${w}</option>`)}`,y=(p,g,b,w,N)=>i`
+      ${e.loras.length} LoRA${e.loras.length===1?"":"s"}.</div>`}async loadComfy(){var e;this.comfyBusy=!0,this.comfyErr="",v.comfyInstalls().then(({jobs:t,...s})=>this.comfyFolder=s,()=>{});try{this.comfy=await v.comfyModels()}catch(t){this.comfy=null,(e=this.settings)!=null&&e.libbyClipUrl&&(this.comfyErr=t.message)}finally{this.comfyBusy=!1}}renderComfyFolder(e,t,s,n,o,r){return i`<div class="field stack">
+      <div class="field-text">
+        <div class="field-label">${e}</div>
+        <div class="field-help">
+          ${t}
+          ${r!=null&&r.dir?i`<div class="field-status ok">${r.ok}</div>`:r!=null&&r.problem?i`<div class="field-status bad">${r.problem}</div>`:r?i`<div class="field-status">${r.none}</div>`:l}
+        </div>
+      </div>
+      <div class="field-control">
+        <input type="text" autocomplete="off" placeholder=${s}
+          .value=${n??""} ?disabled=${!this.canEdit}
+          @change=${a=>o(a.target.value)} />
+      </div>
+    </div>`}renderClipModels(e,t,s,n,o){const r=n??{model:"",checkpoint:!1,lowModel:"",textEncoder:"",vae:"",loras:[],steps:0,cfg:0,shift:0},a=this.comfy,u=p=>o({...r,...p}),g=(p,f,y)=>i`
+      <option value="" ?selected=${!f}>${y}</option>
+      ${(f&&!p.includes(f)?[f,...p]:p).map(w=>i`<option value=${w} ?selected=${w===f}>${w}</option>`)}`,b=(p,f,y,w,N)=>i`
       <select aria-label=${p} ?disabled=${!this.canEdit}
-        @change=${ae=>N(ae.target.value)}>${f(g,b,w)}</select>`,m=(a==null?void 0:a.diffusion)??[],R=(a==null?void 0:a.checkpoints)??[],P=(a==null?void 0:a.loras)??[],U=!!r.lowModel&&!r.checkpoint,se=p=>{const g=R.includes(p)&&!m.includes(p),b=!g&&L(p)==="high";u({model:p,checkpoint:g,lowModel:b?_(p,m)||r.lowModel:""})},B=(p,g)=>u({loras:r.loras.map((b,w)=>w===p?{...b,...g}:b)}),ie=p=>{const g=[{name:p,weight:1,stage:L(p)}],b=_(p,P);b&&!r.loras.some(N=>N.name===b)&&g.push({name:b,weight:1,stage:L(b)});const w=ze(p)&&!r.steps&&!r.cfg?De:{};u({loras:[...r.loras,...g],...w})},M=a?Oe(a,s):null;return i`<div class="field stack">
+        @change=${ae=>N(ae.target.value)}>${g(f,y,w)}</select>`,m=(a==null?void 0:a.diffusion)??[],R=(a==null?void 0:a.checkpoints)??[],P=(a==null?void 0:a.loras)??[],U=!!r.lowModel&&!r.checkpoint,se=p=>{const f=R.includes(p)&&!m.includes(p),y=!f&&L(p)==="high";u({model:p,checkpoint:f,lowModel:y?O(p,m)||r.lowModel:""})},B=(p,f)=>u({loras:r.loras.map((y,w)=>w===p?{...y,...f}:y)}),ie=p=>{const f=[{name:p,weight:1,stage:L(p)}],y=O(p,P);y&&!r.loras.some(N=>N.name===y)&&f.push({name:y,weight:1,stage:L(y)});const w=De(p)&&!r.steps&&!r.cfg?ze:{};u({loras:[...r.loras,...f],...w})},M=a?_e(a,s):null;return i`<div class="field stack">
       <div class="field-text">
         <div class="field-label">${e}</div>
         <div class="field-help">${t}</div>
@@ -1420,38 +1428,38 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
         </select>
         ${r.model&&!r.checkpoint?i`
           <span>Low noise</span>
-          ${y(`${e}: low-noise model`,m,r.lowModel,"None — one model does it all (Wan 2.1, 5B)",p=>u({lowModel:p}))}
+          ${b(`${e}: low-noise model`,m,r.lowModel,"None — one model does it all (Wan 2.1, 5B)",p=>u({lowModel:p}))}
           <span>Text encoder</span>
-          ${y(`${e}: text encoder`,(a==null?void 0:a.textEncoders)??[],r.textEncoder,"Pick one (umt5_xxl)",p=>u({textEncoder:p}))}
+          ${b(`${e}: text encoder`,(a==null?void 0:a.textEncoders)??[],r.textEncoder,"Pick one (umt5_xxl)",p=>u({textEncoder:p}))}
           <span>VAE</span>
-          ${y(`${e}: VAE`,(a==null?void 0:a.vaes)??[],r.vae,"Pick one (wan_2.1_vae)",p=>u({vae:p}))}`:l}
+          ${b(`${e}: VAE`,(a==null?void 0:a.vaes)??[],r.vae,"Pick one (wan_2.1_vae)",p=>u({vae:p}))}`:l}
         ${r.model&&r.checkpoint?i`
           <span>Text encoder</span>
-          ${y(`${e}: text encoder`,(a==null?void 0:a.textEncoders)??[],r.textEncoder,"The checkpoint's own",p=>u({textEncoder:p}))}
+          ${b(`${e}: text encoder`,(a==null?void 0:a.textEncoders)??[],r.textEncoder,"The checkpoint's own",p=>u({textEncoder:p}))}
           <span>VAE</span>
-          ${y(`${e}: VAE`,(a==null?void 0:a.vaes)??[],r.vae,"The checkpoint's own",p=>u({vae:p}))}`:l}
+          ${b(`${e}: VAE`,(a==null?void 0:a.vaes)??[],r.vae,"The checkpoint's own",p=>u({vae:p}))}`:l}
         ${r.model?i`
           <span>LoRAs</span>
           <div class="clip-loras">
-            ${r.loras.map((p,g)=>i`<div class="clip-lora">
-              ${y(`${e}: LoRA ${g+1}`,P,p.name,"Pick a LoRA",b=>B(g,{name:b,stage:L(b)}))}
-              <input type="number" step="0.05" min="-2" max="2" aria-label="${e}: LoRA ${g+1} strength"
+            ${r.loras.map((p,f)=>i`<div class="clip-lora">
+              ${b(`${e}: LoRA ${f+1}`,P,p.name,"Pick a LoRA",y=>B(f,{name:y,stage:L(y)}))}
+              <input type="number" step="0.05" min="-2" max="2" aria-label="${e}: LoRA ${f+1} strength"
                 .value=${String(p.weight)} ?disabled=${!this.canEdit}
-                @change=${b=>B(g,{weight:Number(b.target.value)})} />
-              ${U?i`<select class="stage" aria-label="${e}: LoRA ${g+1} goes on" ?disabled=${!this.canEdit}
-                @change=${b=>B(g,{stage:b.target.value})}>
+                @change=${y=>B(f,{weight:Number(y.target.value)})} />
+              ${U?i`<select class="stage" aria-label="${e}: LoRA ${f+1} goes on" ?disabled=${!this.canEdit}
+                @change=${y=>B(f,{stage:y.target.value})}>
                 <option value="" ?selected=${!p.stage}>Both</option>
                 <option value="high" ?selected=${p.stage==="high"}>High noise</option>
                 <option value="low" ?selected=${p.stage==="low"}>Low noise</option>
               </select>`:l}
-              <button class="btn-inline" title="Remove" aria-label="Remove LoRA ${g+1}" ?disabled=${!this.canEdit}
-                @click=${()=>u({loras:r.loras.filter((b,w)=>w!==g)})}>
+              <button class="btn-inline" title="Remove" aria-label="Remove LoRA ${f+1}" ?disabled=${!this.canEdit}
+                @click=${()=>u({loras:r.loras.filter((y,w)=>w!==f)})}>
                 <span class="material-symbols-rounded" style="font-size:18px;">delete</span></button>
             </div>`)}
             ${P.length?i`<select aria-label="${e}: add a LoRA" ?disabled=${!this.canEdit||r.loras.length>=8}
-              @change=${p=>{const g=p.target;g.value&&ie(g.value),g.value=""}}>
+              @change=${p=>{const f=p.target;f.value&&ie(f.value),f.value=""}}>
               <option value="" selected>${r.loras.length?"Add another LoRA…":"Add a LoRA…"}</option>
-              ${P.filter(p=>!r.loras.some(g=>g.name===p)).map(p=>i`<option value=${p}>${p}</option>`)}
+              ${P.filter(p=>!r.loras.some(f=>f.name===p)).map(p=>i`<option value=${p}>${p}</option>`)}
             </select>`:i`<span class="field-help">${a?"ComfyUI has no LoRAs in models/loras.":"LoRAs are listed once ComfyUI answers."}</span>`}
           </div>
           <span>Steps · CFG · shift</span>
@@ -1471,7 +1479,7 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
             (lightx2v, Lightning) wants 4 steps and CFG 1 — adding one sets them.</div>`:l}
       </div>
       ${M&&!r.model?i`<div class="field-control">
-        <button type="button" class="btn-inline" ?disabled=${!this.canEdit} @click=${()=>n(M)}>
+        <button type="button" class="btn-inline" ?disabled=${!this.canEdit} @click=${()=>o(M)}>
           Pick from what's installed: ${M.model}${M.lowModel?" + its low-noise twin":""}</button>
       </div>`:l}
     </div>`}async runGenCheck(){this.genCheckBusy=!0,this.genCheckErr="";try{this.genChecks=(await v.imageGenCheck()).checks}catch(e){this.genCheckErr=e.message}finally{this.genCheckBusy=!1}this.loadGenLists()}renderGenCheck(){return i`<div class="field stack">
@@ -1509,7 +1517,7 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
           ${t?"Restarting…":"Restart"}
         </button>
       </div>
-    </div>`}async restartGen(){if(!confirm("Restart Automatic1111? It takes a minute or two, and a picture it is drawing now is lost."))return;this.genRestart="Restarting…";try{await v.restartGenerator()}catch(s){this.genRestart=s.message;return}const e=Date.now();let t=!1;for(;this.isConnected&&Date.now()-e<5*6e4;){await new Promise(o=>setTimeout(o,3e3));const s=await v.imageGenStatus().catch(()=>null);if(!(s!=null&&s.reachable)){t=!0;continue}if(t||Date.now()-e>45e3){this.genRestart="Automatic1111 is back.",this.loadGenLists();return}}this.genRestart="It hasn't come back yet — look at it where it runs."}genStatusLine(e){const t=this.genStatus;if(!e.imageGenUrl.trim())return l;let s,o=!1;if(this.dirty)s="Save to check it.";else if(t)if(!t.reachable)s=`Not reachable${t.error?`: ${t.error}`:"."}`,o=!0;else{const n=t.backend==="invokeai"?"InvokeAI":"Automatic1111",r=(t.models??[]).length,a=(t.loras??[]).length;s=`Connected to ${n} — ${r} ${r===1?"model":"models"}, ${a} ${a===1?"LoRA":"LoRAs"}.`}else{if(!this.genError)return i`<div class="field-status">Checking…</div>`;s=this.genError,o=!0}return i`<div class="field-status ${o?"bad":""}">${s}</div>`}modelsFolderLine(e){const t=this.genStatus;if(this.dirty)return i`<div class="field-status">Save to check it.</div>`;if(!(t!=null&&t.reachable))return l;if(t.backend==="invokeai")return i`<div class="field-status">Not needed: InvokeAI installs and edits models itself.</div>`;if(t.manageModels){const s=!(e.imageGenModelsDir??"").trim();return i`<div class="field-status ok">
+    </div>`}async restartGen(){if(!confirm("Restart Automatic1111? It takes a minute or two, and a picture it is drawing now is lost."))return;this.genRestart="Restarting…";try{await v.restartGenerator()}catch(s){this.genRestart=s.message;return}const e=Date.now();let t=!1;for(;this.isConnected&&Date.now()-e<5*6e4;){await new Promise(n=>setTimeout(n,3e3));const s=await v.imageGenStatus().catch(()=>null);if(!(s!=null&&s.reachable)){t=!0;continue}if(t||Date.now()-e>45e3){this.genRestart="Automatic1111 is back.",this.loadGenLists();return}}this.genRestart="It hasn't come back yet — look at it where it runs."}genStatusLine(e){const t=this.genStatus;if(!e.imageGenUrl.trim())return l;let s,n=!1;if(this.dirty)s="Save to check it.";else if(t)if(!t.reachable)s=`Not reachable${t.error?`: ${t.error}`:"."}`,n=!0;else{const o=t.backend==="invokeai"?"InvokeAI":"Automatic1111",r=(t.models??[]).length,a=(t.loras??[]).length;s=`Connected to ${o} — ${r} ${r===1?"model":"models"}, ${a} ${a===1?"LoRA":"LoRAs"}.`}else{if(!this.genError)return i`<div class="field-status">Checking…</div>`;s=this.genError,n=!0}return i`<div class="field-status ${n?"bad":""}">${s}</div>`}modelsFolderLine(e){const t=this.genStatus;if(this.dirty)return i`<div class="field-status">Save to check it.</div>`;if(!(t!=null&&t.reachable))return l;if(t.backend==="invokeai")return i`<div class="field-status">Not needed: InvokeAI installs and edits models itself.</div>`;if(t.manageModels){const s=!(e.imageGenModelsDir??"").trim();return i`<div class="field-status ok">
         Using <code>${t.modelsDir}</code>${s?" — found mounted, so there is nothing to set":""}. Models can be installed, edited and deleted.
       </div>`}return t.modelsDirProblem?i`<div class="field-status bad">${t.modelsDirProblem}.</div>`:i`<div class="field-status">Nothing is mounted at <code>/a1111-models</code> and no path is set.</div>`}renderLibrary(){const e=this.stats;if(!e)return l;const t=new Map(e.kinds.map(s=>[s.kind,s]));return i`
       <section class="card">
@@ -1519,9 +1527,9 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
           ${e.tags} ${e.tags===1?"tag":"tags"}
         </p>
         <div class="stat-grid">
-          ${Object.keys(F).map(s=>{const o=t.get(s);return i`<div class="stat">
-              <div class="stat-num">${(o==null?void 0:o.count)??0}</div>
-              <div class="stat-label">${F[s].label} · ${x((o==null?void 0:o.bytes)??0)}</div>
+          ${Object.keys(G).map(s=>{const n=t.get(s);return i`<div class="stat">
+              <div class="stat-num">${(n==null?void 0:n.count)??0}</div>
+              <div class="stat-label">${G[s].label} · ${x((n==null?void 0:n.bytes)??0)}</div>
             </div>`})}
         </div>
       </section>
@@ -1585,7 +1593,7 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
                 <input
                   type="text"
                   .value=${this.passkeyName}
-                  @input=${o=>this.passkeyName=o.target.value}
+                  @input=${n=>this.passkeyName=n.target.value}
                 />
                 <button @click=${()=>void this.savePasskeyName(e)}>Save</button>
                 <button @click=${()=>this.passkeyRenaming=null}>Cancel</button>
@@ -1606,7 +1614,7 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
                   autocomplete="current-password"
                   placeholder="Your password"
                   .value=${this.passkeyPassword}
-                  @input=${o=>this.passkeyPassword=o.target.value}
+                  @input=${n=>this.passkeyPassword=n.target.value}
                 />
                 <div class="pk-revoke-actions">
                   <button @click=${this.cancelRevoke}>Cancel</button>
@@ -1844,9 +1852,9 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
                   `:i`<p class="field-help">Refresh to read browser timings.</p>`}
             `:i`<p class="field-help">${this.diagBusy?"Reading…":"No snapshot yet."}</p>`}
       </section>
-    `}renderFetchHealth(e){const t=e.metrics.counters,s=[["Fetches completed",t["scrape.fetch.ok"]??0,"Pages and listings fetched successfully."],["Retried",t["scrape.fetch.retry"]??0,"A site failed transiently and we tried again."],["Gave up",t["scrape.fetch.exhausted"]??0,"Still failing after every retry."],["Queued behind another request",t["scrape.host_queued"]??0,"A steady number here means we're fanning out wider than the site allows."],["Asked to back off",t["scrape.fetch.backoff_too_long"]??0,"A site asked for a longer wait than we'll hold a click open for."]];return s.every(([,o])=>o===0)?l:i`
+    `}renderFetchHealth(e){const t=e.metrics.counters,s=[["Fetches completed",t["scrape.fetch.ok"]??0,"Pages and listings fetched successfully."],["Retried",t["scrape.fetch.retry"]??0,"A site failed transiently and we tried again."],["Gave up",t["scrape.fetch.exhausted"]??0,"Still failing after every retry."],["Queued behind another request",t["scrape.host_queued"]??0,"A steady number here means we're fanning out wider than the site allows."],["Asked to back off",t["scrape.fetch.backoff_too_long"]??0,"A site asked for a longer wait than we'll hold a click open for."]];return s.every(([,n])=>n===0)?l:i`
       <h4 class="diag-head">Outbound fetches</h4>
-      ${s.map(([o,n,r])=>n===0?l:i`<div class="diag-row"><strong>${n}</strong> ${o} <span class="field-help">— ${r}</span></div>`)}
+      ${s.map(([n,o,r])=>o===0?l:i`<div class="diag-row"><strong>${o}</strong> ${n} <span class="field-help">— ${r}</span></div>`)}
     `}diagStat(e,t){return i`<div class="stat">
       <div class="stat-num diag-stat-num">${t}</div>
       <div class="stat-label">${e}</div>
@@ -1861,7 +1869,7 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
         ${this.readOnlyField("Database","SQLite metadata store.",e.dbPath)}
         ${this.readOnlyField("Session length","How long a login stays valid.",`${e.sessionHours} hours`)}
       </section>
-    `:l}switchField(e,t,s,o,n=!1){const r=!this.canEdit||n;return i`
+    `:l}switchField(e,t,s,n,o=!1){const r=!this.canEdit||o;return i`
       <div class="field">
         <div class="field-text">
           <div class="field-label">${e}</div>
@@ -1874,7 +1882,7 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
             aria-checked=${s?"true":"false"}
             aria-label=${e}
             ?disabled=${r}
-            @click=${()=>o(!s)}
+            @click=${()=>n(!s)}
           ></button>
         </div>
       </div>
@@ -2455,4 +2463,4 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
         gap: 12px;
         max-width: 360px;
       }
-    `];h([Q({attribute:!1})],c.prototype,"user",2);h([Q({attribute:!1})],c.prototype,"only",2);h([d()],c.prototype,"tab",2);h([d()],c.prototype,"settings",2);h([d()],c.prototype,"info",2);h([d()],c.prototype,"stats",2);h([d()],c.prototype,"apk",2);h([d()],c.prototype,"loadError",2);h([d()],c.prototype,"passkeyList",2);h([d()],c.prototype,"passkeyBusy",2);h([d()],c.prototype,"passkeyError",2);h([d()],c.prototype,"passkeyMsg",2);h([d()],c.prototype,"passkeyName",2);h([d()],c.prototype,"passkeyRenaming",2);h([d()],c.prototype,"passkeyRevoking",2);h([d()],c.prototype,"passkeyPassword",2);h([d()],c.prototype,"diag",2);h([d()],c.prototype,"uiDiag",2);h([d()],c.prototype,"storage",2);h([d()],c.prototype,"storageBusy",2);h([d()],c.prototype,"storageErr",2);h([d()],c.prototype,"diagBusy",2);h([d()],c.prototype,"diagErr",2);h([d()],c.prototype,"dirty",2);h([d()],c.prototype,"saving",2);h([d()],c.prototype,"saved",2);h([d()],c.prototype,"theme",2);h([d()],c.prototype,"fit",2);h([d()],c.prototype,"hideLibby",2);h([d()],c.prototype,"genModels",2);h([d()],c.prototype,"genLoras",2);h([d()],c.prototype,"genLoraTriggers",2);h([d()],c.prototype,"genBoards",2);h([d()],c.prototype,"genError",2);h([d()],c.prototype,"genStatus",2);h([d()],c.prototype,"genChecks",2);h([d()],c.prototype,"genCheckBusy",2);h([d()],c.prototype,"genRestart",2);h([d()],c.prototype,"genCheckErr",2);h([d()],c.prototype,"comfy",2);h([d()],c.prototype,"comfyErr",2);h([d()],c.prototype,"comfyBusy",2);h([d()],c.prototype,"comfyFolder",2);h([d()],c.prototype,"pwCurrent",2);h([d()],c.prototype,"pwNew",2);h([d()],c.prototype,"pwConfirm",2);h([d()],c.prototype,"pwBusy",2);h([d()],c.prototype,"pwMsg",2);h([d()],c.prototype,"pwErr",2);h([d()],c.prototype,"refs",2);h([d()],c.prototype,"refStamp",2);h([d()],c.prototype,"refNote",2);h([d()],c.prototype,"tts",2);h([d()],c.prototype,"describe",2);h([d()],c.prototype,"describeBusy",2);h([d()],c.prototype,"describeNote",2);h([d()],c.prototype,"ttsErrors",2);c=h([J("oppai-settings")],c);function K(e){if(!e)return"never";const t=Math.max(0,(Date.now()-e)/1e3);if(t<90)return"just now";const s=Math.round(t/60);if(s<60)return`${s} min ago`;const o=Math.round(s/60);if(o<24)return`${o}h ago`;const n=Math.round(o/24);return n<=30?`${n} day${n===1?"":"s"} ago`:new Date(e).toLocaleDateString()}function He(e){const t=Math.max(0,Math.floor(e)),s=Math.floor(t/86400),o=Math.floor(t%86400/3600),n=Math.floor(t%3600/60);return s>0?`${s}d ${o}h`:o>0?`${o}h ${n}m`:n>0?`${n}m ${t%60}s`:`${t}s`}function x(e){if(!e)return"0 B";const t=["B","KB","MB","GB","TB"];let s=e,o=0;for(;s>=1024&&o<t.length-1;)s/=1024,o++;return`${s<10&&o>0?s.toFixed(1):Math.round(s)} ${t[o]}`}const Xe=Object.freeze(Object.defineProperty({__proto__:null,get OppaiSettings(){return c}},Symbol.toStringTag,{value:"Module"}));export{Qe as a,ee as b,Xe as c,Je as l,Ce as s};
+    `];h([Q({attribute:!1})],c.prototype,"user",2);h([Q({attribute:!1})],c.prototype,"only",2);h([d()],c.prototype,"tab",2);h([d()],c.prototype,"settings",2);h([d()],c.prototype,"info",2);h([d()],c.prototype,"stats",2);h([d()],c.prototype,"apk",2);h([d()],c.prototype,"loadError",2);h([d()],c.prototype,"passkeyList",2);h([d()],c.prototype,"passkeyBusy",2);h([d()],c.prototype,"passkeyError",2);h([d()],c.prototype,"passkeyMsg",2);h([d()],c.prototype,"passkeyName",2);h([d()],c.prototype,"passkeyRenaming",2);h([d()],c.prototype,"passkeyRevoking",2);h([d()],c.prototype,"passkeyPassword",2);h([d()],c.prototype,"diag",2);h([d()],c.prototype,"uiDiag",2);h([d()],c.prototype,"storage",2);h([d()],c.prototype,"storageBusy",2);h([d()],c.prototype,"storageErr",2);h([d()],c.prototype,"diagBusy",2);h([d()],c.prototype,"diagErr",2);h([d()],c.prototype,"dirty",2);h([d()],c.prototype,"saving",2);h([d()],c.prototype,"saved",2);h([d()],c.prototype,"theme",2);h([d()],c.prototype,"fit",2);h([d()],c.prototype,"hideLibby",2);h([d()],c.prototype,"genModels",2);h([d()],c.prototype,"genLoras",2);h([d()],c.prototype,"genLoraTriggers",2);h([d()],c.prototype,"genBoards",2);h([d()],c.prototype,"genError",2);h([d()],c.prototype,"genStatus",2);h([d()],c.prototype,"genChecks",2);h([d()],c.prototype,"genCheckBusy",2);h([d()],c.prototype,"genRestart",2);h([d()],c.prototype,"genCheckErr",2);h([d()],c.prototype,"comfy",2);h([d()],c.prototype,"comfyErr",2);h([d()],c.prototype,"comfyBusy",2);h([d()],c.prototype,"comfyFolder",2);h([d()],c.prototype,"pwCurrent",2);h([d()],c.prototype,"pwNew",2);h([d()],c.prototype,"pwConfirm",2);h([d()],c.prototype,"pwBusy",2);h([d()],c.prototype,"pwMsg",2);h([d()],c.prototype,"pwErr",2);h([d()],c.prototype,"refs",2);h([d()],c.prototype,"refStamp",2);h([d()],c.prototype,"refNote",2);h([d()],c.prototype,"tts",2);h([d()],c.prototype,"describe",2);h([d()],c.prototype,"describeBusy",2);h([d()],c.prototype,"describeNote",2);h([d()],c.prototype,"ttsErrors",2);c=h([J("oppai-settings")],c);function K(e){if(!e)return"never";const t=Math.max(0,(Date.now()-e)/1e3);if(t<90)return"just now";const s=Math.round(t/60);if(s<60)return`${s} min ago`;const n=Math.round(s/60);if(n<24)return`${n}h ago`;const o=Math.round(n/24);return o<=30?`${o} day${o===1?"":"s"} ago`:new Date(e).toLocaleDateString()}function He(e){const t=Math.max(0,Math.floor(e)),s=Math.floor(t/86400),n=Math.floor(t%86400/3600),o=Math.floor(t%3600/60);return s>0?`${s}d ${n}h`:n>0?`${n}h ${o}m`:o>0?`${o}m ${t%60}s`:`${t}s`}function x(e){if(!e)return"0 B";const t=["B","KB","MB","GB","TB"];let s=e,n=0;for(;s>=1024&&n<t.length-1;)s/=1024,n++;return`${s<10&&n>0?s.toFixed(1):Math.round(s)} ${t[n]}`}const Xe=Object.freeze(Object.defineProperty({__proto__:null,get OppaiSettings(){return c}},Symbol.toStringTag,{value:"Module"}));export{Qe as a,ee as b,Xe as c,Je as l,Ce as s};

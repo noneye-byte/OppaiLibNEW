@@ -170,12 +170,20 @@ func (s *Server) civitaiComfySpecs(ctx context.Context, source string, modelID, 
 	return []imagegen.InstallSpec{{Source: source, Type: kind, Token: token}}, nil
 }
 
-// civitaiComfyInstall downloads a version, and its other half, into ComfyUI's models
-// folder. Nothing is recorded for the catalogue's dressing afterwards: ComfyUI keeps
-// no cover or description, and the file's name already says what it is.
+// comfyPlaces is where installs into ComfyUI go, by the Video settings' folders.
+func (s *Server) comfyPlaces() imagegen.ComfyPlaces {
+	cur := s.settings.Get()
+	return imagegen.ComfyPlacesFor(cur.ComfyModelsDir, cur.ComfyDiffusionDir, cur.ComfyLoraDir)
+}
+
+// civitaiComfyInstall downloads a version, and its other half, into ComfyUI's folder
+// for its kind. Nothing is recorded for the catalogue's dressing afterwards: ComfyUI
+// keeps no cover or description, and the file's name already says what it is.
 func (s *Server) civitaiComfyInstall(w http.ResponseWriter, r *http.Request, req civitaiInstallReq) {
-	dir, problem := imagegen.ComfyModelsDir(s.settings.Get().ComfyModelsDir)
-	if dir == "" {
+	places := s.comfyPlaces()
+	if places.Models == "" && places.Diffusion == "" && places.Loras == "" {
+		// Not worth asking Civitai about a file there is nowhere to put.
+		problem := places.ModelsProblem
 		if problem == "" {
 			problem = "ComfyUI has no API that takes a download; map its models folder into the OppaiLib container at " +
 				"/comfy-models, or set where it is under Settings → Image generation → Video"
@@ -188,9 +196,13 @@ func (s *Server) civitaiComfyInstall(w http.ResponseWriter, r *http.Request, req
 		writeErr(w, civitaiStatus(err), err.Error())
 		return
 	}
+	if err := places.CanInstall(specs[0]); err != nil {
+		writeErr(w, http.StatusConflict, err.Error())
+		return
+	}
 	var first *imagegen.InstallJob
 	for _, spec := range specs {
-		job, err := s.imagegen.ComfyInstall(dir, spec)
+		job, err := s.imagegen.ComfyInstall(places, spec)
 		if err != nil {
 			if first == nil {
 				writeErr(w, http.StatusConflict, err.Error())

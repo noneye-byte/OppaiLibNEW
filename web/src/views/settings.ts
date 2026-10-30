@@ -1,7 +1,7 @@
 import { speak, stopSpeaking, ttsStatus, type TTSStatus } from "../speech.js";
 import { LitElement, html, css, nothing } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
-import { api, mascotSay, type APKInfo, type ClipLora, type ClipModels, type ComfyModels, type Diagnostics, type GenCheck, type ImageGenStatus, type LibbyReferenceSlot, type Passkey, type PasskeyList, type Settings, type ReadOnlyInfo, type Stats, type StorageReport, type Timing, type User } from "../api.js";
+import { api, mascotSay, type APKInfo, type ClipLora, type ClipModels, type ComfyModels, type ComfyPlaces, type Diagnostics, type GenCheck, type ImageGenStatus, type LibbyReferenceSlot, type Passkey, type PasskeyList, type Settings, type ReadOnlyInfo, type Stats, type StorageReport, type Timing, type User } from "../api.js";
 import { passkeyErrorMessage, registerPasskey } from "../passkeys.js";
 import { withViewTransition } from "../motion.js";
 import { isSpeedLora, loraStage, loraTwin, SPEED_SETTINGS, suggestClipModels } from "../clip-models.js";
@@ -138,7 +138,7 @@ export class OppaiSettings extends LitElement {
   @state() private comfyErr = "";
   @state() private comfyBusy = false;
   /** Where Civitai's video mode installs to, or why nowhere; null until asked. */
-  @state() private comfyFolder: { dir: string; problem: string } | null = null;
+  @state() private comfyFolder: ComfyPlaces | null = null;
 
   @state() private pwCurrent = "";
   @state() private pwNew = "";
@@ -2508,27 +2508,30 @@ export class OppaiSettings extends LitElement {
                     @click=${() => void this.loadComfy()}>${this.comfyBusy ? "Reading…" : "Refresh"}</button>
                 </div>
               </div>
-              <div class="field stack">
-                <div class="field-text">
-                  <div class="field-label">ComfyUI models folder</div>
-                  <div class="field-help">
-                    For installing Wan models and LoRAs from Civitai (Create → Video → <em>Find on Civitai</em>): ComfyUI has
-                    no API that takes a download, so they are written into its <code>models</code> folder. Map that folder
-                    into this container at <code>/comfy-models</code> and it is found by itself; give a path here only if you
-                    mapped it somewhere else.
-                    ${this.comfyFolder?.dir
-                      ? html`<div class="field-status ok">Installing into ${this.comfyFolder.dir}.</div>`
-                      : this.comfyFolder?.problem
-                        ? html`<div class="field-status bad">${this.comfyFolder.problem}</div>`
-                        : this.comfyFolder ? html`<div class="field-status">Nothing is mounted at /comfy-models, so Civitai's video mode can browse but not install.</div>` : nothing}
-                  </div>
-                </div>
-                <div class="field-control">
-                  <input type="text" autocomplete="off" placeholder="/comfy-models"
-                    .value=${s.comfyModelsDir ?? ""} ?disabled=${!this.canEdit}
-                    @change=${(e: Event) => this.edit({ comfyModelsDir: (e.target as HTMLInputElement).value })} />
-                </div>
-              </div>
+              ${this.renderComfyFolder("ComfyUI models folder", html`For installing Wan models and LoRAs from Civitai
+                  (Create → Video → <em>Find on Civitai</em>): ComfyUI has no API that takes a download, so they are
+                  written into its <code>models</code> folder. Map that folder into this container at
+                  <code>/comfy-models</code> and it is found by itself; give a path here only if you mapped it somewhere
+                  else.`, "/comfy-models", s.comfyModelsDir, (v) => this.edit({ comfyModelsDir: v }),
+                this.comfyFolder && { dir: this.comfyFolder.dir, problem: this.comfyFolder.problem,
+                  ok: html`Installing into ${this.comfyFolder.dir}.`,
+                  none: this.comfyFolder.modelDir || this.comfyFolder.loraDir
+                    ? "Nothing is mounted at /comfy-models; the folders below are enough for Wan models and LoRAs."
+                    : "Nothing is mounted at /comfy-models, so Civitai's video mode can browse but not install." })}
+              ${this.renderComfyFolder("Wan models folder", html`Where Wan diffusion models go, if they are not in the
+                  models folder's <code>diffusion_models</code> — kept on another share through ComfyUI's
+                  <code>extra_model_paths.yaml</code>, say. Map it at <code>/comfy-diffusion-models</code>, or give its
+                  path here. Blank uses <code>diffusion_models</code>.`, "/comfy-diffusion-models", s.comfyDiffusionDir,
+                (v) => this.edit({ comfyDiffusionDir: v }),
+                this.comfyFolder && { dir: this.comfyFolder.modelDir, problem: this.comfyFolder.modelProblem,
+                  ok: html`Wan models go into ${this.comfyFolder.modelDir}.`,
+                  none: "No folder for Wan models yet — set the models folder or this one." })}
+              ${this.renderComfyFolder("LoRA folder", html`Where Wan LoRAs go, if they are not in the models folder's
+                  <code>loras</code>. Map it at <code>/comfy-loras</code>, or give its path here. Blank uses
+                  <code>loras</code>.`, "/comfy-loras", s.comfyLoraDir, (v) => this.edit({ comfyLoraDir: v }),
+                this.comfyFolder && { dir: this.comfyFolder.loraDir, problem: this.comfyFolder.loraProblem,
+                  ok: html`LoRAs go into ${this.comfyFolder.loraDir}.`,
+                  none: "No folder for LoRAs yet — set the models folder or this one." })}
               <div class="field-help" style="margin:0 0 4px;">
                 Wan is wired here: pick its files and OppaiLib builds the workflow. Wan 2.2's 14B models come as a
                 pair — a <b>high-noise</b> model that sets out the motion over the first half of the steps and a
@@ -2566,7 +2569,7 @@ export class OppaiSettings extends LitElement {
   private async loadComfy() {
     this.comfyBusy = true;
     this.comfyErr = "";
-    void api.comfyInstalls().then(({ dir, problem }) => (this.comfyFolder = { dir, problem }), () => {});
+    void api.comfyInstalls().then(({ jobs: _, ...places }) => (this.comfyFolder = places), () => {});
     try {
       this.comfy = await api.comfyModels();
     } catch (e) {
@@ -2582,6 +2585,30 @@ export class OppaiSettings extends LitElement {
    * One direction's Wan files. A saved name ComfyUI no longer lists stays choosable,
    * so opening settings with ComfyUI down does not quietly blank the choice.
    */
+  /** One of the folders installs into ComfyUI go to, with a line saying where they
+      are going now. */
+  private renderComfyFolder(label: string, help: unknown, placeholder: string, value: string | undefined,
+    set: (v: string) => void, status: { dir: string; problem: string; ok: unknown; none: string } | null) {
+    return html`<div class="field stack">
+      <div class="field-text">
+        <div class="field-label">${label}</div>
+        <div class="field-help">
+          ${help}
+          ${status?.dir
+            ? html`<div class="field-status ok">${status.ok}</div>`
+            : status?.problem
+              ? html`<div class="field-status bad">${status.problem}</div>`
+              : status ? html`<div class="field-status">${status.none}</div>` : nothing}
+        </div>
+      </div>
+      <div class="field-control">
+        <input type="text" autocomplete="off" placeholder=${placeholder}
+          .value=${value ?? ""} ?disabled=${!this.canEdit}
+          @change=${(e: Event) => set((e.target as HTMLInputElement).value)} />
+      </div>
+    </div>`;
+  }
+
   private renderClipModels(label: string, help: unknown, fromImage: boolean, value: ClipModels | undefined, set: (m: ClipModels) => void) {
     const m: ClipModels = value ?? { model: "", checkpoint: false, lowModel: "", textEncoder: "", vae: "", loras: [], steps: 0, cfg: 0, shift: 0 };
     const c = this.comfy;

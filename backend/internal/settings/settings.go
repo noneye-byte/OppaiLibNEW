@@ -232,6 +232,11 @@ type Settings struct {
 	// download. Blank falls back to the template's /comfy-models mount when there is
 	// one. See imagegen/comfy_install.go.
 	ComfyModelsDir string `json:"comfyModelsDir"`
+	// ComfyDiffusionDir and ComfyLoraDir are where Wan models and LoRAs go when they
+	// are kept apart from that models folder; blank means its diffusion_models and
+	// loras, unless the template's /comfy-diffusion-models or /comfy-loras is mounted.
+	ComfyDiffusionDir string `json:"comfyDiffusionDir"`
+	ComfyLoraDir      string `json:"comfyLoraDir"`
 	// LibbyStories lets her post a picture and a line while they are away, at most
 	// LibbyStoriesPerDay a day. See api.libby_stories.go.
 	LibbyStories       bool `json:"libbyStories"`
@@ -336,6 +341,8 @@ const (
 	keyClipImageModels    = "clip.image_models"
 	keyClipTextModels     = "clip.text_models"
 	keyComfyModelsDir     = "clip.comfy_models_dir"
+	keyComfyDiffusionDir  = "clip.comfy_diffusion_dir"
+	keyComfyLoraDir       = "clip.comfy_lora_dir"
 	keyLibbyStories       = "libby.stories"
 	keyLibbyStoriesPerDay = "libby.stories.per_day"
 	keyChatToolMode       = "chat.tool_mode"
@@ -617,6 +624,7 @@ func Merge(base Settings, stored map[string]string) Settings {
 		keyLibbyPoseModule: &s.LibbyPoseModule, keyLibbyPoseModel: &s.LibbyPoseModel,
 		keyLibbyFaceModule: &s.LibbyFaceModule, keyLibbyFaceModel: &s.LibbyFaceModel,
 		keyLibbyClipURL: &s.LibbyClipURL, keyLibbyClipWorkflow: &s.LibbyClipWorkflow, keyComfyModelsDir: &s.ComfyModelsDir,
+		keyComfyDiffusionDir: &s.ComfyDiffusionDir, keyComfyLoraDir: &s.ComfyLoraDir,
 		keyClipTextWorkflow: &s.ClipTextWorkflow,
 		keyChatToolMode:     &s.ChatToolMode,
 	} {
@@ -702,6 +710,8 @@ func (s Settings) Map() map[string]string {
 		keyClipImageModels:    clipModelsJSON(s.ClipImageModels),
 		keyClipTextModels:     clipModelsJSON(s.ClipTextModels),
 		keyComfyModelsDir:     s.ComfyModelsDir,
+		keyComfyDiffusionDir:  s.ComfyDiffusionDir,
+		keyComfyLoraDir:       s.ComfyLoraDir,
 		keyLibbyStories:       strconv.FormatBool(s.LibbyStories),
 		keyLibbyStoriesPerDay: strconv.Itoa(s.LibbyStoriesPerDay),
 		keyChatToolMode:       s.ChatToolMode,
@@ -885,6 +895,8 @@ func (s *Settings) Clamp() {
 	s.ClipImageModels = cleanClipModels(s.ClipImageModels)
 	s.ClipTextModels = cleanClipModels(s.ClipTextModels)
 	s.ComfyModelsDir = strings.TrimRight(strings.TrimSpace(s.ComfyModelsDir), "/")
+	s.ComfyDiffusionDir = strings.TrimRight(strings.TrimSpace(s.ComfyDiffusionDir), "/")
+	s.ComfyLoraDir = strings.TrimRight(strings.TrimSpace(s.ComfyLoraDir), "/")
 	if s.LibbyStoriesPerDay < 1 {
 		s.LibbyStoriesPerDay = 1
 	} else if s.LibbyStoriesPerDay > 6 {

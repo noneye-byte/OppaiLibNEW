@@ -999,8 +999,10 @@ func (s *Server) handleCivitaiInstalls(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("target") == "comfy" {
 		// ComfyUI's downloads, with where they go: the browser's video mode offers
 		// installs only when there is a folder to put them in.
-		dir, problem := imagegen.ComfyModelsDir(s.settings.Get().ComfyModelsDir)
-		writeJSON(w, http.StatusOK, map[string]any{"jobs": s.imagegen.ComfyInstallJobs(), "dir": dir, "problem": problem})
+		writeJSON(w, http.StatusOK, struct {
+			Jobs []imagegen.InstallJob `json:"jobs"`
+			imagegen.ComfyPlaces
+		}{s.imagegen.ComfyInstallJobs(), s.comfyPlaces()})
 		return
 	}
 	base, ok := s.galleryBase(w)
