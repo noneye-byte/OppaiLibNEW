@@ -12,10 +12,12 @@ import {
   type CivitaiModel,
   type CivitaiPost,
   type CivitaiVersion,
+  type ComfyFolderKind,
   type ComfyPlaces,
   type InstallJob,
 } from "../api.js";
 import { mergeCivitaiPosts, postDate } from "../civitai-posts.js";
+import { comfyFolderOf } from "../clip-models.js";
 import { promptSettingsFrom, type PromptSettings } from "../civitai-prompt.js";
 
 /**
@@ -639,7 +641,7 @@ export class OppaiCivitai extends LitElement {
   private async pollJobs() {
     if (this.video) {
       try {
-        const { jobs, ...places } = await api.comfyInstalls();
+        const { jobs, places } = await api.comfyInstalls();
         this.comfyPlaces = places;
         this.jobs = jobs.slice(0, 5);
       } catch {
@@ -1341,12 +1343,12 @@ export class OppaiCivitai extends LitElement {
             ${this.galleryOpen ? this.renderGallery() : nothing}
             <div class="sub" style="margin-top:10px;">
               ${this.video
-                ? this.comfyFolder(m)
-                  ? html`The server downloads into <code>${this.comfyFolder(m)}</code>, named so the high- and low-noise
+                ? this.comfyPlace(m, v).dir
+                  ? html`The server downloads into <code>${this.comfyPlace(m, v).dir}</code>, named so the high- and low-noise
                       halves read as a pair. Press <b>Refresh</b> under Settings → Image generation → Video to pick them.`
-                  : this.comfyProblem(m) || html`ComfyUI has no API that takes a download, so installing from here needs its
-                      models folder mapped into the OppaiLib container at <code>/comfy-models</code>, or the folder for
-                      ${comfyKind(m.type) === "lora" ? "LoRAs" : "Wan models"} set under Settings → Image generation → Video.`
+                  : this.comfyPlace(m, v).problem || html`ComfyUI has no API that takes a download, so installing from here
+                      needs the folder ComfyUI keeps ${this.comfyPlace(m, v).what} in set under Settings → Image generation →
+                      Video.`
                 : !this.canManage
                 ? this.manageNote || "Automatic1111 has no API that takes a download, so installing from here needs its models folder mapped into the OppaiLib container."
                 : this.backend === "invokeai"
@@ -1359,25 +1361,19 @@ export class OppaiCivitai extends LitElement {
     `;
   }
 
-  /** The folder this model would be installed into, "" when there is none. Wan models
-      and LoRAs can each be kept apart from ComfyUI's models folder. */
-  private comfyFolder(m: CivitaiModel): string {
-    const p = this.comfyPlaces;
-    if (!p) return "";
-    const kind = comfyKind(m.type);
-    return kind === "model" ? p.modelDir : kind === "lora" ? p.loraDir : p.dir;
-  }
-
-  private comfyProblem(m: CivitaiModel): string {
-    const p = this.comfyPlaces;
-    if (!p) return "";
-    const kind = comfyKind(m.type);
-    return kind === "model" ? p.modelProblem : kind === "lora" ? p.loraProblem : p.problem;
+  /** The folder a version would be installed into — dir "" when there is none, with
+      the problem when its folder is set wrong — and what the folder holds, in words. */
+  private comfyPlace(m: CivitaiModel, v: CivitaiVersion | undefined): { dir: string; problem: string; what: string } {
+    const file = v?.files?.find((f) => f.downloadUrl === v.downloadUrl) ?? v?.files?.find((f) => f.primary);
+    const kind = comfyFolderOf(m.type, file?.name ?? "");
+    const what = kind ? COMFY_FOLDER_WHAT[kind] : "files of this kind";
+    const place = kind && this.comfyPlaces?.[kind];
+    return { dir: place ? place.dir : "", problem: place ? place.problem : "", what };
   }
 
   /** Video mode's install: into ComfyUI, the other half of a Wan 2.2 pair with it. */
   private renderComfyInstall(m: CivitaiModel, v: CivitaiVersion) {
-    if (!this.comfyFolder(m)) return nothing;
+    if (!this.comfyPlace(m, v).dir) return nothing;
     const twin = v.twin ? m.versions.find((x) => x.id === v.twin) : undefined;
     const size = (v.sizeMB ?? 0) + (twin?.sizeMB ?? 0);
     const label = twin
@@ -1812,13 +1808,12 @@ export class OppaiCivitai extends LitElement {
 
 /** Which of ComfyUI's folders a catalogue type installs into, as the server files it
     (imagegen/comfy_install.go). */
-function comfyKind(t: string): "model" | "lora" | "other" {
-  switch (t) {
-    case "Checkpoint": return "model";
-    case "LORA": case "LoCon": case "DoRA": case "LyCORIS": return "lora";
-    default: return "other";
-  }
-}
+const COMFY_FOLDER_WHAT: Record<ComfyFolderKind, string> = {
+  diffusion_models: "Wan models",
+  checkpoints: "all-in-one checkpoints",
+  loras: "LoRAs",
+  vae: "VAEs",
+};
 
 function typeLabel(t: string): string {
   switch (t) {

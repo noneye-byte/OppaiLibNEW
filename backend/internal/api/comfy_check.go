@@ -1,0 +1,280 @@
+package api
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/youruser/oppailib/internal/imagegen"
+	"github.com/youruser/oppailib/internal/settings"
+)
+
+// The Video settings' Test: every link between pressing Make on a clip, or Install in
+// Civitai's video mode, and it working — ComfyUI itself, how busy it is, each
+// direction's files or pasted workflow against what ComfyUI has, and each install
+// folder against the files ComfyUI lists. Clips have never been run here against a
+// real ComfyUI, so when one fails what the operator needs is which link it was, in
+// words, before a render gets half way. Rows are the Image generation Test's genCheck.
+
+func (s *Server) handleComfyCheck(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+	writeJSON(w, http.StatusOK, map[string]any{"checks": s.comfyChecks(ctx)})
+}
+
+func (s *Server) comfyChecks(ctx context.Context) []genCheck {
+	var out []genCheck
+	add := func(c genCheck) { out = append(out, c) }
+	set := s.settings.Get()
+	base := strings.TrimRight(strings.TrimSpace(set.LibbyClipURL), "/")
+
+	// ComfyUI. The folders are still worth looking at without it.
+	var lists *imagegen.ComfyModels
+	if base == "" {
+		add(genCheck{ID: "comfy", Label: "ComfyUI", Detail: "No address is set, so clips are off."})
+	} else if sys, err := s.imagegen.ComfySystemStats(ctx, base); err != nil {
+		add(genCheck{ID: "comfy", Label: "ComfyUI", Detail: fmt.Sprintf("Could not reach %s: %v. Is ComfyUI running, and started with --listen so other machines can reach it?", base, err)})
+	} else {
+		add(genCheck{ID: "comfy", Label: "ComfyUI", OK: true, Detail: comfySystemLine(base, sys)})
+		if running, pending, err := s.imagegen.ComfyQueue(ctx, base); err == nil {
+			add(comfyQueueCheck(running, pending))
+		}
+		if m, err := s.imagegen.ListComfyModels(ctx, base); err != nil {
+			add(genCheck{ID: "lists", Label: "Model lists", Detail: err.Error()})
+		} else {
+			lists = &m
+		}
+	}
+
+	if lists != nil {
+		for _, fromImage := range []bool{true, false} {
+			add(s.comfyDirectionCheck(ctx, base, clipRecipeFor(set, fromImage), fromImage, *lists))
+		}
+	}
+
+	places := s.comfyPlaces()
+	for _, k := range []struct{ folder, label, what string }{
+		{"diffusion_models", "Wan models folder", "Wan models"},
+		{"checkpoints", "Checkpoints folder", "all-in-one checkpoints"},
+		{"loras", "LoRA folder", "LoRAs"},
+		{"vae", "VAE folder", "VAEs"},
+	} {
+		add(comfyFolderCheck("folder-"+k.folder, k.label, k.what, places[k.folder], comfyListed(lists, k.folder)))
+	}
+	return out
+}
+
+// comfySystemLine is ComfyUI's version and the card it renders on, with its memory.
+func comfySystemLine(base string, sys imagegen.ComfySystem) string {
+	line := "ComfyUI"
+	if sys.Version != "" {
+		line += " " + sys.Version
+	}
+	line += " at " + base
+	if len(sys.Devices) > 0 {
+		d := sys.Devices[0]
+		// ComfyUI names a card "cuda:0 NVIDIA GeForce RTX 4090 : cudaMallocAsync".
+		name := d.Name
+		if i := strings.Index(name, " : "); i > 0 {
+			name = name[:i]
+		}
+		if f := strings.Fields(name); len(f) > 1 && strings.Contains(f[0], ":") {
+			name = strings.Join(f[1:], " ")
+		}
+		line += ", on " + name
+		if d.VRAMTotal > 0 {
+			line += fmt.Sprintf(" — %.1f of %.1f GB free", float64(d.VRAMFree)/(1<<30), float64(d.VRAMTotal)/(1<<30))
+		}
+	}
+	return line + "."
+}
+
+func comfyQueueCheck(running, pending int) genCheck {
+	c := genCheck{ID: "queue", Label: "Queue", OK: true}
+	switch {
+	case running == 0 && pending == 0:
+		c.Detail = "Nothing is running; a clip starts straight away."
+	case pending == 0:
+		c.Detail = "Busy with one prompt; a clip made now waits for it."
+	default:
+		c.Detail = fmt.Sprintf("Busy with one prompt and %d more waiting; a clip made now waits behind them.", pending)
+	}
+	return c
+}
+
+// comfyDirectionCheck is one direction's recipe against what ComfyUI has: each picked
+// file still listed and the nodes the built graph uses present, or a pasted workflow
+// that is an API export with every node installed and the placeholders it needs.
+func (s *Server) comfyDirectionCheck(ctx context.Context, base string, r clipRecipe, fromImage bool, lists imagegen.ComfyModels) genCheck {
+	c := genCheck{ID: "text", Label: "From words"}
+	if fromImage {
+		c.ID, c.Label = "image", "From a picture"
+	}
+	if r.built() {
+		return comfyBuiltCheck(c, r.models, lists)
+	}
+	if strings.TrimSpace(r.workflow) == "" {
+		c.OK, c.Skipped = true, true
+		c.Detail = "Not set up: no model is picked and no workflow is pasted."
+		if fromImage {
+			c.Detail += " Animate on a picture and Libby's clips are off."
+		}
+		return c
+	}
+	classes, err := imagegen.WorkflowNodes(r.workflow)
+	if err != nil {
+		c.Detail = "The pasted workflow won't run: " + err.Error() + "."
+		return c
+	}
+	missing, err := s.imagegen.ComfyMissingNodes(ctx, base, classes)
+	if err != nil {
+		c.Detail = "Could not ask ComfyUI about the workflow's nodes: " + err.Error()
+		return c
+	}
+	if len(missing) > 0 {
+		c.Detail = fmt.Sprintf("The pasted workflow uses nodes this ComfyUI doesn't have: %s. Install them (ComfyUI-Manager → Install Missing Custom Nodes) and restart it.", strings.Join(missing, ", "))
+		return c
+	}
+	takes := imagegen.ComfyPlaceholders(r.workflow)
+	has := map[string]bool{}
+	for _, t := range takes {
+		has[t] = true
+	}
+	if fromImage && !has["image"] {
+		c.Detail = `The pasted workflow has no "{{image}}", so the picture is never used — write it as the image value of its Load Image node.`
+		return c
+	}
+	c.OK = true
+	c.Detail = fmt.Sprintf("A pasted workflow of %d kinds of node, all of which ComfyUI has", len(classes))
+	if len(takes) > 0 {
+		c.Detail += "; it takes " + strings.Join(takes, ", ")
+	}
+	if !has["prompt"] {
+		c.Detail += `. It has no "{{prompt}}", so every clip is told the same thing`
+	}
+	if !has["seed"] {
+		c.Detail += `. It has no "{{seed}}", so the same picture makes the same clip`
+	}
+	c.Detail += "."
+	return c
+}
+
+func comfyBuiltCheck(c genCheck, m settings.ClipModels, lists imagegen.ComfyModels) genCheck {
+	if len(lists.Missing) > 0 {
+		c.Detail = fmt.Sprintf("This ComfyUI has no %s — it is older than Wan 2.2. Update it (Manager → Update ComfyUI, or git pull in its folder).", strings.Join(lists.Missing, ", "))
+		return c
+	}
+	type pick struct{ name, as string }
+	picks := []pick{{m.Model, "the model"}}
+	listed := map[string][]string{"the model": append(append([]string{}, lists.Diffusion...), lists.Checkpoints...)}
+	if m.LowModel != "" && !m.Checkpoint {
+		picks = append(picks, pick{m.LowModel, "the low-noise model"})
+		listed["the low-noise model"] = lists.Diffusion
+	}
+	if m.TextEncoder != "" {
+		picks = append(picks, pick{m.TextEncoder, "the text encoder"})
+		listed["the text encoder"] = lists.TextEncoders
+	}
+	if m.VAE != "" {
+		picks = append(picks, pick{m.VAE, "the VAE"})
+		listed["the VAE"] = lists.VAEs
+	}
+	for _, l := range m.Loras {
+		picks = append(picks, pick{l.Name, "a LoRA"})
+	}
+	listed["a LoRA"] = lists.Loras
+	// A .gguf file is only listed when ComfyUI-GGUF's loaders are installed, so a
+	// missing loader shows up here as a file no longer listed.
+	var gone []string
+	for _, p := range picks {
+		if !slices.Contains(listed[p.as], p.name) {
+			gone = append(gone, fmt.Sprintf("%s (%s)", p.name, p.as))
+		}
+	}
+	if len(gone) > 0 {
+		c.Detail = fmt.Sprintf("ComfyUI no longer lists %s. Press Refresh and pick again, or put the file back.", strings.Join(gone, ", "))
+		return c
+	}
+	if !m.Checkpoint && (m.TextEncoder == "" || m.VAE == "") {
+		c.Detail = "A model from diffusion_models needs a text encoder and a VAE picked beside it."
+		return c
+	}
+	c.OK = true
+	c.Detail = fmt.Sprintf("Wan, built from %d files ComfyUI has", len(picks))
+	if m.LowModel != "" && !m.Checkpoint {
+		c.Detail += ", a high- and low-noise pair"
+	}
+	c.Detail += "."
+	return c
+}
+
+// comfyListed is what ComfyUI lists for one install folder's kind, by file name; nil
+// when ComfyUI did not answer.
+func comfyListed(lists *imagegen.ComfyModels, folder string) map[string]bool {
+	if lists == nil {
+		return nil
+	}
+	var names []string
+	switch folder {
+	case "diffusion_models":
+		names = lists.Diffusion
+	case "checkpoints":
+		names = lists.Checkpoints
+	case "loras":
+		names = lists.Loras
+	case "vae":
+		names = lists.VAEs
+	}
+	out := map[string]bool{}
+	for _, n := range names {
+		out[imagegen.ComfyBaseName(n)] = true
+	}
+	return out
+}
+
+// comfyFolderCheck is one install folder: set, usable, and — with ComfyUI's list to
+// hand — one ComfyUI reads, judged by whether the files in it are the files it lists.
+func comfyFolderCheck(id, label, what string, f imagegen.ComfyFolder, listed map[string]bool) genCheck {
+	c := genCheck{ID: id, Label: label}
+	switch {
+	case f.Problem != "":
+		c.Detail = f.Problem + "."
+		return c
+	case f.Dir == "":
+		c.OK, c.Skipped = true, true
+		c.Detail = fmt.Sprintf("Not set, so Civitai's video mode doesn't install %s.", what)
+		return c
+	}
+	files := imagegen.ComfyFolderFiles(f.Dir)
+	found, missing := 0, ""
+	for _, name := range files {
+		if listed[name] {
+			found++
+		} else if missing == "" {
+			missing = name
+		}
+	}
+	c.OK = true
+	switch {
+	case len(files) == 0:
+		c.Detail = fmt.Sprintf("%s is empty and OppaiLib can write into it; with nothing in it yet there is no telling whether ComfyUI reads it.", f.Dir)
+	case listed == nil:
+		c.Detail = fmt.Sprintf("OppaiLib can write into %s (%d files); ComfyUI didn't answer, so whether it reads this folder is untested.", f.Dir, len(files))
+	case found == 0 && len(files) == 1:
+		c.OK = false
+		c.Detail = fmt.Sprintf("The one file in %s, %s, is not among the %s ComfyUI lists — it doesn't read this folder, so installs here would never show up. Give the container's side of the mapping for the folder ComfyUI loads %s from.", f.Dir, missing, what, what)
+	case found == 0:
+		c.OK = false
+		c.Detail = fmt.Sprintf("None of the %d files in %s are among the %s ComfyUI lists (%s, for one) — it doesn't read this folder, so installs here would never show up. Give the container's side of the mapping for the folder ComfyUI loads %s from.", len(files), f.Dir, what, missing, what)
+	case found < len(files):
+		c.Detail = fmt.Sprintf("%d of the %d files in %s are in ComfyUI's list; the rest (%s, for one) are files it skips. Installs go here.", found, len(files), f.Dir, missing)
+	case found == 1:
+		c.Detail = fmt.Sprintf("The one file in %s is in ComfyUI's list, so this is a folder it reads.", f.Dir)
+	default:
+		c.Detail = fmt.Sprintf("All %d files in %s are in ComfyUI's list, so this is a folder it reads.", len(files), f.Dir)
+	}
+	return c
+}

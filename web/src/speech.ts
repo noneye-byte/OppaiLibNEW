@@ -124,10 +124,6 @@ export function stopSpeaking(): void {
   try { window.speechSynthesis?.cancel(); } catch { /* unsupported */ }
 }
 
-export function isSpeaking(): boolean {
-  return playing !== null || queue.length > 0 || !!window.speechSynthesis?.speaking;
-}
-
 async function drain(): Promise<void> {
   if (draining) return;
   draining = true;

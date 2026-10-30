@@ -7,19 +7,6 @@ import (
 	"testing"
 )
 
-// The gallery the report was about: one red dress among a crowd of pictures that
-// each share a word with the request.
-func redDressGallery() chatWorkspace {
-	return chatWorkspace{Images: []chatImage{
-		{ID: "dress", CharacterID: "libby", Tags: []string{"red dress", "smile", "standing"}},
-		{ID: "hair", CharacterID: "libby", Tags: []string{"red hair", "bedroom", "black dress"}},
-		{ID: "lips", CharacterID: "libby", Tags: []string{"red lips", "mirror"}},
-		{ID: "nails", CharacterID: "libby", Tags: []string{"red nails", "sofa"}},
-		{ID: "sundress", CharacterID: "libby", Tags: []string{"sundress", "beach"}},
-		{ID: "car", CharacterID: "libby", Tags: []string{"red car", "street"}},
-	}}
-}
-
 // A whole tag matched in full outranks its words landing in different tags: "red
 // dress" is the red dress, not red hair in a black dress.
 func TestWholeTagMatchOutranksScatteredWords(t *testing.T) {

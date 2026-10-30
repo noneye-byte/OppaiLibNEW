@@ -78,15 +78,16 @@ func TestBothHalvesAreNamedAfterWhatTheirFilesShareEndingInTheirHalf(t *testing.
 	}
 }
 
-func TestInstallingIntoComfyUIWithoutItsFolderSaysWhereToMapIt(t *testing.T) {
+func TestInstallingIntoComfyUIWithNoFoldersSetSaysWhereToSetThem(t *testing.T) {
 	s, token := newTestServer(t)
 	rec := do(t, s.Handler(), token, http.MethodPost, "/api/imagegen/civitai/install",
 		`{"url":"https://civitai.com/api/download/models/1","target":"comfy"}`)
-	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "/comfy-models") {
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "Settings → Image generation → Video") {
 		t.Fatalf("got %d %s", rec.Code, rec.Body)
 	}
 	jobs := do(t, s.Handler(), token, http.MethodGet, "/api/imagegen/civitai/installs?target=comfy", "")
-	if jobs.Code != http.StatusOK || !strings.Contains(jobs.Body.String(), `"jobs":[]`) {
+	if jobs.Code != http.StatusOK || !strings.Contains(jobs.Body.String(), `"jobs":[]`) ||
+		!strings.Contains(jobs.Body.String(), `"loras":{"dir":"","problem":""}`) {
 		t.Fatalf("installs: %d %s", jobs.Code, jobs.Body)
 	}
 }

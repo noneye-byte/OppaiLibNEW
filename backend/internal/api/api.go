@@ -450,7 +450,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/feeds/check", s.requireAuth(s.handleCheckSavedFeeds))
 	mux.HandleFunc("POST /api/feeds/seen", s.requireAuth(s.handleMarkFeedsSeen))
 	mux.HandleFunc("DELETE /api/feeds/{id}", s.requireAuth(s.handleDeleteSavedFeed))
-	mux.HandleFunc("POST /api/feeds/{id}/check", s.requireAuth(s.handleCheckSavedFeeds))
 	mux.HandleFunc("POST /api/feeds/{id}/seen", s.requireAuth(s.handleMarkFeedsSeen))
 	mux.HandleFunc("GET /api/sources/{id}/item/{item}/pages", s.requireAuth(s.handleSourcePages))
 	// The conversation an item was posted in — a 4chan thread's comments.
@@ -479,6 +478,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/imagegen/generate", s.requireAuth(s.handleImageGenGenerate))
 	mux.HandleFunc("POST /api/imagegen/clip", s.requireAuth(s.handleImageGenClip))
 	mux.HandleFunc("GET /api/imagegen/comfy/models", s.requireAuth(s.handleComfyModels))
+	mux.HandleFunc("POST /api/imagegen/comfy/check", s.requireAuth(s.requireAdmin(s.handleComfyCheck)))
 	mux.HandleFunc("GET /api/imagegen/progress/{id}", s.requireAuth(s.handleImageGenProgress))
 	mux.HandleFunc("POST /api/imagegen/cancel/{id}", s.requireAuth(s.handleImageGenCancel))
 	// Preview ids are 128-bit random capabilities and expire from memory. Keeping the

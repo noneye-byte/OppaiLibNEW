@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-const { isSpeedLora, loraStage, loraTwin, suggestClipModels } = await import("./clip-models.ts");
+const { comfyFolderOf, isSpeedLora, loraStage, loraTwin, suggestClipModels } = await import("./clip-models.ts");
 
 test("a LoRA's half of the pair is read off its name however it is written", () => {
   assert.equal(loraStage("Wan2.2-Lightning_I2V-A14B-4steps-lora_HIGH_fp16.safetensors"), "high");
@@ -75,4 +75,14 @@ test("an all-in-one checkpoint is picked when there are no bare models", () => {
   assert.equal(s?.model, "wan2.2-i2v-rapid-aio-v10.safetensors");
   assert.equal(s?.checkpoint, true);
   assert.equal(suggestClipModels(lists, false), null);
+});
+
+test("a Wan checkpoint goes to diffusion_models unless its name says it carries everything", () => {
+  assert.equal(comfyFolderOf("Checkpoint", "Smooth Mix i2v_high.safetensors"), "diffusion_models");
+  assert.equal(comfyFolderOf("Checkpoint", "Wan 2.2 Rapid AIO v10.safetensors"), "checkpoints");
+  assert.equal(comfyFolderOf("Checkpoint", "wan22-all-in-one.safetensors"), "checkpoints");
+  assert.equal(comfyFolderOf("Checkpoint", "Radio Ratio.safetensors"), "diffusion_models");
+  assert.equal(comfyFolderOf("LyCORIS", "bounce.safetensors"), "loras");
+  assert.equal(comfyFolderOf("VAE", "wan_2.1_vae.safetensors"), "vae");
+  assert.equal(comfyFolderOf("TextualInversion", "x.pt"), null);
 });

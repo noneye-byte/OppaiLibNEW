@@ -646,10 +646,3 @@ func firstOf(s []string) string {
 	}
 	return ""
 }
-
-func kindOrDefault(kind string, def models.MediaKind) string {
-	if kind != "" {
-		return kind
-	}
-	return string(def)
-}

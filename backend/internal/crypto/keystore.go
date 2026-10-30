@@ -23,10 +23,9 @@ type keystoreFile struct {
 }
 
 var (
-	ErrNoKeystore   = errors.New("crypto: keystore not initialized")
-	ErrWrongPass    = errors.New("crypto: incorrect passphrase")
-	verifierPlain   = []byte("oppailib-ok")
-	verifierAAD     = []byte("verifier")
+	ErrWrongPass  = errors.New("crypto: incorrect passphrase")
+	verifierPlain = []byte("oppailib-ok")
+	verifierAAD   = []byte("verifier")
 )
 
 // OpenKeystore loads an existing keystore at dir/keystore.json and verifies the

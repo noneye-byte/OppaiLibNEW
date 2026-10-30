@@ -84,7 +84,6 @@ type Settings struct {
 	ChatModel     string `json:"chatModel"`
 	ChatAPIKey    string `json:"chatApiKey"`
 	ChatAPIKeySet bool   `json:"chatApiKeySet"`
-	ChatEnabled   bool   `json:"chatEnabled"`
 	// ChatContextTokens is the window OppaiLib fits a turn into, in tokens.
 	//
 	// 0 means auto, and auto is what almost everyone should leave it on: the loader is
@@ -227,16 +226,14 @@ type Settings struct {
 	// (imagegen/comfy_wan.go). A picked model wins over a pasted workflow.
 	ClipImageModels ClipModels `json:"clipImageModels"`
 	ClipTextModels  ClipModels `json:"clipTextModels"`
-	// ComfyModelsDir is that ComfyUI's models folder as this container sees it, for
-	// installing Wan models and LoRAs from Civitai: ComfyUI has no API that takes a
-	// download. Blank falls back to the template's /comfy-models mount when there is
-	// one. See imagegen/comfy_install.go.
-	ComfyModelsDir string `json:"comfyModelsDir"`
-	// ComfyDiffusionDir and ComfyLoraDir are where Wan models and LoRAs go when they
-	// are kept apart from that models folder; blank means its diffusion_models and
-	// loras, unless the template's /comfy-diffusion-models or /comfy-loras is mounted.
-	ComfyDiffusionDir string `json:"comfyDiffusionDir"`
-	ComfyLoraDir      string `json:"comfyLoraDir"`
+	// The folders installs from Civitai's video mode write into, as this container
+	// sees them, one per kind: ComfyUI has no API that takes a download. Each is
+	// exactly what was typed and a blank one is not installed into; nothing is
+	// guessed from the others. See imagegen/comfy_install.go.
+	ComfyDiffusionDir  string `json:"comfyDiffusionDir"`
+	ComfyCheckpointDir string `json:"comfyCheckpointDir"`
+	ComfyLoraDir       string `json:"comfyLoraDir"`
+	ComfyVaeDir        string `json:"comfyVaeDir"`
 	// LibbyStories lets her post a picture and a line while they are away, at most
 	// LibbyStoriesPerDay a day. See api.libby_stories.go.
 	LibbyStories       bool `json:"libbyStories"`
@@ -340,9 +337,11 @@ const (
 	keyClipTextWorkflow   = "clip.text_workflow"
 	keyClipImageModels    = "clip.image_models"
 	keyClipTextModels     = "clip.text_models"
-	keyComfyModelsDir     = "clip.comfy_models_dir"
+	keyComfyModelsDir     = "clip.comfy_models_dir" // read once, by comfyFolderDefaults
 	keyComfyDiffusionDir  = "clip.comfy_diffusion_dir"
+	keyComfyCheckpointDir = "clip.comfy_checkpoint_dir"
 	keyComfyLoraDir       = "clip.comfy_lora_dir"
+	keyComfyVaeDir        = "clip.comfy_vae_dir"
 	keyLibbyStories       = "libby.stories"
 	keyLibbyStoriesPerDay = "libby.stories.per_day"
 	keyChatToolMode       = "chat.tool_mode"
@@ -623,14 +622,18 @@ func Merge(base Settings, stored map[string]string) Settings {
 	for key, field := range map[string]*string{
 		keyLibbyPoseModule: &s.LibbyPoseModule, keyLibbyPoseModel: &s.LibbyPoseModel,
 		keyLibbyFaceModule: &s.LibbyFaceModule, keyLibbyFaceModel: &s.LibbyFaceModel,
-		keyLibbyClipURL: &s.LibbyClipURL, keyLibbyClipWorkflow: &s.LibbyClipWorkflow, keyComfyModelsDir: &s.ComfyModelsDir,
-		keyComfyDiffusionDir: &s.ComfyDiffusionDir, keyComfyLoraDir: &s.ComfyLoraDir,
+		keyLibbyClipURL: &s.LibbyClipURL, keyLibbyClipWorkflow: &s.LibbyClipWorkflow,
+		keyComfyDiffusionDir: &s.ComfyDiffusionDir, keyComfyCheckpointDir: &s.ComfyCheckpointDir,
+		keyComfyLoraDir: &s.ComfyLoraDir, keyComfyVaeDir: &s.ComfyVaeDir,
 		keyClipTextWorkflow: &s.ClipTextWorkflow,
 		keyChatToolMode:     &s.ChatToolMode,
 	} {
 		if v, ok := stored[key]; ok {
 			*field = v
 		}
+	}
+	if _, saved := stored[keyComfyVaeDir]; !saved {
+		comfyFolderDefaults(&s, stored[keyComfyModelsDir])
 	}
 	if v, ok := parseBool(stored[keyLibbyStories]); ok {
 		s.LibbyStories = v
@@ -709,9 +712,10 @@ func (s Settings) Map() map[string]string {
 		keyClipTextWorkflow:   s.ClipTextWorkflow,
 		keyClipImageModels:    clipModelsJSON(s.ClipImageModels),
 		keyClipTextModels:     clipModelsJSON(s.ClipTextModels),
-		keyComfyModelsDir:     s.ComfyModelsDir,
 		keyComfyDiffusionDir:  s.ComfyDiffusionDir,
+		keyComfyCheckpointDir: s.ComfyCheckpointDir,
 		keyComfyLoraDir:       s.ComfyLoraDir,
+		keyComfyVaeDir:        s.ComfyVaeDir,
 		keyLibbyStories:       strconv.FormatBool(s.LibbyStories),
 		keyLibbyStoriesPerDay: strconv.Itoa(s.LibbyStoriesPerDay),
 		keyChatToolMode:       s.ChatToolMode,
@@ -818,10 +822,6 @@ func (s *Settings) Clamp() {
 	if s.GPUMemoryGB < 0 || s.GPUMemoryGB > 256 {
 		s.GPUMemoryGB = 0
 	}
-	// A text-generation-webui model is selected in its own WebUI/startup config;
-	// its OpenAI endpoint does not require OppaiLib to own that lifecycle or even
-	// send a model field. The live readiness probe decides whether Chat can run.
-	s.ChatEnabled = s.ChatURL != ""
 	s.VisionURL = strings.TrimRight(strings.TrimSpace(s.VisionURL), "/")
 	s.VisionModel = strings.TrimSpace(s.VisionModel)
 	s.VisionAPIKey = strings.TrimSpace(s.VisionAPIKey)
@@ -894,9 +894,9 @@ func (s *Settings) Clamp() {
 	}
 	s.ClipImageModels = cleanClipModels(s.ClipImageModels)
 	s.ClipTextModels = cleanClipModels(s.ClipTextModels)
-	s.ComfyModelsDir = strings.TrimRight(strings.TrimSpace(s.ComfyModelsDir), "/")
-	s.ComfyDiffusionDir = strings.TrimRight(strings.TrimSpace(s.ComfyDiffusionDir), "/")
-	s.ComfyLoraDir = strings.TrimRight(strings.TrimSpace(s.ComfyLoraDir), "/")
+	for _, dir := range []*string{&s.ComfyDiffusionDir, &s.ComfyCheckpointDir, &s.ComfyLoraDir, &s.ComfyVaeDir} {
+		*dir = strings.TrimRight(strings.TrimSpace(*dir), "/")
+	}
 	if s.LibbyStoriesPerDay < 1 {
 		s.LibbyStoriesPerDay = 1
 	} else if s.LibbyStoriesPerDay > 6 {

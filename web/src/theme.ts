@@ -285,12 +285,3 @@ export function watchSystemTheme(): void {
     if (loadTheme() === "system") applyTheme("system");
   });
 }
-
-// Shared component-level styles.
-export const cardStyles = css`
-  .card {
-    background: var(--md-sys-color-surface-container);
-    border-radius: var(--oppai-radius);
-    overflow: hidden;
-  }
-`;

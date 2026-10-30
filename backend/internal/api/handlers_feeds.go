@@ -252,7 +252,7 @@ func (s *Server) checkSavedFeed(ctx context.Context, f *savedFeed, now time.Time
 }
 
 // checkUserFeeds runs every feed of one user that is due, or all of them when forced.
-func (s *Server) checkUserFeeds(ctx context.Context, userID int64, force bool, only string) {
+func (s *Server) checkUserFeeds(ctx context.Context, userID int64, force bool) {
 	feedsMu.Lock()
 	defer feedsMu.Unlock()
 	store, err := s.readSavedFeeds(userID)
@@ -263,9 +263,6 @@ func (s *Server) checkUserFeeds(ctx context.Context, userID int64, force bool, o
 	changed := false
 	for i := range store.Feeds {
 		f := &store.Feeds[i]
-		if only != "" && f.ID != only {
-			continue
-		}
 		due := f.CheckedAt == 0 || now.Sub(time.UnixMilli(f.CheckedAt)) >= feedCheckEvery
 		if !force && !due {
 			continue
@@ -293,7 +290,7 @@ func (s *Server) sweepSavedFeeds() {
 			if _, err := fmt.Sscanf(filepath.Base(filepath.Dir(path)), "user-%d", &userID); err != nil || userID <= 0 {
 				continue
 			}
-			s.checkUserFeeds(context.Background(), userID, false, "")
+			s.checkUserFeeds(context.Background(), userID, false)
 		}
 	}
 	// A short first delay so startup is not a burst of outbound requests before the
@@ -431,14 +428,14 @@ func (s *Server) handleDeleteSavedFeed(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleCheckSavedFeeds runs every feed now — the "refresh" button — or one, by id.
+// handleCheckSavedFeeds runs every feed now: the "refresh" button.
 func (s *Server) handleCheckSavedFeeds(w http.ResponseWriter, r *http.Request) {
 	u, ok := s.chatUser(r)
 	if !ok {
 		writeErr(w, http.StatusUnauthorized, "invalid user")
 		return
 	}
-	s.checkUserFeeds(r.Context(), u.ID, true, r.PathValue("id"))
+	s.checkUserFeeds(r.Context(), u.ID, true)
 	s.handleListSavedFeeds(w, r)
 }
 

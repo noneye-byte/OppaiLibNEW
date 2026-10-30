@@ -1,10 +1,10 @@
-import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap as oe,aq as ne,ar as re,as as F,at as le,x as de,au as ce,av as pe,aw as he,ax as ue,ay as ve,az as fe,aA as ge,aB as me,aC as ye,aD as G,v as Q}from"./index-C5YPaA3S.js";import{r as be,p as we}from"./passkeys-V-LCJrh0.js";import{l as $e,a as ke,s as T,b as D,D as xe,d as Le}from"./launchy-xyl1VS8H.js";const Ee=160,Ae=220;function Se(e){var u;const t=e.trim();if(t.length<=Ee)return t?[t]:[];const s=((u=t.match(/[^.!?…\n]+(?:[.!?…]+["”')]*|\n|$)/g))==null?void 0:u.map(g=>g.trim()).filter(Boolean))??[t],[n,...o]=s,r=[n];let a="";for(const g of o)a&&a.length+g.length+1>Ae&&(r.push(a),a=""),a=a?`${a} ${g}`:g;return a&&r.push(a),r}const X="oppai_libby_speak";function Je(){try{return localStorage.getItem(X)==="1"}catch{return!1}}function Qe(e){try{localStorage.setItem(X,e?"1":"0")}catch{}e||ee(),window.dispatchEvent(new CustomEvent("oppai-libby-speak",{detail:{on:e}}))}let C=null,W=0;async function Z(e=!1){if(!e&&C&&Date.now()-W<6e4)return C;try{const t=await fetch("/api/tts/status",{credentials:"same-origin"});if(!t.ok)throw new Error(String(t.status));C=await t.json(),W=Date.now()}catch{C=null}return C}const I=[];let A=null,z=!1,S=0,_=Promise.resolve();function Ce(e,t=0){const s=Se(e);if(!s.length)return Promise.resolve();const n=S,o=s.map(r=>new Promise(a=>{const u=_.then(()=>n===S?Me(r,t):null);_=u.catch(()=>null),I.push({text:r,heat:t,audio:u,done:a})}));return Re(),Promise.all(o).then(()=>{})}function ee(){var e;S++,_=Promise.resolve();for(const t of I.splice(0))t.done();A&&(A.pause(),A.src="",A=null);try{(e=window.speechSynthesis)==null||e.cancel()}catch{}}async function Re(){if(!z){z=!0;try{for(;I.length;){const e=I.shift(),t=S;try{await Pe(e,t)}catch{}finally{e.done()}}}finally{z=!1}}}async function Pe(e,t){const s=await e.audio.catch(()=>null);if(t===S){if(s){await Te(s,t);return}await Ie(e.text,t)}}async function Me(e,t){const s=await Z();if(s&&!s.engine)return null;try{const n=await fetch("/api/tts/speak",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify({text:e,heat:t||void 0})});return n.status===503?(C=null,null):n.ok?await n.blob():null}catch{return null}}function Te(e,t){return new Promise(s=>{const n=URL.createObjectURL(e),o=new Audio(n);A=o;const r=()=>{A===o&&(A=null),URL.revokeObjectURL(n),s()};o.addEventListener("ended",r,{once:!0}),o.addEventListener("error",r,{once:!0}),o.play().catch(()=>{r()}),t!==S&&r()})}function Ie(e,t){const s=window.speechSynthesis;return!s||typeof SpeechSynthesisUtterance>"u"?Promise.resolve():new Promise(n=>{const o=new SpeechSynthesisUtterance(e),r=Be(s.getVoices());if(r&&(o.voice=r),o.rate=1.02,o.pitch=1.05,o.onend=()=>n(),o.onerror=()=>n(),t!==S){n();return}s.speak(o)})}function Be(e){const t=e.filter(o=>/^en/i.test(o.lang)),s=t.length?t:e,n=o=>{let r=0;const a=o.name.toLowerCase();return/natural|neural|premium|enhanced/.test(a)&&(r+=4),/female|woman|aria|jenny|samantha|zira|karen|moira|tessa|fiona|libby|sonia|ava|allison|susan|emma/.test(a)&&(r+=3),/google/.test(a)&&(r+=1),o.default&&(r+=1),r};return[...s].sort((o,r)=>n(r)-n(o))[0]}const Ne=new RegExp("(high|low)[\\s_-]?noise|(?<![a-z])(high|low)(?![a-z])","gi");function te(e){let t=null;for(const s of e.matchAll(Ne)){const n=s[1]??s[2],o=s.index+s[0].toLowerCase().indexOf(n.toLowerCase());t={stage:n.toLowerCase(),at:o,text:n}}return t}function L(e){var t;return((t=te(e))==null?void 0:t.stage)??""}function O(e,t){const s=te(e);if(!s)return"";const n=s.stage==="high"?"low":"high",o=s.text,r=o===o.toUpperCase()?n.toUpperCase():o[0]===o[0].toUpperCase()?n[0].toUpperCase()+n.slice(1):n,a=e.slice(0,s.at)+r+e.slice(s.at+o.length);return t.includes(a)?a:""}function De(e){return new RegExp("lightx2v|lightning|causvid|distill|(?<![0-9])4[\\s_-]?steps?","i").test(e)}const ze={steps:4,cfg:1};function _e(e,t){const s=t?/i2v/i:/t2v|ti2v/i,n=m=>(/wan/i.test(m)||!!L(m))&&s.test(m),o=e.diffusion.find(m=>n(m)&&L(m)==="high"),r=o?O(o,e.diffusion)||e.diffusion.find(m=>n(m)&&L(m)==="low"):void 0,u={model:"",checkpoint:!1,lowModel:"",textEncoder:e.textEncoders.find(m=>/umt5/i.test(m))??"",vae:"",loras:[],steps:0,cfg:0,shift:0};if(o&&r)return{...u,model:o,lowModel:r,vae:V(e.vaes,!1)};const g=e.diffusion.find(m=>n(m)&&!L(m));if(g)return{...u,model:g,vae:V(e.vaes,/5b/i.test(g))};const b=e.checkpoints.find(n);return b?{...u,model:b,checkpoint:!0,textEncoder:""}:null}function V(e,t){const s=o=>/wan[\s_.-]?2[._]?2/i.test(o);return e.filter(o=>/wan/i.test(o)&&s(o)===t)[0]??""}var Oe=Object.defineProperty,Ue=Object.getOwnPropertyDescriptor,E=(e,t,s,n)=>{for(var o=n>1?void 0:n?Ue(t,s):t,r=e.length-1,a;r>=0;r--)(a=e[r])&&(o=(n?a(t,s,o):a(o))||o);return n&&o&&Oe(t,s,o),o};const Fe={itch:"itch.io",f95:"F95zone"},Ge=4e3;let $=class extends Y{constructor(){super(...arguments),this.status=null,this.keys=null,this.loadError="",this.link="",this.linkExpires=0,this.linking=!1,this.busy={},this.timer=null,this.linkIssuedAt=0}connectedCallback(){super.connectedCallback(),this.refresh(),this.loadKeys(),this.timer=window.setInterval(()=>void this.refresh(),Ge)}disconnectedCallback(){super.disconnectedCallback(),this.timer!=null&&clearInterval(this.timer),this.timer=null}async refresh(){try{this.status=await v.launchyStatus(),this.loadError=""}catch(e){this.loadError=e.message}if(this.link)if(Date.now()/1e3>this.linkExpires)this.link="";else{await this.loadKeys();const e=(this.keys??[]).find(t=>t.createdAt>=this.linkIssuedAt);e&&(this.link="",k(`Launchy on ${e.name} is linked.`))}}async loadKeys(){try{this.keys=(await v.launchyKeys()).items}catch(e){this.loadError=e.message}}async makeLink(){this.linking=!0;try{const{code:e,expiresAt:t}=await v.launchyPairing();this.linkIssuedAt=Math.floor(Date.now()/1e3)-5,this.link=$e(location.origin,e),this.linkExpires=t,window.location.assign(this.link)}catch(e){k(e.message,"error")}finally{this.linking=!1}}async copyLink(e){var s;const t=(s=e.currentTarget.parentElement)==null?void 0:s.querySelector("input");try{await navigator.clipboard.writeText(this.link),k("Copied the link.")}catch{t==null||t.select(),k("Press Ctrl+C to copy the selected link.")}}async revoke(e){if(confirm(`Unlink Launchy on ${e.name}? It stops syncing until it is linked again.`))try{await v.revokeLaunchyKey(e.id),await this.loadKeys()}catch(t){k(t.message,"error")}}async run(e,t,s){this.busy={...this.busy,[e]:!0};try{const n=await v.launchyRequest(t),o=await ke(v.launchyRequestStatus,n.id,{timeout:t.action==="sync"?18e4:6e4});o.status==="done"?k(o.message||s):k(o.error||"Launchy could not do that.","error")}catch(n){k(n.message,"error")}finally{this.busy={...this.busy,[e]:!1},this.refresh()}}render(){return i`
-      ${this.loadError?i`<div class="banner error"><span class="material-symbols-rounded" style="font-size:18px;">error</span>${this.loadError}</div>`:l}
+import{z as H,q as j,i as q,u as d,a as Y,e as v,m as $,A as l,b as s,t as J,ap as ae,aq as oe,ar as ne,as as U,at as re,x as le,au as de,av as ce,aw as pe,ax as he,ay as ue,az as ve,aA as fe,aB as ge,aC as me,aD as G,v as Q}from"./index-BEFN2Gyr.js";import{r as ye,p as be}from"./passkeys-ciXgQjG7.js";import{s as $e,l as T,a as F,i as we,S as ke}from"./clip-models-C_2_HC7J.js";import{l as xe,a as Le,s as M,b as D,D as Ee,d as Se}from"./launchy-xyl1VS8H.js";const Ae=160,Ce=220;function Re(e){var u;const t=e.trim();if(t.length<=Ae)return t?[t]:[];const i=((u=t.match(/[^.!?…\n]+(?:[.!?…]+["”')]*|\n|$)/g))==null?void 0:u.map(m=>m.trim()).filter(Boolean))??[t],[n,...o]=i,r=[n];let a="";for(const m of o)a&&a.length+m.length+1>Ce&&(r.push(a),a=""),a=a?`${a} ${m}`:m;return a&&r.push(a),r}const X="oppai_libby_speak";function Ye(){try{return localStorage.getItem(X)==="1"}catch{return!1}}function Je(e){try{localStorage.setItem(X,e?"1":"0")}catch{}e||ee(),window.dispatchEvent(new CustomEvent("oppai-libby-speak",{detail:{on:e}}))}let A=null,V=0;async function Z(e=!1){if(!e&&A&&Date.now()-V<6e4)return A;try{const t=await fetch("/api/tts/status",{credentials:"same-origin"});if(!t.ok)throw new Error(String(t.status));A=await t.json(),V=Date.now()}catch{A=null}return A}const I=[];let L=null,z=!1,E=0,O=Promise.resolve();function Pe(e,t=0){const i=Re(e);if(!i.length)return Promise.resolve();const n=E,o=i.map(r=>new Promise(a=>{const u=O.then(()=>n===E?Ie(r,t):null);O=u.catch(()=>null),I.push({text:r,heat:t,audio:u,done:a})}));return Te(),Promise.all(o).then(()=>{})}function ee(){var e;E++,O=Promise.resolve();for(const t of I.splice(0))t.done();L&&(L.pause(),L.src="",L=null);try{(e=window.speechSynthesis)==null||e.cancel()}catch{}}async function Te(){if(!z){z=!0;try{for(;I.length;){const e=I.shift(),t=E;try{await Me(e,t)}catch{}finally{e.done()}}}finally{z=!1}}}async function Me(e,t){const i=await e.audio.catch(()=>null);if(t===E){if(i){await Be(i,t);return}await Ne(e.text,t)}}async function Ie(e,t){const i=await Z();if(i&&!i.engine)return null;try{const n=await fetch("/api/tts/speak",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify({text:e,heat:t||void 0})});return n.status===503?(A=null,null):n.ok?await n.blob():null}catch{return null}}function Be(e,t){return new Promise(i=>{const n=URL.createObjectURL(e),o=new Audio(n);L=o;const r=()=>{L===o&&(L=null),URL.revokeObjectURL(n),i()};o.addEventListener("ended",r,{once:!0}),o.addEventListener("error",r,{once:!0}),o.play().catch(()=>{r()}),t!==E&&r()})}function Ne(e,t){const i=window.speechSynthesis;return!i||typeof SpeechSynthesisUtterance>"u"?Promise.resolve():new Promise(n=>{const o=new SpeechSynthesisUtterance(e),r=De(i.getVoices());if(r&&(o.voice=r),o.rate=1.02,o.pitch=1.05,o.onend=()=>n(),o.onerror=()=>n(),t!==E){n();return}i.speak(o)})}function De(e){const t=e.filter(o=>/^en/i.test(o.lang)),i=t.length?t:e,n=o=>{let r=0;const a=o.name.toLowerCase();return/natural|neural|premium|enhanced/.test(a)&&(r+=4),/female|woman|aria|jenny|samantha|zira|karen|moira|tessa|fiona|libby|sonia|ava|allison|susan|emma/.test(a)&&(r+=3),/google/.test(a)&&(r+=1),o.default&&(r+=1),r};return[...i].sort((o,r)=>n(r)-n(o))[0]}var ze=Object.defineProperty,Oe=Object.getOwnPropertyDescriptor,x=(e,t,i,n)=>{for(var o=n>1?void 0:n?Oe(t,i):t,r=e.length-1,a;r>=0;r--)(a=e[r])&&(o=(n?a(t,i,o):a(o))||o);return n&&o&&ze(t,i,o),o};const _e={itch:"itch.io",f95:"F95zone"},Ue=4e3;let b=class extends Y{constructor(){super(...arguments),this.status=null,this.keys=null,this.loadError="",this.link="",this.linkExpires=0,this.linking=!1,this.busy={},this.timer=null,this.linkIssuedAt=0}connectedCallback(){super.connectedCallback(),this.refresh(),this.loadKeys(),this.timer=window.setInterval(()=>void this.refresh(),Ue)}disconnectedCallback(){super.disconnectedCallback(),this.timer!=null&&clearInterval(this.timer),this.timer=null}async refresh(){try{this.status=await v.launchyStatus(),this.loadError=""}catch(e){this.loadError=e.message}if(this.link)if(Date.now()/1e3>this.linkExpires)this.link="";else{await this.loadKeys();const e=(this.keys??[]).find(t=>t.createdAt>=this.linkIssuedAt);e&&(this.link="",$(`Launchy on ${e.name} is linked.`))}}async loadKeys(){try{this.keys=(await v.launchyKeys()).items}catch(e){this.loadError=e.message}}async makeLink(){this.linking=!0;try{const{code:e,expiresAt:t}=await v.launchyPairing();this.linkIssuedAt=Math.floor(Date.now()/1e3)-5,this.link=xe(location.origin,e),this.linkExpires=t,window.location.assign(this.link)}catch(e){$(e.message,"error")}finally{this.linking=!1}}async copyLink(e){var i;const t=(i=e.currentTarget.parentElement)==null?void 0:i.querySelector("input");try{await navigator.clipboard.writeText(this.link),$("Copied the link.")}catch{t==null||t.select(),$("Press Ctrl+C to copy the selected link.")}}async revoke(e){if(confirm(`Unlink Launchy on ${e.name}? It stops syncing until it is linked again.`))try{await v.revokeLaunchyKey(e.id),await this.loadKeys()}catch(t){$(t.message,"error")}}async run(e,t,i){this.busy={...this.busy,[e]:!0};try{const n=await v.launchyRequest(t),o=await Le(v.launchyRequestStatus,n.id,{timeout:t.action==="sync"?18e4:6e4});o.status==="done"?$(o.message||i):$(o.error||"Launchy could not do that.","error")}catch(n){$(n.message,"error")}finally{this.busy={...this.busy,[e]:!1},this.refresh()}}render(){return s`
+      ${this.loadError?s`<div class="banner error"><span class="material-symbols-rounded" style="font-size:18px;">error</span>${this.loadError}</div>`:l}
       ${this.renderLink()}
       ${this.renderPC()}
       ${this.renderRunning()}
       ${this.renderDownloads()}
-    `}renderLink(){const e=this.keys??[];return i`
+    `}renderLink(){const e=this.keys??[];return s`
       <section class="card">
         <h3><span class="material-symbols-rounded">link</span>Link</h3>
         <p class="sub">
@@ -23,7 +23,7 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
             <span class="material-symbols-rounded">link</span>${this.linking?"Making a link…":"Link Launchy"}
           </button>
         </div>
-        ${this.link?i`<div class="linkbox">
+        ${this.link?s`<div class="linkbox">
               <input readonly .value=${this.link} @focus=${t=>t.target.select()} />
               <a class="btn-inline" href=${this.link}><span class="material-symbols-rounded">open_in_new</span>Open Launchy</a>
               <button class="btn-inline" @click=${t=>void this.copyLink(t)}>
@@ -34,13 +34,13 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
                 into Launchy under Settings → OppaiLib.
               </div>
             </div>`:l}
-        ${e.map(t=>i`<div class="row">
+        ${e.map(t=>s`<div class="row">
             <span class="material-symbols-rounded" style="font-size:18px; color:var(--oppai-text-muted);">key</span>
             <div class="grow">
               <div class="label">${t.name}</div>
               <div class="help">
                 Key …${t.hint} · linked ${new Date(t.createdAt*1e3).toLocaleDateString()} ·
-                ${t.lastUsedAt?`last used ${T(t.lastUsedAt)}`:"not used yet"}
+                ${t.lastUsedAt?`last used ${M(t.lastUsedAt)}`:"not used yet"}
               </div>
             </div>
             <button class="btn-inline" @click=${()=>void this.revoke(t)}>
@@ -48,7 +48,7 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
             </button>
           </div>`)}
       </section>
-    `}renderPC(){var s,n,o,r;const e=this.status;if(!e)return l;const t=!!e.reportedAt;return i`
+    `}renderPC(){var i,n,o,r;const e=this.status;if(!e)return l;const t=!!e.reportedAt;return s`
       <section class="card">
         <h3><span class="material-symbols-rounded">sports_esports</span>The PC</h3>
         <div class="row">
@@ -56,64 +56,64 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
           <div class="grow">
             <div class="label">${e.connected?`Launchy is running on ${e.name||"the PC"}`:"Launchy is offline"}</div>
             <div class="help">
-              ${e.version?`Version ${e.version} · `:""}last checked in ${T(e.lastSeen)}
-              ${e.connected&&!t?i` · <span class="warn">an older Launchy — update it to control it from here</span>`:l}
+              ${e.version?`Version ${e.version} · `:""}last checked in ${M(e.lastSeen)}
+              ${e.connected&&!t?s` · <span class="warn">an older Launchy — update it to control it from here</span>`:l}
             </div>
           </div>
-          ${D(e,"sync")?i`<button class="btn-inline" ?disabled=${this.busy.sync||((s=e.sync)==null?void 0:s.running)}
+          ${D(e,"sync")?s`<button class="btn-inline" ?disabled=${this.busy.sync||((i=e.sync)==null?void 0:i.running)}
                 @click=${()=>void this.run("sync",{action:"sync"},"Synced.")}>
                 <span class="material-symbols-rounded">sync</span>${this.busy.sync||(n=e.sync)!=null&&n.running?"Syncing…":"Sync now"}
               </button>`:l}
         </div>
-        ${(o=e.sync)!=null&&o.lastSync||(r=e.sync)!=null&&r.lastError?i`<div class="row"><div class="grow">
+        ${(o=e.sync)!=null&&o.lastSync||(r=e.sync)!=null&&r.lastError?s`<div class="row"><div class="grow">
               <div class="label">Library sync</div>
               <div class="help">
-                ${e.sync.lastSync?`Last synced ${T(e.sync.lastSync)}`:"Not synced yet"}
-                ${e.sync.lastError?i` · <span class="warn">${e.sync.lastError}</span>`:l}
+                ${e.sync.lastSync?`Last synced ${M(e.sync.lastSync)}`:"Not synced yet"}
+                ${e.sync.lastError?s` · <span class="warn">${e.sync.lastError}</span>`:l}
               </div>
             </div></div>`:l}
-        ${(e.accounts??[]).map(a=>i`<div class="row">
+        ${(e.accounts??[]).map(a=>s`<div class="row">
             <span class="dot ${a.challenged?"warn":a.signedIn?"on":""}"></span>
             <div class="grow">
-              <div class="label">${Fe[a.site]??a.site}</div>
+              <div class="label">${_e[a.site]??a.site}</div>
               <div class="help">
-                ${a.challenged?i`<span class="warn">Wants a person to prove they are one — press Verify next to it in Launchy on the PC.</span>`:a.signedIn?`Signed in${a.user?` as ${a.user}`:""} in Launchy`:"Not signed in in Launchy — sign in there, under Settings → Accounts"}
+                ${a.challenged?s`<span class="warn">Wants a person to prove they are one — press Verify next to it in Launchy on the PC.</span>`:a.signedIn?`Signed in${a.user?` as ${a.user}`:""} in Launchy`:"Not signed in in Launchy — sign in there, under Settings → Accounts"}
               </div>
             </div>
           </div>`)}
       </section>
-    `}renderRunning(){const e=this.status;if(!(e!=null&&e.connected)||!e.reportedAt)return l;const t=e.sessions??[];return i`
+    `}renderRunning(){const e=this.status;if(!(e!=null&&e.connected)||!e.reportedAt)return l;const t=e.sessions??[];return s`
       <section class="card">
         <h3><span class="material-symbols-rounded">play_arrow</span>Running</h3>
-        ${t.length===0?i`<div class="empty">Nothing is running on the PC.</div>`:l}
-        ${t.map(s=>{const n=`stop:${s.gameId}`;return i`<div class="row">
+        ${t.length===0?s`<div class="empty">Nothing is running on the PC.</div>`:l}
+        ${t.map(i=>{const n=`stop:${i.gameId}`;return s`<div class="row">
             <div class="grow">
-              <div class="label">${s.title||"A game"}</div>
-              <div class="help">Started ${T(s.startedAt)}</div>
+              <div class="label">${i.title||"A game"}</div>
+              <div class="help">Started ${M(i.startedAt)}</div>
             </div>
-            ${D(e,"stop")?i`<button class="btn-inline" ?disabled=${this.busy[n]}
-                  @click=${()=>{confirm(`Close ${s.title||"this game"} on the PC? Anything unsaved in it is lost.`)&&this.run(n,{action:"stop",gameId:s.gameId},"Closed.")}}>
+            ${D(e,"stop")?s`<button class="btn-inline" ?disabled=${this.busy[n]}
+                  @click=${()=>{confirm(`Close ${i.title||"this game"} on the PC? Anything unsaved in it is lost.`)&&this.run(n,{action:"stop",gameId:i.gameId},"Closed.")}}>
                   <span class="material-symbols-rounded">stop_circle</span>${this.busy[n]?"Closing…":"Close"}
                 </button>`:l}
           </div>`})}
       </section>
-    `}renderDownloads(){const e=this.status;if(!(e!=null&&e.connected)||!e.reportedAt)return l;const t=e.downloads??[];return t.length?i`
+    `}renderDownloads(){const e=this.status;if(!(e!=null&&e.connected)||!e.reportedAt)return l;const t=e.downloads??[];return t.length?s`
       <section class="card">
         <h3><span class="material-symbols-rounded">download</span>Downloads on the PC</h3>
-        ${t.map(s=>{const n=`cancel:${s.id}`;return i`<div class="row">
+        ${t.map(i=>{const n=`cancel:${i.id}`;return s`<div class="row">
             <div class="grow">
-              <div class="label">${s.title}${s.label?i` <span class="help">· ${s.label}</span>`:l}</div>
+              <div class="label">${i.title}${i.label?s` <span class="help">· ${i.label}</span>`:l}</div>
               <div class="help">
-                ${xe[s.status]??s.status}${s.message?` — ${s.message}`:""}
+                ${Ee[i.status]??i.status}${i.message?` — ${i.message}`:""}
               </div>
             </div>
-            ${Le(s)&&D(e,"download")?i`<button class="btn-inline" ?disabled=${this.busy[n]}
-                  @click=${()=>void this.run(n,{action:"cancel-download",downloadId:s.id},"Cancelled.")}>
+            ${Se(i)&&D(e,"download")?s`<button class="btn-inline" ?disabled=${this.busy[n]}
+                  @click=${()=>void this.run(n,{action:"cancel-download",downloadId:i.id},"Cancelled.")}>
                   <span class="material-symbols-rounded">close</span>Cancel
                 </button>`:l}
           </div>`})}
       </section>
-    `:l}};$.styles=[H,j,q`
+    `:l}};b.styles=[H,j,q`
       :host { display: block; }
       .card {
         border-top: 1px solid var(--oppai-border);
@@ -176,25 +176,25 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
       .banner.error { background: color-mix(in srgb, var(--oppai-fav) 18%, transparent); color: var(--oppai-fav); }
       .banner.info { background: var(--oppai-surface-2); color: var(--oppai-text-dim); }
       .empty { font-size: 13px; color: var(--oppai-text-muted); padding: 6px 0 10px; }
-    `];E([d()],$.prototype,"status",2);E([d()],$.prototype,"keys",2);E([d()],$.prototype,"loadError",2);E([d()],$.prototype,"link",2);E([d()],$.prototype,"linkExpires",2);E([d()],$.prototype,"linking",2);E([d()],$.prototype,"busy",2);$=E([J("oppai-launchy-panel")],$);var We=Object.defineProperty,Ve=Object.getOwnPropertyDescriptor,h=(e,t,s,n)=>{for(var o=n>1?void 0:n?Ve(t,s):t,r=e.length-1,a;r>=0;r--)(a=e[r])&&(o=(n?a(t,s,o):a(o))||o);return n&&o&&We(t,s,o),o};const Ke=[{id:"appearance",label:"Appearance",icon:"palette",group:"You"},{id:"account",label:"Account",icon:"account_circle",group:"You"},{id:"library",label:"Library",icon:"inventory_2",group:"Library"},{id:"scraping",label:"Import & scraping",icon:"travel_explore",group:"Library",server:!0},{id:"ai",label:"Tagging & descriptions",icon:"smart_toy",group:"AI",server:!0},{id:"imagegen",label:"Image generation",icon:"auto_awesome",group:"AI",server:!0},{id:"android",label:"Android app",icon:"android",group:"Apps"},{id:"launchy",label:"Launchy",icon:"sports_esports",group:"Apps"},{id:"storage",label:"Storage",icon:"hard_drive",group:"Server"},{id:"privacy",label:"Privacy",icon:"visibility_off",group:"Server",server:!0,adminOnly:!0},{id:"diagnostics",label:"Diagnostics",icon:"speed",group:"Server",adminOnly:!0},{id:"about",label:"About",icon:"info",group:"Server"}];let c=class extends Y{constructor(){super(...arguments),this.only="",this.tab="appearance",this.settings=null,this.info=null,this.stats=null,this.apk=null,this.loadError="",this.passkeyList=null,this.passkeyBusy=!1,this.passkeyError="",this.passkeyMsg="",this.passkeyName="",this.passkeyRenaming=null,this.passkeyRevoking=null,this.passkeyPassword="",this.diag=null,this.uiDiag=null,this.storage=null,this.storageBusy=!1,this.storageErr="",this.diagBusy=!1,this.diagErr="",this.dirty=!1,this.saving=!1,this.saved=!1,this.theme=oe(),this.fit=ne(),this.hideLibby=re(),this.genModels=[],this.genLoras=[],this.genLoraTriggers={},this.genBoards=[],this.genError="",this.genStatus=null,this.genChecks=null,this.genCheckBusy=!1,this.genRestart="",this.genCheckErr="",this.comfy=null,this.comfyErr="",this.comfyBusy=!1,this.comfyFolder=null,this.pwCurrent="",this.pwNew="",this.pwConfirm="",this.pwBusy=!1,this.pwMsg="",this.pwErr="",this.refs=null,this.refStamp=Date.now(),this.refNote="",this.tts=void 0,this.describe=null,this.describeBusy=!1,this.describeNote="",this.ttsErrors={},this.addPasskey=async()=>{this.passkeyBusy=!0,this.passkeyError="",this.passkeyMsg="";try{const e=await be(this.passkeyName.trim());this.passkeyName="",this.passkeyMsg=`Added “${e.name}”. You can sign in with it now.`,await this.loadPasskeys()}catch(e){const t=we(e);t&&(this.passkeyError=t)}finally{this.passkeyBusy=!1}},this.cancelRevoke=()=>{this.passkeyRevoking=null,this.passkeyPassword=""},this.loadStorage=async()=>{this.storageBusy=!0,this.storageErr="";try{this.storage=await v.storage()}catch(e){this.storageErr=e.message}finally{this.storageBusy=!1}},this.runCleanup=async()=>{this.storageBusy=!0,this.storageErr="";try{const e=await v.cleanupStorage(["uploads","temp"]);this.storage=e.storage,k(`Reclaimed ${e.freedHuman}.`,"success")}catch(e){this.storageErr=e.message}finally{this.storageBusy=!1}},this.loadDiagnostics=async()=>{this.diagBusy=!0,this.diagErr="";try{this.diag=await v.diagnostics(),this.uiDiag=F()}catch(e){this.diagErr=e.message}finally{this.diagBusy=!1}},this.resetDiagnostics=async()=>{this.diagBusy=!0,this.diagErr="";try{le(),await v.resetDiagnostics(),this.diag=await v.diagnostics(),this.uiDiag=F()}catch(e){this.diagErr=e.message}finally{this.diagBusy=!1}}}connectedCallback(){super.connectedCallback(),de(this,"settings"),this.load(),this.loadGenLists(),this.loadComfy(),this.loadTTS(),this.loadDescribe(),this.loadReferences()}async loadReferences(){try{this.refs=await v.libbyReferences()}catch{this.refs=null}}async setReference(e,t){var o;const s=(o=t.files)==null?void 0:o[0];if(t.value="",!s)return;const n=await new Promise((r,a)=>{const u=new FileReader;u.onload=()=>r(String(u.result)),u.onerror=()=>a(u.error),u.readAsDataURL(s)});try{await v.setLibbyReference(e,n),this.refNote="",this.refStamp=Date.now(),await this.loadReferences()}catch(r){this.refNote=r.message}}async clearReference(e){try{await v.deleteLibbyReference(e),this.refNote="",await this.loadReferences()}catch(t){this.refNote=t.message}}referenceTile(e,t){var n;const s=!!((n=this.refs)!=null&&n[e]);return i`<div style="display:flex;flex-direction:column;gap:6px;align-items:center;width:132px;">
+    `];x([d()],b.prototype,"status",2);x([d()],b.prototype,"keys",2);x([d()],b.prototype,"loadError",2);x([d()],b.prototype,"link",2);x([d()],b.prototype,"linkExpires",2);x([d()],b.prototype,"linking",2);x([d()],b.prototype,"busy",2);b=x([J("oppai-launchy-panel")],b);var Ge=Object.defineProperty,Fe=Object.getOwnPropertyDescriptor,p=(e,t,i,n)=>{for(var o=n>1?void 0:n?Fe(t,i):t,r=e.length-1,a;r>=0;r--)(a=e[r])&&(o=(n?a(t,i,o):a(o))||o);return n&&o&&Ge(t,i,o),o};const Ve=[{id:"appearance",label:"Appearance",icon:"palette",group:"You"},{id:"account",label:"Account",icon:"account_circle",group:"You"},{id:"library",label:"Library",icon:"inventory_2",group:"Library"},{id:"scraping",label:"Import & scraping",icon:"travel_explore",group:"Library",server:!0},{id:"ai",label:"Tagging & descriptions",icon:"smart_toy",group:"AI",server:!0},{id:"imagegen",label:"Image generation",icon:"auto_awesome",group:"AI",server:!0},{id:"android",label:"Android app",icon:"android",group:"Apps"},{id:"launchy",label:"Launchy",icon:"sports_esports",group:"Apps"},{id:"storage",label:"Storage",icon:"hard_drive",group:"Server"},{id:"privacy",label:"Privacy",icon:"visibility_off",group:"Server",server:!0,adminOnly:!0},{id:"diagnostics",label:"Diagnostics",icon:"speed",group:"Server",adminOnly:!0},{id:"about",label:"About",icon:"info",group:"Server"}];let c=class extends Y{constructor(){super(...arguments),this.only="",this.tab="appearance",this.settings=null,this.info=null,this.stats=null,this.apk=null,this.loadError="",this.passkeyList=null,this.passkeyBusy=!1,this.passkeyError="",this.passkeyMsg="",this.passkeyName="",this.passkeyRenaming=null,this.passkeyRevoking=null,this.passkeyPassword="",this.diag=null,this.uiDiag=null,this.storage=null,this.storageBusy=!1,this.storageErr="",this.diagBusy=!1,this.diagErr="",this.dirty=!1,this.saving=!1,this.saved=!1,this.theme=ae(),this.fit=oe(),this.hideLibby=ne(),this.genModels=[],this.genLoras=[],this.genLoraTriggers={},this.genBoards=[],this.genError="",this.genStatus=null,this.genChecks=null,this.genCheckBusy=!1,this.genRestart="",this.genCheckErr="",this.comfy=null,this.comfyErr="",this.comfyBusy=!1,this.comfyFolder=null,this.comfyChecks=null,this.comfyCheckBusy=!1,this.comfyCheckErr="",this.pwCurrent="",this.pwNew="",this.pwConfirm="",this.pwBusy=!1,this.pwMsg="",this.pwErr="",this.refs=null,this.refStamp=Date.now(),this.refNote="",this.tts=void 0,this.describe=null,this.describeBusy=!1,this.describeNote="",this.ttsErrors={},this.addPasskey=async()=>{this.passkeyBusy=!0,this.passkeyError="",this.passkeyMsg="";try{const e=await ye(this.passkeyName.trim());this.passkeyName="",this.passkeyMsg=`Added “${e.name}”. You can sign in with it now.`,await this.loadPasskeys()}catch(e){const t=be(e);t&&(this.passkeyError=t)}finally{this.passkeyBusy=!1}},this.cancelRevoke=()=>{this.passkeyRevoking=null,this.passkeyPassword=""},this.loadStorage=async()=>{this.storageBusy=!0,this.storageErr="";try{this.storage=await v.storage()}catch(e){this.storageErr=e.message}finally{this.storageBusy=!1}},this.runCleanup=async()=>{this.storageBusy=!0,this.storageErr="";try{const e=await v.cleanupStorage(["uploads","temp"]);this.storage=e.storage,$(`Reclaimed ${e.freedHuman}.`,"success")}catch(e){this.storageErr=e.message}finally{this.storageBusy=!1}},this.loadDiagnostics=async()=>{this.diagBusy=!0,this.diagErr="";try{this.diag=await v.diagnostics(),this.uiDiag=U()}catch(e){this.diagErr=e.message}finally{this.diagBusy=!1}},this.resetDiagnostics=async()=>{this.diagBusy=!0,this.diagErr="";try{re(),await v.resetDiagnostics(),this.diag=await v.diagnostics(),this.uiDiag=U()}catch(e){this.diagErr=e.message}finally{this.diagBusy=!1}}}connectedCallback(){super.connectedCallback(),le(this,"settings"),this.load(),this.loadGenLists(),this.loadComfy(),this.loadTTS(),this.loadDescribe(),this.loadReferences()}async loadReferences(){try{this.refs=await v.libbyReferences()}catch{this.refs=null}}async setReference(e,t){var o;const i=(o=t.files)==null?void 0:o[0];if(t.value="",!i)return;const n=await new Promise((r,a)=>{const u=new FileReader;u.onload=()=>r(String(u.result)),u.onerror=()=>a(u.error),u.readAsDataURL(i)});try{await v.setLibbyReference(e,n),this.refNote="",this.refStamp=Date.now(),await this.loadReferences()}catch(r){this.refNote=r.message}}async clearReference(e){try{await v.deleteLibbyReference(e),this.refNote="",await this.loadReferences()}catch(t){this.refNote=t.message}}referenceTile(e,t){var n;const i=!!((n=this.refs)!=null&&n[e]);return s`<div style="display:flex;flex-direction:column;gap:6px;align-items:center;width:132px;">
       <div style="width:132px;height:176px;border-radius:12px;overflow:hidden;display:grid;place-items:center;
         background:var(--md-sys-color-surface-container-highest);color:var(--md-sys-color-on-surface-variant);font-size:12px;text-align:center;">
-        ${s?i`<img src=${v.libbyReferenceURL(e,this.refStamp)} alt=${`Libby, ${t.toLowerCase()}`} style="width:100%;height:100%;object-fit:cover;"/>`:i`<span>No picture</span>`}
+        ${i?s`<img src=${v.libbyReferenceURL(e,this.refStamp)} alt=${`Libby, ${t.toLowerCase()}`} style="width:100%;height:100%;object-fit:cover;"/>`:s`<span>No picture</span>`}
       </div>
       <strong style="font-size:12px;">${t}</strong>
       <div style="display:flex;gap:6px;">
         <label class="btn-inline">
-          ${s?"Replace":"Upload"}
+          ${i?"Replace":"Upload"}
           <input type="file" accept="image/*" hidden ?disabled=${!this.canEdit}
             @change=${o=>void this.setReference(e,o.target)}/>
         </label>
-        ${s?i`<button class="btn-inline" ?disabled=${!this.canEdit}
+        ${i?s`<button class="btn-inline" ?disabled=${!this.canEdit}
           @click=${()=>void this.clearReference(e)}>Remove</button>`:l}
       </div>
-    </div>`}async load(){try{const[e,t]=await Promise.all([v.getSettings(),v.stats()]);this.settings=e.settings,this.info=e.readOnly,this.stats=t}catch(e){this.loadError=e.message}try{this.apk=await v.apkInfo()}catch{this.apk={available:!1}}}get canEdit(){var e;return!!((e=this.user)!=null&&e.isAdmin)}openTab(e){ce(()=>{this.tab=e}),e==="diagnostics"&&!this.diag&&!this.diagBusy&&this.loadDiagnostics(),e==="storage"&&!this.storage&&!this.storageBusy&&this.loadStorage(),e==="account"&&!this.passkeyList&&this.loadPasskeys()}editLora(e,t){var n;const s=[...((n=this.settings)==null?void 0:n.libbyGenLoras)??[]];s[e]&&(s[e]={...s[e],...t},this.edit({libbyGenLoras:s}))}editCameraLora(e,t){var o;const s=[...((o=this.settings)==null?void 0:o.libbyCameraLoras)??[]];if(!s[e])return;const n={...s[e],...t};t.name&&!s[e].trigger&&(n.trigger=this.genLoraTriggers[t.name]??""),s[e]=n,this.edit({libbyCameraLoras:s})}edit(e){!this.settings||!this.canEdit||(this.settings={...this.settings,...e},this.dirty=!0,this.saved=!1)}async save(){if(this.settings){this.saving=!0;try{const e=await v.saveSettings(this.settings);this.settings=e.settings,this.info=e.readOnly,this.dirty=!1,this.saved=!0,pe(!!e.settings.incognito),this.loadTTS(!0),this.loadDescribe(),this.loadGenLists(),this.loadComfy()}catch(e){this.loadError=e.message}finally{this.saving=!1}}}pickTheme(e){this.theme=e,he(e),ue(e)}pickFit(e){this.fit=e,ve(e)}async changePassword(){if(this.pwMsg="",this.pwErr="",this.pwNew!==this.pwConfirm){this.pwErr="The new passwords don't match.";return}if(this.pwNew.length<8){this.pwErr="Use at least 8 characters.";return}this.pwBusy=!0;try{await v.changePassword(this.pwCurrent,this.pwNew),this.pwMsg="Password changed.",this.pwCurrent=this.pwNew=this.pwConfirm=""}catch(e){this.pwErr=e.message}finally{this.pwBusy=!1}}render(){if(this.only)return this.renderOnly(this.only);const e=Ke.filter(o=>!o.adminOnly||this.canEdit),t=e.find(o=>o.id===this.tab)??e[0],s=this.dirty||this.saved;let n="";return i`
+    </div>`}async load(){try{const[e,t]=await Promise.all([v.getSettings(),v.stats()]);this.settings=e.settings,this.info=e.readOnly,this.stats=t}catch(e){this.loadError=e.message}try{this.apk=await v.apkInfo()}catch{this.apk={available:!1}}}get canEdit(){var e;return!!((e=this.user)!=null&&e.isAdmin)}openTab(e){de(()=>{this.tab=e}),e==="diagnostics"&&!this.diag&&!this.diagBusy&&this.loadDiagnostics(),e==="storage"&&!this.storage&&!this.storageBusy&&this.loadStorage(),e==="account"&&!this.passkeyList&&this.loadPasskeys()}editLora(e,t){var n;const i=[...((n=this.settings)==null?void 0:n.libbyGenLoras)??[]];i[e]&&(i[e]={...i[e],...t},this.edit({libbyGenLoras:i}))}editCameraLora(e,t){var o;const i=[...((o=this.settings)==null?void 0:o.libbyCameraLoras)??[]];if(!i[e])return;const n={...i[e],...t};t.name&&!i[e].trigger&&(n.trigger=this.genLoraTriggers[t.name]??""),i[e]=n,this.edit({libbyCameraLoras:i})}edit(e){!this.settings||!this.canEdit||(this.settings={...this.settings,...e},this.dirty=!0,this.saved=!1)}async save(){if(this.settings){this.saving=!0;try{const e=await v.saveSettings(this.settings);this.settings=e.settings,this.info=e.readOnly,this.dirty=!1,this.saved=!0,ce(!!e.settings.incognito),this.loadTTS(!0),this.loadDescribe(),this.loadGenLists(),this.loadComfy()}catch(e){this.loadError=e.message}finally{this.saving=!1}}}pickTheme(e){this.theme=e,pe(e),he(e)}pickFit(e){this.fit=e,ue(e)}async changePassword(){if(this.pwMsg="",this.pwErr="",this.pwNew!==this.pwConfirm){this.pwErr="The new passwords don't match.";return}if(this.pwNew.length<8){this.pwErr="Use at least 8 characters.";return}this.pwBusy=!0;try{await v.changePassword(this.pwCurrent,this.pwNew),this.pwMsg="Password changed.",this.pwCurrent=this.pwNew=this.pwConfirm=""}catch(e){this.pwErr=e.message}finally{this.pwBusy=!1}}render(){if(this.only)return this.renderOnly(this.only);const e=Ve.filter(o=>!o.adminOnly||this.canEdit),t=e.find(o=>o.id===this.tab)??e[0],i=this.dirty||this.saved;let n="";return s`
       <div class="shell">
         <nav class="cat-rail" aria-label="Settings categories">
-          ${e.map(o=>{const r=o.group===n?l:i`<div class="cat-head">${o.group}</div>`;return n=o.group,i`${r}
+          ${e.map(o=>{const r=o.group===n?l:s`<div class="cat-head">${o.group}</div>`;return n=o.group,s`${r}
               <button
                 class="cat-row ${o.id===this.tab?"on":""}"
                 aria-current=${o.id===this.tab?"page":"false"}
@@ -212,24 +212,24 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
 
         <div class="panel-col">
           <h2 class="panel-title">${t.label}</h2>
-          ${this.loadError?i`<div class="banner error">
+          ${this.loadError?s`<div class="banner error">
                 <span class="material-symbols-rounded" style="font-size:18px;">error</span>
                 ${this.loadError}
               </div>`:l}
-          ${!this.canEdit&&this.settings&&t.server?i`<div class="banner info">
+          ${!this.canEdit&&this.settings&&t.server?s`<div class="banner info">
                 <span class="material-symbols-rounded" style="font-size:18px;">lock</span>
                 Server settings are read-only — only an admin can change them.
               </div>`:l}
           ${this.renderTab()}
-          ${s?this.renderSaveBar():l}
+          ${i?this.renderSaveBar():l}
         </div>
       </div>
-    `}renderOnly(e){const t={"libby-general":()=>this.renderLibby(),"libby-model":()=>this.renderLibbyModel(),"libby-voice":()=>this.renderLibbyVoice(),"libby-pictures":()=>i`${this.renderLibbyImageGen()}${this.renderLibbyReferences()}`}[e];return i`<div class="embedded">
-      ${this.loadError?i`<div class="banner error"><span class="material-symbols-rounded" style="font-size:18px;">error</span>${this.loadError}</div>`:l}
-      ${!this.canEdit&&this.settings&&e!=="libby-general"?i`<div class="banner info"><span class="material-symbols-rounded" style="font-size:18px;">lock</span>Server settings are read-only — only an admin can change them.</div>`:l}
+    `}renderOnly(e){const t={"libby-general":()=>this.renderLibby(),"libby-model":()=>this.renderLibbyModel(),"libby-voice":()=>this.renderLibbyVoice(),"libby-pictures":()=>s`${this.renderLibbyImageGen()}${this.renderLibbyReferences()}`}[e];return s`<div class="embedded">
+      ${this.loadError?s`<div class="banner error"><span class="material-symbols-rounded" style="font-size:18px;">error</span>${this.loadError}</div>`:l}
+      ${!this.canEdit&&this.settings&&e!=="libby-general"?s`<div class="banner info"><span class="material-symbols-rounded" style="font-size:18px;">lock</span>Server settings are read-only — only an admin can change them.</div>`:l}
       ${t()}
       ${this.dirty||this.saved?this.renderSaveBar():l}
-    </div>`}renderTab(){switch(this.tab){case"appearance":return this.renderAppearance();case"ai":return this.renderAI();case"scraping":return this.renderScraping();case"imagegen":return this.renderImageGen();case"library":return this.renderLibrary();case"android":return this.renderAndroid();case"launchy":return i`<oppai-launchy-panel></oppai-launchy-panel>`;case"account":return this.renderAccount();case"storage":return this.renderStorage();case"diagnostics":return this.renderDiagnostics();case"privacy":return this.renderPrivacy();default:return this.renderAbout()}}renderSaveBar(){return i`
+    </div>`}renderTab(){switch(this.tab){case"appearance":return this.renderAppearance();case"ai":return this.renderAI();case"scraping":return this.renderScraping();case"imagegen":return this.renderImageGen();case"library":return this.renderLibrary();case"android":return this.renderAndroid();case"launchy":return s`<oppai-launchy-panel></oppai-launchy-panel>`;case"account":return this.renderAccount();case"storage":return this.renderStorage();case"diagnostics":return this.renderDiagnostics();case"privacy":return this.renderPrivacy();default:return this.renderAbout()}}renderSaveBar(){return s`
       <div class="savebar">
         <span class="grow">
           ${this.saved&&!this.dirty?"Settings saved — they're live now.":"You have unsaved changes."}
@@ -239,7 +239,7 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
           ${this.saving?"Saving…":"Save"}
         </button>
       </div>
-    `}renderAndroid(){const e=this.apk;return i`
+    `}renderAndroid(){const e=this.apk;return s`
       <section class="card">
         <h3><span class="material-symbols-rounded">android</span>Android app</h3>
         <p class="card-sub">
@@ -247,14 +247,14 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
           sideloading from a third party.
         </p>
 
-        ${e===null?i`<p class="field-help">Checking…</p>`:e.available?i`
+        ${e===null?s`<p class="field-help">Checking…</p>`:e.available?s`
                 <div class="field">
                   <div class="field-text">
                     <div class="field-label">oppailib.apk</div>
                     <div class="field-help">
-                      ${x(e.size??0)} · built
+                      ${k(e.size??0)} · built
                       ${new Date((e.modified??0)*1e3).toLocaleDateString()}
-                      ${e.sha256?i`<br /><span style="font-family:monospace; font-size:11px;"
+                      ${e.sha256?s`<br /><span style="font-family:monospace; font-size:11px;"
                             >sha256 ${e.sha256.slice(0,16)}…</span
                           >`:l}
                     </div>
@@ -281,13 +281,13 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
                     <code style="font-size:12px; opacity:0.8;">${location.origin}/api/apk</code>
                   </div>
                 </div>
-              `:i`<p class="field-help">
+              `:s`<p class="field-help">
                 No APK is bundled with this server build. Drop one at
                 <code>/config/oppailib.apk</code>, or grab it from the Actions run that
                 built this image.
               </p>`}
       </section>
-    `}renderAppearance(){return i`
+    `}renderAppearance(){return s`
       <section class="card">
         <h3><span class="material-symbols-rounded">palette</span>Appearance</h3>
         <p class="card-sub">Per-device — applies as soon as you pick it.</p>
@@ -298,11 +298,11 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
             <div class="field-help">"System" follows your OS light/dark setting.</div>
           </div>
           <div class="field-control seg">
-            ${[["dark","Dark","dark_mode"],["light","Light","light_mode"],["system","System","contrast"]].map(([e,t,s])=>i`<button
+            ${[["dark","Dark","dark_mode"],["light","Light","light_mode"],["system","System","contrast"]].map(([e,t,i])=>s`<button
                 class=${this.theme===e?"on":""}
                 @click=${()=>this.pickTheme(e)}
               >
-                <span class="material-symbols-rounded" style="font-size:18px;">${s}</span>${t}
+                <span class="material-symbols-rounded" style="font-size:18px;">${i}</span>${t}
               </button>`)}
           </div>
         </div>
@@ -316,16 +316,16 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
             </div>
           </div>
           <div class="field-control seg">
-            ${[["page","Fit page","fit_screen"],["width","Fit width","fit_width"]].map(([e,t,s])=>i`<button
+            ${[["page","Fit page","fit_screen"],["width","Fit width","fit_width"]].map(([e,t,i])=>s`<button
                 class=${this.fit===e?"on":""}
                 @click=${()=>this.pickFit(e)}
               >
-                <span class="material-symbols-rounded" style="font-size:18px;">${s}</span>${t}
+                <span class="material-symbols-rounded" style="font-size:18px;">${i}</span>${t}
               </button>`)}
           </div>
         </div>
       </section>
-    `}renderPrivacy(){const e=this.settings,t=!!(e!=null&&e.incognito);return i`
+    `}renderPrivacy(){const e=this.settings,t=!!(e!=null&&e.incognito);return s`
       <section class="card">
         <h3><span class="material-symbols-rounded">visibility_off</span>Incognito</h3>
         <p class="card-sub">Server-wide — every browser and device sees it.</p>
@@ -369,7 +369,7 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
           </div>
         </div>
       </section>
-    `}renderLibby(){return i`
+    `}renderLibby(){return s`
       <section class="card">
         <h3><span class="material-symbols-rounded">face_3</span>Libby</h3>
         <p class="card-sub">Per-device — applies as soon as you pick it.</p>
@@ -389,7 +389,7 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
               role="switch"
               aria-checked=${this.hideLibby?"true":"false"}
               aria-label="Hide Libby"
-              @click=${()=>{this.hideLibby=!this.hideLibby,fe(this.hideLibby)}}
+              @click=${()=>{this.hideLibby=!this.hideLibby,ve(this.hideLibby)}}
             ></button>
           </div>
         </div>
@@ -403,9 +403,9 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
             </div>
           </div>
           <div class="field-control seg">
-            ${ge.map(e=>i`<button
-              class=${me()===e?"on":""}
-              @click=${()=>{ye(e),this.requestUpdate()}}
+            ${fe.map(e=>s`<button
+              class=${ge()===e?"on":""}
+              @click=${()=>{me(e),this.requestUpdate()}}
             >${e}×</button>`)}
           </div>
         </div>
@@ -426,10 +426,10 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
           </div>
         </div>
       </section>
-    `}renderLibbyVoice(){const e=this.settings;if(!e)return l;const t=this.tts,s=(t==null?void 0:t.voices)??[],n=s.filter(a=>a.installed),o=s.filter(a=>!a.installed),r=new Set((t==null?void 0:t.downloading)??[]);return i`<section class="card">
+    `}renderLibbyVoice(){const e=this.settings;if(!e)return l;const t=this.tts,i=(t==null?void 0:t.voices)??[],n=i.filter(a=>a.installed),o=i.filter(a=>!a.installed),r=new Set((t==null?void 0:t.downloading)??[]);return s`<section class="card">
       <h3><span class="material-symbols-rounded">record_voice_over</span>Libby’s voice</h3>
       <p class="card-sub">
-        ${t===void 0?"Checking the server…":t?t.engine==="kokoro"&&t.ready?i`Speaking with <strong>Kokoro</strong>, the natural voice, on the server’s CPU. Turn playback on per device with the speaker button in Chat.`:t.engine==="piper"&&t.ready?i`Speaking with <strong>piper</strong> on the server’s CPU. Turn playback on per device with the speaker button in Chat.`:t.engine==="openai"&&t.ready?i`Speaking through the speech server at <code>${e.ttsUrl}</code>.`:i`Not speaking from the server${t.detail?i` — ${t.detail}`:l}. Devices fall back to their own voices.`:"The server did not answer about speech."}
+        ${t===void 0?"Checking the server…":t?t.engine==="kokoro"&&t.ready?s`Speaking with <strong>Kokoro</strong>, the natural voice, on the server’s CPU. Turn playback on per device with the speaker button in Chat.`:t.engine==="piper"&&t.ready?s`Speaking with <strong>piper</strong> on the server’s CPU. Turn playback on per device with the speaker button in Chat.`:t.engine==="openai"&&t.ready?s`Speaking through the speech server at <code>${e.ttsUrl}</code>.`:s`Not speaking from the server${t.detail?s` — ${t.detail}`:l}. Devices fall back to their own voices.`:"The server did not answer about speech."}
       </p>
 
       <div class="field">
@@ -439,7 +439,7 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
         </div>
         <div class="field-control">
           <select ?disabled=${!this.canEdit} @change=${a=>this.edit({ttsEngine:a.target.value})}>
-            ${[["auto","Auto"],["kokoro",`Kokoro — natural${t&&!t.kokoroInstalled?" (not installed)":""}`],["piper",`Piper — light${t&&!t.piperInstalled?" (not installed)":""}`],["openai","Speech server"],["off","Off"]].map(([a,u])=>i`<option value=${a} ?selected=${e.ttsEngine===a}>${u}</option>`)}
+            ${[["auto","Auto"],["kokoro",`Kokoro — natural${t&&!t.kokoroInstalled?" (not installed)":""}`],["piper",`Piper — light${t&&!t.piperInstalled?" (not installed)":""}`],["openai","Speech server"],["off","Off"]].map(([a,u])=>s`<option value=${a} ?selected=${e.ttsEngine===a}>${u}</option>`)}
           </select>
         </div>
       </div>
@@ -452,8 +452,8 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
         <div class="field-control" style="display:flex; gap:8px; align-items:center;">
           <select ?disabled=${!this.canEdit} @change=${a=>this.edit({ttsVoice:a.target.value})}>
             <option value="" ?selected=${!e.ttsVoice}>Engine’s default</option>
-            ${n.map(a=>i`<option value=${a.id} ?selected=${a.id===e.ttsVoice}>${a.label}${a.bundled?" · bundled":""}</option>`)}
-            ${e.ttsVoice&&!n.some(a=>a.id===e.ttsVoice)?i`<option value=${e.ttsVoice} selected>${e.ttsVoice} (not installed)</option>`:l}
+            ${n.map(a=>s`<option value=${a.id} ?selected=${a.id===e.ttsVoice}>${a.label}${a.bundled?" · bundled":""}</option>`)}
+            ${e.ttsVoice&&!n.some(a=>a.id===e.ttsVoice)?s`<option value=${e.ttsVoice} selected>${e.ttsVoice} (not installed)</option>`:l}
           </select>
           <button class="btn" ?disabled=${!(t!=null&&t.ready)} title="Hear the current voice" @click=${()=>void this.testVoice()}>Test</button>
         </div>
@@ -470,18 +470,18 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
         </div>
       </div>
 
-      ${t!=null&&t.piperInstalled&&t.engine!=="kokoro"?i`<div class="field stack">
+      ${t!=null&&t.piperInstalled&&t.engine!=="kokoro"?s`<div class="field stack">
         <div class="field-text">
           <div class="field-label">Piper voices</div>
           <div class="field-help">A curated handful from piper’s voice set, fetched from Hugging Face onto the server (20–110 MB each). Any other piper voice dropped into <code>/config/tts</code> is listed too.</div>
         </div>
         <div class="field-control">
           <ul class="voice-list">
-            ${n.map(a=>i`<li><span>${a.label}<small>${a.quality??""}${a.bundled?" · bundled":""}</small></span>
-              ${!a.bundled&&this.canEdit?i`<button class="btn" @click=${()=>void this.deleteVoice(a.id)}>Remove</button>`:l}</li>`)}
-            ${o.map(a=>i`<li><span>${a.label}<small>${a.quality??""}${a.bytes?` · ${Math.round(a.bytes/1e6)} MB`:""}</small></span>
-              ${this.ttsErrors[a.id]?i`<em class="voice-error">${this.ttsErrors[a.id]}</em>`:l}
-              ${r.has(a.id)?i`<span class="hint">Downloading…</span>`:this.canEdit?i`<button class="btn" @click=${()=>void this.downloadVoice(a.id)}>Download</button>`:l}</li>`)}
+            ${n.map(a=>s`<li><span>${a.label}<small>${a.quality??""}${a.bundled?" · bundled":""}</small></span>
+              ${!a.bundled&&this.canEdit?s`<button class="btn" @click=${()=>void this.deleteVoice(a.id)}>Remove</button>`:l}</li>`)}
+            ${o.map(a=>s`<li><span>${a.label}<small>${a.quality??""}${a.bytes?` · ${Math.round(a.bytes/1e6)} MB`:""}</small></span>
+              ${this.ttsErrors[a.id]?s`<em class="voice-error">${this.ttsErrors[a.id]}</em>`:l}
+              ${r.has(a.id)?s`<span class="hint">Downloading…</span>`:this.canEdit?s`<button class="btn" @click=${()=>void this.downloadVoice(a.id)}>Download</button>`:l}</li>`)}
           </ul>
         </div>
       </div>`:l}
@@ -505,11 +505,11 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
             @change=${a=>this.edit({ttsApiKey:a.target.value})} />
         </div>
       </div>
-    </section>`}async loadTTS(e=!1){var t,s;this.tts=await Z(e);try{this.ttsErrors=await v.ttsVoiceErrors()}catch{}(s=(t=this.tts)==null?void 0:t.downloading)!=null&&s.length&&window.setTimeout(()=>void this.loadTTS(!0),4e3)}async loadDescribe(){try{this.describe=await v.describeStatus()}catch{this.describe=null}}async probeVision(){this.describeBusy=!0,this.describeNote="";try{const e=await v.describeProbe();this.describeNote=`The model answered: “${e.description}”`}catch(e){this.describeNote=e.message}finally{this.describeBusy=!1}}async toggleBackfill(){var e;this.describeBusy=!0;try{(e=this.describe)!=null&&e.backfilling?await v.describeBackfillStop():await v.describeBackfill(),await this.loadDescribe()}catch(t){this.describeNote=t.message}finally{this.describeBusy=!1}}async testVoice(){ee(),await Ce("Hi. This is what I sound like. Saved to your library, by the way — nice pick.")}async downloadVoice(e){try{await v.downloadTTSVoice(e),await this.loadTTS(!0)}catch(t){this.loadError=t.message}}async deleteVoice(e){if(confirm(`Remove the ${e} voice from the server?`))try{await v.deleteTTSVoice(e),await this.loadTTS(!0)}catch(t){this.loadError=t.message}}renderLibbyModel(){const e=this.settings;return i`
+    </section>`}async loadTTS(e=!1){var t,i;this.tts=await Z(e);try{this.ttsErrors=await v.ttsVoiceErrors()}catch{}(i=(t=this.tts)==null?void 0:t.downloading)!=null&&i.length&&window.setTimeout(()=>void this.loadTTS(!0),4e3)}async loadDescribe(){try{this.describe=await v.describeStatus()}catch{this.describe=null}}async probeVision(){this.describeBusy=!0,this.describeNote="";try{const e=await v.describeProbe();this.describeNote=`The model answered: “${e.description}”`}catch(e){this.describeNote=e.message}finally{this.describeBusy=!1}}async toggleBackfill(){var e;this.describeBusy=!0;try{(e=this.describe)!=null&&e.backfilling?await v.describeBackfillStop():await v.describeBackfill(),await this.loadDescribe()}catch(t){this.describeNote=t.message}finally{this.describeBusy=!1}}async testVoice(){ee(),await Pe("Hi. This is what I sound like. Saved to your library, by the way — nice pick.")}async downloadVoice(e){try{await v.downloadTTSVoice(e),await this.loadTTS(!0)}catch(t){this.loadError=t.message}}async deleteVoice(e){if(confirm(`Remove the ${e} voice from the server?`))try{await v.deleteTTSVoice(e),await this.loadTTS(!0)}catch(t){this.loadError=t.message}}renderLibbyModel(){const e=this.settings;return s`
       <section class="card">
         <h3><span class="material-symbols-rounded">memory</span>Her model</h3>
         <p class="card-sub">The chat backend every character talks through. Saved for the whole server.</p>
-        ${e?i`
+        ${e?s`
               <div class="field stack">
                 <div class="field-text">
                   <div class="field-label">Libby chat</div>
@@ -595,7 +595,7 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
                 <div class="field-control">
                   <select ?disabled=${!this.canEdit}
                     @change=${t=>this.edit({chatModelTier:t.target.value})}>
-                    ${[["","Auto (from the model name)"],["small","Small — 7B to 13B"],["large","Large — 24B and up"]].map(([t,s])=>i`<option value=${t} ?selected=${e.chatModelTier===t}>${s}</option>`)}
+                    ${[["","Auto (from the model name)"],["small","Small — 7B to 13B"],["large","Large — 24B and up"]].map(([t,i])=>s`<option value=${t} ?selected=${e.chatModelTier===t}>${i}</option>`)}
                   </select>
                 </div>
               </div>
@@ -637,7 +637,7 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
                 <div class="field-control">
                   <select ?disabled=${!this.canEdit}
                     @change=${t=>this.edit({chatVision:t.target.value})}>
-                    ${[["","Auto (from the model name)"],["on","On — her model can see"],["off","Off — tags only"]].map(([t,s])=>i`<option value=${t} ?selected=${(e.chatVision??"")===t}>${s}</option>`)}
+                    ${[["","Auto (from the model name)"],["on","On — her model can see"],["off","Off — tags only"]].map(([t,i])=>s`<option value=${t} ?selected=${(e.chatVision??"")===t}>${i}</option>`)}
                   </select>
                 </div>
               </div>
@@ -656,7 +656,7 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
                 <div class="field-control">
                   <select ?disabled=${!this.canEdit}
                     @change=${t=>this.edit({gpuShare:t.target.value})}>
-                    ${[["","Both loaded"],["swap","Swap for pictures"]].map(([t,s])=>i`<option value=${t} ?selected=${(e.gpuShare??"")===t}>${s}</option>`)}
+                    ${[["","Both loaded"],["swap","Swap for pictures"]].map(([t,i])=>s`<option value=${t} ?selected=${(e.gpuShare??"")===t}>${i}</option>`)}
                   </select>
                 </div>
               </div>
@@ -674,7 +674,7 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
                 <div class="field-control">
                   <select ?disabled=${!this.canEdit}
                     @change=${t=>this.edit({chatToolMode:t.target.value})}>
-                    ${[["","Auto"],["native","Native tool calls"],["json","JSON answers"]].map(([t,s])=>i`<option value=${t} ?selected=${(e.chatToolMode??"")===t}>${s}</option>`)}
+                    ${[["","Auto"],["native","Native tool calls"],["json","JSON answers"]].map(([t,i])=>s`<option value=${t} ?selected=${(e.chatToolMode??"")===t}>${i}</option>`)}
                   </select>
                 </div>
               </div>
@@ -703,9 +703,9 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
                   />
                 </div>
               </div>
-            `:i`<div class="field-help">Loading…</div>`}
+            `:s`<div class="field-help">Loading…</div>`}
       </section>
-    `}renderLibbyReferences(){return i`
+    `}renderLibbyReferences(){return s`
       <section class="card">
               <div class="field stack">
                 <div class="field-text">
@@ -718,7 +718,7 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
                     only reach a model that can see (Her eyes, under Model &amp; generation). If the bare one is missing she uses the
                     clothed one.
                   </div>
-                  ${this.refNote?i`<div class="field-help" style="color:var(--md-sys-color-error);">${this.refNote}</div>`:l}
+                  ${this.refNote?s`<div class="field-help" style="color:var(--md-sys-color-error);">${this.refNote}</div>`:l}
                 </div>
                 <div class="field-control" style="display:flex;gap:16px;flex-wrap:wrap;">
                   ${this.referenceTile("clothed","Usual outfit")}
@@ -726,19 +726,19 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
                 </div>
               </div>
       </section>
-    `}renderLibbyImageGen(){var r;const e=this.settings;if(!e)return l;if(!e.imageGenEnabled)return i`<section class="card">
+    `}renderLibbyImageGen(){var r;const e=this.settings;if(!e)return l;if(!e.imageGenEnabled)return s`<section class="card">
         <h3><span class="material-symbols-rounded">auto_awesome</span>Libby’s image generation</h3>
         <p class="card-sub">
           Set an image generator URL under <strong>Settings → Image generation</strong> and Libby can offer to make
           pictures for you in chat. She always asks first — nothing is generated or saved until
           you press Allow.
         </p>
-      </section>`;const t=this.genModels,s=this.genLoras,n=e.libbyGenLoras??[],o=this.genBoards;return i`<section class="card">
+      </section>`;const t=this.genModels,i=this.genLoras,n=e.libbyGenLoras??[],o=this.genBoards;return s`<section class="card">
       <h3><span class="material-symbols-rounded">auto_awesome</span>Libby’s image generation</h3>
       <p class="card-sub">
         What she uses when she offers to make you a picture. She always asks first — nothing is
         generated or saved until you press Allow.
-        ${this.genError?i`<br /><span style="color:var(--oppai-danger,#ff6b6b);">${this.genError}</span>`:l}
+        ${this.genError?s`<br /><span style="color:var(--oppai-danger,#ff6b6b);">${this.genError}</span>`:l}
       </p>
 
       <div class="field">
@@ -748,11 +748,11 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
             generator’s default to use whatever it loads.</div>
         </div>
         <div class="field-control">
-          ${t.length?i`<select ?disabled=${!this.canEdit}
+          ${t.length?s`<select ?disabled=${!this.canEdit}
                 @change=${a=>this.edit({libbyGenModel:a.target.value})}>
                 <option value="" ?selected=${!e.libbyGenModel}>Generator’s default</option>
-                ${t.map(a=>i`<option value=${a} ?selected=${a===e.libbyGenModel}>${a}</option>`)}
-              </select>`:i`<input type="text" autocomplete="off" placeholder="Generator’s default"
+                ${t.map(a=>s`<option value=${a} ?selected=${a===e.libbyGenModel}>${a}</option>`)}
+              </select>`:s`<input type="text" autocomplete="off" placeholder="Generator’s default"
                 .value=${e.libbyGenModel} ?disabled=${!this.canEdit}
                 @change=${a=>this.edit({libbyGenModel:a.target.value})} />`}
         </div>
@@ -766,34 +766,34 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
             LoRAs you like her drawn with.</div>
         </div>
         <div class="field-control" style="display:flex; flex-direction:column; gap:8px; align-items:stretch;">
-          ${n.map((a,u)=>i`<div style="display:flex; gap:8px; align-items:center;">
-            ${s.length?i`<select style="flex:1; min-width:0;" ?disabled=${!this.canEdit}
+          ${n.map((a,u)=>s`<div style="display:flex; gap:8px; align-items:center;">
+            ${i.length?s`<select style="flex:1; min-width:0;" ?disabled=${!this.canEdit}
                   aria-label="LoRA ${u+1}"
-                  @change=${g=>this.editLora(u,{name:g.target.value})}>
-                  ${(s.includes(a.name)?s:[a.name,...s]).map(g=>i`<option value=${g} ?selected=${g===a.name}>${g}</option>`)}
-                </select>`:i`<input type="text" autocomplete="off" placeholder="LoRA name" style="flex:1; min-width:0;"
+                  @change=${m=>this.editLora(u,{name:m.target.value})}>
+                  ${(i.includes(a.name)?i:[a.name,...i]).map(m=>s`<option value=${m} ?selected=${m===a.name}>${m}</option>`)}
+                </select>`:s`<input type="text" autocomplete="off" placeholder="LoRA name" style="flex:1; min-width:0;"
                   aria-label="LoRA ${u+1}"
                   .value=${a.name} ?disabled=${!this.canEdit}
-                  @change=${g=>this.editLora(u,{name:g.target.value})} />`}
+                  @change=${m=>this.editLora(u,{name:m.target.value})} />`}
             <input type="number" step="0.05" min="-2" max="2" style="width:90px;"
               aria-label="LoRA ${u+1} strength"
               .value=${String(a.weight)} ?disabled=${!this.canEdit}
-              @change=${g=>this.editLora(u,{weight:Number(g.target.value)})} />
+              @change=${m=>this.editLora(u,{weight:Number(m.target.value)})} />
             <button class="btn-inline" title="Remove" aria-label="Remove LoRA ${u+1}" ?disabled=${!this.canEdit}
-              @click=${()=>this.edit({libbyGenLoras:n.filter((g,b)=>b!==u)})}>
+              @click=${()=>this.edit({libbyGenLoras:n.filter((m,w)=>w!==u)})}>
               <span class="material-symbols-rounded" style="font-size:18px;">delete</span>
             </button>
           </div>`)}
           <button class="btn-inline" style="align-self:flex-start; display:inline-flex; align-items:center; gap:6px;"
             ?disabled=${!this.canEdit||n.length>=8}
-            @click=${()=>this.edit({libbyGenLoras:[...n,{name:s.find(a=>!n.some(u=>u.name===a))??"",weight:1}]})}>
+            @click=${()=>this.edit({libbyGenLoras:[...n,{name:i.find(a=>!n.some(u=>u.name===a))??"",weight:1}]})}>
             <span class="material-symbols-rounded" style="font-size:18px;">add</span>
             ${n.length?"Add another LoRA":"Add a LoRA"}
           </button>
         </div>
       </div>
 
-      ${o.length?i`<div class="field">
+      ${o.length?s`<div class="field">
             <div class="field-text">
               <div class="field-label">Board</div>
               <div class="field-help">The InvokeAI board her pictures are filed into, so what she
@@ -803,7 +803,7 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
               <select ?disabled=${!this.canEdit}
                 @change=${a=>this.edit({libbyGenBoard:a.target.value})}>
                 <option value="" ?selected=${!e.libbyGenBoard}>Uncategorized</option>
-                ${o.map(a=>i`<option value=${a} ?selected=${a===e.libbyGenBoard}>${a}</option>`)}
+                ${o.map(a=>s`<option value=${a} ?selected=${a===e.libbyGenBoard}>${a}</option>`)}
               </select>
             </div>
           </div>`:l}
@@ -872,7 +872,7 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
         <div class="field-control">
           <select ?disabled=${!this.canEdit}
             @change=${a=>this.edit({libbyCameraCandidates:Number(a.target.value)})}>
-            ${[1,2,3,4].map(a=>i`<option value=${a} ?selected=${(e.libbyCameraCandidates||2)===a}>${a}</option>`)}
+            ${[1,2,3,4].map(a=>s`<option value=${a} ?selected=${(e.libbyCameraCandidates||2)===a}>${a}</option>`)}
           </select>
         </div>
       </div>
@@ -920,7 +920,7 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
           <div class="field-help">
             She can turn the last picture she sent into a few seconds of video, with the
             picture-to-video workflow under <b>Image generation → Video</b> — the same one
-            Create's Video drawer uses. ${e.libbyClipUrl&&(e.libbyClipWorkflow||(r=e.clipImageModels)!=null&&r.model)?i`It is set up, so she can.`:i`It is not set up yet, so she can't.`}
+            Create's Video drawer uses. ${e.libbyClipUrl&&(e.libbyClipWorkflow||(r=e.clipImageModels)!=null&&r.model)?s`It is set up, so she can.`:s`It is not set up yet, so she can't.`}
           </div>
         </div>
       </div>
@@ -937,7 +937,7 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
         <div class="field-control" style="display:flex;gap:8px;align-items:center;">
           <select ?disabled=${!this.canEdit||!e.libbyStories}
             @change=${a=>this.edit({libbyStoriesPerDay:Number(a.target.value)})}>
-            ${[1,2,3,4,6].map(a=>i`<option value=${a} ?selected=${(e.libbyStoriesPerDay||2)===a}>${a} a day</option>`)}
+            ${[1,2,3,4,6].map(a=>s`<option value=${a} ?selected=${(e.libbyStoriesPerDay||2)===a}>${a} a day</option>`)}
           </select>
           <button
             class="switch ${e.libbyStories?"on":""}"
@@ -949,7 +949,7 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
           ></button>
         </div>
       </div>
-    </section>`}async loadGenLists(){this.genError="";try{const e=await v.imageGenStatus();if(this.genStatus=e,!e.enabled||!e.reachable){e.enabled&&(this.genError=e.error||"The image generator isn't reachable.");return}this.genModels=(e.models??[]).map(t=>t.title||t.model_name).filter(Boolean),this.genLoras=(e.loras??[]).map(t=>t.name).filter(Boolean),this.genLoraTriggers=Object.fromEntries((e.loras??[]).map(t=>[t.name,(t.triggerPhrases??[]).join(", ")])),this.genBoards=(e.boards??[]).map(t=>t.name).filter(Boolean)}catch(e){this.genStatus=null,this.genError=e.message}}renderCameraLoras(e){const t=this.genLoras,s=e.libbyCameraLoras??[];return i`<div class="field stack">
+    </section>`}async loadGenLists(){this.genError="";try{const e=await v.imageGenStatus();if(this.genStatus=e,!e.enabled||!e.reachable){e.enabled&&(this.genError=e.error||"The image generator isn't reachable.");return}this.genModels=(e.models??[]).map(t=>t.title||t.model_name).filter(Boolean),this.genLoras=(e.loras??[]).map(t=>t.name).filter(Boolean),this.genLoraTriggers=Object.fromEntries((e.loras??[]).map(t=>[t.name,(t.triggerPhrases??[]).join(", ")])),this.genBoards=(e.boards??[]).map(t=>t.name).filter(Boolean)}catch(e){this.genStatus=null,this.genError=e.message}}renderCameraLoras(e){const t=this.genLoras,i=e.libbyCameraLoras??[];return s`<div class="field stack">
       <div class="field-text">
         <div class="field-label">LoRAs she can choose</div>
         <div class="field-help">
@@ -959,19 +959,19 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
         </div>
       </div>
       <div class="field-control" style="display:flex; flex-direction:column; gap:12px; align-items:stretch;">
-        ${s.map((n,o)=>i`<div style="display:flex; flex-direction:column; gap:6px;">
+        ${i.map((n,o)=>s`<div style="display:flex; flex-direction:column; gap:6px;">
           <div style="display:flex; gap:8px; align-items:center;">
-            ${t.length?i`<select style="flex:1; min-width:0;" ?disabled=${!this.canEdit} aria-label="Optional LoRA ${o+1}"
+            ${t.length?s`<select style="flex:1; min-width:0;" ?disabled=${!this.canEdit} aria-label="Optional LoRA ${o+1}"
                   @change=${r=>this.editCameraLora(o,{name:r.target.value})}>
-                  ${(t.includes(n.name)?t:[n.name,...t]).map(r=>i`<option value=${r} ?selected=${r===n.name}>${r}</option>`)}
-                </select>`:i`<input type="text" autocomplete="off" placeholder="LoRA name" style="flex:1; min-width:0;"
+                  ${(t.includes(n.name)?t:[n.name,...t]).map(r=>s`<option value=${r} ?selected=${r===n.name}>${r}</option>`)}
+                </select>`:s`<input type="text" autocomplete="off" placeholder="LoRA name" style="flex:1; min-width:0;"
                   aria-label="Optional LoRA ${o+1}" .value=${n.name} ?disabled=${!this.canEdit}
                   @change=${r=>this.editCameraLora(o,{name:r.target.value})} />`}
             <input type="number" step="0.05" min="-2" max="2" style="width:90px;"
               aria-label="Optional LoRA ${o+1} strength" .value=${String(n.weight)} ?disabled=${!this.canEdit}
               @change=${r=>this.editCameraLora(o,{weight:Number(r.target.value)})} />
             <button class="btn-inline" title="Remove" aria-label="Remove optional LoRA ${o+1}" ?disabled=${!this.canEdit}
-              @click=${()=>this.edit({libbyCameraLoras:s.filter((r,a)=>a!==o)})}>
+              @click=${()=>this.edit({libbyCameraLoras:i.filter((r,a)=>a!==o)})}>
               <span class="material-symbols-rounded" style="font-size:18px;">delete</span>
             </button>
           </div>
@@ -983,13 +983,13 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
             @change=${r=>this.editCameraLora(o,{trigger:r.target.value})} />
         </div>`)}
         <button class="btn-inline" style="align-self:flex-start; display:inline-flex; align-items:center; gap:6px;"
-          ?disabled=${!this.canEdit||s.length>=12}
-          @click=${()=>{const n=t.find(o=>!s.some(r=>r.name===o))??"";this.edit({libbyCameraLoras:[...s,{name:n,weight:1,when:"",trigger:this.genLoraTriggers[n]??""}]})}}>
+          ?disabled=${!this.canEdit||i.length>=12}
+          @click=${()=>{const n=t.find(o=>!i.some(r=>r.name===o))??"";this.edit({libbyCameraLoras:[...i,{name:n,weight:1,when:"",trigger:this.genLoraTriggers[n]??""}]})}}>
           <span class="material-symbols-rounded" style="font-size:18px;">add</span>
-          ${s.length?"Add another":"Add one she can choose"}
+          ${i.length?"Add another":"Add one she can choose"}
         </button>
       </div>
-    </div>`}renderAI(){const e=this.settings,t=this.info;return i`
+    </div>`}renderAI(){const e=this.settings,t=this.info;return s`
       <section class="card">
         <h3><span class="material-symbols-rounded">auto_awesome</span>AI auto-tagging</h3>
         <p class="card-sub">
@@ -997,9 +997,9 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
           model; a real classifier requires an ONNX build with a model in the model directory.
         </p>
 
-        ${e?i`
-              ${this.switchField("Enable auto-tagging","Master switch. Off means no tagging at all, including the ✨ button.",e.aiEnabled,s=>this.edit({aiEnabled:s}))}
-              ${this.switchField("Tag on import","Tag new uploads and imports automatically. With this off, tagging only happens when you ask for it.",e.aiAutoTag,s=>this.edit({aiAutoTag:s}),!e.aiEnabled)}
+        ${e?s`
+              ${this.switchField("Enable auto-tagging","Master switch. Off means no tagging at all, including the ✨ button.",e.aiEnabled,i=>this.edit({aiEnabled:i}))}
+              ${this.switchField("Tag on import","Tag new uploads and imports automatically. With this off, tagging only happens when you ask for it.",e.aiAutoTag,i=>this.edit({aiAutoTag:i}),!e.aiEnabled)}
 
               <div class="field">
                 <div class="field-text">
@@ -1014,7 +1014,7 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
                     step="0.05"
                     .value=${String(e.aiMinScore)}
                     ?disabled=${!this.canEdit||!e.aiEnabled}
-                    @input=${s=>this.edit({aiMinScore:Number(s.target.value)})}
+                    @input=${i=>this.edit({aiMinScore:Number(i.target.value)})}
                   />
                   <span class="value">${e.aiMinScore.toFixed(2)}</span>
                 </div>
@@ -1032,20 +1032,20 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
                     max="100"
                     .value=${String(e.aiMaxTags)}
                     ?disabled=${!this.canEdit||!e.aiEnabled}
-                    @change=${s=>this.edit({aiMaxTags:Number(s.target.value)})}
+                    @change=${i=>this.edit({aiMaxTags:Number(i.target.value)})}
                   />
                 </div>
               </div>
 
-              ${t?i`
+              ${t?s`
                     ${this.readOnlyField("Active tagger","Chosen at startup.",t.aiTagger)}
                     ${this.readOnlyField("Inference device","OPPAI_AI_DEVICE — needs a restart to change.",t.aiDevice)}
                     ${this.readOnlyField("Model directory","OPPAI_AI_MODEL_DIR — needs a restart to change.",t.aiModelDir)}
                   `:l}
-            `:i`<div class="field-help">Loading…</div>`}
+            `:s`<div class="field-help">Loading…</div>`}
       </section>
       ${this.renderVision()}
-    `}renderVision(){const e=this.settings,t=this.describe;return i`
+    `}renderVision(){const e=this.settings,t=this.describe;return s`
       <section class="card">
         <h3><span class="material-symbols-rounded">description</span>Describing pictures</h3>
         <p class="card-sub">
@@ -1054,7 +1054,7 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
           shown in the viewer, and given to Libby when a picture comes up. Any OpenAI-compatible server whose model
           accepts images works: Ollama or LM Studio with a llava, qwen-vl or gemma3 build, llama.cpp server with an mmproj.
         </p>
-        ${e?i`
+        ${e?s`
               <div class="field stack">
                 <div class="field-text">
                   <div class="field-label">Vision model</div>
@@ -1066,27 +1066,27 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
                 <div class="field-control">
                   <input type="text" autocomplete="off" placeholder="http://host:11434/v1" .value=${e.visionUrl}
                     ?disabled=${!this.canEdit}
-                    @change=${s=>this.edit({visionUrl:s.target.value})} />
+                    @change=${i=>this.edit({visionUrl:i.target.value})} />
                 </div>
                 <div class="field-control">
                   <input type="text" autocomplete="off" placeholder="Model name, e.g. qwen2.5vl:7b or llava" .value=${e.visionModel}
                     ?disabled=${!this.canEdit}
-                    @change=${s=>this.edit({visionModel:s.target.value})} />
+                    @change=${i=>this.edit({visionModel:i.target.value})} />
                 </div>
                 <div class="field-control">
                   <input type="password" autocomplete="new-password"
                     placeholder=${e.visionApiKeySet?"API key saved — enter to replace":"API key (optional)"}
                     .value=${e.visionApiKey} ?disabled=${!this.canEdit}
-                    @change=${s=>this.edit({visionApiKey:s.target.value})} />
+                    @change=${i=>this.edit({visionApiKey:i.target.value})} />
                 </div>
               </div>
-              ${this.switchField("Describe on import","Describe every new picture and clip once it has been tagged; the tags steer the model. Off means only when you ask, from the viewer.",e.visionAuto,s=>this.edit({visionAuto:s}),!e.visionUrl)}
+              ${this.switchField("Describe on import","Describe every new picture and clip once it has been tagged; the tags steer the model. Off means only when you ask, from the viewer.",e.visionAuto,i=>this.edit({visionAuto:i}),!e.visionUrl)}
               <div class="field">
                 <div class="field-text">
                   <div class="field-label">Check the model</div>
                   <div class="field-help">
                     Sends a generated test picture and shows what comes back. Save the URL first.
-                    ${this.describeNote?i`<div style="margin-top:6px; color:var(--oppai-text);">${this.describeNote}</div>`:l}
+                    ${this.describeNote?s`<div style="margin-top:6px; color:var(--oppai-text);">${this.describeNote}</div>`:l}
                   </div>
                 </div>
                 <div class="field-control">
@@ -1113,14 +1113,14 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
                   </button>
                 </div>
               </div>
-            `:i`<div class="field-help">Loading…</div>`}
+            `:s`<div class="field-help">Loading…</div>`}
       </section>
-    `}renderScraping(){const e=this.settings;return i`
+    `}renderScraping(){const e=this.settings;return s`
       <section class="card">
         <h3><span class="material-symbols-rounded">travel_explore</span>Import &amp; scraping</h3>
         <p class="card-sub">How OppaiLib behaves toward the sites you import from.</p>
 
-        ${e?i`
+        ${e?s`
               ${this.switchField("Respect robots.txt","Skip URLs a site asks crawlers not to fetch.",e.scrapeRespectRobots,t=>this.edit({scrapeRespectRobots:t}))}
 
               <div class="field">
@@ -1182,7 +1182,7 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
                     ?disabled=${!this.canEdit}
                     @change=${t=>this.edit({rule34ApiKey:t.target.value})} />
                 </div>
-                ${e.rule34ApiKeySet?i`<div class="field-control">
+                ${e.rule34ApiKeySet?s`<div class="field-control">
                   <button type="button" class="btn-inline" ?disabled=${!this.canEdit}
                     @click=${()=>this.edit({rule34ApiKey:"",rule34ApiKeySet:!1})}>Clear saved key</button>
                 </div>`:l}
@@ -1202,16 +1202,16 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
                 </div>
               </div>
 
-            `:i`<div class="field-help">Loading…</div>`}
+            `:s`<div class="field-help">Loading…</div>`}
       </section>
-    `}renderImageGen(){const e=this.settings;return i`
+    `}renderImageGen(){const e=this.settings;return s`
       <section class="card">
         <h3><span class="material-symbols-rounded">auto_awesome</span>Image generation</h3>
         <p class="card-sub">
           The generator behind the Create tab and Libby's pictures. Prompts stay on your own
           hardware — nothing is sent to a cloud service.
         </p>
-        ${e?i`
+        ${e?s`
               <div class="field stack">
                 <div class="field-text">
                   <div class="field-label">Generator</div>
@@ -1254,7 +1254,7 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
 
               ${this.renderGenCheck()}
               ${this.renderGenRestart()}
-            `:i`<div class="field-help">Loading…</div>`}
+            `:s`<div class="field-help">Loading…</div>`}
       </section>
 
       ${this.renderVideoGen()}
@@ -1262,7 +1262,7 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
       <section class="card">
         <h3><span class="material-symbols-rounded">download</span>Civitai</h3>
         <p class="card-sub">The model catalogue Create browses, links your models to and installs from.</p>
-        ${e?i`
+        ${e?s`
               <div class="field stack">
                 <div class="field-text">
                   <div class="field-label">Civitai API</div>
@@ -1284,19 +1284,19 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
                     ?disabled=${!this.canEdit}
                     @change=${t=>this.edit({civitaiApiKey:t.target.value})} />
                 </div>
-                ${e.civitaiKeySet?i`<div class="field-control">
+                ${e.civitaiKeySet?s`<div class="field-control">
                   <button type="button" class="btn-inline" ?disabled=${!this.canEdit}
                     @click=${()=>this.edit({civitaiApiKey:"",civitaiKeySet:!1})}>Clear saved key</button>
                 </div>`:l}
               </div>
-            `:i`<div class="field-help">Loading…</div>`}
+            `:s`<div class="field-help">Loading…</div>`}
       </section>
 
       <section class="card">
         <h3><span class="material-symbols-rounded">model_training</span>LoRA training</h3>
         <p class="card-sub">The trainer Create's Train screen sends your pictures to. It runs on its own, so a run
           carries on with the browser closed.</p>
-        ${e?i`
+        ${e?s`
               <div class="field stack">
                 <div class="field-text">
                   <div class="field-label">Trainer</div>
@@ -1320,14 +1320,14 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
                     ?disabled=${!this.canEdit}
                     @change=${t=>this.edit({trainerToken:t.target.value})} />
                 </div>
-                ${e.trainerTokenSet?i`<div class="field-control">
+                ${e.trainerTokenSet?s`<div class="field-control">
                   <button type="button" class="btn-inline" ?disabled=${!this.canEdit}
                     @click=${()=>this.edit({trainerToken:"",trainerTokenSet:!1})}>Clear saved token</button>
                 </div>`:l}
               </div>
-            `:i`<div class="field-help">Loading…</div>`}
+            `:s`<div class="field-help">Loading…</div>`}
       </section>
-    `}renderVideoGen(){const e=this.settings,t=(o,r,a)=>i`
+    `}renderVideoGen(){const e=this.settings,t=(o,r,a)=>s`
       <details class="clip-paste" ?open=${a&&!!o}>
         <summary>Or paste a workflow of your own${o?a?" (in use)":" (not used while a model is picked)":""}</summary>
         <div class="field-help" style="margin:8px 0 6px;">
@@ -1340,14 +1340,14 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
         <textarea rows="4" style="width:100%;font-family:monospace;font-size:11px;" placeholder='{"3": {"class_type": "KSampler", …}}'
           .value=${o} ?disabled=${!this.canEdit}
           @change=${u=>r(u.target.value)}></textarea>
-      </details>`,s=e==null?void 0:e.clipImageModels,n=e==null?void 0:e.clipTextModels;return i`
+      </details>`,i=e==null?void 0:e.clipImageModels,n=e==null?void 0:e.clipTextModels;return s`
       <section class="card">
         <h3><span class="material-symbols-rounded">movie</span>Video</h3>
         <p class="card-sub">
           A few seconds of video, from words or from a picture, made by ComfyUI — Create's Video
           drawer, and Libby's clips of herself. Neither Automatic1111 nor InvokeAI makes video.
         </p>
-        ${e?i`
+        ${e?s`
               <div class="field stack">
                 <div class="field-text">
                   <div class="field-label">ComfyUI</div>
@@ -1366,18 +1366,19 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
                     @click=${()=>void this.loadComfy()}>${this.comfyBusy?"Reading…":"Refresh"}</button>
                 </div>
               </div>
-              ${this.renderComfyFolder("ComfyUI models folder",i`For installing Wan models and LoRAs from Civitai
-                  (Create → Video → <em>Find on Civitai</em>): ComfyUI has no API that takes a download, so they are
-                  written into its <code>models</code> folder. Map that folder into this container at
-                  <code>/comfy-models</code> and it is found by itself; give a path here only if you mapped it somewhere
-                  else.`,"/comfy-models",e.comfyModelsDir,o=>this.edit({comfyModelsDir:o}),this.comfyFolder&&{dir:this.comfyFolder.dir,problem:this.comfyFolder.problem,ok:i`Installing into ${this.comfyFolder.dir}.`,none:this.comfyFolder.modelDir||this.comfyFolder.loraDir?"Nothing is mounted at /comfy-models; the folders below are enough for Wan models and LoRAs.":"Nothing is mounted at /comfy-models, so Civitai's video mode can browse but not install."})}
-              ${this.renderComfyFolder("Wan models folder",i`Where Wan diffusion models go, if they are not in the
-                  models folder's <code>diffusion_models</code> — kept on another share through ComfyUI's
-                  <code>extra_model_paths.yaml</code>, say. Map it at <code>/comfy-diffusion-models</code>, or give its
-                  path here. Blank uses <code>diffusion_models</code>.`,"/comfy-diffusion-models",e.comfyDiffusionDir,o=>this.edit({comfyDiffusionDir:o}),this.comfyFolder&&{dir:this.comfyFolder.modelDir,problem:this.comfyFolder.modelProblem,ok:i`Wan models go into ${this.comfyFolder.modelDir}.`,none:"No folder for Wan models yet — set the models folder or this one."})}
-              ${this.renderComfyFolder("LoRA folder",i`Where Wan LoRAs go, if they are not in the models folder's
-                  <code>loras</code>. Map it at <code>/comfy-loras</code>, or give its path here. Blank uses
-                  <code>loras</code>.`,"/comfy-loras",e.comfyLoraDir,o=>this.edit({comfyLoraDir:o}),this.comfyFolder&&{dir:this.comfyFolder.loraDir,problem:this.comfyFolder.loraProblem,ok:i`LoRAs go into ${this.comfyFolder.loraDir}.`,none:"No folder for LoRAs yet — set the models folder or this one."})}
+              <div class="field-help" style="margin:0 0 4px;">
+                Where Civitai's video mode (Create → Video → <em>Find on Civitai</em>) installs to. ComfyUI has no API that
+                takes a download, so the file is written straight into the folder ComfyUI loads that kind from. Map each
+                folder into the OppaiLib container and give the container's side of the mapping — the folder itself, such
+                as <code>…/models/loras</code>, not the models folder above it. A blank folder is not installed into.
+              </div>
+              ${this.renderComfyFolder("diffusion_models","Wan models folder",s`Wan diffusion models: ComfyUI's
+                  <code>models/diffusion_models</code> (<code>unet</code> on an older install), or wherever its
+                  <code>extra_model_paths.yaml</code> points.`,e.comfyDiffusionDir,o=>this.edit({comfyDiffusionDir:o}))}
+              ${this.renderComfyFolder("checkpoints","Checkpoints folder",s`All-in-one checkpoints, which carry their
+                  own text encoder and VAE: <code>models/checkpoints</code>.`,e.comfyCheckpointDir,o=>this.edit({comfyCheckpointDir:o}))}
+              ${this.renderComfyFolder("loras","LoRA folder",s`Wan LoRAs: <code>models/loras</code>.`,e.comfyLoraDir,o=>this.edit({comfyLoraDir:o}))}
+              ${this.renderComfyFolder("vae","VAE folder",s`VAEs: <code>models/vae</code>.`,e.comfyVaeDir,o=>this.edit({comfyVaeDir:o}))}
               <div class="field-help" style="margin:0 0 4px;">
                 Wan is wired here: pick its files and OppaiLib builds the workflow. Wan 2.2's 14B models come as a
                 pair — a <b>high-noise</b> model that sets out the motion over the first half of the steps and a
@@ -1386,103 +1387,120 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
                 (<code>umt5_xxl</code>) and the VAE (<code>wan_2.1_vae</code>; only the 5B model uses
                 <code>wan2.2_vae</code>). An all-in-one checkpoint has both inside and needs nothing beside it.
               </div>
-              ${this.renderClipModels("From a picture",i`Image to video: brings a still to life — what Animate on a
-                picture and Libby's clips run.`,!0,s,o=>this.edit({clipImageModels:o}))}
-              ${t(e.libbyClipWorkflow??"",o=>this.edit({libbyClipWorkflow:o}),!(s!=null&&s.model))}
-              ${this.renderClipModels("From words",i`Text to video: a clip from a description alone. Optional.`,!1,n,o=>this.edit({clipTextModels:o}))}
+              ${this.renderClipModels("From a picture",s`Image to video: brings a still to life — what Animate on a
+                picture and Libby's clips run.`,!0,i,o=>this.edit({clipImageModels:o}))}
+              ${t(e.libbyClipWorkflow??"",o=>this.edit({libbyClipWorkflow:o}),!(i!=null&&i.model))}
+              ${this.renderClipModels("From words",s`Text to video: a clip from a description alone. Optional.`,!1,n,o=>this.edit({clipTextModels:o}))}
               ${t(e.clipTextWorkflow??"",o=>this.edit({clipTextWorkflow:o}),!(n!=null&&n.model))}
-            `:i`<div class="field-help">Loading…</div>`}
+              ${this.renderComfyCheck()}
+            `:s`<div class="field-help">Loading…</div>`}
       </section>
-    `}comfyLine(){if(this.comfyErr)return i`<div class="field-status bad">${this.comfyErr}</div>`;const e=this.comfy;if(!e)return l;if(e.missing.length)return i`<div class="field-status bad">This ComfyUI has no ${e.missing.join(", ")} — it is older than Wan 2.2.
-        Update it (<em>Manager → Update ComfyUI</em>, or <code>git pull</code> in its folder) and press Refresh.</div>`;const t=e.diffusion.length+e.checkpoints.length;return i`<div class="field-status ok">Found ${t} model${t===1?"":"s"}, ${e.textEncoders.length} text
+    `}comfyLine(){if(this.comfyErr)return s`<div class="field-status bad">${this.comfyErr}</div>`;const e=this.comfy;if(!e)return l;if(e.missing.length)return s`<div class="field-status bad">This ComfyUI has no ${e.missing.join(", ")} — it is older than Wan 2.2.
+        Update it (<em>Manager → Update ComfyUI</em>, or <code>git pull</code> in its folder) and press Refresh.</div>`;const t=e.diffusion.length+e.checkpoints.length;return s`<div class="field-status ok">Found ${t} model${t===1?"":"s"}, ${e.textEncoders.length} text
       encoder${e.textEncoders.length===1?"":"s"}, ${e.vaes.length} VAE${e.vaes.length===1?"":"s"} and
-      ${e.loras.length} LoRA${e.loras.length===1?"":"s"}.</div>`}async loadComfy(){var e;this.comfyBusy=!0,this.comfyErr="",v.comfyInstalls().then(({jobs:t,...s})=>this.comfyFolder=s,()=>{});try{this.comfy=await v.comfyModels()}catch(t){this.comfy=null,(e=this.settings)!=null&&e.libbyClipUrl&&(this.comfyErr=t.message)}finally{this.comfyBusy=!1}}renderComfyFolder(e,t,s,n,o,r){return i`<div class="field stack">
+      ${e.loras.length} LoRA${e.loras.length===1?"":"s"}.</div>`}async loadComfy(){var e;this.comfyBusy=!0,this.comfyErr="",v.comfyInstalls().then(({places:t})=>this.comfyFolder=t,()=>{});try{this.comfy=await v.comfyModels()}catch(t){this.comfy=null,(e=this.settings)!=null&&e.libbyClipUrl&&(this.comfyErr=t.message)}finally{this.comfyBusy=!1}}renderComfyFolder(e,t,i,n,o){var a;const r=(a=this.comfyFolder)==null?void 0:a[e];return s`<div class="field stack">
       <div class="field-text">
-        <div class="field-label">${e}</div>
+        <div class="field-label">${t}</div>
         <div class="field-help">
-          ${t}
-          ${r!=null&&r.dir?i`<div class="field-status ok">${r.ok}</div>`:r!=null&&r.problem?i`<div class="field-status bad">${r.problem}</div>`:r?i`<div class="field-status">${r.none}</div>`:l}
+          ${i}
+          ${r!=null&&r.dir?s`<div class="field-status ok">Installing into ${r.dir}.</div>`:r!=null&&r.problem?s`<div class="field-status bad">${r.problem}</div>`:l}
         </div>
       </div>
       <div class="field-control">
-        <input type="text" autocomplete="off" placeholder=${s}
+        <input type="text" autocomplete="off" placeholder="Not installed into"
           .value=${n??""} ?disabled=${!this.canEdit}
-          @change=${a=>o(a.target.value)} />
+          @change=${u=>o(u.target.value)} />
       </div>
-    </div>`}renderClipModels(e,t,s,n,o){const r=n??{model:"",checkpoint:!1,lowModel:"",textEncoder:"",vae:"",loras:[],steps:0,cfg:0,shift:0},a=this.comfy,u=p=>o({...r,...p}),g=(p,f,y)=>i`
-      <option value="" ?selected=${!f}>${y}</option>
-      ${(f&&!p.includes(f)?[f,...p]:p).map(w=>i`<option value=${w} ?selected=${w===f}>${w}</option>`)}`,b=(p,f,y,w,N)=>i`
-      <select aria-label=${p} ?disabled=${!this.canEdit}
-        @change=${ae=>N(ae.target.value)}>${g(f,y,w)}</select>`,m=(a==null?void 0:a.diffusion)??[],R=(a==null?void 0:a.checkpoints)??[],P=(a==null?void 0:a.loras)??[],U=!!r.lowModel&&!r.checkpoint,se=p=>{const f=R.includes(p)&&!m.includes(p),y=!f&&L(p)==="high";u({model:p,checkpoint:f,lowModel:y?O(p,m)||r.lowModel:""})},B=(p,f)=>u({loras:r.loras.map((y,w)=>w===p?{...y,...f}:y)}),ie=p=>{const f=[{name:p,weight:1,stage:L(p)}],y=O(p,P);y&&!r.loras.some(N=>N.name===y)&&f.push({name:y,weight:1,stage:L(y)});const w=De(p)&&!r.steps&&!r.cfg?ze:{};u({loras:[...r.loras,...f],...w})},M=a?_e(a,s):null;return i`<div class="field stack">
+    </div>`}async runComfyCheck(){this.comfyCheckBusy=!0,this.comfyCheckErr="";try{this.comfyChecks=(await v.comfyCheck()).checks}catch(e){this.comfyCheckErr=e.message}finally{this.comfyCheckBusy=!1}this.loadComfy()}renderComfyCheck(){return s`<div class="field stack">
+      <div class="field-text">
+        <div class="field-label">Test ComfyUI</div>
+        <div class="field-help">
+          Asks ComfyUI what it runs on and how busy it is, checks each direction's picked files (or pasted
+          workflow) against what it has, and each folder above against the files ComfyUI lists. Nothing is
+          rendered or written. Save first.
+        </div>
+      </div>
+      <div class="field-control">
+        <button class="btn" ?disabled=${!this.canEdit||this.comfyCheckBusy||this.dirty} @click=${()=>void this.runComfyCheck()}>
+          ${this.comfyCheckBusy?"Testing…":"Test"}
+        </button>
+      </div>
+      ${this.comfyCheckErr?s`<div class="field-status bad">${this.comfyCheckErr}</div>`:l}
+      ${this.comfyChecks?K(this.comfyChecks):l}
+    </div>`}renderClipModels(e,t,i,n,o){const r=n??{model:"",checkpoint:!1,lowModel:"",textEncoder:"",vae:"",loras:[],steps:0,cfg:0,shift:0},a=this.comfy,u=h=>o({...r,...h}),m=(h,f,g)=>s`
+      <option value="" ?selected=${!f}>${g}</option>
+      ${(f&&!h.includes(f)?[f,...h]:h).map(y=>s`<option value=${y} ?selected=${y===f}>${y}</option>`)}`,w=(h,f,g,y,N)=>s`
+      <select aria-label=${h} ?disabled=${!this.canEdit}
+        @change=${ie=>N(ie.target.value)}>${m(f,g,y)}</select>`,S=(a==null?void 0:a.diffusion)??[],C=(a==null?void 0:a.checkpoints)??[],R=(a==null?void 0:a.loras)??[],_=!!r.lowModel&&!r.checkpoint,te=h=>{const f=C.includes(h)&&!S.includes(h),g=!f&&T(h)==="high";u({model:h,checkpoint:f,lowModel:g?F(h,S)||r.lowModel:""})},B=(h,f)=>u({loras:r.loras.map((g,y)=>y===h?{...g,...f}:g)}),se=h=>{const f=[{name:h,weight:1,stage:T(h)}],g=F(h,R);g&&!r.loras.some(N=>N.name===g)&&f.push({name:g,weight:1,stage:T(g)});const y=we(h)&&!r.steps&&!r.cfg?ke:{};u({loras:[...r.loras,...f],...y})},P=a?$e(a,i):null;return s`<div class="field stack">
       <div class="field-text">
         <div class="field-label">${e}</div>
         <div class="field-help">${t}</div>
       </div>
       <div class="clip-grid">
-        <span>Model${U?i`<small>high noise</small>`:l}</span>
-        <select aria-label="${e}: model" ?disabled=${!this.canEdit} @change=${p=>se(p.target.value)}>
-          <option value="" ?selected=${!r.model}>None — ${s?"a pasted workflow, or no clips":"no clips from words"}</option>
-          ${r.model&&!m.includes(r.model)&&!R.includes(r.model)?i`<option value=${r.model} selected>${r.model}</option>`:l}
-          ${m.length?i`<optgroup label="Diffusion models">${m.map(p=>i`<option value=${p} ?selected=${p===r.model}>${p}</option>`)}</optgroup>`:l}
-          ${R.length?i`<optgroup label="Checkpoints (all-in-one)">${R.map(p=>i`<option value=${p} ?selected=${p===r.model}>${p}</option>`)}</optgroup>`:l}
+        <span>Model${_?s`<small>high noise</small>`:l}</span>
+        <select aria-label="${e}: model" ?disabled=${!this.canEdit} @change=${h=>te(h.target.value)}>
+          <option value="" ?selected=${!r.model}>None — ${i?"a pasted workflow, or no clips":"no clips from words"}</option>
+          ${r.model&&!S.includes(r.model)&&!C.includes(r.model)?s`<option value=${r.model} selected>${r.model}</option>`:l}
+          ${S.length?s`<optgroup label="Diffusion models">${S.map(h=>s`<option value=${h} ?selected=${h===r.model}>${h}</option>`)}</optgroup>`:l}
+          ${C.length?s`<optgroup label="Checkpoints (all-in-one)">${C.map(h=>s`<option value=${h} ?selected=${h===r.model}>${h}</option>`)}</optgroup>`:l}
         </select>
-        ${r.model&&!r.checkpoint?i`
+        ${r.model&&!r.checkpoint?s`
           <span>Low noise</span>
-          ${b(`${e}: low-noise model`,m,r.lowModel,"None — one model does it all (Wan 2.1, 5B)",p=>u({lowModel:p}))}
+          ${w(`${e}: low-noise model`,S,r.lowModel,"None — one model does it all (Wan 2.1, 5B)",h=>u({lowModel:h}))}
           <span>Text encoder</span>
-          ${b(`${e}: text encoder`,(a==null?void 0:a.textEncoders)??[],r.textEncoder,"Pick one (umt5_xxl)",p=>u({textEncoder:p}))}
+          ${w(`${e}: text encoder`,(a==null?void 0:a.textEncoders)??[],r.textEncoder,"Pick one (umt5_xxl)",h=>u({textEncoder:h}))}
           <span>VAE</span>
-          ${b(`${e}: VAE`,(a==null?void 0:a.vaes)??[],r.vae,"Pick one (wan_2.1_vae)",p=>u({vae:p}))}`:l}
-        ${r.model&&r.checkpoint?i`
+          ${w(`${e}: VAE`,(a==null?void 0:a.vaes)??[],r.vae,"Pick one (wan_2.1_vae)",h=>u({vae:h}))}`:l}
+        ${r.model&&r.checkpoint?s`
           <span>Text encoder</span>
-          ${b(`${e}: text encoder`,(a==null?void 0:a.textEncoders)??[],r.textEncoder,"The checkpoint's own",p=>u({textEncoder:p}))}
+          ${w(`${e}: text encoder`,(a==null?void 0:a.textEncoders)??[],r.textEncoder,"The checkpoint's own",h=>u({textEncoder:h}))}
           <span>VAE</span>
-          ${b(`${e}: VAE`,(a==null?void 0:a.vaes)??[],r.vae,"The checkpoint's own",p=>u({vae:p}))}`:l}
-        ${r.model?i`
+          ${w(`${e}: VAE`,(a==null?void 0:a.vaes)??[],r.vae,"The checkpoint's own",h=>u({vae:h}))}`:l}
+        ${r.model?s`
           <span>LoRAs</span>
           <div class="clip-loras">
-            ${r.loras.map((p,f)=>i`<div class="clip-lora">
-              ${b(`${e}: LoRA ${f+1}`,P,p.name,"Pick a LoRA",y=>B(f,{name:y,stage:L(y)}))}
+            ${r.loras.map((h,f)=>s`<div class="clip-lora">
+              ${w(`${e}: LoRA ${f+1}`,R,h.name,"Pick a LoRA",g=>B(f,{name:g,stage:T(g)}))}
               <input type="number" step="0.05" min="-2" max="2" aria-label="${e}: LoRA ${f+1} strength"
-                .value=${String(p.weight)} ?disabled=${!this.canEdit}
-                @change=${y=>B(f,{weight:Number(y.target.value)})} />
-              ${U?i`<select class="stage" aria-label="${e}: LoRA ${f+1} goes on" ?disabled=${!this.canEdit}
-                @change=${y=>B(f,{stage:y.target.value})}>
-                <option value="" ?selected=${!p.stage}>Both</option>
-                <option value="high" ?selected=${p.stage==="high"}>High noise</option>
-                <option value="low" ?selected=${p.stage==="low"}>Low noise</option>
+                .value=${String(h.weight)} ?disabled=${!this.canEdit}
+                @change=${g=>B(f,{weight:Number(g.target.value)})} />
+              ${_?s`<select class="stage" aria-label="${e}: LoRA ${f+1} goes on" ?disabled=${!this.canEdit}
+                @change=${g=>B(f,{stage:g.target.value})}>
+                <option value="" ?selected=${!h.stage}>Both</option>
+                <option value="high" ?selected=${h.stage==="high"}>High noise</option>
+                <option value="low" ?selected=${h.stage==="low"}>Low noise</option>
               </select>`:l}
               <button class="btn-inline" title="Remove" aria-label="Remove LoRA ${f+1}" ?disabled=${!this.canEdit}
-                @click=${()=>u({loras:r.loras.filter((y,w)=>w!==f)})}>
+                @click=${()=>u({loras:r.loras.filter((g,y)=>y!==f)})}>
                 <span class="material-symbols-rounded" style="font-size:18px;">delete</span></button>
             </div>`)}
-            ${P.length?i`<select aria-label="${e}: add a LoRA" ?disabled=${!this.canEdit||r.loras.length>=8}
-              @change=${p=>{const f=p.target;f.value&&ie(f.value),f.value=""}}>
+            ${R.length?s`<select aria-label="${e}: add a LoRA" ?disabled=${!this.canEdit||r.loras.length>=8}
+              @change=${h=>{const f=h.target;f.value&&se(f.value),f.value=""}}>
               <option value="" selected>${r.loras.length?"Add another LoRA…":"Add a LoRA…"}</option>
-              ${P.filter(p=>!r.loras.some(f=>f.name===p)).map(p=>i`<option value=${p}>${p}</option>`)}
-            </select>`:i`<span class="field-help">${a?"ComfyUI has no LoRAs in models/loras.":"LoRAs are listed once ComfyUI answers."}</span>`}
+              ${R.filter(h=>!r.loras.some(f=>f.name===h)).map(h=>s`<option value=${h}>${h}</option>`)}
+            </select>`:s`<span class="field-help">${a?"ComfyUI has no LoRAs in models/loras.":"LoRAs are listed once ComfyUI answers."}</span>`}
           </div>
           <span>Steps · CFG · shift</span>
           <div class="clip-lora">
             <input type="number" min="0" max="100" step="1" placeholder="20" aria-label="${e}: steps"
               .value=${r.steps?String(r.steps):""} ?disabled=${!this.canEdit}
-              @change=${p=>u({steps:Number(p.target.value)||0})} />
+              @change=${h=>u({steps:Number(h.target.value)||0})} />
             <input type="number" min="0" max="30" step="0.5" placeholder="3.5" aria-label="${e}: CFG"
               .value=${r.cfg?String(r.cfg):""} ?disabled=${!this.canEdit}
-              @change=${p=>u({cfg:Number(p.target.value)||0})} />
+              @change=${h=>u({cfg:Number(h.target.value)||0})} />
             <input type="number" min="0" max="50" step="0.5" placeholder="8" aria-label="${e}: shift"
               .value=${r.shift?String(r.shift):""} ?disabled=${!this.canEdit}
-              @change=${p=>u({shift:Number(p.target.value)||0})} />
+              @change=${h=>u({shift:Number(h.target.value)||0})} />
           </div>
           <span></span>
           <div class="field-help" style="margin:0;">Blank is Wan's own: 20 steps, CFG 3.5, shift 8. A speed LoRA
             (lightx2v, Lightning) wants 4 steps and CFG 1 — adding one sets them.</div>`:l}
       </div>
-      ${M&&!r.model?i`<div class="field-control">
-        <button type="button" class="btn-inline" ?disabled=${!this.canEdit} @click=${()=>o(M)}>
-          Pick from what's installed: ${M.model}${M.lowModel?" + its low-noise twin":""}</button>
+      ${P&&!r.model?s`<div class="field-control">
+        <button type="button" class="btn-inline" ?disabled=${!this.canEdit} @click=${()=>o(P)}>
+          Pick from what's installed: ${P.model}${P.lowModel?" + its low-noise twin":""}</button>
       </div>`:l}
-    </div>`}async runGenCheck(){this.genCheckBusy=!0,this.genCheckErr="";try{this.genChecks=(await v.imageGenCheck()).checks}catch(e){this.genCheckErr=e.message}finally{this.genCheckBusy=!1}this.loadGenLists()}renderGenCheck(){return i`<div class="field stack">
+    </div>`}async runGenCheck(){this.genCheckBusy=!0,this.genCheckErr="";try{this.genChecks=(await v.imageGenCheck()).checks}catch(e){this.genCheckErr=e.message}finally{this.genCheckBusy=!1}this.loadGenLists()}renderGenCheck(){return s`<div class="field stack">
       <div class="field-text">
         <div class="field-label">Test everything</div>
         <div class="field-help">
@@ -1496,44 +1514,39 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
           ${this.genCheckBusy?"Testing…":"Test"}
         </button>
       </div>
-      ${this.genCheckErr?i`<div class="field-status bad">${this.genCheckErr}</div>`:l}
-      ${this.genChecks?i`<ul class="checks">
-            ${this.genChecks.map(e=>i`<li class=${e.skipped?"skip":e.ok?"ok":"bad"}>
-              <span class="material-symbols-rounded">${e.skipped?"info":e.ok?"check_circle":"error"}</span>
-              <span><strong>${e.label}</strong> — ${e.detail}</span>
-            </li>`)}
-          </ul>`:l}
-    </div>`}renderGenRestart(){const e=this.genStatus;if(!(e!=null&&e.reachable)||e.backend!=="a1111")return l;const t=this.genRestart==="Restarting…";return i`<div class="field">
+      ${this.genCheckErr?s`<div class="field-status bad">${this.genCheckErr}</div>`:l}
+      ${this.genChecks?K(this.genChecks):l}
+    </div>`}renderGenRestart(){const e=this.genStatus;if(!(e!=null&&e.reachable)||e.backend!=="a1111")return l;const t=this.genRestart==="Restarting…";return s`<div class="field">
       <div class="field-text">
         <div class="field-label">Restart Automatic1111</div>
         <div class="field-help">
-          ${e.canRestart?"It reads ADetailer's detectors and its extensions only when it starts. Back in a minute or two; a picture it is drawing is lost.":i`It can only be restarted from here when it is started with <code>--api-server-stop</code> — add that to
+          ${e.canRestart?"It reads ADetailer's detectors and its extensions only when it starts. Back in a minute or two; a picture it is drawing is lost.":s`It can only be restarted from here when it is started with <code>--api-server-stop</code> — add that to
                 COMMANDLINE_ARGS beside <code>--api</code> and restart it by hand once.`}
         </div>
-        ${this.genRestart&&!t?i`<div class="field-status">${this.genRestart}</div>`:l}
+        ${this.genRestart&&!t?s`<div class="field-status">${this.genRestart}</div>`:l}
       </div>
       <div class="field-control">
         <button class="btn" ?disabled=${!this.canEdit||t} @click=${()=>void this.restartGen()}>
           ${t?"Restarting…":"Restart"}
         </button>
       </div>
-    </div>`}async restartGen(){if(!confirm("Restart Automatic1111? It takes a minute or two, and a picture it is drawing now is lost."))return;this.genRestart="Restarting…";try{await v.restartGenerator()}catch(s){this.genRestart=s.message;return}const e=Date.now();let t=!1;for(;this.isConnected&&Date.now()-e<5*6e4;){await new Promise(n=>setTimeout(n,3e3));const s=await v.imageGenStatus().catch(()=>null);if(!(s!=null&&s.reachable)){t=!0;continue}if(t||Date.now()-e>45e3){this.genRestart="Automatic1111 is back.",this.loadGenLists();return}}this.genRestart="It hasn't come back yet — look at it where it runs."}genStatusLine(e){const t=this.genStatus;if(!e.imageGenUrl.trim())return l;let s,n=!1;if(this.dirty)s="Save to check it.";else if(t)if(!t.reachable)s=`Not reachable${t.error?`: ${t.error}`:"."}`,n=!0;else{const o=t.backend==="invokeai"?"InvokeAI":"Automatic1111",r=(t.models??[]).length,a=(t.loras??[]).length;s=`Connected to ${o} — ${r} ${r===1?"model":"models"}, ${a} ${a===1?"LoRA":"LoRAs"}.`}else{if(!this.genError)return i`<div class="field-status">Checking…</div>`;s=this.genError,n=!0}return i`<div class="field-status ${n?"bad":""}">${s}</div>`}modelsFolderLine(e){const t=this.genStatus;if(this.dirty)return i`<div class="field-status">Save to check it.</div>`;if(!(t!=null&&t.reachable))return l;if(t.backend==="invokeai")return i`<div class="field-status">Not needed: InvokeAI installs and edits models itself.</div>`;if(t.manageModels){const s=!(e.imageGenModelsDir??"").trim();return i`<div class="field-status ok">
-        Using <code>${t.modelsDir}</code>${s?" — found mounted, so there is nothing to set":""}. Models can be installed, edited and deleted.
-      </div>`}return t.modelsDirProblem?i`<div class="field-status bad">${t.modelsDirProblem}.</div>`:i`<div class="field-status">Nothing is mounted at <code>/a1111-models</code> and no path is set.</div>`}renderLibrary(){const e=this.stats;if(!e)return l;const t=new Map(e.kinds.map(s=>[s.kind,s]));return i`
+    </div>`}async restartGen(){if(!confirm("Restart Automatic1111? It takes a minute or two, and a picture it is drawing now is lost."))return;this.genRestart="Restarting…";try{await v.restartGenerator()}catch(i){this.genRestart=i.message;return}const e=Date.now();let t=!1;for(;this.isConnected&&Date.now()-e<5*6e4;){await new Promise(n=>setTimeout(n,3e3));const i=await v.imageGenStatus().catch(()=>null);if(!(i!=null&&i.reachable)){t=!0;continue}if(t||Date.now()-e>45e3){this.genRestart="Automatic1111 is back.",this.loadGenLists();return}}this.genRestart="It hasn't come back yet — look at it where it runs."}genStatusLine(e){const t=this.genStatus;if(!e.imageGenUrl.trim())return l;let i,n=!1;if(this.dirty)i="Save to check it.";else if(t)if(!t.reachable)i=`Not reachable${t.error?`: ${t.error}`:"."}`,n=!0;else{const o=t.backend==="invokeai"?"InvokeAI":"Automatic1111",r=(t.models??[]).length,a=(t.loras??[]).length;i=`Connected to ${o} — ${r} ${r===1?"model":"models"}, ${a} ${a===1?"LoRA":"LoRAs"}.`}else{if(!this.genError)return s`<div class="field-status">Checking…</div>`;i=this.genError,n=!0}return s`<div class="field-status ${n?"bad":""}">${i}</div>`}modelsFolderLine(e){const t=this.genStatus;if(this.dirty)return s`<div class="field-status">Save to check it.</div>`;if(!(t!=null&&t.reachable))return l;if(t.backend==="invokeai")return s`<div class="field-status">Not needed: InvokeAI installs and edits models itself.</div>`;if(t.manageModels){const i=!(e.imageGenModelsDir??"").trim();return s`<div class="field-status ok">
+        Using <code>${t.modelsDir}</code>${i?" — found mounted, so there is nothing to set":""}. Models can be installed, edited and deleted.
+      </div>`}return t.modelsDirProblem?s`<div class="field-status bad">${t.modelsDirProblem}.</div>`:s`<div class="field-status">Nothing is mounted at <code>/a1111-models</code> and no path is set.</div>`}renderLibrary(){const e=this.stats;if(!e)return l;const t=new Map(e.kinds.map(i=>[i.kind,i]));return s`
       <section class="card">
         <h3><span class="material-symbols-rounded">inventory_2</span>Library</h3>
         <p class="card-sub">
-          ${e.items} ${e.items===1?"item":"items"} · ${x(e.bytes)} stored ·
+          ${e.items} ${e.items===1?"item":"items"} · ${k(e.bytes)} stored ·
           ${e.tags} ${e.tags===1?"tag":"tags"}
         </p>
         <div class="stat-grid">
-          ${Object.keys(G).map(s=>{const n=t.get(s);return i`<div class="stat">
+          ${Object.keys(G).map(i=>{const n=t.get(i);return s`<div class="stat">
               <div class="stat-num">${(n==null?void 0:n.count)??0}</div>
-              <div class="stat-label">${G[s].label} · ${x((n==null?void 0:n.bytes)??0)}</div>
+              <div class="stat-label">${G[i].label} · ${k((n==null?void 0:n.bytes)??0)}</div>
             </div>`})}
         </div>
       </section>
-    `}renderPasskeys(){const e=this.passkeyList;return i`
+    `}renderPasskeys(){const e=this.passkeyList;return s`
       <section class="card">
         <h3><span class="material-symbols-rounded">passkey</span>Passkeys</h3>
         <p class="card-sub">
@@ -1542,28 +1555,28 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
           key — your device keeps the private half.
         </p>
 
-        ${this.passkeyError?i`<div class="banner error">
+        ${this.passkeyError?s`<div class="banner error">
               <span class="material-symbols-rounded" style="font-size:18px;">error</span>${this.passkeyError}
             </div>`:l}
-        ${this.passkeyMsg?i`<div class="banner ok">
+        ${this.passkeyMsg?s`<div class="banner ok">
               <span class="material-symbols-rounded" style="font-size:18px;">check_circle</span>${this.passkeyMsg}
             </div>`:l}
 
-        ${e&&!e.available?i`<div class="banner info">
+        ${e&&!e.available?s`<div class="banner info">
               <span class="material-symbols-rounded" style="font-size:18px;">lock</span>
               ${e.reason}
             </div>`:l}
 
-        ${e===null?i`<p class="field-help">Checking…</p>`:e.passkeys.length===0?i`<p class="field-help">
+        ${e===null?s`<p class="field-help">Checking…</p>`:e.passkeys.length===0?s`<p class="field-help">
                 No passkeys yet. Your password keeps working either way — it's also how you
                 get back in if you lose a device.
-              </p>`:i`
+              </p>`:s`
                 <div class="pk-list">
                   ${e.passkeys.map(t=>this.renderPasskeyRow(t))}
                 </div>
               `}
 
-        ${e!=null&&e.available?i`
+        ${e!=null&&e.available?s`
               <div class="pk-add">
                 <input
                   type="text"
@@ -1579,17 +1592,17 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
               </div>
             `:l}
 
-        ${e!=null&&e.relyingPartyId?i`<p class="field-help">
+        ${e!=null&&e.relyingPartyId?s`<p class="field-help">
               Passkeys added here are tied to <code>${e.relyingPartyId}</code>. That's how
               WebAuthn works — reach OppaiLib at a different address and your device won't
               offer them, so add one per address you actually use.
             </p>`:l}
       </section>
-    `}renderPasskeyRow(e){const t=this.passkeyRenaming===e.id,s=this.passkeyRevoking===e.id;return i`
+    `}renderPasskeyRow(e){const t=this.passkeyRenaming===e.id,i=this.passkeyRevoking===e.id;return s`
       <div class="pk-row">
         <span class="material-symbols-rounded pk-icon">${e.synced?"cloud_sync":"key"}</span>
         <div class="pk-body">
-          ${t?i`<div class="pk-rename">
+          ${t?s`<div class="pk-rename">
                 <input
                   type="text"
                   .value=${this.passkeyName}
@@ -1597,13 +1610,13 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
                 />
                 <button @click=${()=>void this.savePasskeyName(e)}>Save</button>
                 <button @click=${()=>this.passkeyRenaming=null}>Cancel</button>
-              </div>`:i`<div class="pk-name">${e.name}</div>`}
+              </div>`:s`<div class="pk-name">${e.name}</div>`}
           <div class="pk-meta">
             ${e.synced?"Synced to your account":"This device only"}
-            · added ${K(e.createdAt)}
-            · ${e.lastUsedAt?`last used ${K(e.lastUsedAt)}`:"never used"}
+            · added ${W(e.createdAt)}
+            · ${e.lastUsedAt?`last used ${W(e.lastUsedAt)}`:"never used"}
           </div>
-          ${s?i`<div class="pk-revoke">
+          ${i?s`<div class="pk-revoke">
                 <p class="field-help">
                   Confirm with your password. A signed-in browser isn't proof of who's at
                   the keyboard, and this is the first thing someone taking over an account
@@ -1625,7 +1638,7 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
                 </div>
               </div>`:l}
         </div>
-        ${t||s?l:i`<div class="pk-actions">
+        ${t||i?l:s`<div class="pk-actions">
               <button title="Rename" @click=${()=>this.startRename(e)}>
                 <span class="material-symbols-rounded" style="font-size:18px;">edit</span>
               </button>
@@ -1634,7 +1647,7 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
               </button>
             </div>`}
       </div>
-    `}async loadPasskeys(){try{this.passkeyList=await v.passkeys()}catch(e){this.passkeyError=e.message}}startRename(e){this.passkeyRenaming=e.id,this.passkeyRevoking=null,this.passkeyName=e.name}async savePasskeyName(e){const t=this.passkeyName.trim();if(t)try{await v.renamePasskey(e.id,t),this.passkeyRenaming=null,this.passkeyName="",await this.loadPasskeys()}catch(s){this.passkeyError=s.message}}startRevoke(e){this.passkeyRevoking=e.id,this.passkeyRenaming=null,this.passkeyPassword="",this.passkeyError=""}async revokePasskey(e){this.passkeyBusy=!0,this.passkeyError="";try{await v.revokePasskey(e.id,this.passkeyPassword),this.passkeyRevoking=null,this.passkeyPassword="",this.passkeyMsg=`Removed “${e.name}”.`,await this.loadPasskeys()}catch(t){this.passkeyError=t.message}finally{this.passkeyBusy=!1}}renderAccount(){var e,t;return i`
+    `}async loadPasskeys(){try{this.passkeyList=await v.passkeys()}catch(e){this.passkeyError=e.message}}startRename(e){this.passkeyRenaming=e.id,this.passkeyRevoking=null,this.passkeyName=e.name}async savePasskeyName(e){const t=this.passkeyName.trim();if(t)try{await v.renamePasskey(e.id,t),this.passkeyRenaming=null,this.passkeyName="",await this.loadPasskeys()}catch(i){this.passkeyError=i.message}}startRevoke(e){this.passkeyRevoking=e.id,this.passkeyRenaming=null,this.passkeyPassword="",this.passkeyError=""}async revokePasskey(e){this.passkeyBusy=!0,this.passkeyError="";try{await v.revokePasskey(e.id,this.passkeyPassword),this.passkeyRevoking=null,this.passkeyPassword="",this.passkeyMsg=`Removed “${e.name}”.`,await this.loadPasskeys()}catch(t){this.passkeyError=t.message}finally{this.passkeyBusy=!1}}renderAccount(){var e,t;return s`
       ${this.renderPasskeys()}
       <section class="card">
         <h3><span class="material-symbols-rounded">account_circle</span>Account</h3>
@@ -1642,10 +1655,10 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
           Signed in as <strong>${(e=this.user)==null?void 0:e.username}</strong>${(t=this.user)!=null&&t.isAdmin?" (admin)":""}.
         </p>
 
-        ${this.pwErr?i`<div class="banner error">
+        ${this.pwErr?s`<div class="banner error">
               <span class="material-symbols-rounded" style="font-size:18px;">error</span>${this.pwErr}
             </div>`:l}
-        ${this.pwMsg?i`<div class="banner ok">
+        ${this.pwMsg?s`<div class="banner ok">
               <span class="material-symbols-rounded" style="font-size:18px;">check_circle</span>${this.pwMsg}
             </div>`:l}
 
@@ -1655,21 +1668,21 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
             placeholder="Current password"
             autocomplete="current-password"
             .value=${this.pwCurrent}
-            @input=${s=>this.pwCurrent=s.target.value}
+            @input=${i=>this.pwCurrent=i.target.value}
           />
           <input
             type="password"
             placeholder="New password (8+ characters)"
             autocomplete="new-password"
             .value=${this.pwNew}
-            @input=${s=>this.pwNew=s.target.value}
+            @input=${i=>this.pwNew=i.target.value}
           />
           <input
             type="password"
             placeholder="Confirm new password"
             autocomplete="new-password"
             .value=${this.pwConfirm}
-            @input=${s=>this.pwConfirm=s.target.value}
+            @input=${i=>this.pwConfirm=i.target.value}
           />
           <div>
             <button
@@ -1683,7 +1696,7 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
           </div>
         </div>
       </section>
-    `}renderStorage(){var t;const e=this.storage;return i`
+    `}renderStorage(){var t;const e=this.storage;return s`
       <section class="card">
         <h3><span class="material-symbols-rounded">hard_drive</span>Storage</h3>
         <p class="card-sub">
@@ -1692,12 +1705,12 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
           the warnings are for.
         </p>
 
-        ${this.storageErr?i`<div class="banner error">
+        ${this.storageErr?s`<div class="banner error">
               <span class="material-symbols-rounded" style="font-size:18px;">error</span>${this.storageErr}
             </div>`:l}
 
-        ${((e==null?void 0:e.warnings)??[]).map(s=>i`<div class="banner error">
-          <span class="material-symbols-rounded" style="font-size:18px;">warning</span>${s}
+        ${((e==null?void 0:e.warnings)??[]).map(i=>s`<div class="banner error">
+          <span class="material-symbols-rounded" style="font-size:18px;">warning</span>${i}
         </div>`)}
 
         <div class="diag-actions">
@@ -1705,7 +1718,7 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
             <span class="material-symbols-rounded" style="font-size:20px;">refresh</span>
             ${this.storageBusy?"Reading…":"Refresh"}
           </button>
-          ${(t=this.user)!=null&&t.isAdmin?i`<button ?disabled=${this.storageBusy} @click=${this.runCleanup}>
+          ${(t=this.user)!=null&&t.isAdmin?s`<button ?disabled=${this.storageBusy} @click=${this.runCleanup}>
                 <span class="material-symbols-rounded" style="font-size:20px;">mop</span>
                 Reclaim space
               </button>`:l}
@@ -1716,35 +1729,35 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
           </span>
         </div>
 
-        ${e?i`
-              ${e.pendingBytes>0?i`<p class="field-help">
-                    Uploads in progress still need about ${x(e.pendingBytes)}.
+        ${e?s`
+              ${e.pendingBytes>0?s`<p class="field-help">
+                    Uploads in progress still need about ${k(e.pendingBytes)}.
                   </p>`:l}
-              ${e.mappings.map(s=>this.renderMapping(s))}
+              ${e.mappings.map(i=>this.renderMapping(i))}
               <h4 style="margin:18px 0 6px;">Reclaimable now</h4>
-              ${e.reclaimable.map(s=>i`<p class="field-help">
-                ${s.label}: <strong>${x(s.bytes)}</strong>${s.note?i` — ${s.note}`:l}
+              ${e.reclaimable.map(i=>s`<p class="field-help">
+                ${i.label}: <strong>${k(i.bytes)}</strong>${i.note?s` — ${i.note}`:l}
               </p>`)}
-            `:i`<p class="field-help">${this.storageBusy?"Reading…":"No reading yet."}</p>`}
+            `:s`<p class="field-help">${this.storageBusy?"Reading…":"No reading yet."}</p>`}
       </section>
-    `}renderMapping(e){const t=e.totalBytes>0?Math.round(e.usedBytes/e.totalBytes*100):0;return i`
+    `}renderMapping(e){const t=e.totalBytes>0?Math.round(e.usedBytes/e.totalBytes*100):0;return s`
       <div class="setting-row" style="display:block;">
         <div style="display:flex; align-items:baseline; gap:8px; flex-wrap:wrap;">
           <strong>${e.label}</strong>
           <code style="font-size:12px; opacity:.8;">${e.path}</code>
-          ${e.exists?l:i`<span class="field-help" style="color:var(--oppai-error);">not mapped</span>`}
-          ${e.exists&&!e.writable?i`<span class="field-help" style="color:var(--oppai-error);">read-only</span>`:l}
+          ${e.exists?l:s`<span class="field-help" style="color:var(--oppai-error);">not mapped</span>`}
+          ${e.exists&&!e.writable?s`<span class="field-help" style="color:var(--oppai-error);">read-only</span>`:l}
         </div>
         <div style="height:6px; border-radius:999px; background:var(--oppai-surface-2); overflow:hidden; margin:6px 0;">
           <span style="display:block; height:100%; width:${t}%; background:${t>=90?"var(--oppai-error)":"var(--oppai-primary)"};"></span>
         </div>
         <p class="field-help">
-          ${e.error?e.error:i`${x(e.freeBytes)} free of ${x(e.totalBytes)} (${t}% used)`}
-          ${(e.contents??[]).map(s=>i` · ${s.label}: ${x(s.bytes)}${s.count?i` (${s.count})`:l}`)}
+          ${e.error?e.error:s`${k(e.freeBytes)} free of ${k(e.totalBytes)} (${t}% used)`}
+          ${(e.contents??[]).map(i=>s` · ${i.label}: ${k(i.bytes)}${i.count?s` (${i.count})`:l}`)}
         </p>
         <p class="field-help">${e.purpose} Set with <code>${e.env}</code>.</p>
       </div>
-    `}renderDiagnostics(){const e=this.diag,t=this.uiDiag;return i`
+    `}renderDiagnostics(){const e=this.diag,t=this.uiDiag;return s`
       <section class="card">
         <h3><span class="material-symbols-rounded">speed</span>Performance</h3>
         <p class="card-sub">
@@ -1752,7 +1765,7 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
           Nothing here is sent anywhere — it's read straight off this box.
         </p>
 
-        ${this.diagErr?i`<div class="banner error">
+        ${this.diagErr?s`<div class="banner error">
               <span class="material-symbols-rounded" style="font-size:18px;">error</span>${this.diagErr}
             </div>`:l}
 
@@ -1771,8 +1784,8 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
           </span>
         </div>
 
-        ${e?i`
-              ${e.dbWal?l:i`<div class="banner error">
+        ${e?s`
+              ${e.dbWal?l:s`<div class="banner error">
                     <span class="material-symbols-rounded" style="font-size:18px;">warning</span>
                     The database isn't in WAL mode, so every query runs one at a time.
                     This is usually because it lives on a network share — move it to a
@@ -1780,7 +1793,7 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
                   </div>`}
 
               <div class="stat-grid">
-                ${this.diagStat("Uptime",He(e.uptimeSeconds))}
+                ${this.diagStat("Uptime",We(e.uptimeSeconds))}
                 ${this.diagStat("Requests",String(e.metrics.counters["http.requests"]??0))}
                 ${this.diagStat("Server errors",String(e.metrics.counters["http.status.5xx"]??0))}
                 ${this.diagStat("Memory",`${e.heapMB} MB heap · ${e.sysMB} MB total`)}
@@ -1794,7 +1807,7 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
                 <code>scrape.fetch.…</code> is it waiting on someone else's site.
                 Percentiles are estimates from fixed buckets.
               </p>
-              ${e.metrics.timings.length===0?i`<p class="field-help">Nothing measured in this window yet.</p>`:i`
+              ${e.metrics.timings.length===0?s`<p class="field-help">Nothing measured in this window yet.</p>`:s`
                     <div class="diag-scroll">
                       <table class="diag-table">
                         <thead>
@@ -1803,12 +1816,12 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
                           </tr>
                         </thead>
                         <tbody>
-                          ${e.metrics.timings.slice(0,25).map(s=>i`<tr>
-                              <td class="diag-name">${s.name}</td>
-                              <td>${s.count}</td>
-                              <td>${s.avgMs} ms</td>
-                              <td>${s.p95Ms} ms</td>
-                              <td class=${s.maxMs>=3e3?"diag-bad":""}>${s.maxMs} ms</td>
+                          ${e.metrics.timings.slice(0,25).map(i=>s`<tr>
+                              <td class="diag-name">${i.name}</td>
+                              <td>${i.count}</td>
+                              <td>${i.avgMs} ms</td>
+                              <td>${i.p95Ms} ms</td>
+                              <td class=${i.maxMs>=3e3?"diag-bad":""}>${i.maxMs} ms</td>
                             </tr>`)}
                         </tbody>
                       </table>
@@ -1823,42 +1836,42 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
                 A slow update takes over one 16 ms frame. Long tasks are browser main-thread
                 stalls over 50 ms; layout shift excludes movement caused by your input.
               </p>
-              ${t?i`
+              ${t?s`
                     <div class="stat-grid">
                       ${this.diagStat("UI updates",String(t.updates))}
                       ${this.diagStat("Slow updates",String(t.slowUpdates))}
                       ${this.diagStat("Long tasks",`${t.longTasks} · ${Math.round(t.longTaskMs)} ms`)}
                       ${this.diagStat("Layout shift",`${t.layoutShifts} · ${t.layoutShiftScore}`)}
                     </div>
-                    ${t.timings.length===0?i`<p class="field-help">No profiled component has updated in this window yet.</p>`:i`
+                    ${t.timings.length===0?s`<p class="field-help">No profiled component has updated in this window yet.</p>`:s`
                           <div class="diag-scroll">
                             <table class="diag-table">
                               <thead>
                                 <tr><th>Component</th><th>Updates</th><th>Avg</th><th>p95</th><th>Slow</th><th>Worst</th></tr>
                               </thead>
                               <tbody>
-                                ${t.timings.map(s=>i`<tr>
-                                  <td class="diag-name">${s.name}</td>
-                                  <td>${s.count}</td>
-                                  <td>${s.avgMs} ms</td>
-                                  <td>${s.p95Ms} ms</td>
-                                  <td class=${s.slow?"diag-bad":""}>${s.slow}</td>
-                                  <td class=${s.maxMs>16?"diag-bad":""}>${s.maxMs} ms</td>
+                                ${t.timings.map(i=>s`<tr>
+                                  <td class="diag-name">${i.name}</td>
+                                  <td>${i.count}</td>
+                                  <td>${i.avgMs} ms</td>
+                                  <td>${i.p95Ms} ms</td>
+                                  <td class=${i.slow?"diag-bad":""}>${i.slow}</td>
+                                  <td class=${i.maxMs>16?"diag-bad":""}>${i.maxMs} ms</td>
                                 </tr>`)}
                               </tbody>
                             </table>
                           </div>
                         `}
-                  `:i`<p class="field-help">Refresh to read browser timings.</p>`}
-            `:i`<p class="field-help">${this.diagBusy?"Reading…":"No snapshot yet."}</p>`}
+                  `:s`<p class="field-help">Refresh to read browser timings.</p>`}
+            `:s`<p class="field-help">${this.diagBusy?"Reading…":"No snapshot yet."}</p>`}
       </section>
-    `}renderFetchHealth(e){const t=e.metrics.counters,s=[["Fetches completed",t["scrape.fetch.ok"]??0,"Pages and listings fetched successfully."],["Retried",t["scrape.fetch.retry"]??0,"A site failed transiently and we tried again."],["Gave up",t["scrape.fetch.exhausted"]??0,"Still failing after every retry."],["Queued behind another request",t["scrape.host_queued"]??0,"A steady number here means we're fanning out wider than the site allows."],["Asked to back off",t["scrape.fetch.backoff_too_long"]??0,"A site asked for a longer wait than we'll hold a click open for."]];return s.every(([,n])=>n===0)?l:i`
+    `}renderFetchHealth(e){const t=e.metrics.counters,i=[["Fetches completed",t["scrape.fetch.ok"]??0,"Pages and listings fetched successfully."],["Retried",t["scrape.fetch.retry"]??0,"A site failed transiently and we tried again."],["Gave up",t["scrape.fetch.exhausted"]??0,"Still failing after every retry."],["Queued behind another request",t["scrape.host_queued"]??0,"A steady number here means we're fanning out wider than the site allows."],["Asked to back off",t["scrape.fetch.backoff_too_long"]??0,"A site asked for a longer wait than we'll hold a click open for."]];return i.every(([,n])=>n===0)?l:s`
       <h4 class="diag-head">Outbound fetches</h4>
-      ${s.map(([n,o,r])=>o===0?l:i`<div class="diag-row"><strong>${o}</strong> ${n} <span class="field-help">— ${r}</span></div>`)}
-    `}diagStat(e,t){return i`<div class="stat">
+      ${i.map(([n,o,r])=>o===0?l:s`<div class="diag-row"><strong>${o}</strong> ${n} <span class="field-help">— ${r}</span></div>`)}
+    `}diagStat(e,t){return s`<div class="stat">
       <div class="stat-num diag-stat-num">${t}</div>
       <div class="stat-label">${e}</div>
-    </div>`}renderAbout(){const e=this.info;return e?i`
+    </div>`}renderAbout(){const e=this.info;return e?s`
       <section class="card">
         <h3><span class="material-symbols-rounded">info</span>About this server</h3>
         <p class="card-sub">Set by environment variables; changing them needs a restart.</p>
@@ -1869,7 +1882,7 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
         ${this.readOnlyField("Database","SQLite metadata store.",e.dbPath)}
         ${this.readOnlyField("Session length","How long a login stays valid.",`${e.sessionHours} hours`)}
       </section>
-    `:l}switchField(e,t,s,n,o=!1){const r=!this.canEdit||o;return i`
+    `:l}switchField(e,t,i,n,o=!1){const r=!this.canEdit||o;return s`
       <div class="field">
         <div class="field-text">
           <div class="field-label">${e}</div>
@@ -1877,22 +1890,22 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
         </div>
         <div class="field-control">
           <button
-            class="switch ${s?"on":""}"
+            class="switch ${i?"on":""}"
             role="switch"
-            aria-checked=${s?"true":"false"}
+            aria-checked=${i?"true":"false"}
             aria-label=${e}
             ?disabled=${r}
-            @click=${()=>n(!s)}
+            @click=${()=>n(!i)}
           ></button>
         </div>
       </div>
-    `}readOnlyField(e,t,s){return i`
+    `}readOnlyField(e,t,i){return s`
       <div class="field">
         <div class="field-text">
           <div class="field-label">${e}</div>
           <div class="field-help">${t}</div>
         </div>
-        <div class="field-control"><span class="ro">${s}</span></div>
+        <div class="field-control"><span class="ro">${i}</span></div>
       </div>
     `}};c.styles=[H,j,q`
       :host {
@@ -2463,4 +2476,9 @@ import{z as H,q as j,i as q,u as d,a as Y,e as v,m as k,A as l,b as i,t as J,ap 
         gap: 12px;
         max-width: 360px;
       }
-    `];h([Q({attribute:!1})],c.prototype,"user",2);h([Q({attribute:!1})],c.prototype,"only",2);h([d()],c.prototype,"tab",2);h([d()],c.prototype,"settings",2);h([d()],c.prototype,"info",2);h([d()],c.prototype,"stats",2);h([d()],c.prototype,"apk",2);h([d()],c.prototype,"loadError",2);h([d()],c.prototype,"passkeyList",2);h([d()],c.prototype,"passkeyBusy",2);h([d()],c.prototype,"passkeyError",2);h([d()],c.prototype,"passkeyMsg",2);h([d()],c.prototype,"passkeyName",2);h([d()],c.prototype,"passkeyRenaming",2);h([d()],c.prototype,"passkeyRevoking",2);h([d()],c.prototype,"passkeyPassword",2);h([d()],c.prototype,"diag",2);h([d()],c.prototype,"uiDiag",2);h([d()],c.prototype,"storage",2);h([d()],c.prototype,"storageBusy",2);h([d()],c.prototype,"storageErr",2);h([d()],c.prototype,"diagBusy",2);h([d()],c.prototype,"diagErr",2);h([d()],c.prototype,"dirty",2);h([d()],c.prototype,"saving",2);h([d()],c.prototype,"saved",2);h([d()],c.prototype,"theme",2);h([d()],c.prototype,"fit",2);h([d()],c.prototype,"hideLibby",2);h([d()],c.prototype,"genModels",2);h([d()],c.prototype,"genLoras",2);h([d()],c.prototype,"genLoraTriggers",2);h([d()],c.prototype,"genBoards",2);h([d()],c.prototype,"genError",2);h([d()],c.prototype,"genStatus",2);h([d()],c.prototype,"genChecks",2);h([d()],c.prototype,"genCheckBusy",2);h([d()],c.prototype,"genRestart",2);h([d()],c.prototype,"genCheckErr",2);h([d()],c.prototype,"comfy",2);h([d()],c.prototype,"comfyErr",2);h([d()],c.prototype,"comfyBusy",2);h([d()],c.prototype,"comfyFolder",2);h([d()],c.prototype,"pwCurrent",2);h([d()],c.prototype,"pwNew",2);h([d()],c.prototype,"pwConfirm",2);h([d()],c.prototype,"pwBusy",2);h([d()],c.prototype,"pwMsg",2);h([d()],c.prototype,"pwErr",2);h([d()],c.prototype,"refs",2);h([d()],c.prototype,"refStamp",2);h([d()],c.prototype,"refNote",2);h([d()],c.prototype,"tts",2);h([d()],c.prototype,"describe",2);h([d()],c.prototype,"describeBusy",2);h([d()],c.prototype,"describeNote",2);h([d()],c.prototype,"ttsErrors",2);c=h([J("oppai-settings")],c);function K(e){if(!e)return"never";const t=Math.max(0,(Date.now()-e)/1e3);if(t<90)return"just now";const s=Math.round(t/60);if(s<60)return`${s} min ago`;const n=Math.round(s/60);if(n<24)return`${n}h ago`;const o=Math.round(n/24);return o<=30?`${o} day${o===1?"":"s"} ago`:new Date(e).toLocaleDateString()}function He(e){const t=Math.max(0,Math.floor(e)),s=Math.floor(t/86400),n=Math.floor(t%86400/3600),o=Math.floor(t%3600/60);return s>0?`${s}d ${n}h`:n>0?`${n}h ${o}m`:o>0?`${o}m ${t%60}s`:`${t}s`}function x(e){if(!e)return"0 B";const t=["B","KB","MB","GB","TB"];let s=e,n=0;for(;s>=1024&&n<t.length-1;)s/=1024,n++;return`${s<10&&n>0?s.toFixed(1):Math.round(s)} ${t[n]}`}const Xe=Object.freeze(Object.defineProperty({__proto__:null,get OppaiSettings(){return c}},Symbol.toStringTag,{value:"Module"}));export{Qe as a,ee as b,Xe as c,Je as l,Ce as s};
+    `];p([Q({attribute:!1})],c.prototype,"user",2);p([Q({attribute:!1})],c.prototype,"only",2);p([d()],c.prototype,"tab",2);p([d()],c.prototype,"settings",2);p([d()],c.prototype,"info",2);p([d()],c.prototype,"stats",2);p([d()],c.prototype,"apk",2);p([d()],c.prototype,"loadError",2);p([d()],c.prototype,"passkeyList",2);p([d()],c.prototype,"passkeyBusy",2);p([d()],c.prototype,"passkeyError",2);p([d()],c.prototype,"passkeyMsg",2);p([d()],c.prototype,"passkeyName",2);p([d()],c.prototype,"passkeyRenaming",2);p([d()],c.prototype,"passkeyRevoking",2);p([d()],c.prototype,"passkeyPassword",2);p([d()],c.prototype,"diag",2);p([d()],c.prototype,"uiDiag",2);p([d()],c.prototype,"storage",2);p([d()],c.prototype,"storageBusy",2);p([d()],c.prototype,"storageErr",2);p([d()],c.prototype,"diagBusy",2);p([d()],c.prototype,"diagErr",2);p([d()],c.prototype,"dirty",2);p([d()],c.prototype,"saving",2);p([d()],c.prototype,"saved",2);p([d()],c.prototype,"theme",2);p([d()],c.prototype,"fit",2);p([d()],c.prototype,"hideLibby",2);p([d()],c.prototype,"genModels",2);p([d()],c.prototype,"genLoras",2);p([d()],c.prototype,"genLoraTriggers",2);p([d()],c.prototype,"genBoards",2);p([d()],c.prototype,"genError",2);p([d()],c.prototype,"genStatus",2);p([d()],c.prototype,"genChecks",2);p([d()],c.prototype,"genCheckBusy",2);p([d()],c.prototype,"genRestart",2);p([d()],c.prototype,"genCheckErr",2);p([d()],c.prototype,"comfy",2);p([d()],c.prototype,"comfyErr",2);p([d()],c.prototype,"comfyBusy",2);p([d()],c.prototype,"comfyFolder",2);p([d()],c.prototype,"comfyChecks",2);p([d()],c.prototype,"comfyCheckBusy",2);p([d()],c.prototype,"comfyCheckErr",2);p([d()],c.prototype,"pwCurrent",2);p([d()],c.prototype,"pwNew",2);p([d()],c.prototype,"pwConfirm",2);p([d()],c.prototype,"pwBusy",2);p([d()],c.prototype,"pwMsg",2);p([d()],c.prototype,"pwErr",2);p([d()],c.prototype,"refs",2);p([d()],c.prototype,"refStamp",2);p([d()],c.prototype,"refNote",2);p([d()],c.prototype,"tts",2);p([d()],c.prototype,"describe",2);p([d()],c.prototype,"describeBusy",2);p([d()],c.prototype,"describeNote",2);p([d()],c.prototype,"ttsErrors",2);c=p([J("oppai-settings")],c);function W(e){if(!e)return"never";const t=Math.max(0,(Date.now()-e)/1e3);if(t<90)return"just now";const i=Math.round(t/60);if(i<60)return`${i} min ago`;const n=Math.round(i/60);if(n<24)return`${n}h ago`;const o=Math.round(n/24);return o<=30?`${o} day${o===1?"":"s"} ago`:new Date(e).toLocaleDateString()}function We(e){const t=Math.max(0,Math.floor(e)),i=Math.floor(t/86400),n=Math.floor(t%86400/3600),o=Math.floor(t%3600/60);return i>0?`${i}d ${n}h`:n>0?`${n}h ${o}m`:o>0?`${o}m ${t%60}s`:`${t}s`}function k(e){if(!e)return"0 B";const t=["B","KB","MB","GB","TB"];let i=e,n=0;for(;i>=1024&&n<t.length-1;)i/=1024,n++;return`${i<10&&n>0?i.toFixed(1):Math.round(i)} ${t[n]}`}function K(e){return s`<ul class="checks">
+    ${e.map(t=>s`<li class=${t.skipped?"skip":t.ok?"ok":"bad"}>
+      <span class="material-symbols-rounded">${t.skipped?"info":t.ok?"check_circle":"error"}</span>
+      <span><strong>${t.label}</strong> — ${t.detail}</span>
+    </li>`)}
+  </ul>`}const Qe=Object.freeze(Object.defineProperty({__proto__:null,get OppaiSettings(){return c}},Symbol.toStringTag,{value:"Module"}));export{Je as a,ee as b,Qe as c,Ye as l,Pe as s};

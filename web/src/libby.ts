@@ -63,18 +63,6 @@ export function saveLibbyOutfit(id: string): void {
 }
 
 /**
- * The image to show for one of Libby's emotions: the worn outfit's art when an
- * outfit is selected, else the bundled default. Callers should keep the default
- * as an @error fallback, since an outfit may not cover every emotion.
- */
-export function libbyEmotionSrc(emotion: string): string {
-  const outfit = loadLibbyOutfit();
-  const mood = normalizeEmotion(emotion);
-  if (!outfit) return defaultLibbyArt(mood);
-  return `/api/libby/outfits/${encodeURIComponent(outfit)}/emotions/${encodeURIComponent(mood)}`;
-}
-
-/**
  * Libby's profile picture: a face crop of her calm sprite, shipped beside the
  * wardrobe as /Libby_Default/default-libby-pfp.png.
  *

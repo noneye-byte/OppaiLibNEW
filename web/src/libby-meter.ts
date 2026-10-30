@@ -47,10 +47,6 @@ export function bumpIntensity(delta = 1): number {
   return store(next.progress, next.intensity);
 }
 
-export function tierForIntensity(value: number = getIntensity()): number {
-  return Math.max(1, Math.min(LIBBY_MAX_INTENSITY, Math.round(value))) - 1;
-}
-
 function store(progress: number, intensity: number): number {
   try {
     sessionStorage.setItem(PROGRESS_KEY, String(progress));

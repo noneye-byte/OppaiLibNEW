@@ -537,7 +537,6 @@ export interface Settings {
   visionApiKeySet: boolean;
   visionAuto: boolean;
   visionEnabled: boolean;
-  chatEnabled: boolean;
   /** text-generation-webui's models folder, as the OppaiLib container sees it. Needed
       only to delete a model — that backend exposes no delete API, so it is a filesystem
       operation. Blank means the delete control is simply absent. */
@@ -591,14 +590,12 @@ export interface Settings {
       server itself. A picked model wins over a pasted workflow. */
   clipImageModels?: ClipModels;
   clipTextModels?: ClipModels;
-  /** ComfyUI's models folder as the container sees it, for installing from Civitai's
-      video mode; blank uses the template's /comfy-models mount. */
-  comfyModelsDir?: string;
-  /** Where Wan models and LoRAs go when they are kept apart from that models folder;
-      blank means its diffusion_models and loras (or the template's
-      /comfy-diffusion-models and /comfy-loras mounts, when mapped). */
+  /** The folders Civitai's video mode installs into, as the container sees them, one
+      per kind. Each is used exactly as given; a blank one is not installed into. */
   comfyDiffusionDir?: string;
+  comfyCheckpointDir?: string;
   comfyLoraDir?: string;
+  comfyVaeDir?: string;
   /** Whether she posts stories while you are away, and at most how many a day. */
   libbyStories: boolean;
   libbyStoriesPerDay: number;
@@ -632,13 +629,6 @@ export interface ChatMessage {
 export interface ChatReaction {
   emoji: string;
   by: "user" | "assistant";
-}
-
-/** What a reply carries when she reacted: the emoji and the message it goes on. */
-export interface LibbyReaction {
-  emoji: string;
-  /** The id of the message reacted to; absent means the latest one of yours. */
-  to?: string;
 }
 
 /** What a quoted reply points at: enough to draw the quote, and the id to jump to. */
@@ -747,31 +737,6 @@ export interface LibbyAttachment extends LibbyLink {
   at?: number;
 }
 
-/**
- * What the two of them are looking at while browsing together.
- *
- * Ids only: the server reads the titles and tags out of the database itself, so
- * what a character is told about the collection is what the collection says.
- */
-export interface ChatViewing {
-  /** The item that is actually open, if any. */
-  focusId?: number;
-  /** The rest of what is on screen, in the order it is laid out. */
-  ids?: number[];
-  /** Remote browse tiles cannot be represented by library ids. They are explicitly
-      untrusted labels from an outside catalogue and are fenced that way server-side. */
-  external?: ChatViewingItem[];
-  /** The remote item actually open in the browse viewer, when there is one. */
-  focusExternal?: ChatViewingItem;
-  /** Where in the library they are — a section name or a search term. */
-  section?: string;
-  /** Where in the open video they are, in seconds, and whether it is playing. Lets
-      her react to *this* moment rather than to the title. */
-  position?: number;
-  duration?: number;
-  paused?: boolean;
-}
-
 export interface ChatViewingItem {
   title: string;
   kind: string;
@@ -824,30 +789,6 @@ export interface ChatSampling {
   /** How her actions travelled: "native" tool calls, or "json" for a backend that
       refuses tools. */
   toolMode?: string;
-}
-
-/** Token accounting for one turn. Every figure is an estimate and says so. */
-export interface ChatContextReport {
-  limit: number;
-  promptTokens: number;
-  replyTokens: number;
-  systemTokens: number;
-  /** The part of the prompt that cannot be shed: her identity, card and tag protocol. */
-  coreTokens: number;
-  /** How many older messages were left out. */
-  dropped: number;
-  /** Whether those were replaced by a summary. */
-  digested?: boolean;
-  /** Parts of what Libby knows that did not fit, named. */
-  droppedSections?: string[];
-  /** Parts the turn had no use for and that were cleared to make room — her selfie
-      catalogue on a message about the weather. Housekeeping, not a loss. */
-  clearedSections?: string[];
-  /** Whether her reply length had to be cut. */
-  squeezed?: boolean;
-  /** The user-facing explanation, empty when everything fitted. */
-  note?: string;
-  estimated?: boolean;
 }
 
 /** One allowed Discord channel, and what she may do in it. Reading and posting are
@@ -1627,20 +1568,15 @@ export interface ClipLora {
   stage: "" | "high" | "low";
 }
 
+/** The ComfyUI folders installs go to, by kind, as named in ComfyUI. */
+export type ComfyFolderKind = "diffusion_models" | "checkpoints" | "loras" | "vae";
+
+/** Where installs into ComfyUI go, kind by kind. `dir` is "" when there is nowhere,
+    with `problem` saying why when a folder was given but is unusable. */
+export type ComfyPlaces = Record<ComfyFolderKind, { dir: string; problem: string }>;
+
 /** What a ComfyUI has to fill a ClipModels with, folder by folder, and which core
     nodes it lacks (an old ComfyUI has no Wan 2.2 nodes). */
-/** Where installs into ComfyUI go: `dir` its models folder, `modelDir` and `loraDir`
-    the folders a Wan model and a LoRA land in. Each is "" with its problem saying why
-    when there is none (blank when nothing is set or mounted). */
-export interface ComfyPlaces {
-  dir: string;
-  problem: string;
-  modelDir: string;
-  modelProblem: string;
-  loraDir: string;
-  loraProblem: string;
-}
-
 export interface ComfyModels {
   diffusion: string[];
   checkpoints: string[];
@@ -1666,8 +1602,9 @@ export interface ClipParams {
   seed?: number;
 }
 
-/** One link the Image generation panel's Test tried: the generator, its rescan
-    route, the models folder, whether it is A1111's own, Civitai, the key, a download. */
+/** One link a Test tried: for Image generation the generator, its rescan route, the
+    models folder, whether it is A1111's own, Civitai, the key, a download; for Video
+    ComfyUI, its queue, each direction's files and each install folder. */
 export interface GenCheck {
   id: string;
   label: string;
@@ -3271,6 +3208,7 @@ export const api = {
 
   /** The model files the saved ComfyUI offers, for the Video settings' pickers. */
   comfyModels: () => request<ComfyModels>("/api/imagegen/comfy/models"),
+  comfyCheck: () => request<{ checks: GenCheck[] }>("/api/imagegen/comfy/check", { method: "POST" }, 65_000),
 
   /**
    * What the generator has drawn so far of a run named by jobId: the step count and,
@@ -3596,7 +3534,7 @@ export const api = {
   civitaiInstalls: () => request<{ jobs: InstallJob[] }>("/api/imagegen/civitai/installs", {}, 20_000),
   /** Downloads into ComfyUI, and the folders they go to. */
   comfyInstalls: () =>
-    request<{ jobs: InstallJob[] } & ComfyPlaces>("/api/imagegen/civitai/installs?target=comfy", {}, 20_000),
+    request<{ jobs: InstallJob[]; places: ComfyPlaces }>("/api/imagegen/civitai/installs?target=comfy", {}, 20_000),
   /** The studio's models with their Civitai records, matched by file hash. The
    *  first call after new models arrive asks the catalogue, so it is given time. */
   civitaiInstalled: (refresh = false) =>

@@ -173,7 +173,9 @@ func (s *Server) civitaiComfySpecs(ctx context.Context, source string, modelID, 
 // comfyPlaces is where installs into ComfyUI go, by the Video settings' folders.
 func (s *Server) comfyPlaces() imagegen.ComfyPlaces {
 	cur := s.settings.Get()
-	return imagegen.ComfyPlacesFor(cur.ComfyModelsDir, cur.ComfyDiffusionDir, cur.ComfyLoraDir)
+	return imagegen.ComfyPlacesFor(imagegen.ComfyFolders{
+		Diffusion: cur.ComfyDiffusionDir, Checkpoints: cur.ComfyCheckpointDir, Loras: cur.ComfyLoraDir, VAEs: cur.ComfyVaeDir,
+	})
 }
 
 // civitaiComfyInstall downloads a version, and its other half, into ComfyUI's folder
@@ -181,14 +183,10 @@ func (s *Server) comfyPlaces() imagegen.ComfyPlaces {
 // keeps no cover or description, and the file's name already says what it is.
 func (s *Server) civitaiComfyInstall(w http.ResponseWriter, r *http.Request, req civitaiInstallReq) {
 	places := s.comfyPlaces()
-	if places.Models == "" && places.Diffusion == "" && places.Loras == "" {
+	if !places.Any() {
 		// Not worth asking Civitai about a file there is nowhere to put.
-		problem := places.ModelsProblem
-		if problem == "" {
-			problem = "ComfyUI has no API that takes a download; map its models folder into the OppaiLib container at " +
-				"/comfy-models, or set where it is under Settings → Image generation → Video"
-		}
-		writeErr(w, http.StatusConflict, problem)
+		writeErr(w, http.StatusConflict, "ComfyUI has no API that takes a download, so OppaiLib writes into the folders "+
+			"ComfyUI loads from — set them under Settings → Image generation → Video")
 		return
 	}
 	specs, err := s.civitaiComfySpecs(r.Context(), req.URL, req.ModelID, req.VersionID, req.Pair)

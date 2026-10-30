@@ -6,7 +6,7 @@
 // these read it off the names: what a LoRA is for, its other half, and a first guess
 // at the whole set from what ComfyUI has installed.
 
-import type { ClipLora, ClipModels, ComfyModels } from "./api.js";
+import type { ClipLora, ClipModels, ComfyFolderKind, ComfyModels } from "./api.js";
 
 // "high noise" and "HighNoise" need no boundary before them; a bare "high" or "low"
 // stands alone, so "slow" and "highres" are words rather than halves.
@@ -77,4 +77,20 @@ function wanVAE(vaes: readonly string[], fiveB: boolean): string {
   const v22 = (n: string) => /wan[\s_.-]?2[._]?2/i.test(n);
   const own = vaes.filter((n) => /wan/i.test(n) && v22(n) === fiveB);
   return own[0] ?? "";
+}
+
+// The merges that bundle their own text encoder and VAE say so in their name, and the
+// server reads the same words to file them (imagegen/comfy_install.go).
+const ALL_IN_ONE = /(^|[^a-z])(aio|all[\s_-]?in[\s_-]?one)([^a-z]|$)/i;
+
+/** The ComfyUI folder the server installs a Civitai file into, by the catalogue's type
+    and the file's name, or null for a kind a Wan clip has no use for. Most Wan
+    "checkpoints" are the bare model, for diffusion_models. */
+export function comfyFolderOf(type: string, fileName: string): ComfyFolderKind | null {
+  switch (type) {
+    case "Checkpoint": return ALL_IN_ONE.test(fileName) ? "checkpoints" : "diffusion_models";
+    case "LORA": case "LoCon": case "DoRA": case "LyCORIS": return "loras";
+    case "VAE": return "vae";
+    default: return null;
+  }
 }

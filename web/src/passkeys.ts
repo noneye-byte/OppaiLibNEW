@@ -20,26 +20,6 @@ export function passkeysSupported(): boolean {
   return typeof PublicKeyCredential !== "undefined" && !!navigator.credentials?.create;
 }
 
-/**
- * Whether a passkey might be offered without the user naming an account.
- *
- * Used to decide whether to show a "Sign in with a passkey" button before anything is
- * typed. It is a hint, not a promise: a browser that says yes may still find nothing,
- * which is why the button handles an empty result rather than treating it as an error.
- */
-export async function conditionalPasskeysAvailable(): Promise<boolean> {
-  try {
-    if (!passkeysSupported()) return false;
-    const cls = PublicKeyCredential as unknown as {
-      isConditionalMediationAvailable?: () => Promise<boolean>;
-    };
-    if (!cls.isConditionalMediationAvailable) return false;
-    return await cls.isConditionalMediationAvailable();
-  } catch {
-    return false;
-  }
-}
-
 // Pinned to ArrayBuffer rather than the default ArrayBufferLike: WebAuthn's BufferSource
 // will not accept a view over a SharedArrayBuffer, which is what the looser type admits.
 function base64urlToBytes(value: string): Uint8Array<ArrayBuffer> {

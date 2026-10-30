@@ -21,13 +21,8 @@ package api
 //
 // That distinction is the whole reason for two tags rather than one. "God, he looks
 // tired" thought at someone and muttered near them are different acts, and a character
-// who cannot do the second only ever soliloquises.
-type libbyThought struct {
-	// Kind is thoughtPrivate or thoughtAside. Never empty in a returned value.
-	Kind string `json:"kind"`
-	Text string `json:"text"`
-}
-
+// who cannot do the second only ever soliloquises. She has the tool for both kinds
+// (libby_tool_exec.go); a message carries which one it is in Thought.
 const (
 	thoughtPrivate = "thought"
 	thoughtAside   = "aside"

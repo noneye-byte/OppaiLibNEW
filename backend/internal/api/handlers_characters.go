@@ -15,23 +15,11 @@ import (
 // The storage is the shared prompt library (handlers_prompt_library.go); the one thing
 // that is a character's alone is deriving a prompt from a reference picture.
 
-// character is the record as the character endpoints have always returned it.
-type character = promptFragment
-
-// charView is what lists return: the record plus whether a thumbnail exists.
-type charView = promptFragmentView
-
 // charIDPattern is kept for the tests and callers that name it.
 var charIDPattern = promptFragmentIDPattern
 
 func (s *Server) characterLibrary() promptLibrary {
 	return promptLibrary{dir: s.characterDir, aad: "character", thumbAAD: "character-thumb", listKey: "characters", noun: "character"}
-}
-
-func (s *Server) charThumbPath(id string) string { return s.characterLibrary().thumbPath(id) }
-
-func (s *Server) readCharacter(id string) (*character, error) {
-	return s.readPromptFragment(s.characterLibrary(), id)
 }
 
 func (s *Server) handleListCharacters(w http.ResponseWriter, r *http.Request) {

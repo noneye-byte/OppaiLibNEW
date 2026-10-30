@@ -657,17 +657,17 @@ func (s *Server) handleCivitaiCategories(w http.ResponseWriter, r *http.Request)
 // that made it when the poster kept it — the reason to browse a version's gallery
 // is to see what it does and take a prompt that works.
 type civitaiImageOut struct {
-	ID             int64   `json:"id"`
-	URL            string  `json:"url"`
-	Width          int     `json:"width"`
-	Height         int     `json:"height"`
-	NSFWLevel      int     `json:"nsfwLevel"`
-	Username       string  `json:"username,omitempty"`
+	ID        int64  `json:"id"`
+	URL       string `json:"url"`
+	Width     int    `json:"width"`
+	Height    int    `json:"height"`
+	NSFWLevel int    `json:"nsfwLevel"`
+	Username  string `json:"username,omitempty"`
 	// PostID groups the pictures someone uploaded together; CreatedAt is when.
 	// The catalogue has no endpoint for posts, so a person's posts are rebuilt
 	// from their image feed by these two (civitai_account.go).
-	PostID    int64  `json:"postId,omitempty"`
-	CreatedAt string `json:"createdAt,omitempty"`
+	PostID         int64   `json:"postId,omitempty"`
+	CreatedAt      string  `json:"createdAt,omitempty"`
 	Prompt         string  `json:"prompt,omitempty"`
 	NegativePrompt string  `json:"negativePrompt,omitempty"`
 	Sampler        string  `json:"sampler,omitempty"`
@@ -817,7 +817,7 @@ func (s *Server) handleCivitaiImages(w http.ResponseWriter, r *http.Request) {
 		VersionID: num("versionId"), ModelID: num("modelId"), PostID: num("postId"), CollectionID: num("collectionId"),
 		Username: strings.TrimSpace(q.Get("username")),
 		Sort:     q.Get("sort"), Period: q.Get("period"), Cursor: q.Get("cursor"),
-		NSFW:     q.Get("nsfw") == "" || isTruthy(q.Get("nsfw")),
+		NSFW: q.Get("nsfw") == "" || isTruthy(q.Get("nsfw")),
 	}
 	if query.VersionID == 0 && query.ModelID == 0 && query.PostID == 0 && query.CollectionID == 0 && query.Username == "" {
 		writeErr(w, http.StatusBadRequest, "versionId, modelId, postId, collectionId or username is required")
@@ -1000,8 +1000,8 @@ func (s *Server) handleCivitaiInstalls(w http.ResponseWriter, r *http.Request) {
 		// ComfyUI's downloads, with where they go: the browser's video mode offers
 		// installs only when there is a folder to put them in.
 		writeJSON(w, http.StatusOK, struct {
-			Jobs []imagegen.InstallJob `json:"jobs"`
-			imagegen.ComfyPlaces
+			Jobs   []imagegen.InstallJob `json:"jobs"`
+			Places imagegen.ComfyPlaces  `json:"places"`
 		}{s.imagegen.ComfyInstallJobs(), s.comfyPlaces()})
 		return
 	}
