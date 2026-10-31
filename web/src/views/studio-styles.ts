@@ -339,9 +339,29 @@ export const studioStyles = css`
     border: 2px dashed var(--oppai-primary); border-radius: 18px; background: color-mix(in srgb, var(--oppai-primary) 12%, transparent);
     color: var(--oppai-text); font-size: 14px; font-weight: 650; pointer-events: none;
   }
-  .canvas-stage > .banner {
-    position: absolute; top: 10px; left: 50%; z-index: 4; transform: translateX(-50%); margin: 0; max-width: min(560px, 90%); background: var(--oppai-surface-2);
+  /* What went wrong, above the stage: in the flow, so it pushes the picture down rather
+     than covering it and its tools. */
+  .stage-alert {
+    flex: none; display: flex; align-items: flex-start; gap: 10px; margin: 10px 12px 0; padding: 10px 10px 10px 12px; border-radius: 14px;
+    border: 1px solid color-mix(in srgb, var(--oppai-error, #f2b8b5) 45%, transparent);
+    background: color-mix(in srgb, var(--oppai-error, #f2b8b5) 10%, var(--oppai-surface-2)); color: var(--oppai-text); font-size: 12.5px;
+    animation: oppai-fade-in-up 0.18s ease both;
   }
+  .stage-alert > .material-symbols-rounded { font-size: 20px; color: var(--oppai-error, #f2b8b5); margin-top: 1px; }
+  .stage-alert.info { border-color: var(--oppai-border-strong); background: var(--oppai-surface-2); }
+  .stage-alert.info > .material-symbols-rounded { color: var(--oppai-primary-bright, var(--oppai-primary)); }
+  .sa-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; line-height: 1.45; }
+  .sa-copy b { font-size: 13px; }
+  .sa-copy > span { color: var(--oppai-text-dim); }
+  .sa-raw {
+    display: block; max-height: 96px; overflow: auto; margin-top: 4px; padding: 6px 8px; border-radius: 8px; background: var(--oppai-bg);
+    font-size: 11.5px; color: var(--oppai-text-dim); white-space: pre-wrap; word-break: break-word;
+  }
+  .sa-acts { flex: none; display: flex; align-items: center; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+  .sa-acts .chip { height: 28px; padding: 0 10px; font-size: 12px; }
+  .sa-x { width: 30px; height: 30px; border-radius: 15px; border: none; background: none; color: var(--oppai-text-muted); display: grid; place-items: center; cursor: pointer; }
+  .sa-x:hover { background: var(--oppai-surface); color: var(--oppai-text); }
+  .sa-x .material-symbols-rounded { font-size: 17px; }
   .canvas-empty {
     width: min(420px, 88%); min-height: 220px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
     border: 1px dashed var(--oppai-border-strong); border-radius: 18px; background: color-mix(in srgb, var(--oppai-surface) 78%, transparent);
@@ -377,11 +397,13 @@ export const studioStyles = css`
   .viewer { position: relative; width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; }
   .view-frame { position: relative; margin: 0; display: grid; place-items: center; min-height: 0; }
   .view-img {
-    display: block; max-width: calc(100cqw - 104px); max-height: calc(100cqh - 74px); min-width: 120px; border-radius: 12px; object-fit: contain;
+    display: block; max-width: calc(100cqw - 104px); max-height: calc(100cqh - 28px); min-width: 120px; border-radius: 12px; object-fit: contain;
     background: #000; box-shadow: 0 22px 70px rgba(0,0,0,.55); cursor: zoom-in; animation: oppai-fade-in 0.2s ease both;
   }
+  /* The picture's facts, in the stage's corner rather than on the picture: on a short
+     window the picture is small, and four chips over it hid half of it. */
   .view-cap {
-    position: absolute; left: 10px; top: 10px; display: flex; flex-wrap: wrap; gap: 6px; pointer-events: none;
+    position: absolute; left: 12px; top: 10px; z-index: 2; display: flex; gap: 6px; pointer-events: none; max-width: calc(100% - 24px); overflow: hidden;
   }
   .view-cap > span {
     display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 8px; background: rgba(0,0,0,.55); backdrop-filter: blur(6px);
@@ -403,6 +425,9 @@ export const studioStyles = css`
     background: color-mix(in srgb, var(--oppai-surface-2) 88%, transparent); backdrop-filter: blur(10px); box-shadow: 0 10px 30px rgba(0,0,0,.35);
     max-width: calc(100% - 24px); overflow-x: auto; scrollbar-width: none;
   }
+  /* In the session row the tools sit at its end, and give way to the thumbnails last. */
+  .session-strip > .view-bar { flex: 0 1 auto; min-width: 0; max-width: none; margin-left: auto; box-shadow: none; backdrop-filter: none; }
+  .canvas-empty.gone { min-height: 0; }
   .vb {
     flex: none; height: 36px; min-width: 36px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 0 8px;
     border: none; border-radius: 12px; background: transparent; color: var(--oppai-text-dim); font: inherit; font-size: 12.5px; font-weight: 650; cursor: pointer;
@@ -467,7 +492,7 @@ export const studioStyles = css`
     letter-spacing: 0.5px; text-transform: uppercase; color: var(--oppai-text-muted); text-align: center; line-height: 1.2;
   }
   .strip-label b { font-size: 15px; color: var(--oppai-text); letter-spacing: 0; font-variant-numeric: tabular-nums; }
-  .strip-scroll { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; overflow-x: auto; scrollbar-width: thin; padding: 3px 2px; }
+  .strip-scroll { flex: 1 1 120px; min-width: 0; display: flex; align-items: center; gap: 6px; overflow-x: auto; scrollbar-width: thin; padding: 3px 2px; }
   .strip-thumb, .strip-live, .strip-q {
     position: relative; flex: none; width: 54px; height: 66px; border-radius: 10px; overflow: hidden; padding: 0; border: 2px solid transparent;
     background: var(--oppai-bg); cursor: pointer;
@@ -521,8 +546,36 @@ export const studioStyles = css`
     color: var(--oppai-text-muted); pointer-events: none;
   }
   .field-tag.negative { color: var(--oppai-error, #f2b8b5); }
-  .trigger-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-  .trigger-label { font-size: 11px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; color: var(--oppai-text-muted); margin-right: 4px; }
+  /* Trigger words: one line, the picked ones and a way to the rest. */
+  .trigger-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .trig-open {
+    flex: none; display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 8px 0 10px; border-radius: 15px;
+    border: 1px solid var(--oppai-border-strong); background: transparent; color: var(--oppai-text-dim); font: inherit; font-size: 12px; font-weight: 650; cursor: pointer;
+  }
+  .trig-open:hover, .trig-open.on { color: var(--oppai-text); border-color: color-mix(in srgb, var(--oppai-primary) 60%, transparent); }
+  .trig-open .material-symbols-rounded { font-size: 16px; }
+  .trig-n { font-weight: 500; color: var(--oppai-text-muted); font-variant-numeric: tabular-nums; }
+  .trig-picked { flex: 1; min-width: 0; display: flex; align-items: center; gap: 5px; overflow-x: auto; scrollbar-width: none; }
+  .trig-chip {
+    flex: none; display: inline-flex; align-items: center; gap: 2px; height: 26px; padding: 0 3px 0 10px; border-radius: 13px; max-width: 180px;
+    background: var(--oppai-primary-container); color: var(--oppai-text); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .trig-chip button { flex: none; width: 20px; height: 20px; border-radius: 10px; border: none; background: none; color: inherit; opacity: 0.6; display: grid; place-items: center; cursor: pointer; padding: 0; }
+  .trig-chip button:hover { opacity: 1; background: rgba(0,0,0,.18); }
+  .trig-chip .material-symbols-rounded { font-size: 14px; }
+  .trig-more { flex: none; height: 26px; padding: 0 9px; border-radius: 13px; border: 1px dashed var(--oppai-border-strong); background: none; color: var(--oppai-text-dim); font: inherit; font-size: 12px; cursor: pointer; }
+  .trig-none { font-size: 12px; color: var(--oppai-text-muted); white-space: nowrap; }
+  .triggers-pop { left: 0; bottom: calc(100% + 8px); transform-origin: bottom left; width: min(620px, 100%); max-height: min(520px, 62vh); }
+  .triggers-pop .link { border: none; background: none; color: var(--oppai-primary-bright, var(--oppai-primary)); font: inherit; font-size: 12px; font-weight: 650; cursor: pointer; padding: 2px 4px; }
+  .trig-search { display: flex; align-items: center; gap: 6px; margin: 8px 10px 4px; padding: 0 10px; height: 34px; border-radius: 10px; background: var(--oppai-bg); border: 1px solid var(--oppai-border); }
+  .trig-search input { flex: 1; min-width: 0; border: none; background: none; color: var(--oppai-text); font: inherit; font-size: 13px; outline: none; }
+  .trig-search .material-symbols-rounded { font-size: 18px; color: var(--oppai-text-muted); }
+  .trig-groups { overflow-y: auto; padding: 4px 10px 12px; display: flex; flex-direction: column; gap: 12px; }
+  .trig-group-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; font-size: 12px; }
+  .trig-group-head b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .trig-group-head small { color: var(--oppai-text-muted); font-variant-numeric: tabular-nums; }
+  .trig-group-head .link { margin-left: auto; }
+  .trig-chips { display: flex; flex-wrap: wrap; gap: 5px; }
   .chip.small { min-height: 28px; padding: 2px 11px; font-size: 12px; border-radius: 14px; }
   .composer-bar { display: flex; align-items: center; gap: 8px; min-height: 44px; }
   .composer .mic {
@@ -928,6 +981,14 @@ export const studioStyles = css`
     .sprite-shell.with-inspector.with-focus { grid-template-columns: 290px minmax(0, 1fr); }
     .sprite-shell.with-inspector.with-focus .studio-focus { display: none; }
   }
+  /* A short window: the session row thinner, so the picture keeps the height. */
+  @media (max-height: 880px) and (min-width: 901px) {
+    .session-strip { padding: 5px 12px; gap: 8px; }
+    .strip-thumb, .strip-live, .strip-q { width: 42px; height: 52px; border-radius: 8px; }
+    .strip-label { width: 44px; }
+    .vb { height: 32px; min-width: 32px; }
+    .composer .prompt-field textarea { min-height: 62px; }
+  }
   /* A tablet or a phone: one column that scrolls, the panels as sheets or below. */
   @media (max-width: 900px) {
     :host, .wrap { overflow: visible; height: auto; }
@@ -955,8 +1016,12 @@ export const studioStyles = css`
     .viewer-stage { flex: none; height: 56vh; padding: 10px; }
     .view-img { max-width: calc(100cqw - 20px); max-height: calc(100cqh - 70px); }
     .view-nav { display: none; }
+    .view-cap { left: 8px; top: 8px; }
     .view-bar { max-width: 100%; }
     .vb-sep { display: none; }
+    /* A phone has no width for the tools beside the session: they take the row above it. */
+    .session-strip { flex-wrap: wrap; }
+    .session-strip > .view-bar { order: -1; flex: 1 1 100%; margin: 0; }
     /* The composer stays in reach while the page scrolls under it: on a phone the
        picture fills the screen, and the prompt is what is changed next. */
     .prompt-dock { position: sticky; bottom: 0; z-index: 6; padding: 8px 10px 10px; background: linear-gradient(to bottom, transparent, var(--oppai-bg) 22%); }

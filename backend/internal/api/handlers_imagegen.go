@@ -417,6 +417,13 @@ func (s *Server) handleImageGenGenerate(w http.ResponseWriter, r *http.Request) 
 	release := s.lendCardToImages(r.Context())
 	defer release()
 	res, err := s.imagegen.Generate(ctx, set.ImageGenURL, gen)
+	if err != nil && splitAcrossDevices(err) && ctx.Err() == nil {
+		// Automatic1111 brought its checkpoint back from the CPU only partly (see
+		// recoverSplitModel); once more after putting it back on the card.
+		s.log.Warn("image generate: the model is split between CPU and GPU; reloading it and trying once more", "err", err)
+		s.recoverSplitModel(ctx, set.ImageGenURL)
+		res, err = s.imagegen.Generate(ctx, set.ImageGenURL, gen)
+	}
 	if err != nil {
 		if job != nil && ctx.Err() != nil {
 			// Stopped from the studio, not failed: the cancel endpoint ended it.

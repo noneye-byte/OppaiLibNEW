@@ -394,3 +394,27 @@ func (s *Server) forgetParkedCard() {
 		s.writeParkedModel("")
 	}
 }
+
+// splitAcrossDevices says a generation failed because the generator's model is partly
+// on the CPU and partly on the GPU — PyTorch's "Expected all tensors to be on the same
+// device". On Automatic1111 it comes after its checkpoint was let go of (for a clip, or
+// for her model) and brought back with reload-checkpoint, which moves the model back
+// but, on some setups (--medvram, and extensions holding tensors of their own), not
+// all of it.
+func splitAcrossDevices(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "Expected all tensors to be on the same device")
+}
+
+// recoverSplitModel asks the generator to put its checkpoint back on the card again,
+// under the same lock as the card's other hand-offs. Best-effort: when it does not
+// help, the second failure goes to the studio, which says to restart A1111.
+func (s *Server) recoverSplitModel(ctx context.Context, base string) {
+	c := s.card
+	c.swap.Lock()
+	defer c.swap.Unlock()
+	opCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+	defer cancel()
+	if err := s.imagegen.ReclaimMemory(opCtx, base); err != nil {
+		s.log.Warn("card share: generator did not reload its checkpoint", "err", err)
+	}
+}

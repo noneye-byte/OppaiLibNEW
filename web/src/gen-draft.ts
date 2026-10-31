@@ -59,6 +59,10 @@ export interface DraftShot {
       picture is read back from the wardrobe rather than from a preview id that expires
       six hours after it was generated. */
   wipOutfitId?: string;
+  /** Its name in the studio's gallery. The preview lives in the server's memory and is
+      gone after a restart; the gallery copy is what the stage shows then, so a draft
+      that dropped this left a session of pictures it could no longer show. */
+  gallery?: string;
 }
 
 export interface DraftOutfitSlot {
@@ -270,6 +274,7 @@ export function loadDraft(): GenDraft | null {
         ...(typeof s.outfitConfig === "string" ? { outfitConfig: s.outfitConfig } : {}),
         ...(typeof s.cutoutReviewed === "boolean" ? { cutoutReviewed: s.cutoutReviewed } : {}),
         ...(typeof s.wipOutfitId === "string" ? { wipOutfitId: s.wipOutfitId } : {}),
+        ...(typeof s.gallery === "string" && s.gallery ? { gallery: s.gallery } : {}),
         ...(typeof s.previewVersion === "number" && Number.isFinite(s.previewVersion)
           ? { previewVersion: s.previewVersion }
           : {}),

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -152,5 +153,47 @@ func TestACardLentWhenTheServerStoppedIsHandedBack(t *testing.T) {
 	}
 	if s.card.parkedModel() != "" {
 		t.Fatal("still reported parked after the hand-back")
+	}
+}
+
+// A model left half on the CPU fails a picture with PyTorch's device error. The server
+// puts the checkpoint back on the card and draws it once more before giving up.
+func TestAPictureThatFailsOnASplitModelIsDrawnAgainAfterAReload(t *testing.T) {
+	var mu sync.Mutex
+	var calls []string
+	failed := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/sdapi/v1/sd-models":
+			_, _ = w.Write([]byte(`[{"title":"rev.safetensors [abc123]","model_name":"rev","hash":"abc123"}]`))
+		case "/sdapi/v1/reload-checkpoint":
+			calls = append(calls, "reload")
+			_, _ = w.Write([]byte(`{}`))
+		case "/sdapi/v1/txt2img":
+			calls = append(calls, "txt2img")
+			if !failed {
+				failed = true
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = w.Write([]byte(`{"error":"RuntimeError","detail":"","body":"","errors":"Expected all tensors to be on the same device, but found at least two devices, cpu and cuda:0!"}`))
+				return
+			}
+			pic := base64.StdEncoding.EncodeToString(pngOf(t, 64, 96, 3))
+			_, _ = w.Write([]byte(`{"images":["` + pic + `"],"info":"{\"seed\":7,\"all_seeds\":[7]}"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	s, token := newTestServer(t)
+	enableImageGen(t, s, srv.URL)
+
+	out := generateOn(t, s, token, `{"prompt":"a fox"}`)
+	mu.Lock()
+	defer mu.Unlock()
+	if len(out.Images) != 1 || strings.Join(calls, ",") != "txt2img,reload,txt2img" {
+		t.Fatalf("calls = %v, images = %+v", calls, out.Images)
 	}
 }

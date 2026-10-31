@@ -131,6 +131,8 @@ import {
 } from "../regions.js";
 import { renameKeys, renameLorasInPrompt, renamedMap } from "../model-rename.js";
 import { hiresScale, hiresUpscalers, scaledSize, upscaleFactor } from "../upscale.js";
+import { filterTriggerGroups, inlineTriggers, triggerGroups, type TriggerGroup } from "../trigger-groups.js";
+import { explainGenError } from "../gen-errors.js";
 import {
   LORA_CATEGORIES, filedByCategory, moveToCategory, type LoraCategoryKey,
 } from "../lora-categories.js";
@@ -654,6 +656,11 @@ export class OppaiImageGen extends LitElement {
   @state() private queueOpen = false;
   @state() private recentPrompts: RecentPrompt[] = loadPrompts();
   @state() private promptsOpen = false;
+  /** The trigger-word picker over the composer, and what it is narrowed to. */
+  @state() private triggersOpen = false;
+  @state() private triggerQuery = "";
+  /** The stage's alert shows the generator's whole reply. */
+  @state() private errorRaw = false;
   @state() private shortcutsOpen = false;
   /** A gallery picture or a file is being dragged over the stage. */
   @state() private stageDrop = false;
@@ -2070,8 +2077,8 @@ export class OppaiImageGen extends LitElement {
     const target = e.composedPath()[0] as HTMLElement | undefined;
     const typing = !!target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName));
     if (e.key === "Escape") {
-      if (this.shortcutsOpen || this.queueOpen || this.promptsOpen) {
-        this.shortcutsOpen = this.queueOpen = this.promptsOpen = false;
+      if (this.shortcutsOpen || this.queueOpen || this.promptsOpen || this.triggersOpen) {
+        this.shortcutsOpen = this.queueOpen = this.promptsOpen = this.triggersOpen = false;
         e.preventDefault();
       } else if (this.compareWith && !typing) {
         this.compareWith = null;
@@ -2245,6 +2252,7 @@ export class OppaiImageGen extends LitElement {
         outfitFilename: s.outfitFilename, outfitSlot: s.outfitSlot,
         outfitConfig: s.outfitConfig,
         cutoutReviewed: s.cutoutReviewed, previewVersion: s.previewVersion,
+        wipOutfitId: s.wipOutfitId, gallery: s.gallery,
       })),
       scrollTop: this.scrollHost?.scrollTop ?? 0,
     });
@@ -2859,6 +2867,31 @@ export class OppaiImageGen extends LitElement {
    * generations, and squares from before a wardrobe existed — still reads the preview.
    * Either way the URL is stable across a redo, so a version bumps the cache.
    */
+  /**
+   * Where to show a picture from: its preview, until that has failed to load — the
+   * preview cache lives in the server's memory, so a restart (an update) or six hours
+   * empties it — and then its gallery copy, which lasts. A picture moved into the
+   * library has left the gallery; "" when there is nothing left to show.
+   */
+  private displayURL(shot: Shot, thumb = false): string {
+    const preview = this.previewURL(shot);
+    if (!this.failedThumbs.has(preview)) return preview;
+    if (shot.gallery && !shot.saved && !shot.wipOutfitId) {
+      const kept = thumb ? api.galleryThumbURL(shot.gallery) : api.galleryFullURL(shot.gallery);
+      if (!this.failedThumbs.has(kept)) return kept;
+    }
+    return "";
+  }
+
+  /** A picture's URL for reading it back (to start a run from it, to cut it out). */
+  private liveURL(shot: Shot): string {
+    return this.displayURL(shot) || this.previewURL(shot);
+  }
+
+  private markFailed(url: string) {
+    if (url && !this.failedThumbs.has(url)) this.failedThumbs = new Set(this.failedThumbs).add(url);
+  }
+
   private previewURL(shot: Pick<Shot, "id" | "previewVersion" | "wipOutfitId" | "outfitSlot">): string {
     if (shot.wipOutfitId && shot.outfitSlot) {
       return api.libbyOutfitWipImageURL(
@@ -4726,13 +4759,11 @@ export class OppaiImageGen extends LitElement {
             <section class="create-stage">
               ${this.renderRecipeStrip(st)}
               <div class="canvas-wrap">
+                ${this.renderStageAlert()}
                 <div class="canvas-stage viewer-stage ${this.stageDrop ? "drop" : ""}"
                   @dragover=${(e: DragEvent) => this.onStageDragOver(e)} @dragleave=${(e: DragEvent) => { if (e.target === e.currentTarget) this.stageDrop = false; }}
                   @drop=${(e: DragEvent) => this.onStageDrop(e)}>
                   ${this.renderViewer()}
-                  ${this.restarting || this.error
-                    ? html`<div class="banner">${this.restarting ? "Restarting Automatic1111 — it takes a minute or two…" : this.error}</div>`
-                    : nothing}
                   ${this.generating ? this.renderGenerating(invoke) : nothing}
                 </div>
                 ${this.loraDrag ? this.renderLoraDrop() : nothing}
@@ -7262,15 +7293,10 @@ export class OppaiImageGen extends LitElement {
         </div>
         ${this.outfitOn ? nothing : this.renderPeopleStrip()}
 
-        ${triggerPhrases.length ? html`<div class="trigger-row">
-          <span class="trigger-label">Trigger words</span>
-          ${triggerPhrases.map((phrase) => html`<button
-            class="chip small ${this.selectedTriggers.includes(phrase) ? "on" : ""}"
-            title="Add or remove this LoRA trigger phrase"
-            @click=${() => this.toggleTrigger(phrase)}>${phrase}</button>`)}
-        </div>` : nothing}
+        ${triggerPhrases.length ? this.renderTriggerRow() : nothing}
 
         ${this.promptsOpen ? this.renderRecentPrompts() : nothing}
+        ${this.triggersOpen && triggerPhrases.length ? this.renderTriggerPicker() : nothing}
         <div class="composer-bar">
           <button class="mic" title="Start from a picture on this computer" @click=${() => this.sourceFile?.click()}>
             <span class="material-symbols-rounded">add_photo_alternate</span>
@@ -7322,6 +7348,72 @@ export class OppaiImageGen extends LitElement {
     if (!this.source) return `${this.width}×${this.height}`;
     const size = sourceSize(this.source.width, this.source.height);
     return `${size.width}×${size.height}, as the picture`;
+  }
+
+  private triggerGroups(): TriggerGroup[] {
+    return triggerGroups(this.status?.loras ?? [], this.selectedLoras);
+  }
+
+  /**
+   * The trigger words, in one line: the ones picked, and a button for the rest. They
+   * were every phrase of every LoRA on as a wall of chips, and three character LoRAs
+   * made it taller than the picture.
+   */
+  private renderTriggerRow() {
+    const groups = this.triggerGroups();
+    const total = groups.reduce((n, g) => n + g.phrases.length, 0);
+    const { shown, folded } = inlineTriggers(this.selectedTriggers, groups, 10);
+    return html`<div class="trigger-row">
+      <button class="trig-open ${this.triggersOpen ? "on" : ""}" aria-expanded=${this.triggersOpen ? "true" : "false"}
+        title="Pick the trigger words of the LoRAs in use" @click=${() => { this.triggersOpen = !this.triggersOpen; this.promptsOpen = false; }}>
+        <span class="material-symbols-rounded">sell</span>Trigger words
+        <span class="trig-n">${shown.length + folded} of ${total}</span>
+        <span class="material-symbols-rounded">${this.triggersOpen ? "expand_more" : "expand_less"}</span>
+      </button>
+      <div class="trig-picked">
+        ${shown.length ? shown.map((phrase) => html`<span class="trig-chip">${phrase}<button title="Take it out" aria-label=${`Take out ${phrase}`}
+            @click=${() => this.toggleTrigger(phrase)}><span class="material-symbols-rounded">close</span></button></span>`)
+          : html`<span class="trig-none">None picked — they help a LoRA show up.</span>`}
+        ${folded ? html`<button class="trig-more" @click=${() => (this.triggersOpen = true)}>+${folded}</button>` : nothing}
+      </div>
+    </div>`;
+  }
+
+  /** Every trigger word of the LoRAs in use, under the LoRA that wants it. */
+  private renderTriggerPicker() {
+    const all = this.triggerGroups();
+    const groups = filterTriggerGroups(all, this.triggerQuery);
+    const setGroup = (g: TriggerGroup, on: boolean) => {
+      const phrases = new Set(g.phrases);
+      const rest = this.selectedTriggers.filter((p) => !phrases.has(p));
+      this.selectedTriggers = on ? [...rest, ...g.phrases] : rest;
+    };
+    return html`<div class="pop triggers-pop" role="dialog" aria-label="Trigger words">
+      <div class="pop-head">
+        <span class="material-symbols-rounded">sell</span>Trigger words
+        <span class="pop-note">${this.selectedTriggers.length} picked</span>
+        ${this.selectedTriggers.length ? html`<button class="link" @click=${() => (this.selectedTriggers = [])}>Clear</button>` : nothing}
+        <button class="pop-x" aria-label="Close" @click=${() => (this.triggersOpen = false)}><span class="material-symbols-rounded">close</span></button>
+      </div>
+      <label class="trig-search">
+        <span class="material-symbols-rounded">search</span>
+        <input type="search" placeholder="Find a word…" .value=${this.triggerQuery}
+          @input=${(e: Event) => (this.triggerQuery = (e.target as HTMLInputElement).value)} />
+      </label>
+      <div class="trig-groups">
+        ${groups.length ? groups.map((g) => {
+          const picked = g.phrases.filter((ph) => this.selectedTriggers.includes(ph)).length;
+          return html`<section class="trig-group">
+            <div class="trig-group-head">
+              <b title=${g.lora}>${g.label}</b><small>${picked}/${g.phrases.length}</small>
+              <button class="link" @click=${() => setGroup(g, picked < g.phrases.length)}>${picked < g.phrases.length ? "All" : "None"}</button>
+            </div>
+            <div class="trig-chips">${g.phrases.map((phrase) => html`<button class="chip small ${this.selectedTriggers.includes(phrase) ? "on" : ""}"
+              @click=${() => this.toggleTrigger(phrase)}>${phrase}</button>`)}</div>
+          </section>`;
+        }) : html`<p class="pop-empty">No trigger word has “${this.triggerQuery}” in it.</p>`}
+      </div>
+    </div>`;
   }
 
   /** The trigger phrases of the LoRAs that are switched on. */
@@ -7958,31 +8050,75 @@ export class OppaiImageGen extends LitElement {
     if (other && other.id !== shot.id) return this.renderCompare(shot, other);
     const at = list.indexOf(shot);
     const info = shot.info;
+    const src = this.displayURL(shot);
     return html`<div class="viewer">
       <button class="view-nav prev" ?disabled=${at <= 0} title="Newer (←)" aria-label="Newer picture" @click=${() => this.stepViewer(-1)}>
         <span class="material-symbols-rounded">chevron_left</span></button>
       <figure class="view-frame">
-        <img class="view-img" src=${this.previewURL(shot)} alt="Generated image" title="Expand"
-          @click=${() => (this.expandedShot = shot)} @contextmenu=${(e: MouseEvent) => this.openShotMenu(shot, e)} />
-        <figcaption class="view-cap">
-          <span>${at + 1} of ${list.length}</span>
-          <span><span class="material-symbols-rounded">casino</span>${shot.seed}</span>
-          ${info ? html`<span>${info.width}×${info.height}</span>` : nothing}
-          ${info?.seconds ? html`<span>${info.seconds.toFixed(1)}s</span>` : nothing}
-          ${shot.saved ? html`<span class="cap-saved"><span class="material-symbols-rounded">check</span>In the library</span>` : nothing}
-        </figcaption>
+        ${src
+          ? html`<img class="view-img" src=${src} alt="Generated image" title="Expand" @error=${() => this.markFailed(src)}
+              @click=${() => (this.expandedShot = shot)} @contextmenu=${(e: MouseEvent) => this.openShotMenu(shot, e)} />`
+          : html`<div class="canvas-empty gone">
+              <span class="material-symbols-rounded">hourglass_empty</span>
+              <strong>This picture isn't here any more</strong>
+              <span>${shot.saved
+                ? "It's in the library — open it there."
+                : "Its preview expired when the server restarted, and it isn't in the gallery either. Its settings are still here: Generation data, or Use same parameters."}</span>
+            </div>`}
       </figure>
+      <div class="view-cap">
+        <span>${at + 1} of ${list.length}</span>
+        <span><span class="material-symbols-rounded">casino</span>${shot.seed}</span>
+        ${info ? html`<span>${info.width}×${info.height}</span>` : nothing}
+        ${info?.seconds ? html`<span>${info.seconds.toFixed(1)}s</span>` : nothing}
+        ${shot.saved ? html`<span class="cap-saved"><span class="material-symbols-rounded">check</span>In the library</span>` : nothing}
+      </div>
       <button class="view-nav next" ?disabled=${at >= list.length - 1} title="Older (→)" aria-label="Older picture" @click=${() => this.stepViewer(1)}>
         <span class="material-symbols-rounded">chevron_right</span></button>
-      ${this.renderViewBar(shot)}
       ${this.infoFor === shot.id ? html`<div class="view-info">${this.renderGenInfo(shot)}</div>` : nothing}
+    </div>`;
+  }
+
+  /**
+   * What went wrong, over the stage rather than on it: it used to float across the top
+   * of the picture and its tools, so a failed run hid the one before it. The reason is
+   * pulled out of the generator's reply (gen-errors.ts), with what to do when that is
+   * known; the whole reply is a click away, for copying.
+   */
+  private renderStageAlert() {
+    if (this.restarting) {
+      return html`<div class="stage-alert info" role="status">
+        <span class="material-symbols-rounded">restart_alt</span>
+        <div class="sa-copy"><b>Restarting Automatic1111</b><span>It takes a minute or two.</span></div>
+      </div>`;
+    }
+    if (!this.error) return nothing;
+    const e = explainGenError(this.error);
+    const more = e.raw !== e.message;
+    return html`<div class="stage-alert" role="alert">
+      <span class="material-symbols-rounded">error</span>
+      <div class="sa-copy">
+        <b>${e.message}</b>
+        ${e.hint ? html`<span>${e.hint}</span>` : nothing}
+        ${this.errorRaw ? html`<code class="sa-raw">${e.raw}</code>` : nothing}
+      </div>
+      <div class="sa-acts">
+        ${e.restart && this.status?.canRestart ? html`<button class="chip" @click=${() => void this.restartGenerator()}>
+          <span class="material-symbols-rounded">restart_alt</span>Restart A1111</button>` : nothing}
+        ${more ? html`<button class="chip" @click=${() => (this.errorRaw = !this.errorRaw)}>${this.errorRaw ? "Less" : "Details"}</button>` : nothing}
+        <button class="sa-x" title="Copy what the generator said" aria-label="Copy the error"
+          @click=${() => void copyText(e.raw).then((ok) => this.showToast(ok ? "Copied" : "Couldn't copy"))}>
+          <span class="material-symbols-rounded">content_copy</span></button>
+        <button class="sa-x" title="Dismiss" aria-label="Dismiss" @click=${() => { this.error = ""; this.errorRaw = false; }}>
+          <span class="material-symbols-rounded">close</span></button>
+      </div>
     </div>`;
   }
 
   /** The tools for the picture on the stage, in the order they are reached for. */
   private renderViewBar(shot: Shot) {
     const a1111 = this.status?.backend !== "invokeai";
-    const url = this.previewURL(shot);
+    const url = this.liveURL(shot);
     const name = `seed ${shot.seed}`;
     const tool = (icon: string, label: string, run: () => void, on = false) => html`<button class="vb ${on ? "on" : ""}" title=${label} aria-label=${label} @click=${run}>
       <span class="material-symbols-rounded">${icon}</span></button>`;
@@ -8039,7 +8175,12 @@ export class OppaiImageGen extends LitElement {
   /** The session, newest first, with the run drawing now at its head. */
   private renderSessionStrip() {
     if (!this.history.length && !this.generating && !this.queue.length) return nothing;
-    const current = this.viewedShot?.id;
+    const viewed = this.viewedShot;
+    const current = viewed?.id;
+    // The picture's tools live here, beside the session, not under the picture: under
+    // it they took a row of the stage, and on a short window the picture was left a
+    // sliver. Comparing has a bar of its own, on the stage.
+    const comparing = !!(this.compareWith && viewed && this.compareWith !== viewed.id);
     const p = this.progress;
     return html`<div class="session-strip">
       <span class="strip-label">This session<b>${this.history.length}</b></span>
@@ -8051,13 +8192,13 @@ export class OppaiImageGen extends LitElement {
           <span>${p?.total ? `${Math.round(Math.max(0, Math.min(1, p.percent)) * 100)}%` : "…"}</span>
         </div>` : nothing}
         ${this.history.map((s) => {
-          const url = this.previewURL(s);
+          const url = this.displayURL(s, true);
           return html`<button class="strip-thumb ${s.id === current ? "on" : ""} ${s.id === this.compareWith ? "cmp" : ""}" role="option"
             aria-selected=${s.id === current ? "true" : "false"} title=${`Seed ${s.seed} — Shift-click to compare`}
             @click=${(e: MouseEvent) => this.pickFromStrip(s, e)}>
-            ${this.failedThumbs.has(url)
-              ? html`<span class="strip-gone" title="This preview has expired — it is still in the gallery"><span class="material-symbols-rounded">hourglass_empty</span></span>`
-              : html`<img src=${url} alt="" loading="lazy" @error=${() => (this.failedThumbs = new Set(this.failedThumbs).add(url))} />`}
+            ${!url
+              ? html`<span class="strip-gone" title="This picture's preview has expired"><span class="material-symbols-rounded">hourglass_empty</span></span>`
+              : html`<img src=${url} alt="" loading="lazy" @error=${() => this.markFailed(url)} />`}
             ${s.saved ? html`<span class="strip-saved"><span class="material-symbols-rounded">check</span></span>` : nothing}
             ${s.id === this.compareWith ? html`<span class="strip-b">B</span>` : nothing}
           </button>`;
@@ -8065,6 +8206,7 @@ export class OppaiImageGen extends LitElement {
       </div>
       ${this.history.length ? html`<button class="strip-clear" title="Clear the session off the stage" aria-label="Clear the session" @click=${() => this.clearWorkspace()}>
         <span class="material-symbols-rounded">delete_sweep</span></button>` : nothing}
+      ${viewed && !comparing ? this.renderViewBar(viewed) : nothing}
     </div>`;
   }
 

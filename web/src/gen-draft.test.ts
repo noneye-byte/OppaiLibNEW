@@ -209,3 +209,10 @@ test("clearDraft removes it", () => {
   clearDraft();
   assert.equal(loadDraft(), null);
 });
+
+test("a picture's gallery name comes back with it, so the stage can show the copy that outlives the preview", () => {
+  saveDraft({ shots: [{ id: "abc", seed: 5, saved: false, gallery: "42" }, { id: "def", seed: 6, saved: false, gallery: 7 as unknown as string }] } as never);
+  const d = loadDraft();
+  assert.equal(d?.shots?.[0].gallery, "42");
+  assert.equal(d?.shots?.[1].gallery, undefined);
+});
