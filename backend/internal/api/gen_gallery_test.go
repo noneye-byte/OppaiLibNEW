@@ -54,6 +54,9 @@ func newGalleryA1111(t *testing.T, g *galleryA1111) *httptest.Server {
 				<-hold
 			}
 			_, _ = w.Write([]byte(`{"images":["` + pic + `"],"info":"{\"seed\":4242,\"all_seeds\":[4242]}"}`))
+		case "/sdapi/v1/extra-single-image":
+			// Twice the size it was drawn at, as an upscaler would hand it back.
+			_, _ = w.Write([]byte(`{"image":"` + base64.StdEncoding.EncodeToString(pngOf(t, 128, 192, 9)) + `"}`))
 		case "/sdapi/v1/unload-checkpoint", "/sdapi/v1/reload-checkpoint":
 			g.mu.Lock()
 			g.calls = append(g.calls, strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/sdapi/v1/"), "-checkpoint"))

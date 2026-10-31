@@ -989,7 +989,14 @@ data class GalleryImage(
     val width: Int = 0,
     val height: Int = 0,
     val created: String = "",
-)
+    /** "video" for a clip from the Video studio, and whether it has a still for a tile. */
+    val kind: String = "",
+    val tile: Boolean = false,
+    /** Enlarged from another (the server's own gallery only). */
+    val upscaled: Boolean = false,
+) {
+    val isClip: Boolean get() = kind == "video"
+}
 
 @Serializable
 data class GalleryPageResponse(val items: List<GalleryImage> = emptyList(), val total: Int = 0)
@@ -1456,7 +1463,26 @@ data class ImageGenStatus(
     val modelsDirSet: Boolean = false,
     /** A1111 only: why the folder that is set can't be used, in the server's words. */
     val modelsDirProblem: String = "",
+    /** The clips ComfyUI can make, from a picture and from words; absent when it isn't set up. */
+    val clips: ClipsStatus = ClipsStatus(),
 )
+
+/** What each direction of clip takes — the knobs, "loop" among them for a built clip
+    from a picture — and whether Settings has a model for it yet. */
+@Serializable
+data class ClipsStatus(val image: ClipWorkflowStatus? = null, val text: ClipWorkflowStatus? = null)
+
+@Serializable
+data class ClipWorkflowStatus(
+    val takes: List<String> = emptyList(),
+    val needsModel: Boolean = false,
+    val models: ClipModelsBrief? = null,
+)
+
+/** The part of Settings' clip files the phone reads: the VAE says whether it can loop
+    (Wan 2.2's 5B model, with its own VAE, cannot be given a last frame). */
+@Serializable
+data class ClipModelsBrief(val model: String = "", val vae: String = "")
 
 @Serializable
 data class GenLoraPick(val name: String, val weight: Double)
@@ -1654,7 +1680,49 @@ data class GenProgress(
     val seq: Long = 0,
     val done: Boolean = false,
     val cancelled: Boolean = false,
+    /** Once done: what a detached run made (a clip's is `result.clip`), or why it failed. */
+    val result: GenJobResult? = null,
+    val error: String = "",
 )
+
+@Serializable
+data class GenJobResult(val clip: GenClip? = null)
+
+/** A finished clip: its preview (served at api/imagegen/preview/{id}) and its name in the
+    gallery when it was kept there. */
+@Serializable
+data class GenClip(
+    val id: String = "",
+    val mime: String = "",
+    val seed: Long = 0,
+    val recipe: String = "",
+    val gallery: String = "",
+    val width: Int = 0,
+    val height: Int = 0,
+)
+
+/** A clip to make. The app's JSON leaves out a field at its default, so the ones the
+    server must see — from, prompt, jobId, detach — have none. A picture is sent as a
+    data URL, or named by its gallery name so it is not sent back to the server it is on. */
+@Serializable
+data class ClipRequest(
+    val jobId: String,
+    val from: String,
+    val prompt: String,
+    val detach: Boolean,
+    val negativePrompt: String = "",
+    val initImage: String? = null,
+    val initGallery: String? = null,
+    val width: Int = 0,
+    val height: Int = 0,
+    val frames: Int = 0,
+    val fps: Int = 0,
+    val board: String = "",
+    val loop: Boolean = false,
+)
+
+@Serializable
+data class ClipAccepted(val jobId: String = "", val accepted: Boolean = false)
 
 @Serializable
 data class GenerateResponse(

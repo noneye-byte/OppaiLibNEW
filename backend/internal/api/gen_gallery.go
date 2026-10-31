@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"image"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"strconv"
@@ -59,6 +60,7 @@ type genRecord struct {
 	Prompt         string                       `json:"prompt"`
 	NegativePrompt string                       `json:"negativePrompt"`
 	Model          string                       `json:"model"`
+	ModelHash      string                       `json:"modelHash,omitempty"`
 	VAE            string                       `json:"vae"`
 	VAEPrecision   string                       `json:"vaePrecision"`
 	Sampler        string                       `json:"sampler"`
@@ -79,7 +81,9 @@ type genRecord struct {
 	Refiner        *genRecordRefiner            `json:"refiner,omitempty"`
 	Hires          *genRecordUpscale            `json:"hires,omitempty"`
 	Upscaled       *genRecordUpscale            `json:"upscaled,omitempty"`
-	Regions        *genRecordRegions            `json:"regions,omitempty"`
+	// StartedFrom is the picture an enlargement was made from, in GenInfo's shape.
+	StartedFrom *genRecordStart   `json:"startedFrom,omitempty"`
+	Regions     *genRecordRegions `json:"regions,omitempty"`
 	// Clip is what only a clip has, beside the fields a picture shares with it.
 	Clip    *genRecordClip `json:"clip,omitempty"`
 	Backend string         `json:"backend"`
@@ -99,6 +103,8 @@ type genRecordClip struct {
 	Scheduler   string  `json:"scheduler,omitempty"`
 	// Recipe is the line said under the clip in the studio.
 	Recipe string `json:"recipe,omitempty"`
+	// Loop says it ends on the picture it starts from.
+	Loop bool `json:"loop,omitempty"`
 	// Source is the gallery clip this one was enlarged from, when it was.
 	Source string `json:"source,omitempty"`
 }
@@ -146,6 +152,11 @@ func recordLoras(loras []imagegen.LoraWeight) []imagegen.ImageMetadataLora {
 		out = append(out, imagegen.ImageMetadataLora{Name: l.Name, Weight: l.Weight})
 	}
 	return out
+}
+
+type genRecordStart struct {
+	Name string `json:"name"`
+	Mode string `json:"mode"`
 }
 
 // genRecordUpscale is how a picture was enlarged: by a hires fix as it was drawn,
@@ -209,6 +220,45 @@ func genRecordOf(gen imagegen.GenerateRequest, seed int64, width, height int) ge
 	return rec
 }
 
+// upscaledRecord is an enlarged picture's record: the record of the picture it was
+// enlarged from — its prompt, model, seed and LoRAs, which are what made it and what
+// Civitai reads off an export — with its new size and the enlargement on top. The
+// upscale's own request carries none of that: it draws nothing, so the studio sends
+// whatever its form happens to say, and the copy used to be kept as a picture with
+// no prompt at all. ok is false for a source with no record to inherit.
+func upscaledRecord(source json.RawMessage, from string, gen imagegen.GenerateRequest, width, height int) (genRecord, bool) {
+	var rec genRecord
+	if len(source) == 0 || json.Unmarshal(source, &rec) != nil || rec.Clip != nil {
+		return genRecord{}, false
+	}
+	// Enlarged twice is enlarged by the product, said with the upscaler used last.
+	scale := gen.Upscale.Scale
+	if prev := rec.Upscaled; prev != nil && prev.Scale > 0 {
+		scale *= prev.Scale
+	}
+	rec.Upscaled = &genRecordUpscale{Upscaler: gen.Upscale.Upscaler, Scale: math.Round(scale*100) / 100}
+	rec.StartedFrom = &genRecordStart{Name: "Picture " + from, Mode: "upscale"}
+	rec.Width, rec.Height = width, height
+	rec.At = time.Now().UnixMilli()
+	if rec.Loras == nil {
+		rec.Loras = []imagegen.ImageMetadataLora{}
+	}
+	return rec, true
+}
+
+// galleryRecord is a gallery picture's record when the gallery is this one, nil for
+// none or for InvokeAI's (whose upscales the studio does not run).
+func (s *Server) galleryRecord(ctx context.Context, base, name string) json.RawMessage {
+	if !s.ownGallery(ctx, base) {
+		return nil
+	}
+	g, err := s.genImageNamed(ctx, name)
+	if err != nil {
+		return nil
+	}
+	return s.genInfo(g)
+}
+
 // genFolderOf reads the board a run asked to be filed into: a folder's id, or
 // Unsorted for anything else — "all", "none", a folder deleted since, InvokeAI's
 // board ids from a client that had them.
@@ -227,7 +277,10 @@ func (s *Server) genFolderOf(ctx context.Context, board string) int64 {
 // index-aligned with the pictures; 0 for one that could not be kept. A picture
 // that fails to keep is logged and skipped — the run itself still succeeded, and
 // its preview is on the canvas to be saved by hand.
-func (s *Server) keepGenerated(ctx context.Context, gen imagegen.GenerateRequest, res *imagegen.GenerateResult) []int64 {
+//
+// source is the record of the gallery picture an upscale enlarged, which the copy
+// inherits (upscaledRecord); from is that picture's name.
+func (s *Server) keepGenerated(ctx context.Context, gen imagegen.GenerateRequest, res *imagegen.GenerateResult, source json.RawMessage, from string) []int64 {
 	folder := s.genFolderOf(ctx, gen.Board)
 	ids := make([]int64, len(res.Images))
 	for i, data := range res.Images {
@@ -235,7 +288,14 @@ func (s *Server) keepGenerated(ctx context.Context, gen imagegen.GenerateRequest
 		if i < len(res.Seeds) {
 			seed = res.Seeds[i]
 		}
-		g, err := s.keepGenImage(ctx, data, folder, func(w, h int) genRecord { return genRecordOf(gen, seed, w, h) })
+		g, err := s.keepGenImage(ctx, data, folder, func(w, h int) genRecord {
+			if gen.UpscaleOnly {
+				if rec, ok := upscaledRecord(source, from, gen, w, h); ok {
+					return rec
+				}
+			}
+			return genRecordOf(gen, seed, w, h)
+		})
 		if err != nil {
 			s.log.Warn("studio gallery: keep", "err", err)
 			continue
@@ -265,7 +325,9 @@ func (s *Server) keepGenImage(ctx context.Context, data []byte, folder int64, re
 			g.ThumbPath = tp.RelPath
 		}
 	}
-	if raw, err := json.Marshal(record(w, h)); err == nil {
+	rec := record(w, h)
+	g.Upscaled = rec.Upscaled != nil
+	if raw, err := json.Marshal(rec); err == nil {
 		g.InfoEnc, _ = crypto.SealBytes(s.kek, raw, []byte("generation"))
 	}
 	if err := s.db.AddGenImage(ctx, &g); err != nil {
@@ -297,7 +359,7 @@ func (s *Server) keepGenClip(ctx context.Context, data []byte, mime string, fold
 		return db.GenImage{}, err
 	}
 	g := db.GenImage{FolderID: folder, SHA256: put.SHA256, Size: put.Size, BlobPath: put.RelPath,
-		Width: int64(rec.Width), Height: int64(rec.Height), MIME: mime}
+		Width: int64(rec.Width), Height: int64(rec.Height), MIME: mime, Upscaled: rec.Upscaled != nil}
 	if tile != nil {
 		if tp, err := s.store.Put(bytes.NewReader(tile)); err == nil {
 			g.ThumbPath = tp.RelPath
@@ -337,6 +399,36 @@ func clipPoster(ctx context.Context, data []byte) (w, h int, tile []byte) {
 	}
 	tile, _ = thumbnail.Frame(ctx, tmp.Name(), meta.Duration, trainThumbSide)
 	return meta.Width, meta.Height, tile
+}
+
+// backfillGenUpscaled reads, once, whether each item kept before the gallery could be
+// filtered by kind was an enlargement: the record that says so is sealed, so the
+// column could not be filled when it was added.
+func (s *Server) backfillGenUpscaled() {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	for {
+		rows, err := s.db.GenUnclassified(ctx, 200)
+		if err != nil {
+			s.log.Warn("studio gallery: classify", "err", err)
+			return
+		}
+		if len(rows) == 0 {
+			return
+		}
+		for _, g := range rows {
+			var rec struct {
+				Upscaled *genRecordUpscale `json:"upscaled"`
+			}
+			if raw := s.genInfo(g); raw != nil {
+				_ = json.Unmarshal(raw, &rec)
+			}
+			if err := s.db.SetGenUpscaled(ctx, g.ID, rec.Upscaled != nil); err != nil {
+				s.log.Warn("studio gallery: classify", "err", err)
+				return
+			}
+		}
+	}
 }
 
 // isClip says a kept item is a clip rather than a picture.
@@ -548,8 +640,12 @@ func (s *Server) handleGalleryRenameBoard(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, imagegen.Board{ID: strconv.FormatInt(n, 10), Name: strings.TrimSpace(name)})
 }
 
-func (s *Server) ownGalleryImages(w http.ResponseWriter, r *http.Request, board, order string, offset, limit int) {
+func (s *Server) ownGalleryImages(w http.ResponseWriter, r *http.Request, board, order, kind string, offset, limit int) {
 	scope := db.GenScope{All: board == genGalleryAll}
+	switch kind {
+	case db.GenTypePictures, db.GenTypeUpscaled, db.GenTypeVideos:
+		scope.Type = kind
+	}
 	if !scope.All && board != "" && board != "none" {
 		n, err := strconv.ParseInt(board, 10, 64)
 		if err != nil || n <= 0 {
@@ -567,8 +663,9 @@ func (s *Server) ownGalleryImages(w http.ResponseWriter, r *http.Request, board,
 	for _, g := range rows {
 		item := imagegen.GalleryImage{
 			Name: strconv.FormatInt(g.ID, 10), Width: int(g.Width), Height: int(g.Height), Size: g.Size,
-			Created: time.Unix(g.CreatedAt, 0).UTC().Format(time.RFC3339),
-			Label:   fmt.Sprintf("Picture %d", g.ID),
+			Created:  time.Unix(g.CreatedAt, 0).UTC().Format(time.RFC3339),
+			Label:    fmt.Sprintf("Picture %d", g.ID),
+			Upscaled: g.Upscaled,
 		}
 		if isClip(g) {
 			item.Kind, item.Label, item.Tile = "video", fmt.Sprintf("Clip %d", g.ID), g.ThumbPath != ""

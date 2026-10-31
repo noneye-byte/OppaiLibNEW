@@ -28,6 +28,11 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderSpecial
 import androidx.compose.material.icons.filled.Inbox
+import androidx.compose.material.icons.filled.Animation
+import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.OpenInFull
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material3.FilterChip
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material3.Button
@@ -85,6 +90,8 @@ fun InvokeGalleryTab(
     onBoardChange: (String) -> Unit,
     onSaved: () -> Unit,
     own: Boolean = false,
+    /** Hands a picture to the Video tab to start a clip from; null when no clips are set up. */
+    onAnimate: ((String) -> Unit)? = null,
 ) {
     // The boards that are not folders: the unfiled pile, and (own gallery) all of them.
     val isFolder = board != "none" && board != "all"
@@ -100,20 +107,22 @@ fun InvokeGalleryTab(
     var selected by remember { mutableStateOf<Set<String>>(emptySet()) }
     var moveMenuOpen by remember { mutableStateOf(false) }
     var confirmDeleteBoard by remember { mutableStateOf(false) }
+    /** The kind shown on the server's own gallery: null is everything. */
+    var type by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
 
     suspend fun loadPage(reset: Boolean) {
         loading = true
         runCatching {
             val offset = if (reset) 0 else items.size
-            val page = repo.api.galleryImages(board, offset, PAGE)
+            val page = repo.api.galleryImages(board, offset, PAGE, type = if (own) type else null)
             items = if (reset) page.items else items + page.items
             total = page.total
         }.onFailure { error = it.message ?: "Couldn't load the gallery" }
         loading = false
     }
 
-    LaunchedEffect(refreshKey, board) {
+    LaunchedEffect(refreshKey, board, type) {
         error = ""
         runCatching { repo.api.galleryBoards() }
             .onSuccess { res ->
@@ -301,12 +310,25 @@ fun InvokeGalleryTab(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(bottom = 4.dp),
         )
+        if (own) {
+            // Pictures, upscales and clips apart; the server tells them apart.
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(bottom = 4.dp)) {
+                items(listOf(null to "All", "pictures" to "Pictures", "upscaled" to "Upscaled", "videos" to "Videos"), key = { it.second }) { (id, label) ->
+                    FilterChip(selected = type == id, onClick = { if (type != id) { items = emptyList(); type = id } }, label = { Text(label) })
+                }
+            }
+        }
         if (error.isNotEmpty()) {
             Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
         }
         if (items.isEmpty() && !loading) {
             Text(
-                "Nothing here yet — generated images land in this gallery.",
+                when (type) {
+                    "pictures" -> "No pictures here — only upscales and clips."
+                    "upscaled" -> "Nothing here has been upscaled yet."
+                    "videos" -> "No clips here yet — make one in the Video tab."
+                    else -> "Nothing here yet — generated images land in this gallery."
+                },
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(vertical = 20.dp),
@@ -333,15 +355,39 @@ fun InvokeGalleryTab(
                             }
                         },
                 ) {
-                    AsyncImage(
-                        model = repo.galleryThumbUrl(img.name),
-                        imageLoader = repo.imageLoader,
-                        contentDescription = "Generated image",
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize().then(
-                            if (picked) Modifier.padding(0.dp) else Modifier,
-                        ),
-                    )
+                    if (img.isClip && !img.tile) {
+                        // A clip with no still: drawn as a film rather than a broken tile.
+                        Icon(Icons.Filled.Movie, contentDescription = "Generated clip",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.align(Alignment.Center))
+                    } else {
+                        AsyncImage(
+                            model = repo.galleryThumbUrl(img.name),
+                            imageLoader = repo.imageLoader,
+                            contentDescription = if (img.isClip) "Generated clip" else "Generated image",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize().then(
+                                if (picked) Modifier.padding(0.dp) else Modifier,
+                            ),
+                        )
+                    }
+                    if (img.isClip || img.upscaled) {
+                        Row(
+                            Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(4.dp)
+                                .clip(RoundedCornerShape(9.dp))
+                                .background(Color.Black.copy(alpha = 0.6f))
+                                .padding(horizontal = 5.dp, vertical = 1.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(if (img.isClip) Icons.Filled.PlayArrow else Icons.Filled.OpenInFull, contentDescription = null,
+                                tint = Color.White, modifier = Modifier.size(12.dp))
+                            Text(
+                                if (img.isClip) (if (img.upscaled) " Clip · HD" else " Clip") else " Upscaled",
+                                color = Color.White, style = MaterialTheme.typography.labelSmall,
+                            )
+                        }
+                    }
                     if (selecting) {
                         Box(
                             Modifier
@@ -412,18 +458,30 @@ fun InvokeGalleryTab(
                     .padding(bottom = 8.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                AsyncImage(
-                    model = repo.galleryFullUrl(img.name),
-                    imageLoader = repo.imageLoader,
-                    contentDescription = "Generated image",
-                    contentScale = ContentScale.Fit,
-                    modifier = Modifier.fillMaxWidth(),
-                )
+                if (img.isClip) {
+                    ClipPlayer(
+                        repo, repo.galleryFullUrl(img.name),
+                        Modifier.fillMaxWidth().aspectRatio(if (img.width > 0 && img.height > 0) img.width.toFloat() / img.height else 9f / 16f),
+                    )
+                } else {
+                    AsyncImage(
+                        model = repo.galleryFullUrl(img.name),
+                        imageLoader = repo.imageLoader,
+                        contentDescription = "Generated image",
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     Button(onClick = { save(img) }, enabled = !saved) {
                         Icon(if (saved) Icons.Filled.Check else Icons.Filled.Save, contentDescription = null,
                             Modifier.size(16.dp))
                         Text(if (saved) "  In library" else "  Save")
+                    }
+                    if (onAnimate != null && !img.isClip) {
+                        IconButton(onClick = { expanded = null; onAnimate(img.name) }) {
+                            Icon(Icons.Filled.Animation, contentDescription = "Animate into a clip", tint = Color.White)
+                        }
                     }
                     if (isFolder) {
                         IconButton(onClick = { setCover(img) }) {

@@ -353,3 +353,22 @@ func TestADetachedClipIsAnsweredAtOnceAndCollectedFromItsJob(t *testing.T) {
 		t.Fatalf("no job id: %d %s", rec.Code, rec.Body)
 	}
 }
+
+func TestALoopingClipIsAskedOfComfyUIAndSaysSoInItsRecord(t *testing.T) {
+	s, token, comfy, _ := clipStudio(t)
+	picture := "data:image/png;base64," + base64.StdEncoding.EncodeToString(pngOf(t, 64, 96, 200))
+	out := postClip(t, s, token, "/api/imagegen/clip", map[string]any{"from": "image", "prompt": "she blinks", "initImage": picture, "loop": true})
+	graphNode(t, comfy.lastGraph(), "WanFirstLastFrameToVideo")
+	if !strings.HasSuffix(out.Clip.Recipe, " · loop") {
+		t.Fatalf("recipe = %q", out.Clip.Recipe)
+	}
+	if rec := galleryRecordOf(t, s, token, out.Clip.Gallery); rec.Clip == nil || !rec.Clip.Loop {
+		t.Fatalf("record = %+v", rec.Clip)
+	}
+	// From words there is no picture to come back to, and the flag is dropped.
+	words := postClip(t, s, token, "/api/imagegen/clip", map[string]any{"from": "text", "prompt": "rain on a window", "loop": true,
+		"models": studioPair})
+	if strings.Contains(words.Clip.Recipe, "loop") {
+		t.Fatalf("a clip from words looped: %q", words.Clip.Recipe)
+	}
+}

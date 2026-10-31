@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-const { MOTION_PRESETS, hasPhrase, togglePhrase } = await import("./motion-presets.ts");
+const { MOTION_PRESETS, SHOWCASE_PRESETS, hasPhrase, isShowcase, togglePhrase, toggleShowcase } = await import("./motion-presets.ts");
 
 test("a preset pressed on an empty box writes one sentence", () => {
   assert.equal(togglePhrase("", "She blinks naturally"), "She blinks naturally.");
@@ -39,4 +39,24 @@ test("every preset has a phrase that reads as a sentence and a unique id", () =>
   const ids = new Set(MOTION_PRESETS.map((p) => p.id));
   assert.equal(ids.size, MOTION_PRESETS.length);
   for (const p of MOTION_PRESETS) assert.match(p.phrase, /^[A-Z][^.!?]+$/, p.id);
+});
+
+test("the showcase puts her blink, breath, hair, clothes and a still camera in front of what was typed", () => {
+  const on = toggleShowcase("She is on a balcony at night.");
+  assert.ok(isShowcase(on));
+  assert.match(on, /^The camera stays perfectly still\. She holds her pose/);
+  assert.match(on, /She blinks naturally\./);
+  assert.match(on, /Her hair flows/);
+  assert.match(on, /Her clothes sway/);
+  assert.match(on, /She is on a balcony at night\.$/);
+  // Pressed again it leaves only what was hers.
+  assert.equal(toggleShowcase(on), "She is on a balcony at night.");
+});
+
+test("a showcase part already typed is not written twice, and one pressed off ends the showcase", () => {
+  const on = toggleShowcase("She blinks naturally.");
+  assert.equal(on.match(/She blinks naturally/g)?.length, 1);
+  const blink = MOTION_PRESETS.find((p) => p.id === "blink")!;
+  assert.equal(isShowcase(togglePhrase(on, blink.phrase)), false);
+  assert.equal(SHOWCASE_PRESETS.every((id) => MOTION_PRESETS.some((p) => p.id === id)), true);
 });

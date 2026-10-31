@@ -382,6 +382,8 @@ func (s *Server) handleImageGenGenerate(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	gen, promptRecord, rolled := s.prepareGenerate(&req)
+	// The record of the picture an upscale enlarges, for the copy to keep.
+	var source json.RawMessage
 	if req.InitGallery != "" && req.InitImage == "" {
 		data, err := s.galleryPicture(r.Context(), set.ImageGenURL, req.InitGallery)
 		if err != nil {
@@ -389,6 +391,9 @@ func (s *Server) handleImageGenGenerate(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		req.InitImage = base64.StdEncoding.EncodeToString(data)
+		if req.UpscaleOnly {
+			source = s.galleryRecord(r.Context(), set.ImageGenURL, req.InitGallery)
+		}
 	}
 	if err := decodeGenerateImages(&req, &gen); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
@@ -437,7 +442,7 @@ func (s *Server) handleImageGenGenerate(w http.ResponseWriter, r *http.Request) 
 	// becomes of this response. Libby's camera never comes through here.
 	var kept []int64
 	if !req.NoGallery && s.ownGallery(ctx, set.ImageGenURL) {
-		kept = s.keepGenerated(ctx, gen, res)
+		kept = s.keepGenerated(ctx, gen, res, source, req.InitGallery)
 	}
 	out := make([]genResultImage, 0, len(res.Images))
 	for i, img := range res.Images {
@@ -1178,7 +1183,7 @@ func (s *Server) handleGalleryImages(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 	if s.ownGallery(ctx, base) {
-		s.ownGalleryImages(w, r, q.Get("board"), q.Get("sort"), offset, limit)
+		s.ownGalleryImages(w, r, q.Get("board"), q.Get("sort"), q.Get("type"), offset, limit)
 		return
 	}
 	page, err := s.imagegen.BoardImages(ctx, base, q.Get("board"), q.Get("sort"), offset, limit)

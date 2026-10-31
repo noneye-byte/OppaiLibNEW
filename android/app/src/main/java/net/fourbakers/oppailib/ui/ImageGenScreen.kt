@@ -119,6 +119,7 @@ import kotlinx.coroutines.launch
 import net.fourbakers.oppailib.data.GenCharacter
 import net.fourbakers.oppailib.data.GenDraft
 import net.fourbakers.oppailib.data.GenSession
+import net.fourbakers.oppailib.data.VideoSession
 import net.fourbakers.oppailib.data.GenWildcard
 import net.fourbakers.oppailib.data.DetailerRequest
 import net.fourbakers.oppailib.data.LoraCategories
@@ -607,8 +608,10 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit, to
                 // against either backend — an A1111 is linked by hash and, with its
                 // models folder set on the server, installed into.
                 val invoke = st.backend == "invokeai"
+                val clips = st.clips.image != null || st.clips.text != null
                 val tabNames = buildList {
                     add("Create")
+                    if (clips) add("Video")
                     add("Gallery")
                     if (invoke || st.civitai) add("Civitai")
                     add("Train")
@@ -628,7 +631,12 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit, to
                         onBoardChange = { board = it },
                         onSaved = onSaved,
                         own = !invoke,
+                        onAnimate = if (st.clips.image != null) { name ->
+                            VideoSession.animate(name)
+                            tab = tabNames.indexOf("Video")
+                        } else null,
                     )
+                    "Video" -> VideoGenTab(repo, st, board = board, onKept = { galleryRefresh++ })
                     "Train" -> LoraTrainTab(repo, models = st.models, checkpoint = checkpoint)
                     "Civitai" -> CivitaiTab(
                         repo,

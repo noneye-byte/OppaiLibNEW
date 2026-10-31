@@ -337,6 +337,7 @@ func (s *Server) StartBackgroundJobs() {
 	go s.startStories()
 	go s.backfillThumbnails()
 	go s.backfillImageThumbs()
+	go s.backfillGenUpscaled()
 	go s.backfillComics()
 	// Only actually starts anything when a Discord connection is configured and on.
 	// See discord_relay.go.
@@ -570,6 +571,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/imagegen/gallery/boards/{id}", s.requireAuth(s.handleGalleryDeleteBoard))
 	mux.HandleFunc("PATCH /api/imagegen/gallery/boards/{id}", s.requireAuth(s.handleGalleryRenameBoard))
 	mux.HandleFunc("GET /api/imagegen/gallery/images", s.requireAuth(s.handleGalleryImages))
+	mux.HandleFunc("GET /api/imagegen/gallery/export", s.requireAuth(s.handleGalleryExport))
 	mux.HandleFunc("GET /api/imagegen/gallery/image/{name}", s.requireAuth(s.handleGalleryFull))
 	mux.HandleFunc("GET /api/imagegen/gallery/image/{name}/thumb", s.requireAuth(s.handleGalleryThumb))
 	mux.HandleFunc("GET /api/imagegen/gallery/image/{name}/metadata", s.requireAuth(s.handleGalleryMetadata))

@@ -1,6 +1,10 @@
 package api
 
-import "testing"
+import (
+	"slices"
+	"strings"
+	"testing"
+)
 
 func TestSafeInlineContentType(t *testing.T) {
 	cases := map[string]string{
@@ -26,4 +30,24 @@ func TestSafeInlineContentType(t *testing.T) {
 			t.Errorf("safeInlineContentType(%q) = %q, want %q", in, got, want)
 		}
 	}
+}
+
+// A picture chosen from disk reaches the studios as an object URL that they fetch()
+// to send as a run's start. The policy once left blob: out of connect-src, and every
+// clip or picture started from a file failed in the browser before it was sent.
+func TestThePolicyLetsThePageReadItsOwnObjectURLs(t *testing.T) {
+	for _, directive := range strings.Split(contentSecurityPolicy, ";") {
+		f := strings.Fields(directive)
+		if len(f) == 0 || f[0] != "connect-src" {
+			continue
+		}
+		if !slices.Contains(f, "blob:") {
+			t.Fatalf("connect-src has no blob: — %q", directive)
+		}
+		if slices.Contains(f, "*") || slices.Contains(f, "http:") || slices.Contains(f, "https:") {
+			t.Fatalf("connect-src reaches off the origin: %q", directive)
+		}
+		return
+	}
+	t.Fatal("the policy has no connect-src")
 }

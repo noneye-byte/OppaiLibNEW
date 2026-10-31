@@ -3,6 +3,7 @@ package imagegen
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -290,5 +291,53 @@ func TestABuiltPairWithASpeedLoraSplitsItsFourSteps(t *testing.T) {
 	}
 	if got := clip.Recipe(); got != "4 steps · CFG 1 · shift 8 · 1 LoRA" {
 		t.Fatalf("recipe = %q", got)
+	}
+}
+
+func TestALoopEndsOnThePictureItStartsFromAndCutsTheRepeatedFrame(t *testing.T) {
+	clip := wan22Pair
+	clip.Loop = true
+	g, err := BuildWanGraph(clip)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nodes(g, "WanImageToVideo")) != 0 {
+		t.Fatal("a loop still went through the start-only node")
+	}
+	flf := node(t, g, "WanFirstLastFrameToVideo")
+	if classOf(g, flf["start_image"]) != "LoadImage" || fmt.Sprint(flf["start_image"]) != fmt.Sprint(flf["end_image"]) {
+		t.Fatalf("the loop does not end on its own picture: %v", flf)
+	}
+	for _, s := range nodes(g, "KSamplerAdvanced") {
+		if classOf(g, s["positive"]) != "WanFirstLastFrameToVideo" {
+			t.Fatal("the samplers are not conditioned on both frames")
+		}
+	}
+	// 81 frames come back, the last of them the first again; 80 are played round.
+	cut := node(t, g, "ImageFromBatch")
+	if cut["batch_index"] != 0 || cut["length"] != 80 || classOf(g, cut["image"]) != "VAEDecode" {
+		t.Fatalf("cut = %v", cut)
+	}
+	if classOf(g, node(t, g, "CreateVideo")["images"]) != "ImageFromBatch" {
+		t.Fatal("the video is made from every frame, the repeat too")
+	}
+	if !strings.HasSuffix(clip.Recipe(), " · loop") {
+		t.Fatalf("recipe = %q", clip.Recipe())
+	}
+}
+
+func TestOnlyAClipFromAPictureOnAModelThatTakesALastFrameCanLoop(t *testing.T) {
+	words := wan22Pair
+	words.Loop, words.Image = true, ""
+	if _, err := BuildWanGraph(words); err == nil || !strings.Contains(err.Error(), "picture") {
+		t.Fatalf("a loop from words: %v", err)
+	}
+	small := WanClip{Model: "wan2.2_ti2v_5B_fp16.safetensors", TextEncoder: "umt5.safetensors", VAE: "wan2.2_vae.safetensors",
+		Image: "start.png", Loop: true}
+	if _, err := BuildWanGraph(small); err == nil || !strings.Contains(err.Error(), "5B") {
+		t.Fatalf("a loop on the 5B model: %v", err)
+	}
+	if g, err := BuildWanGraph(wan22Pair); err != nil || len(nodes(g, "ImageFromBatch")) != 0 {
+		t.Fatalf("a clip that does not loop was cut: %v", err)
 	}
 }

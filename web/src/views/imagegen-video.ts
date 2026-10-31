@@ -2,12 +2,12 @@ import { LitElement, html, css, nothing } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { iconStyles, motionStyles } from "../theme.js";
 import { api, type ClipModels, type ClipParams, type ClipUpscaleParams, type ClipWorkflow, type ComfyModels, type GenClip, type GenerateResult } from "../api.js";
-import { CLIP_ASPECTS, CLIP_SIDES, clipFrames, clipSize, lastFrameTime, type ClipAspect } from "../clip-shape.js";
+import { CLIP_ASPECTS, CLIP_SIDES, clipFrames, clipSize, lastFrameTime, startFrameSize, type ClipAspect } from "../clip-shape.js";
 import {
-  clipIsFast, clipLoraChoices, clipModelChoiceOf, clipModelChoices, settleSpeed, SPEED_SETTINGS, speedAtFullCFG, studioClipModels,
+  canLoop, clipIsFast, clipLoraChoices, clipModelChoiceOf, clipModelChoices, settleSpeed, SPEED_SETTINGS, speedAtFullCFG, studioClipModels,
   studioClipRecipe, withClipModel, type ClipLoraChoice, type ClipModelChoice, type StudioClipRecipe,
 } from "../clip-models.js";
-import { MOTION_PRESETS, hasPhrase, togglePhrase } from "../motion-presets.js";
+import { MOTION_PRESETS, hasPhrase, isShowcase, togglePhrase, toggleShowcase } from "../motion-presets.js";
 import { GALLERY_DRAG_TYPE } from "./imagegen-gallery.js";
 
 /**
@@ -94,6 +94,8 @@ const session = {
   variations: 1,
   /** Reuse the selected clip's seed, to see what a changed prompt does to the same take. */
   keepSeed: false,
+  /** Make the next clip from a picture end on that picture, so it plays round. */
+  makeLoop: false,
   /** Each direction's files once the studio has changed them from Settings'. */
   recipes: {} as Partial<Record<"image" | "text", StudioClipRecipe>>,
   loraQuery: "",
@@ -305,6 +307,18 @@ export class OppaiVideoStudio extends LitElement {
       .chip:disabled { opacity: 0.5; cursor: default; }
       .row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
       .presets { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+      /* Showcase is one press for a whole kind of clip, so it reads as more than a chip. */
+      .showcase {
+        display: flex; align-items: center; gap: 10px; width: 100%; margin-top: 10px; padding: 9px 12px; text-align: left;
+        border-radius: 12px; border: 1px dashed var(--oppai-border-strong); background: transparent; color: var(--oppai-text-dim);
+        font: inherit; cursor: pointer; transition: background 0.12s ease, border-color 0.12s ease;
+      }
+      .showcase:hover { border-color: var(--oppai-text-muted); color: var(--oppai-text); }
+      .showcase.on { border-style: solid; border-color: transparent; background: var(--oppai-primary-container); color: var(--oppai-on-primary-container, var(--oppai-text)); }
+      .showcase > .material-symbols-rounded { font-size: 22px; color: var(--oppai-primary); }
+      .showcase .sc-copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+      .showcase b { font-size: 12.5px; }
+      .showcase small { font-size: 11px; line-height: 1.35; opacity: 0.85; }
       .presets .row { gap: 5px; }
       .preset-group { font-size: 10.5px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; color: var(--oppai-text-muted); width: 52px; flex: none; }
       .presets .chip { height: 26px; padding: 0 9px; font-size: 11.5px; }
@@ -563,6 +577,20 @@ export class OppaiVideoStudio extends LitElement {
     return !!(this.built ? w?.built ?? w?.takes : w?.takes)?.includes(name);
   }
 
+  /** Whether the next clip can loop: from a picture, on files the server builds, and
+      not on the 5B model, which cannot be given a last frame. */
+  private get loopable(): boolean {
+    return session.from === "image" && this.takes("loop") && canLoop(this.recipe()?.models ?? this.workflow?.models);
+  }
+
+  /** Showcase on, or off: its sentences in the prompt, and on, the loop with them. */
+  private toggleShowcase() {
+    const on = !isShowcase(session.prompt);
+    session.prompt = toggleShowcase(session.prompt);
+    if (on && this.loopable) session.makeLoop = true;
+    changed();
+  }
+
   /** Changes this direction's recipe. A change that brings a speed file in, or takes
       the last one out, settles the steps and CFG with it, as Settings does. */
   private edit(fn: (r: StudioClipRecipe) => StudioClipRecipe) {
@@ -718,6 +746,7 @@ export class OppaiVideoStudio extends LitElement {
         if (pic.gallery) params.initGallery = pic.gallery;
         else params.initImage = initImage;
       }
+      if (session.makeLoop && this.loopable) params.loop = true;
       const run: ClipRun = {
         jobId: params.jobId!, from, prompt: params.prompt, thumb: from === "image" ? pic?.url : undefined,
         fps: this.fps(), percent: 0, done: false, startedAt: Date.now(),
@@ -904,6 +933,12 @@ export class OppaiVideoStudio extends LitElement {
             placeholder=${from === "image"
               ? "She turns to the camera, smiles and waves; her hair moves in the breeze"
               : "A woman with silver hair in a red dress turns to the camera and waves, soft evening light"}></textarea>
+          ${from === "image" ? html`<button class="showcase ${isShowcase(session.prompt) ? "on" : ""}"
+            aria-pressed=${isShowcase(session.prompt) ? "true" : "false"} @click=${() => this.toggleShowcase()}>
+            <span class="material-symbols-rounded">auto_awesome</span>
+            <span class="sc-copy"><b>Showcase</b><small>She stays put and comes alive: blinks, breathes, her hair flows and her clothes move,
+              the camera holds still${this.loopable ? " — and it loops" : ""}.</small></span>
+          </button>` : nothing}
           <div class="presets">
             ${(["camera", "her", "scene"] as const).map((group) => html`<div class="row">
               <span class="preset-group">${group === "her" ? "Her" : group === "camera" ? "Camera" : "Scene"}</span>
@@ -941,6 +976,15 @@ export class OppaiVideoStudio extends LitElement {
             <b>${session.seconds}s</b>
           </label>
         ` : nothing}
+
+        ${from === "image" && this.takes("loop") ? html`
+          <label class="switch" title=${this.loopable ? "The clip ends on the picture it starts from, so it plays round without a jump"
+            : "Wan 2.2's 5B model can't be given a last frame — pick the 14B pair or Wan 2.1 to loop"}>
+            <input type="checkbox" .checked=${session.makeLoop && this.loopable} ?disabled=${!this.loopable}
+              @change=${(e: Event) => this.set("makeLoop", (e.target as HTMLInputElement).checked)} />
+            <span class="material-symbols-rounded" style="font-size:17px">loop</span>Seamless loop
+            <span style="opacity:.7">${this.loopable ? "· ends where it starts" : "· not on the 5B model"}</span>
+          </label>` : nothing}
 
         ${this.takes("fps") ? html`
           <div class="k">Frame rate</div>
@@ -1377,13 +1421,41 @@ async function pictureDataURL(url: string): Promise<string> {
     throw new Error("Couldn't read the picture to start from any more — pick it again.");
   });
   if (!res.ok) throw new Error("Couldn't read the picture — a result on the canvas expires after a while; pick it again.");
-  const blob = await res.blob();
+  const blob = await shrunkStart(await res.blob());
   return new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result));
     reader.onerror = () => reject(new Error("couldn't read the picture"));
     reader.readAsDataURL(blob);
   });
+}
+
+/** A picture too big to start a clip from, made the size it is sent at (clip-shape's
+    startFrameSize). A photo stays a JPEG — as a PNG it would be several times larger
+    for nothing; anything else is a PNG, as the studio's own pictures are. */
+async function shrunkStart(blob: Blob): Promise<Blob> {
+  let bitmap: ImageBitmap;
+  try {
+    bitmap = await createImageBitmap(blob);
+  } catch {
+    return blob;
+  }
+  const size = startFrameSize(bitmap.width, bitmap.height);
+  if (!size.shrunk) {
+    bitmap.close();
+    return blob;
+  }
+  const canvas = document.createElement("canvas");
+  canvas.width = size.width;
+  canvas.height = size.height;
+  const g = canvas.getContext("2d");
+  if (!g) return blob;
+  g.imageSmoothingQuality = "high";
+  g.drawImage(bitmap, 0, 0, size.width, size.height);
+  bitmap.close();
+  const photo = blob.type === "image/jpeg" || blob.type === "image/webp";
+  const out = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, photo ? "image/jpeg" : "image/png", 0.92));
+  return out ?? blob;
 }
 
 declare global {

@@ -21,6 +21,11 @@ import (
 //     this.
 //   - img/media-src cover self plus data:/blob: for generated thumbnails and object
 //     URLs; all remote media is already proxied through our origin.
+//   - connect-src takes blob: as well, because a picture chosen from disk (or a frame
+//     grabbed off a clip) is an object URL the studios read back with fetch() to send
+//     as the run's start. 'self' does not cover the blob: scheme, so without it every
+//     such run failed in the browser before it was sent. An object URL can only be
+//     made by this page, so it reaches nothing new.
 //   - object-src 'none', base-uri 'self' and frame-ancestors 'none' close the
 //     usual injection side doors (and frame-ancestors backstops X-Frame-Options).
 //   - frame-src is the one directive that reaches off-origin, and only to frame:
@@ -39,7 +44,7 @@ const contentSecurityPolicy = "default-src 'self'; " +
 	"img-src 'self' data: blob:; " +
 	"media-src 'self' blob:; " +
 	"frame-src 'self' https://html-classic.itch.zone https://html.itch.zone https://itch.io; " +
-	"connect-src 'self'; " +
+	"connect-src 'self' blob:; " +
 	"manifest-src 'self'"
 
 // securityHeaders sets defensive response headers on every request. nosniff is one

@@ -134,6 +134,11 @@ func Open(path string) (*DB, error) {
 	if err := ensureColumn(sqldb, "gen_images", "mime", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return nil, err
 	}
+	// NULL on the rows kept before it, until the server has read their records (see
+	// api.backfillGenUpscaled); every row kept since says 0 or 1.
+	if err := ensureColumn(sqldb, "gen_images", "upscaled", "INTEGER"); err != nil {
+		return nil, err
+	}
 	if err := migrateLoraFolders(sqldb); err != nil {
 		return nil, fmt.Errorf("move lora categories: %w", err)
 	}

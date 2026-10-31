@@ -2,7 +2,7 @@ import { LitElement, html, css, nothing, type PropertyValues } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import { iconStyles, motionStyles } from "../theme.js";
-import { api, mascotSay, type ChatCharacter, type GalleryBoard, type GalleryImage, type GallerySort } from "../api.js";
+import { api, mascotSay, type ChatCharacter, type GalleryBoard, type GalleryImage, type GallerySort, type GalleryType } from "../api.js";
 import { libbyReact, type LibbyItemFacts } from "../libby-voice.js";
 import { shareImageWithCharacter } from "../chat-share.js";
 import { openMenu, menuDivider, type MenuItem } from "../context-menu.js";
@@ -65,6 +65,15 @@ const SORTS: { id: GallerySort; label: string; ownOnly?: boolean }[] = [
   { id: "largest", label: "Largest first", ownOnly: true },
 ];
 
+/** What the studio's own gallery can be narrowed to. Upscaled is anything enlarged
+    after it was made, a clip too; the server tells them apart (gen_images.upscaled). */
+const TYPES: { id: GalleryType | ""; label: string; icon: string; empty: string }[] = [
+  { id: "", label: "Everything", icon: "apps", empty: "" },
+  { id: "pictures", label: "Pictures", icon: "image", empty: "No pictures here — only upscales and clips." },
+  { id: "upscaled", label: "Upscaled", icon: "open_in_full", empty: "Nothing here has been upscaled yet." },
+  { id: "videos", label: "Videos", icon: "movie", empty: "No clips here yet — make one in the Video studio." },
+];
+
 /** The expanded grid's tile sizes, smallest first. */
 const SIZES = [{ id: "s", px: 120 }, { id: "m", px: 170 }, { id: "l", px: 250 }] as const;
 type TileSize = (typeof SIZES)[number]["id"];
@@ -94,6 +103,8 @@ export class OppaiInvokeGallery extends LitElement {
   @property({ attribute: false }) startBoard = "";
   @state() private boards: GalleryBoard[] = [];
   @state() private sort: GallerySort = "newest";
+  /** The kind shown, on the studio's own gallery: everything, or one kind. */
+  @state() private type: GalleryType | "" = "";
   /** The open picture's settings, once read. */
   @state() private info: GenInfo | null = null;
   @state() private infoError = "";
@@ -204,6 +215,9 @@ export class OppaiInvokeGallery extends LitElement {
       }
       .pill:hover { color: var(--oppai-text); border-color: var(--oppai-text-muted); }
       .pill .material-symbols-rounded { font-size: 17px; }
+      /* Narrowed to one kind: said in the primary colour, so a half-empty grid is not
+         mistaken for a missing picture. */
+      .pill.on { color: var(--oppai-primary); border-color: color-mix(in srgb, var(--oppai-primary) 60%, transparent); }
 
       .day { display: flex; align-items: baseline; gap: 8px; margin: 6px 2px 6px; font-size: 12px; font-weight: 700; color: var(--oppai-text-dim); }
       .day small { font-weight: 500; color: var(--oppai-text-muted); font-variant-numeric: tabular-nums; }
@@ -519,6 +533,14 @@ export class OppaiInvokeGallery extends LitElement {
     void this.loadPage(true);
   }
 
+  private pickType(type: GalleryType | "") {
+    if (type === this.type) return;
+    this.type = type;
+    this.items = [];
+    this.selected = new Set();
+    void this.loadPage(true);
+  }
+
   private setTileSize(size: TileSize) {
     this.tileSize = size;
     try {
@@ -570,7 +592,7 @@ export class OppaiInvokeGallery extends LitElement {
     this.loading = true;
     try {
       const offset = reset ? 0 : this.items.length;
-      const page = await api.galleryImages(this.board, offset, PAGE, this.sort);
+      const page = await api.galleryImages(this.board, offset, PAGE, this.sort, this.own && this.type ? this.type : undefined);
       this.items = reset ? page.items : [...this.items, ...page.items.filter((i) => !this.items.some((o) => o.name === i.name))];
       this.total = page.total;
     } catch (e) {
@@ -931,6 +953,7 @@ export class OppaiInvokeGallery extends LitElement {
           ...moves,
           { label: "Move to library", icon: "save", run: () => void this.saveToLibrary(img) },
           { label: "Download", icon: "download", run: () => this.downloadClip(img) },
+          { label: "Export for Civitai", icon: "folder_zip", run: () => this.exportForCivitai([img.name]) },
           menuDivider,
           { label: "Delete", icon: "delete", danger: true, run: () => void this.deleteImage(img) },
         ],
@@ -961,6 +984,23 @@ export class OppaiInvokeGallery extends LitElement {
         { label: "Delete", icon: "delete", danger: true, run: () => void this.deleteImage(img) },
       ],
     });
+  }
+
+  /**
+   * Downloads a zip for Civitai: these pictures and clips, or with none named everything
+   * on the board in view (of the kind shown). The server writes each one's parameters
+   * into it and beside it as it reads it (api/gen_export.go), and the browser saves the
+   * zip as it arrives — a folder of hundreds held in the page was a tab out of memory.
+   */
+  private exportForCivitai(names?: string[]) {
+    const a = document.createElement("a");
+    a.href = api.galleryExportURL(names?.length
+      ? { names }
+      : { board: this.board, type: this.own && this.type ? this.type : undefined });
+    a.download = "";
+    a.click();
+    const n = names?.length ?? this.total;
+    mascotSay(`Exporting ${n} for Civitai — the zip downloads as it's written, each with its prompt and settings inside and in a .txt beside it.`, "success");
   }
 
   private downloadClip(img: GalleryImage) {
@@ -1197,6 +1237,25 @@ export class OppaiInvokeGallery extends LitElement {
     });
   }
 
+  private openTypeMenu(e: MouseEvent) {
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    openMenu({
+      x: r.left, y: r.bottom + 4, title: "Show",
+      items: TYPES.map((t) => ({
+        label: t.label, icon: t.id === this.type ? "check" : t.icon, run: () => this.pickType(t.id),
+      })),
+    });
+  }
+
+  /** The type pill, on the studio's own gallery: InvokeAI's holds pictures alone. */
+  private renderTypePill(short: boolean) {
+    if (!this.own) return nothing;
+    const t = TYPES.find((x) => x.id === this.type) ?? TYPES[0];
+    return html`<button class="pill ${this.type ? "on" : ""}" title="Show pictures, upscales or clips"
+      @click=${(e: MouseEvent) => this.openTypeMenu(e)}>
+      <span class="material-symbols-rounded">${this.type ? t.icon : "filter_alt"}</span>${short && !this.type ? "All" : t.label}</button>`;
+  }
+
   /** Where the next run lands, said under the folders. */
   private filingNote(current: GalleryBoard | undefined) {
     if (!this.own) return html`New pictures go to <b>${current?.name ?? "this gallery"}</b>`;
@@ -1213,7 +1272,8 @@ export class OppaiInvokeGallery extends LitElement {
       @contextmenu=${(e: MouseEvent) => { if (!this.selecting) this.openImageMenu(img, e); }}
       @dragstart=${(e: DragEvent) => this.dragStart(e, img)} @dragend=${() => this.dragEnd()}>
       ${this.still(img, this.isClip(img) ? "Generated clip" : "Generated image")}
-      ${this.isClip(img) ? html`<span class="play"><span class="material-symbols-rounded">play_arrow</span>Clip</span>` : nothing}
+      ${this.isClip(img) ? html`<span class="play"><span class="material-symbols-rounded">play_arrow</span>Clip${img.upscaled ? " · HD" : ""}</span>`
+        : img.upscaled ? html`<span class="play" title="Upscaled"><span class="material-symbols-rounded">open_in_full</span>Upscaled</span>` : nothing}
       <span class="shade"></span>
       <button class="tick" title=${picked ? "Unpick" : "Pick — then drag onto a folder, or use the bar below"} aria-label="Pick"
         @click=${(e: MouseEvent) => this.pick(e, img)}>
@@ -1232,6 +1292,8 @@ export class OppaiInvokeGallery extends LitElement {
   private renderGrid() {
     if (!this.items.length) {
       if (this.loading) return html`<div class="loading">Loading…</div>`;
+      const narrowed = TYPES.find((t) => t.id && t.id === this.type);
+      if (narrowed) return html`<div class="empty"><span class="material-symbols-rounded">${narrowed.icon}</span>${narrowed.empty}</div>`;
       return html`<div class="empty"><span class="material-symbols-rounded">${this.board === "none" || this.board === "all" ? "image" : "folder_open"}</span>
         ${this.own && this.board !== "none" && this.board !== "all"
           ? "Nothing in here yet. Drag pictures onto this folder, or pick some and use Move."
@@ -1263,6 +1325,8 @@ export class OppaiInvokeGallery extends LitElement {
       }}><span class="material-symbols-rounded">drive_file_move</span>Move</button>
       ${this.own ? html`<button class="sbtn primary" ?disabled=${this.busy || !n} title="Move them into the library; they leave the gallery"
         @click=${() => void this.moveSelectedToLibrary()}><span class="material-symbols-rounded">save</span>Library</button>` : nothing}
+      <button class="sbtn" ?disabled=${!n} title="Download them as a zip for Civitai, each with its prompt and settings"
+        @click=${() => this.exportForCivitai([...this.selected])}><span class="material-symbols-rounded">folder_zip</span>Civitai</button>
       <button class="sbtn danger" ?disabled=${this.busy || !n} @click=${() => void this.deleteSelected()}>
         <span class="material-symbols-rounded">delete</span>Delete</button>
       ${this.browsing && n ? html`<span class="drag-hint">Or drag them onto a folder.</span>` : nothing}
@@ -1283,12 +1347,15 @@ export class OppaiInvokeGallery extends LitElement {
           ${this.items.length ? html`<button class="hbtn ${this.selecting ? "on" : ""}" title=${this.selecting ? "Stop picking" : "Pick pictures"}
             aria-pressed=${this.selecting ? "true" : "false"} @click=${() => this.toggleSelecting()}>
             <span class="material-symbols-rounded">checklist</span></button>` : nothing}
+          ${this.items.length ? html`<button class="hbtn" title="Export what's shown here for Civitai, as a zip" aria-label="Export for Civitai"
+            @click=${() => this.exportForCivitai()}><span class="material-symbols-rounded">folder_zip</span></button>` : nothing}
           <button class="hbtn" title="Open the gallery full screen" aria-label="Open the gallery full screen" @click=${() => (this.browsing = true)}>
             <span class="material-symbols-rounded">open_in_full</span></button>
         </div>
         ${this.boards.length ? this.renderFolderCards() : nothing}
         <div class="bar">
           <div class="where"><b>${current?.name ?? ""}</b><span>${this.filingNote(current)}</span></div>
+          ${this.renderTypePill(true)}
           <button class="pill" title="Order" @click=${(e: MouseEvent) => this.openSortMenu(e)}>
             <span class="material-symbols-rounded">sort</span>${SORTS.find((s) => s.id === this.sort)?.label.replace(" first", "")}
           </button>
@@ -1310,7 +1377,7 @@ export class OppaiInvokeGallery extends LitElement {
       <div class="browse-top">
         <button class="hbtn" title="Back to the studio (Esc)" aria-label="Back to the studio" @click=${() => (this.browsing = false)}>
           <span class="material-symbols-rounded">arrow_back</span></button>
-        <div class="where"><b>${current?.name ?? "Gallery"}</b><span>${count} ${count === 1 ? "picture" : "pictures"} · ${this.filingNote(current)}</span></div>
+        <div class="where"><b>${current?.name ?? "Gallery"}</b><span>${count} ${this.type === "videos" ? (count === 1 ? "clip" : "clips") : count === 1 ? "picture" : "pictures"} · ${this.filingNote(current)}</span></div>
         <span class="grow"></span>
         <label class="size" title="Tile size">
           <span class="material-symbols-rounded">photo_size_select_small</span>
@@ -1318,8 +1385,11 @@ export class OppaiInvokeGallery extends LitElement {
             @input=${(e: Event) => this.setTileSize(SIZES[Number((e.target as HTMLInputElement).value)].id)} />
           <span class="material-symbols-rounded">photo_size_select_large</span>
         </label>
+        ${this.renderTypePill(false)}
         <button class="pill" @click=${(e: MouseEvent) => this.openSortMenu(e)}>
           <span class="material-symbols-rounded">sort</span>${SORTS.find((s) => s.id === this.sort)?.label}</button>
+        ${this.items.length ? html`<button class="pill" title="Download everything shown here as a zip for Civitai, each with its prompt and settings"
+          @click=${() => this.exportForCivitai()}><span class="material-symbols-rounded">folder_zip</span>Export for Civitai</button>` : nothing}
         ${this.items.length ? html`<button class="pill" @click=${() => this.toggleSelecting()}>
           <span class="material-symbols-rounded">checklist</span>${this.selecting ? "Done" : "Select"}</button>` : nothing}
         ${current && this.isFolder(current.id) ? html`<button class="hbtn" title="Folder options" aria-label="Folder options"
@@ -1416,7 +1486,9 @@ export class OppaiInvokeGallery extends LitElement {
             <div class="k">Share</div>
             <div class="rowbtns">
               ${this.isClip(img) ? html`<button @click=${() => this.downloadClip(img)}>
-                <span class="material-symbols-rounded">download</span>Download</button>` : html`
+                <span class="material-symbols-rounded">download</span>Download</button>
+              <button title="A zip of the clip with its prompt and settings in it and in a .txt beside it" @click=${() => this.exportForCivitai([img.name])}>
+                <span class="material-symbols-rounded">folder_zip</span>Export for Civitai</button>` : html`
               <button ?disabled=${this.busy} @click=${(e: MouseEvent) => void this.openShareMenu(img, e.clientX, e.clientY)}>
                 <span class="material-symbols-rounded">forum</span>Send to chat</button>
               <button ?disabled=${this.busy} @click=${() => void this.exportImage(img)}>

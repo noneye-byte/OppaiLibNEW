@@ -45,3 +45,17 @@ export function lastFrameTime(duration: number, fps: number): number {
   if (!(duration > 0)) return 0;
   return Math.max(0, duration - 0.5 / Math.max(1, fps));
 }
+
+/** The longest side a picture to start a clip from is sent at. Wan draws at 832 and the
+    studio offers up to 1280, so a phone's 4000-pixel photo is fifteen times the pixels
+    it needs — and, as a data URL in the request, enough to be turned away by a reverse
+    proxy's body limit before the server sees it. */
+export const MAX_START_SIDE = 1536;
+
+/** The size a picture is sent at: as it is, or shrunk to fit MAX_START_SIDE. */
+export function startFrameSize(w: number, h: number, max = MAX_START_SIDE): { width: number; height: number; shrunk: boolean } {
+  const long = Math.max(w, h);
+  if (!(long > max)) return { width: w, height: h, shrunk: false };
+  const k = max / long;
+  return { width: Math.max(1, Math.round(w * k)), height: Math.max(1, Math.round(h * k)), shrunk: true };
+}

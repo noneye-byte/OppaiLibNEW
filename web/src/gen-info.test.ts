@@ -3,7 +3,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { buildGenInfo, toGenerateParams, toInfotext, toJSON } from "./gen-info.ts";
+import { buildGenInfo, fromGalleryMetadata, toGenerateParams, toInfotext, toJSON, upscaledInfo } from "./gen-info.ts";
+import type { GalleryImageMetadata } from "./api.ts";
 import type { GenerateParams } from "./api.ts";
 
 const params: GenerateParams = {
@@ -186,4 +187,49 @@ test("a face pass and a hand pass are both written down, the second as ADetailer
   const text = toInfotext(info);
   assert.ok(text.includes("ADetailer model: face_yolov8n.pt") && text.includes("ADetailer model 2nd: hand_yolov8n.pt"), text);
   assert.deepEqual(toGenerateParams(info).detailer?.models, ["face_yolov8n.pt", "hand_yolov8n.pt"]);
+});
+
+test("an upscaled copy is described by the picture it was enlarged from, not by the form", () => {
+  const source = buildGenInfo(params, { seed: 77, backend: "a1111" });
+  const up = upscaledInfo(source, { upscaler: "4x-UltraSharp", scale: 2, width: 1024, height: 1536, name: "seed 77" });
+  assert.equal(up.prompt, source.prompt);
+  assert.equal(up.seed, 77);
+  assert.deepEqual(up.loras, source.loras);
+  assert.equal(up.width, 1024);
+  assert.deepEqual(up.upscaled, { upscaler: "4x-UltraSharp", scale: 2 });
+  assert.match(toInfotext(up), /Upscaled: 2x with 4x-UltraSharp/);
+  assert.match(toInfotext(up), /Started from: seed 77 \(upscale\)/);
+  // Enlarged again: by the product of the two.
+  assert.equal(upscaledInfo(up, { upscaler: "Lanczos", scale: 1.5, width: 1536, height: 2304, name: "x" }).upscaled?.scale, 3);
+});
+
+test("a gallery record keeps everything it was made with, not only the portable fields", () => {
+  const meta = {
+    prompt: "a fox", negativePrompt: "", model: "rev", sampler: "Euler a", seed: 3, steps: 20, cfgScale: 7, cfgRescale: 0,
+    clipSkip: 0, width: 1024, height: 1536, seamlessX: false, seamlessY: false, cpuNoise: true, loras: [], backend: "a1111",
+    vaePrecision: "fp16", triggers: ["foxgirl"], characters: ["Libby"],
+    hires: { upscaler: "Latent", scale: 1.5, denoise: 0.4 },
+    upscaled: { upscaler: "4x-UltraSharp", scale: 2 },
+    refiner: { model: "face_yolov8n.pt", prompt: "", negativePrompt: "", confidence: 0.3, denoise: 0.4, maskBlur: 4 },
+    startedFrom: { name: "Picture 4", mode: "upscale" },
+    at: 1234,
+  } satisfies GalleryImageMetadata;
+  const info = fromGalleryMetadata(meta);
+  const text = toInfotext(info);
+  for (const want of ["VAE precision: fp16", "Hires upscaler: Latent", "Upscaled: 2x with 4x-UltraSharp",
+    "ADetailer model: face_yolov8n.pt", "Trigger phrases: foxgirl", "Characters: Libby", "Started from: Picture 4 (upscale)"]) {
+    assert.ok(text.includes(want), `${want} missing from ${text}`);
+  }
+  assert.equal(info.at, 1234);
+});
+
+test("a clip's record writes its frames and rate rather than a noise device", () => {
+  const info = fromGalleryMetadata({
+    prompt: "she waves", negativePrompt: "", model: "wan_high", sampler: "euler", seed: 1, steps: 4, cfgScale: 1, cfgRescale: 0,
+    clipSkip: 0, width: 480, height: 832, seamlessX: false, seamlessY: false, cpuNoise: false, loras: [], backend: "comfyui",
+    clip: { from: "image", frames: 81, fps: 16, shift: 8, lowModel: "wan_low", loop: true },
+  });
+  const text = toInfotext(info);
+  assert.match(text, /Frames: 81, FPS: 16, Shift: 8, Low noise model: wan_low, Video from: image, Loop: true/);
+  assert.doesNotMatch(text, /Noise device/);
 });

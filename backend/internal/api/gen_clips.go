@@ -62,6 +62,9 @@ type clipReq struct {
 	Board string `json:"board"`
 	// Detach answers 202 at once and makes the clip under JobID; see the top.
 	Detach bool `json:"detach"`
+	// Loop ends a clip from a picture on that picture, so it plays round without a
+	// seam: a built clip only (imagegen.WanClip.Loop).
+	Loop bool `json:"loop"`
 }
 
 // genClip is a finished clip as the studio is given it: a preview, like a picture's,
@@ -160,11 +163,12 @@ func (r clipRecipe) takes(fromImage bool) []string {
 	return builtTakes(fromImage)
 }
 
-// builtTakes is what the drawer may set on a clip of picked files.
+// builtTakes is what the drawer may set on a clip of picked files. Only a clip from a
+// picture can loop: the loop ends on the picture it started from.
 func builtTakes(fromImage bool) []string {
 	knobs := []string{"prompt", "negative", "seed", "width", "height", "frames", "fps", "loras"}
 	if fromImage {
-		return append([]string{"image"}, knobs...)
+		return append(append([]string{"image"}, knobs...), "loop")
 	}
 	return knobs
 }
@@ -208,6 +212,7 @@ func (r clipRecipe) wanClip(vars map[string]string, extra []settings.ClipLora) i
 	clip.Height, _ = strconv.Atoi(vars["height"])
 	clip.Frames, _ = strconv.Atoi(vars["frames"])
 	clip.FPS, _ = strconv.Atoi(vars["fps"])
+	clip.Loop = vars["loop"] == "1"
 	return clip
 }
 
@@ -293,6 +298,9 @@ func clipVars(req clipReq) map[string]string {
 	put("frames", req.Frames, 1, 1025, 1)
 	put("fps", req.FPS, 1, 120, 1)
 	put("steps", req.Steps, 1, 200, 1)
+	if req.Loop && req.From == "image" {
+		vars["loop"] = "1"
+	}
 	return vars
 }
 
@@ -472,7 +480,7 @@ func clipRecord(req clipReq, recipe clipRecipe, vars map[string]string, extra []
 		return rec
 	}
 	w := recipe.wanClip(vars, extra)
-	rec.Clip.Recipe = w.Recipe()
+	rec.Clip.Recipe, rec.Clip.Loop = w.Recipe(), w.Loop
 	w = w.Settled()
 	rec.Width, rec.Height = w.Size(init)
 	rec.Model, rec.VAE, rec.Sampler, rec.Steps, rec.CfgScale = w.Model, w.VAE, w.Sampler, w.Steps, w.CFG

@@ -223,6 +223,8 @@ type GalleryImage struct {
 	// and Tile says it has a still to show; a clip without one is drawn as a film.
 	Kind string `json:"kind,omitempty"`
 	Tile bool   `json:"tile,omitempty"`
+	// Upscaled says it was enlarged from another (OppaiLib's own gallery only).
+	Upscaled bool `json:"upscaled,omitempty"`
 }
 
 // GalleryPage is one page of a board's images, newest first.

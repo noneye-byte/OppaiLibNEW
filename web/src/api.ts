@@ -1628,6 +1628,9 @@ export interface ClipParams {
   board?: string;
   /** Answer at once and make the clip under jobId, to be followed with genProgress. */
   detach?: boolean;
+  /** End on the picture it starts from, so it plays round without a seam: a clip from
+      a picture, on files the studio builds (status `takes` has "loop"). */
+  loop?: boolean;
 }
 
 /** A finished clip: its preview, and its name in the studio's gallery when it was kept
@@ -2005,6 +2008,8 @@ export interface GalleryImage {
   /** "video" for a clip from the Video studio, and whether it has a still for a tile. */
   kind?: "video";
   tile?: boolean;
+  /** Enlarged from another (the studio's own gallery only). */
+  upscaled?: boolean;
 }
 
 /** The orders a gallery page can come back in. InvokeAI sorts by date alone. */
@@ -2015,13 +2020,16 @@ export interface GalleryPage {
   total: number;
 }
 
-/** Portable generation settings read from an InvokeAI gallery image. */
+/** Generation settings read from a gallery image. InvokeAI's carry the portable
+    fields alone; the studio's own gallery keeps its whole record (api/gen_gallery.go's
+    genRecord), which is GenInfo's shape, so the rest are there for its pictures. */
 export interface GalleryImageMetadata {
   prompt: string;
   negativePrompt: string;
   model: string;
   modelHash?: string;
   vae?: string;
+  vaePrecision?: string;
   sampler: string;
   seed: number;
   steps: number;
@@ -2035,7 +2043,47 @@ export interface GalleryImageMetadata {
   cpuNoise: boolean;
   loras: { name: string; hash?: string; weight: number }[];
   backend: string;
+  triggers?: string[];
+  characters?: string[];
+  denoise?: number;
+  refiner?: GenInfoRefiner;
+  regions?: RegionsParams;
+  hires?: { upscaler: string; scale: number; denoise?: number; steps?: number };
+  upscaled?: { upscaler: string; scale: number };
+  startedFrom?: { name: string; mode: "img2img" | "inpaint" | "faces" | "upscale" };
+  clip?: GenClipRecord;
+  at?: number;
 }
+
+/** The face/detail passes as a record keeps them. */
+export interface GenInfoRefiner {
+  model: string;
+  models?: string[];
+  prompt: string;
+  negativePrompt: string;
+  confidence: number;
+  denoise: number;
+  maskBlur: number;
+  custom?: DetailerPassParams[];
+}
+
+/** What only a clip's record has, beside the fields a picture shares with it. */
+export interface GenClipRecord {
+  from?: "image" | "text";
+  frames?: number;
+  fps?: number;
+  shift?: number;
+  lowModel?: string;
+  textEncoder?: string;
+  scheduler?: string;
+  recipe?: string;
+  source?: string;
+  loop?: boolean;
+}
+
+/** The kinds the studio's own gallery can be narrowed to. An enlarged clip is both a
+    video and upscaled. */
+export type GalleryType = "pictures" | "upscaled" | "videos";
 
 /** One model from the Civitai catalogue (via civitai.red). The search page carries
  *  the light fields; `civitaiModel` fills in the description, files and gallery. */
@@ -3491,12 +3539,23 @@ export const api = {
     request<{ status: string }>(`/api/imagegen/gallery/boards/${encodeURIComponent(id)}`, {
       method: "DELETE",
     }, 20_000),
-  galleryImages: (board: string, offset = 0, limit = 60, sort: GallerySort = "newest") =>
+  galleryImages: (board: string, offset = 0, limit = 60, sort: GallerySort = "newest", type?: GalleryType) =>
     request<GalleryPage>(
-      `/api/imagegen/gallery/images?board=${encodeURIComponent(board)}&offset=${offset}&limit=${limit}&sort=${sort}`,
+      `/api/imagegen/gallery/images?board=${encodeURIComponent(board)}&offset=${offset}&limit=${limit}&sort=${sort}` +
+        (type ? `&type=${type}` : ""),
       {},
       20_000,
     ),
+  /** A zip of pictures and clips with their parameters written in and beside them, for
+      Civitai: the names given, or a whole board narrowed by type. A plain download —
+      the browser saves it as it comes, rather than the page holding it. */
+  galleryExportURL: (what: { names?: string[]; board?: string; type?: GalleryType }) => {
+    const q = new URLSearchParams();
+    if (what.names?.length) q.set("names", what.names.join(","));
+    else if (what.board) q.set("board", what.board);
+    if (what.type && !what.names?.length) q.set("type", what.type);
+    return `/api/imagegen/gallery/export?${q}`;
+  },
   galleryThumbURL: (name: string) => `/api/imagegen/gallery/image/${encodeURIComponent(name)}/thumb`,
   galleryFullURL: (name: string) => `/api/imagegen/gallery/image/${encodeURIComponent(name)}`,
   galleryImageMetadata: (name: string) =>

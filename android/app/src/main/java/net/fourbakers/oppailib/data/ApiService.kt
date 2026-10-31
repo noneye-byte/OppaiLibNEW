@@ -365,6 +365,12 @@ interface ApiService {
     @POST("api/imagegen/generate")
     suspend fun imageGenGenerate(@Body body: GenerateRequest): GenerateResponse
 
+    /** Starts a clip through ComfyUI, detached: answered at once, the clip followed by
+     * [imageGenProgress] polls to `result.clip`. A clip takes minutes, past what a proxy
+     * (or the phone's own network) holds one request open for. */
+    @POST("api/imagegen/clip")
+    suspend fun imageGenClip(@Body body: ClipRequest): ClipAccepted
+
     /** What the generator has drawn so far of a named run; an unchanged preview is
      * withheld when [seen] is the last seq the caller had. */
     @GET("api/imagegen/progress/{id}")
@@ -489,6 +495,8 @@ interface ApiService {
         @Query("board") board: String,
         @Query("offset") offset: Int = 0,
         @Query("limit") limit: Int = 60,
+        /** "pictures", "upscaled" or "videos" on the server's own gallery; null is all. */
+        @Query("type") type: String? = null,
     ): GalleryPageResponse
 
     @DELETE("api/imagegen/gallery/image/{name}")

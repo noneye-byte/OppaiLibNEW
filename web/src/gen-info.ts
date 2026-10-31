@@ -1,4 +1,4 @@
-import type { DetailerPassParams, GalleryImageMetadata, GenerateParams, RegionsParams } from "./api.js";
+import type { DetailerPassParams, GalleryImageMetadata, GenClipRecord, GenerateParams, RegionsParams } from "./api.js";
 
 /**
  * The complete record of how one image was made, and how to write it down.
@@ -86,6 +86,8 @@ export interface GenInfo {
   hires?: { upscaler: string; scale: number; denoise?: number; steps?: number };
   /** A finished picture enlarged and not redrawn. */
   upscaled?: { upscaler: string; scale: number };
+  /** What only a clip has: its frames, rate, second model and the like. */
+  clip?: GenClipRecord;
   /** Destination board, for backends that have them. */
   board?: string;
   /** Which API produced this — "invokeai" or "a1111". The same parameters do not
@@ -219,8 +221,22 @@ export function toInfotext(info: GenInfo): string {
   if (info.seamlessX || info.seamlessY) {
     kv.push(`Seamless: ${[info.seamlessX ? "x" : "", info.seamlessY ? "y" : ""].filter(Boolean).join("+")}`);
   }
-  if (info.vaePrecision) kv.push(`VAE precision: ${info.vaePrecision}`);
-  if (!info.cpuNoise) kv.push("Noise device: gpu");
+  if (info.clip) {
+    // A clip's own numbers, as the server's export writes them (genInfotext in
+    // api/gen_export.go). A clip has no noise device or VAE precision to speak of.
+    const c = info.clip;
+    if (c.frames) kv.push(`Frames: ${c.frames}`);
+    if (c.fps) kv.push(`FPS: ${c.fps}`);
+    if (c.shift) kv.push(`Shift: ${c.shift}`);
+    if (c.scheduler) kv.push(`Schedule type: ${c.scheduler}`);
+    if (c.lowModel) kv.push(`Low noise model: ${c.lowModel}`);
+    if (c.textEncoder) kv.push(`Text encoder: ${c.textEncoder}`);
+    if (c.from) kv.push(`Video from: ${c.from}`);
+    if (c.loop) kv.push("Loop: true");
+  } else {
+    if (info.vaePrecision) kv.push(`VAE precision: ${info.vaePrecision}`);
+    if (!info.cpuNoise) kv.push("Noise device: gpu");
+  }
   if (info.hires) {
     // A1111's own keys, so pasting this back into A1111 turns the hires fix on.
     kv.push(`Hires upscale: ${info.hires.scale}`);
@@ -261,30 +277,68 @@ export function toJSON(info: GenInfo): string {
   return JSON.stringify(info, null, 2);
 }
 
-/** Converts stored gallery metadata into the complete client-side record. */
+/**
+ * Converts stored gallery metadata into the complete client-side record.
+ *
+ * The studio's own gallery keeps the whole record, and every part of it is carried
+ * over — the hires fix, the upscale, the detailer passes, the clip's numbers. This
+ * used to keep only InvokeAI's portable fields, and an export for Civitai of a picture
+ * that had been upscaled or drawn with ADetailer quietly said less than was known.
+ */
 export function fromGalleryMetadata(meta: GalleryImageMetadata): GenInfo {
   return {
-    prompt: meta.prompt,
+    prompt: meta.prompt ?? "",
     negativePrompt: meta.negativePrompt ?? "",
     model: meta.model ?? "",
     modelHash: meta.modelHash || undefined,
     vae: meta.vae ?? "",
-    vaePrecision: "fp32",
+    vaePrecision: meta.vaePrecision || "fp32",
     sampler: meta.sampler ?? "",
-    seed: meta.seed,
-    steps: meta.steps,
-    cfgScale: meta.cfgScale,
-    cfgRescale: meta.cfgRescale,
-    clipSkip: meta.clipSkip,
-    width: meta.width,
-    height: meta.height,
-    seamlessX: meta.seamlessX,
-    seamlessY: meta.seamlessY,
-    cpuNoise: meta.cpuNoise,
+    seed: meta.seed ?? 0,
+    steps: meta.steps ?? 0,
+    cfgScale: meta.cfgScale ?? 0,
+    cfgRescale: meta.cfgRescale ?? 0,
+    clipSkip: meta.clipSkip ?? 0,
+    width: meta.width ?? 0,
+    height: meta.height ?? 0,
+    seamlessX: !!meta.seamlessX,
+    seamlessY: !!meta.seamlessY,
+    cpuNoise: meta.cpuNoise !== false,
     loras: meta.loras ?? [],
-    triggers: [],
-    characters: [],
+    triggers: meta.triggers ?? [],
+    characters: meta.characters ?? [],
+    denoise: meta.denoise || undefined,
+    refiner: meta.refiner,
+    regions: meta.regions?.parts?.length ? meta.regions : undefined,
+    hires: meta.hires,
+    upscaled: meta.upscaled,
+    startedFrom: meta.startedFrom,
+    clip: meta.clip,
     backend: meta.backend || "invokeai",
+    at: meta.at || Date.now(),
+  };
+}
+
+/**
+ * The record of a picture enlarged from another: the other's, which is what made it,
+ * at its new size with the enlargement on top. An upscale draws nothing, so the
+ * parameters it was sent with are the form's, not the picture's — the prompt box may
+ * hold the next idea entirely — and recording those made the copy say it was drawn
+ * from words it never saw. The server keeps its gallery copy the same way
+ * (upscaledRecord in api/gen_gallery.go).
+ */
+export function upscaledInfo(
+  source: GenInfo,
+  up: { upscaler: string; scale: number; width: number; height: number; name: string; seconds?: number },
+): GenInfo {
+  const scale = Math.round(up.scale * (source.upscaled?.scale ?? 1) * 100) / 100;
+  return {
+    ...source,
+    width: up.width,
+    height: up.height,
+    upscaled: { upscaler: up.upscaler, scale },
+    startedFrom: { name: up.name, mode: "upscale" },
+    seconds: up.seconds,
     at: Date.now(),
   };
 }

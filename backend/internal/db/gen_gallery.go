@@ -32,6 +32,10 @@ type GenImage struct {
 	CreatedAt int64
 	// MIME is a clip's type; blank is a picture.
 	MIME string
+	// Upscaled says it was enlarged from another after it was made — the gallery's
+	// one way of telling its kinds apart that is not the file type, kept outside the
+	// sealed record so the listing can filter on it.
+	Upscaled bool
 }
 
 // GenScope picks which pictures a listing covers: every one, the unsorted ones, or
@@ -39,16 +43,39 @@ type GenImage struct {
 type GenScope struct {
 	All      bool
 	FolderID int64 // 0 with All false is Unsorted
+	// Type narrows it to one kind: GenTypePictures, GenTypeUpscaled or GenTypeVideos;
+	// blank is every kind.
+	Type string
 }
 
+// The kinds a listing can be narrowed to. An enlarged clip is both a video and
+// upscaled, and listed under either; "pictures" are the pictures as they were drawn.
+const (
+	GenTypePictures = "pictures"
+	GenTypeUpscaled = "upscaled"
+	GenTypeVideos   = "videos"
+)
+
 func (s GenScope) where() (string, []any) {
+	var where string
+	var args []any
 	switch {
 	case s.All:
-		return "1 = 1", nil
+		where = "1 = 1"
 	case s.FolderID == 0:
-		return "folder_id IS NULL", nil
+		where = "folder_id IS NULL"
+	default:
+		where, args = "folder_id = ?", []any{s.FolderID}
 	}
-	return "folder_id = ?", []any{s.FolderID}
+	switch s.Type {
+	case GenTypePictures:
+		where += " AND mime = '' AND COALESCE(upscaled, 0) = 0"
+	case GenTypeUpscaled:
+		where += " AND upscaled = 1"
+	case GenTypeVideos:
+		where += " AND mime <> ''"
+	}
+	return where, args
 }
 
 // GenFolders lists the folders by name, each with how many pictures it holds.
@@ -167,11 +194,11 @@ func (d *DB) DeleteGenFolder(ctx context.Context, id int64) error {
 	return tx.Commit()
 }
 
-const genImageColumns = `id, COALESCE(folder_id, 0), sha256, size, blob_path, thumb_path, width, height, info_enc, created_at, mime`
+const genImageColumns = `id, COALESCE(folder_id, 0), sha256, size, blob_path, thumb_path, width, height, info_enc, created_at, mime, COALESCE(upscaled, 0)`
 
 func scanGenImage(row interface{ Scan(...any) error }) (GenImage, error) {
 	var g GenImage
-	err := row.Scan(&g.ID, &g.FolderID, &g.SHA256, &g.Size, &g.BlobPath, &g.ThumbPath, &g.Width, &g.Height, &g.InfoEnc, &g.CreatedAt, &g.MIME)
+	err := row.Scan(&g.ID, &g.FolderID, &g.SHA256, &g.Size, &g.BlobPath, &g.ThumbPath, &g.Width, &g.Height, &g.InfoEnc, &g.CreatedAt, &g.MIME, &g.Upscaled)
 	return g, err
 }
 
@@ -186,9 +213,9 @@ func (d *DB) AddGenImage(ctx context.Context, g *GenImage) error {
 		folder = g.FolderID
 	}
 	res, err := d.sql.ExecContext(ctx, `
-		INSERT INTO gen_images(folder_id, sha256, size, blob_path, thumb_path, width, height, info_enc, created_at, mime)
-		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		folder, g.SHA256, g.Size, g.BlobPath, g.ThumbPath, g.Width, g.Height, g.InfoEnc, g.CreatedAt, g.MIME)
+		INSERT INTO gen_images(folder_id, sha256, size, blob_path, thumb_path, width, height, info_enc, created_at, mime, upscaled)
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		folder, g.SHA256, g.Size, g.BlobPath, g.ThumbPath, g.Width, g.Height, g.InfoEnc, g.CreatedAt, g.MIME, g.Upscaled)
 	if err != nil {
 		return err
 	}
@@ -235,6 +262,32 @@ func (d *DB) GenImages(ctx context.Context, scope GenScope, order string, offset
 		out = append(out, g)
 	}
 	return out, total, rows.Err()
+}
+
+// GenUnclassified is up to limit kept items that predate the upscaled column, with
+// their records, for the server to read whether each was enlarged: the record is
+// sealed, so only the key-holding process can say.
+func (d *DB) GenUnclassified(ctx context.Context, limit int) ([]GenImage, error) {
+	rows, err := d.sql.QueryContext(ctx, `SELECT `+genImageColumns+` FROM gen_images WHERE upscaled IS NULL ORDER BY id LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []GenImage
+	for rows.Next() {
+		g, err := scanGenImage(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, g)
+	}
+	return out, rows.Err()
+}
+
+// SetGenUpscaled records whether a kept item was enlarged.
+func (d *DB) SetGenUpscaled(ctx context.Context, id int64, upscaled bool) error {
+	_, err := d.sql.ExecContext(ctx, `UPDATE gen_images SET upscaled = ? WHERE id = ?`, upscaled, id)
+	return err
 }
 
 // MoveGenImages files pictures into a folder, or back to Unsorted with folderID 0.

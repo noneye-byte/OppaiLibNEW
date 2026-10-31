@@ -56,6 +56,9 @@ type WanClip struct {
 	Frames   int
 	FPS      int
 	Seed     int64
+	// Loop ends the clip on the picture it starts from, so it plays round without a
+	// seam: see BuildWanGraph.
+	Loop bool
 }
 
 // WanLora is one LoRA on a Wan clip.
@@ -80,6 +83,22 @@ func (w WanClip) check() error {
 	}
 	if !w.Checkpoint && (strings.TrimSpace(w.TextEncoder) == "" || strings.TrimSpace(w.VAE) == "") {
 		return fmt.Errorf("a video model from diffusion_models needs a text encoder and a VAE picked beside it: Settings → Image generation → Video")
+	}
+	return nil
+}
+
+// checkLoop says why a loop can't be made, when it can't. A loop is the starting
+// picture given again as the last frame, and only the 16-channel image-to-video node
+// takes a last frame: the 5B model's latent node has nowhere to put one.
+func (w WanClip) checkLoop() error {
+	if !w.Loop {
+		return nil
+	}
+	if w.Image == "" {
+		return fmt.Errorf("a looping clip starts and ends on a picture, so it needs one to start from")
+	}
+	if wan22Latent(w.VAE) {
+		return fmt.Errorf("Wan 2.2's 5B model can't be given a last frame, so it can't loop — use the 14B pair or Wan 2.1")
 	}
 	return nil
 }
@@ -173,12 +192,18 @@ func (w WanClip) Recipe() string {
 	} else if on > 1 {
 		s += fmt.Sprintf(" · %d LoRAs", on)
 	}
+	if w.Loop {
+		s += " · loop"
+	}
 	return s
 }
 
 // BuildWanGraph wires a clip as an API-format workflow.
 func BuildWanGraph(w WanClip) (map[string]any, error) {
 	if err := w.check(); err != nil {
+		return nil, err
+	}
+	if err := w.checkLoop(); err != nil {
 		return nil, err
 	}
 	w = w.Settled()
@@ -232,9 +257,18 @@ func BuildWanGraph(w WanClip) (map[string]any, error) {
 		size["start_image"] = slot(g.add("LoadImage", map[string]any{"image": w.Image}), 0)
 	}
 	var latent []any
-	if wan22Latent(w.VAE) {
+	switch {
+	case wan22Latent(w.VAE):
 		latent = slot(g.add("Wan22ImageToVideoLatent", size), 0)
-	} else {
+	case w.Loop:
+		// A loop is the first-and-last-frame node given the same picture twice: the
+		// motion has to find its way back to where it began. Wan 2.2's image-to-video
+		// pair was trained to take a last frame (ComfyUI's FLF2V template runs on it).
+		size["end_image"] = size["start_image"]
+		size["positive"], size["negative"] = positive, negCond
+		flf := g.add("WanFirstLastFrameToVideo", size)
+		positive, negCond, latent = slot(flf, 0), slot(flf, 1), slot(flf, 2)
+	default:
 		// WanImageToVideo without a start image is just an empty latent of the right
 		// shape with the conditioning passed through, so words-to-video goes through
 		// it too rather than through a second latent node.
@@ -269,6 +303,11 @@ func BuildWanGraph(w WanClip) (map[string]any, error) {
 		}), 0)
 	}
 	frameImages := slot(g.add("VAEDecode", map[string]any{"samples": samples, "vae": vae}), 0)
+	if w.Loop && frames > 1 {
+		// The last frame is the first one again. Played round, it would show twice and
+		// the loop would hitch on it, so it is cut.
+		frameImages = slot(g.add("ImageFromBatch", map[string]any{"image": frameImages, "batch_index": 0, "length": frames - 1}), 0)
+	}
 	video := slot(g.add("CreateVideo", map[string]any{"images": frameImages, "fps": float64(fps)}), 0)
 	g.add("SaveVideo", map[string]any{"video": video, "filename_prefix": "oppailib/clip", "format": "auto", "codec": "auto"})
 	return g.nodes, nil

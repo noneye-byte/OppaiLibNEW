@@ -267,3 +267,13 @@ export function comfyFolderOf(type: string, fileName: string): ComfyFolderKind |
     default: return null;
   }
 }
+
+/**
+ * Whether a clip on these files can loop. A loop is the start picture given again as
+ * the last frame, and Wan 2.2's 5B model — the one with its own VAE — has no way to
+ * take a last frame (checkLoop in imagegen/comfy_wan.go says the same). Its VAE's name
+ * is the tell, as it is on the server.
+ */
+export function canLoop(m: Pick<ClipModels, "vae"> | undefined): boolean {
+  return !/wan2\.2|wan2_2|wan22/i.test(m?.vae ?? "");
+}

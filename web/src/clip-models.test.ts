@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 const {
   clipLoraChoices, clipLoraPicks, clipModelChoiceOf, clipModelChoices, comfyFolderOf, isSpeedFile, loraStage, loraTwin, NO_CLIP_MODELS,
   settleSpeed, speedAtFullCFG, studioClipModels, studioClipRecipe, suggestClipModels, withClipModel,
+  canLoop,
 } = await import("./clip-models.ts");
 
 test("a LoRA's half of the pair is read off its name however it is written", () => {
@@ -210,4 +211,11 @@ test("Settings' LoRAs are read as the studio's choices and go back out as the sa
   ]);
   // Nothing in Settings is nothing picked.
   assert.deepEqual(studioClipRecipe(undefined, loraChoices), { models: NO_CLIP_MODELS, loras: {} });
+});
+
+test("a loop is offered on the 14B pair and Wan 2.1, never on the 5B model's own VAE", () => {
+  assert.equal(canLoop({ vae: "wan_2.1_vae.safetensors" }), true);
+  assert.equal(canLoop({ vae: "" }), true);
+  assert.equal(canLoop(undefined), true);
+  assert.equal(canLoop({ vae: "wan2.2_vae.safetensors" }), false);
 });

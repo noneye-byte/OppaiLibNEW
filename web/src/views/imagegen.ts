@@ -38,9 +38,11 @@ import {
 import {
   buildGenInfo,
   copyText,
+  fromGalleryMetadata,
   toGenerateParams,
   toInfotext,
   toJSON,
+  upscaledInfo,
   type GenInfo,
 } from "../gen-info.js";
 import { clearDraft, loadDraft, saveDraft, type DraftOutfitSlot } from "../gen-draft.js";
@@ -197,6 +199,8 @@ interface StartPicture {
   /** Its name in the studio's gallery, when it is there: the server reads it from
       there rather than being sent it back. */
   gallery?: string;
+  /** How it was made, when known: what an upscale of it is described by. */
+  info?: GenInfo;
 }
 
 /** The Image studio's inspector tabs, down its rail in this order. Video used to be one
@@ -3207,7 +3211,13 @@ export class OppaiImageGen extends LitElement {
         outfitConfig: run.outfitConfig,
         // The seed that came back, not the one submitted: a submitted -1 means
         // "surprise me", and it is the returned value that reproduces this image.
-        info: buildGenInfo(params, {
+        info: run.from?.mode === "upscale" && run.from.info ? upscaledInfo(run.from.info, {
+          upscaler: params.upscale?.upscaler ?? "",
+          scale: params.upscale?.scale ?? 2,
+          ...scaledSize(run.from.width, run.from.height, params.upscale?.scale ?? 2),
+          name: run.from.name,
+          seconds,
+        }) : buildGenInfo(params, {
           seed: g.seed,
           backend: this.status?.backend ?? "unknown",
           modelHash: this.status?.models?.find((model) => model.title === params.checkpoint)?.hash,
@@ -3424,13 +3434,19 @@ export class OppaiImageGen extends LitElement {
   // the bytes go to the generator with the run (initImage), the painted mask with it.
 
   /** Makes a picture the one the next run starts from. A face pass runs at once. */
-  private async usePicture(url: string, name: string, mode: UsePictureMode, objectURL = false, gallery?: string) {
+  private async usePicture(url: string, name: string, mode: UsePictureMode, objectURL = false, gallery?: string, info?: GenInfo) {
     let img: HTMLImageElement;
     try {
       img = await loadImage(url);
     } catch (e) {
       this.showToast((e as Error).message);
       return;
+    }
+    // An upscale is described by the picture it enlarges (upscaledInfo); one from the
+    // gallery brings its record along. Without it the copy is still made, and the
+    // server's gallery copy inherits the record either way.
+    if (mode === "upscale" && !info && gallery) {
+      info = await api.galleryImageMetadata(gallery).then(fromGalleryMetadata).catch(() => undefined);
     }
     if (mode === "animate") {
       // A clip is not the next picture's start: the Video studio keeps its own.
@@ -3440,7 +3456,7 @@ export class OppaiImageGen extends LitElement {
     }
     // A picture to start from is the Image studio's, whichever mode handed it over.
     if (!this.studio) this.mode = "image";
-    const pic: StartPicture = { url, name, width: img.naturalWidth, height: img.naturalHeight, mode, objectURL, gallery };
+    const pic: StartPicture = { url, name, width: img.naturalWidth, height: img.naturalHeight, mode, objectURL, gallery, info };
     if (mode === "faces" || mode === "upscale") {
       void this.runOnPicture(pic, mode);
       return;
@@ -3825,7 +3841,7 @@ export class OppaiImageGen extends LitElement {
           run: () => void this.usePicture(this.previewURL(shot), `seed ${shot.seed}`, "faces", false, shot.gallery) }] : []),
         ...(this.canUpscale ? [{ label: `Upscale ${this.upscaleBy}×`, icon: "open_in_full",
           disabled: this.generating,
-          run: () => void this.usePicture(this.previewURL(shot), `seed ${shot.seed}`, "upscale", false, shot.gallery) }] : []),
+          run: () => void this.usePicture(this.previewURL(shot), `seed ${shot.seed}`, "upscale", false, shot.gallery, shot.info) }] : []),
         ...(this.status?.clips?.image ? [{ label: "Animate", icon: "animation",
           run: () => void this.usePicture(this.previewURL(shot), `seed ${shot.seed}`, "animate", false, shot.gallery) }] : []),
         { label: "Use as a Libby background", icon: "wallpaper",
@@ -7978,7 +7994,7 @@ export class OppaiImageGen extends LitElement {
       ${tool("add_photo_alternate", "Start the next picture from this one", () => void this.usePicture(url, name, "img2img", false, shot.gallery))}
       ${a1111 ? tool("brush", "Paint over a part to redo it", () => void this.usePicture(url, name, "inpaint", false, shot.gallery)) : nothing}
       ${a1111 && this.status?.detailerAvailable ? tool("face_retouching_natural", fixLabel(this.detailerPasses), () => void this.usePicture(url, name, "faces", false, shot.gallery)) : nothing}
-      ${this.canUpscale ? tool("open_in_full", `Upscale ${this.upscaleBy}×`, () => void this.usePicture(url, name, "upscale", false, shot.gallery)) : nothing}
+      ${this.canUpscale ? tool("open_in_full", `Upscale ${this.upscaleBy}×`, () => void this.usePicture(url, name, "upscale", false, shot.gallery, shot.info)) : nothing}
       ${this.status?.clips?.image ? tool("animation", "Animate it in the Video studio", () => void this.usePicture(url, name, "animate", false, shot.gallery)) : nothing}
       ${tool("background_replace", "Cut the background out", () => void this.openCutout(url, `seed-${shot.seed}`))}
       <span class="vb-sep"></span>

@@ -26,14 +26,45 @@ export const MOTION_PRESETS: readonly MotionPreset[] = [
   { id: "blink", label: "Blinks", phrase: "She blinks naturally", group: "her" },
   { id: "wave", label: "Waves", phrase: "She raises a hand and waves", group: "her" },
   { id: "breathe", label: "Breathing", phrase: "Her chest rises and falls with slow breathing", group: "her" },
-  { id: "hair", label: "Hair in the wind", phrase: "Her hair moves softly in the breeze", group: "her" },
+  { id: "hair", label: "Hair in the wind", phrase: "Her hair flows and moves softly in the breeze", group: "her" },
+  { id: "pose", label: "Holds her pose", phrase: "She holds her pose and moves only a little", group: "her" },
   { id: "walk", label: "Walks closer", phrase: "She walks slowly toward the camera", group: "her" },
   { id: "dance", label: "Sways", phrase: "She sways her hips gently to music", group: "her" },
   { id: "light", label: "Flickering light", phrase: "Warm light flickers across the scene", group: "scene" },
   { id: "rain", label: "Rain", phrase: "Rain falls steadily in the background", group: "scene" },
   { id: "petals", label: "Petals", phrase: "Petals drift through the air", group: "scene" },
-  { id: "cloth", label: "Fabric moves", phrase: "Her clothes ripple and move with her", group: "scene" },
+  { id: "cloth", label: "Fabric moves", phrase: "Her clothes sway and ripple gently as she moves", group: "scene" },
 ];
+
+/**
+ * Showcase: a picture brought to life rather than set in motion — she stays where she
+ * is, blinks, breathes, her hair and clothes move, and the camera holds still. It is
+ * the clip a character card or a wallpaper wants, and it is made of the presets above,
+ * so each of its parts can still be pressed off on its own afterwards. Paired with a
+ * loop (the clip ends on the picture it began from) it plays round for ever.
+ */
+export const SHOWCASE_PRESETS: readonly string[] = ["still", "pose", "blink", "breathe", "hair", "cloth"];
+
+function showcasePhrases(): string[] {
+  return SHOWCASE_PRESETS.map((id) => MOTION_PRESETS.find((p) => p.id === id)!.phrase);
+}
+
+/** Whether every part of the showcase is in the prompt. */
+export function isShowcase(prompt: string): boolean {
+  return showcasePhrases().every((phrase) => hasPhrase(prompt, phrase));
+}
+
+/**
+ * Puts the showcase into the prompt, or takes it out when it is all there. Its parts
+ * go first, in their order, with whatever else the prompt says kept after them; the
+ * ones already there are not added twice. Taking it out leaves only what is not its.
+ */
+export function toggleShowcase(prompt: string): string {
+  const parts = showcasePhrases();
+  const rest = sentences(prompt).filter((s) => !parts.some((p) => same(s, p)));
+  const next = isShowcase(prompt) ? rest : [...parts, ...rest];
+  return next.length ? `${next.join(". ")}.` : "";
+}
 
 /** Splits a prompt into its sentences, trimmed, without their full stops. */
 function sentences(prompt: string): string[] {
