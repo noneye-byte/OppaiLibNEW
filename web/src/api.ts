@@ -1626,6 +1626,8 @@ export interface ClipParams {
   models?: ClipModels;
   /** The gallery folder the clip is filed in. */
   board?: string;
+  /** Answer at once and make the clip under jobId, to be followed with genProgress. */
+  detach?: boolean;
 }
 
 /** A finished clip: its preview, and its name in the studio's gallery when it was kept
@@ -1649,6 +1651,7 @@ export interface ClipUpscaleParams {
   upscaler: string;
   scale: number;
   board?: string;
+  detach?: boolean;
 }
 
 /** One link a Test tried: for Image generation the generator, its rescan route, the
@@ -1709,6 +1712,8 @@ export interface GenerateResult {
   rolled?: boolean;
   /** A clip run's one result, a preview like a picture's (genPreviewURL). */
   clip?: GenClip;
+  /** A detached clip call's answer: nothing yet, the clip is followed by its job. */
+  accepted?: boolean;
 }
 
 /** One txt2img job. Only `prompt` is required; the server clamps the rest to sane ranges. */
@@ -3256,10 +3261,10 @@ export const api = {
   /** A few seconds of video through ComfyUI. Minutes, not seconds: the server holds
       the run past a proxy's timeout, and the result is collected with genProgress. */
   makeClip: (params: ClipParams) =>
-    request<GenerateResult>("/api/imagegen/clip", { method: "POST", body: JSON.stringify(params) }, 16 * 60_000),
+    request<GenerateResult>("/api/imagegen/clip", { method: "POST", body: JSON.stringify(params) }, params.detach ? 2 * 60_000 : 16 * 60_000),
   /** A finished clip, enlarged: a new clip beside it, collected as a clip is. */
   upscaleClip: (params: ClipUpscaleParams) =>
-    request<GenerateResult>("/api/imagegen/clip/upscale", { method: "POST", body: JSON.stringify(params) }, 16 * 60_000),
+    request<GenerateResult>("/api/imagegen/clip/upscale", { method: "POST", body: JSON.stringify(params) }, params.detach ? 2 * 60_000 : 16 * 60_000),
 
   /** The model files the saved ComfyUI offers, for the Video settings' pickers. */
   comfyModels: () => request<ComfyModels>("/api/imagegen/comfy/models"),

@@ -25,9 +25,13 @@ import (
 // Automatic1111 it is kept in the studio's gallery beside the pictures (gen_gallery.go),
 // so nothing reaches the library until it is saved.
 //
-// A clip takes minutes, longer than a reverse proxy holds a request open. A named run
-// is detached from its request the way a picture's is (imagegen_jobs.go), and the
-// studio collects the clip from its last poll when the call itself is cut off.
+// A clip takes minutes, longer than a reverse proxy holds a request open — and longer
+// than Firefox does: it drops any request that has waited five minutes for an answer,
+// as "NetworkError when attempting to fetch resource". So the studio asks for the clip
+// detached: the call is answered 202 as soon as the request is checked, the clip is made
+// under its job (imagegen_jobs.go), and the studio follows the job's progress polls to
+// the result. A named call that is not detached still outlives its request, and the
+// studio collects it from its last poll when the call is cut off.
 
 type clipReq struct {
 	JobID string `json:"jobId"`
@@ -56,6 +60,8 @@ type clipReq struct {
 	Models *settings.ClipModels `json:"models"`
 	// Board is the gallery folder open beside the studio, which the clip is filed in.
 	Board string `json:"board"`
+	// Detach answers 202 at once and makes the clip under JobID; see the top.
+	Detach bool `json:"detach"`
 }
 
 // genClip is a finished clip as the studio is given it: a preview, like a picture's,
@@ -333,54 +339,96 @@ func (s *Server) handleImageGenClip(w http.ResponseWriter, r *http.Request) {
 		req.Seed = rand.Int63n(1 << 32)
 	}
 
+	vars := clipVars(req)
+	s.serveClipJob(w, r, req.JobID, req.Detach, "clip", func(ctx context.Context, report func(imagegen.Progress)) (genResult, error) {
+		outs, err := recipe.run(ctx, s.imagegen, set.LibbyClipURL, vars, extra, init, report)
+		if err != nil {
+			return genResult{}, err
+		}
+		out := outs[0]
+		mime := safeInlineContentType(out.MIME)
+		rec := clipRecord(req, recipe, vars, extra, init)
+		clip := &genClip{MIME: mime, Seed: req.Seed, Recipe: rec.Clip.Recipe, Width: rec.Width, Height: rec.Height}
+		preview := &genPreview{data: out.Data, mime: mime, prompt: req.Prompt, negative: req.NegativePrompt, seed: req.Seed, model: rec.Model}
+		s.keepClip(ctx, set, req.Board, out, rec, init, preview, clip)
+		clip.ID = s.genCache.put(preview)
+		return genResult{Images: []genResultImage{}, Prompt: req.Prompt, Positive: req.Prompt, Negative: req.NegativePrompt, Clip: clip}, nil
+	})
+}
+
+// serveClipJob makes a clip, or an enlargement of one, under its job: answering with it
+// when the call waits, or 202 at once when detached, the work going on without the
+// request. Either way the card is lent for the work, not the request: a proxy that
+// cuts the call off does not stop ComfyUI, and her model must not come back onto the
+// card mid-render. The image generator's checkpoint steps off it too, unless Settings
+// keeps it. what names the work in its errors.
+func (s *Server) serveClipJob(w http.ResponseWriter, r *http.Request, jobID string, detach bool, what string,
+	work func(ctx context.Context, report func(imagegen.Progress)) (genResult, error)) {
+	named := genJobIDPattern.MatchString(jobID)
+	if detach && !named {
+		writeErr(w, http.StatusBadRequest, "a detached "+what+" needs a job id to be followed by")
+		return
+	}
 	ctx := r.Context()
 	var job *genJob
-	if genJobIDPattern.MatchString(req.JobID) {
-		ctx, job = s.genJobs.start(context.WithoutCancel(r.Context()), req.JobID)
-		defer s.genJobs.finish(req.JobID, job)
+	if named {
+		ctx, job = s.genJobs.start(context.WithoutCancel(r.Context()), jobID)
 	}
-	ctx, cancel := context.WithTimeout(ctx, clipTimeout)
-	defer cancel()
-	// The card is lent for the clip, not the request: a proxy that cuts the call off
-	// does not stop ComfyUI, and her model must not come back onto the card mid-render.
-	// The image generator's checkpoint steps off it too, unless Settings keeps it.
-	release := s.lendCardToVideo(ctx)
-	defer release()
-	vars := clipVars(req)
-	outs, err := recipe.run(ctx, s.imagegen, set.LibbyClipURL, vars, extra, init, func(p imagegen.Progress) {
-		if job != nil {
-			job.report(p)
+	run := func() (genResult, int, string) {
+		ctx, cancel := context.WithTimeout(ctx, clipTimeout)
+		defer cancel()
+		release := s.lendCardToVideo(ctx)
+		defer release()
+		res, err := work(ctx, func(p imagegen.Progress) {
+			if job != nil {
+				job.report(p)
+			}
+		})
+		if err == nil {
+			if job != nil {
+				job.succeed(res)
+			}
+			return res, http.StatusOK, ""
 		}
-	})
-	if err != nil {
 		if job != nil && job.wasCancelled() {
 			job.fail("generation cancelled")
-			writeErr(w, http.StatusConflict, "generation cancelled")
-			return
+			return res, http.StatusConflict, "generation cancelled"
 		}
 		msg := err.Error()
 		if errors.Is(err, context.DeadlineExceeded) {
-			msg = "the clip took longer than a quarter of an hour and was stopped"
+			msg = "the " + what + " took longer than a quarter of an hour and was stopped"
 		}
-		s.log.Warn("clip", "err", err)
+		s.log.Warn(what, "err", err)
 		if job != nil {
 			job.fail(msg)
 		}
-		writeErr(w, http.StatusBadGateway, msg)
+		return res, http.StatusBadGateway, msg
+	}
+	if detach {
+		go func() {
+			defer s.genJobs.finish(jobID, job)
+			// Nothing above it would recover a panic here, and the whole server would go
+			// down with the clip; the job says what happened instead.
+			defer func() {
+				if p := recover(); p != nil {
+					s.log.Error(what+" panicked", "panic", p)
+					job.fail("the " + what + " failed inside OppaiLib — the server log has the details")
+				}
+			}()
+			run()
+		}()
+		writeJSON(w, http.StatusAccepted, map[string]any{"jobId": jobID, "accepted": true})
 		return
 	}
-	out := outs[0]
-	mime := safeInlineContentType(out.MIME)
-	rec := clipRecord(req, recipe, vars, extra, init)
-	clip := &genClip{MIME: mime, Seed: req.Seed, Recipe: rec.Clip.Recipe, Width: rec.Width, Height: rec.Height}
-	preview := &genPreview{data: out.Data, mime: mime, prompt: req.Prompt, negative: req.NegativePrompt, seed: req.Seed, model: rec.Model}
-	s.keepClip(ctx, set, req.Board, out, rec, init, preview, clip)
-	clip.ID = s.genCache.put(preview)
-	result := genResult{Images: []genResultImage{}, Prompt: req.Prompt, Positive: req.Prompt, Negative: req.NegativePrompt, Clip: clip}
 	if job != nil {
-		job.succeed(result)
+		defer s.genJobs.finish(jobID, job)
 	}
-	writeJSON(w, http.StatusOK, result)
+	res, status, msg := run()
+	if status != http.StatusOK {
+		writeErr(w, status, msg)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
 }
 
 // keepClip files a finished clip in the studio's gallery, as a picture is as it comes
@@ -448,6 +496,7 @@ type clipUpscaleReq struct {
 	Upscaler string  `json:"upscaler"`
 	Scale    float64 `json:"scale"`
 	Board    string  `json:"board"`
+	Detach   bool    `json:"detach"`
 }
 
 // clipVideoExt is the extension ComfyUI's video loader knows a clip of this type by.
@@ -492,40 +541,19 @@ func (s *Server) handleClipUpscale(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := r.Context()
-	var job *genJob
-	if genJobIDPattern.MatchString(req.JobID) {
-		ctx, job = s.genJobs.start(context.WithoutCancel(r.Context()), req.JobID)
-		defer s.genJobs.finish(req.JobID, job)
-	}
-	ctx, cancel := context.WithTimeout(ctx, clipTimeout)
-	defer cancel()
-	release := s.lendCardToVideo(ctx)
-	defer release()
 	up := imagegen.ClipUpscale{Model: strings.TrimSpace(req.Upscaler), Scale: req.Scale, Width: src.width, Height: src.height}
-	outs, err := s.imagegen.RunClipUpscale(ctx, set.LibbyClipURL, src.data, ext, up, func(p imagegen.Progress) {
-		if job != nil {
-			job.report(p)
+	s.serveClipJob(w, r, req.JobID, req.Detach, "upscale", func(ctx context.Context, report func(imagegen.Progress)) (genResult, error) {
+		outs, err := s.imagegen.RunClipUpscale(ctx, set.LibbyClipURL, src.data, ext, up, report)
+		if err != nil {
+			return genResult{}, err
 		}
+		return s.upscaledClip(ctx, set, req, src, up, outs[0]), nil
 	})
-	if err != nil {
-		if job != nil && job.wasCancelled() {
-			job.fail("generation cancelled")
-			writeErr(w, http.StatusConflict, "generation cancelled")
-			return
-		}
-		msg := err.Error()
-		if errors.Is(err, context.DeadlineExceeded) {
-			msg = "the upscale took longer than a quarter of an hour and was stopped"
-		}
-		s.log.Warn("clip upscale", "err", err)
-		if job != nil {
-			job.fail(msg)
-		}
-		writeErr(w, http.StatusBadGateway, msg)
-		return
-	}
-	out := outs[0]
+}
+
+// upscaledClip files an enlarged clip and says what it is: a preview, kept in the
+// gallery beside the clip it came from, with that clip's record and how it was enlarged.
+func (s *Server) upscaledClip(ctx context.Context, set settings.Settings, req clipUpscaleReq, src clipSource, up imagegen.ClipUpscale, out imagegen.ComfyOutput) genResult {
 	mime := safeInlineContentType(out.MIME)
 	rec := src.record
 	by := up.Model
@@ -545,11 +573,7 @@ func (s *Server) handleClipUpscale(w http.ResponseWriter, r *http.Request) {
 	preview := &genPreview{data: out.Data, mime: mime, prompt: rec.Prompt, negative: rec.NegativePrompt, seed: rec.Seed, model: rec.Model}
 	s.keepClip(ctx, set, req.Board, out, rec, src.still, preview, clip)
 	clip.ID = s.genCache.put(preview)
-	result := genResult{Images: []genResultImage{}, Prompt: rec.Prompt, Positive: rec.Prompt, Negative: rec.NegativePrompt, Clip: clip}
-	if job != nil {
-		job.succeed(result)
-	}
-	writeJSON(w, http.StatusOK, result)
+	return genResult{Images: []genResultImage{}, Prompt: rec.Prompt, Positive: rec.Prompt, Negative: rec.NegativePrompt, Clip: clip}
 }
 
 // clipSource is a clip to enlarge, with what is known of it.

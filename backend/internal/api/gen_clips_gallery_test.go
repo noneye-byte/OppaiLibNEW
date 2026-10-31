@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/youruser/oppailib/internal/settings"
 )
@@ -321,5 +322,34 @@ func TestAClipTakesTheCardFromTheImageModelAndThePictureAfterItGivesItBack(t *te
 	generateOn(t, s, token, `{"prompt":"a fox"}`)
 	if calls() != "unload,reload" || comfy.freeCount() != 1 {
 		t.Fatalf("with the model kept: A1111 %q, ComfyUI freed %d times", calls(), comfy.freeCount())
+	}
+}
+
+func TestADetachedClipIsAnsweredAtOnceAndCollectedFromItsJob(t *testing.T) {
+	s, token, _, _ := clipStudio(t)
+	picture := "data:image/png;base64," + base64.StdEncoding.EncodeToString(pngOf(t, 64, 96, 7))
+	body, _ := json.Marshal(map[string]any{"from": "image", "prompt": "she waves", "initImage": picture, "jobId": "clip-detached-1", "detach": true})
+	rec := do(t, s.Handler(), token, http.MethodPost, "/api/imagegen/clip", string(body))
+	if rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), `"accepted":true`) {
+		t.Fatalf("detached clip: %d %s", rec.Code, rec.Body)
+	}
+	var state genProgressResponse
+	deadline := time.Now().Add(10 * time.Second)
+	for !state.Done && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+		poll := do(t, s.Handler(), token, http.MethodGet, "/api/imagegen/progress/clip-detached-1?seen=-1", "")
+		_ = json.Unmarshal(poll.Body.Bytes(), &state)
+	}
+	if !state.Done || state.Result == nil || state.Result.Clip == nil || state.Result.Clip.Gallery == "" {
+		t.Fatalf("job = %+v", state)
+	}
+
+	// A bad request is still refused there and then, not left for the job to say.
+	if rec := do(t, s.Handler(), token, http.MethodPost, "/api/imagegen/clip", `{"from":"image","prompt":"x","jobId":"clip-detached-2","detach":true}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("no picture: %d %s", rec.Code, rec.Body)
+	}
+	// Detached with nothing to follow it by is refused too.
+	if rec := do(t, s.Handler(), token, http.MethodPost, "/api/imagegen/clip", string(body[:len(body)-1])+`,"jobId":""}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("no job id: %d %s", rec.Code, rec.Body)
 	}
 }

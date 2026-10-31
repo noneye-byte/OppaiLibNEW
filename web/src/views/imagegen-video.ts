@@ -705,6 +705,7 @@ export class OppaiVideoStudio extends LitElement {
         prompt: session.prompt.trim(),
         negativePrompt: session.negative.trim(),
         board: this.board,
+        detach: true,
       };
       if (this.takes("width") || this.takes("height")) Object.assign(params, this.size());
       if (this.takes("frames")) params.frames = clipFrames(session.seconds, this.fps());
@@ -732,7 +733,7 @@ export class OppaiVideoStudio extends LitElement {
   /** Enlarges a finished clip: a new take beside it, so the two can be compared. */
   private upscale(run: ClipRun) {
     if (!run.clip) return;
-    const params: ClipUpscaleParams = { jobId: newJobId(), upscaler: session.upscaler, scale: session.upscaleBy, board: this.board };
+    const params: ClipUpscaleParams = { jobId: newJobId(), upscaler: session.upscaler, scale: session.upscaleBy, board: this.board, detach: true };
     if (run.clip.gallery) params.gallery = run.clip.gallery;
     else params.id = run.clip.id;
     const up: ClipRun = {
@@ -1286,35 +1287,32 @@ export class OppaiVideoStudio extends LitElement {
 }
 
 /**
- * Runs a clip and keeps its card up to date. The call may be cut off by a proxy long
- * before the clip is done; the server finishes it anyway, so a failed call is followed
- * by polling the job, as the studio's own runs are (collectRun in imagegen.ts). A job
- * the server never heard of means the call itself was refused: that is the error.
+ * Runs a clip and keeps its card up to date. The call is detached: the server answers
+ * as soon as it has checked the request and the clip is followed by polling its job,
+ * because a call held open for the minutes a clip takes is cut off — by a proxy, and
+ * by Firefox itself at five minutes ("NetworkError when attempting to fetch resource").
+ * A server from before detaching answers with the clip itself, and a call cut off
+ * anyway is followed the same way.
  */
 async function runClip(run: ClipRun, call: () => Promise<GenerateResult>) {
-  const poll = window.setInterval(async () => {
-    try {
-      const p = await api.genProgress(run.jobId, -1);
-      if (!run.done) {
-        run.percent = p.percent;
-        changed();
-      }
-    } catch {
-      // Not registered yet, or a blip.
+  const progress = (percent: number) => {
+    if (!run.done) {
+      run.percent = percent;
+      changed();
     }
-  }, 2000);
+  };
   let res: GenerateResult | undefined;
   try {
-    res = await call();
-  } catch (e) {
+    let answer: GenerateResult;
     try {
-      res = await collect(run.jobId, e as Error);
-    } catch (failure) {
-      const msg = (failure as Error).message;
-      run.error = /cancelled/i.test(msg) ? "Stopped." : msg;
+      answer = await call();
+    } catch (e) {
+      answer = await collect(run.jobId, progress, e as Error);
     }
-  } finally {
-    window.clearInterval(poll);
+    res = answer.clip || !answer.accepted ? answer : await collect(run.jobId, progress);
+  } catch (failure) {
+    const msg = (failure as Error).message;
+    run.error = /cancelled/i.test(msg) ? "Stopped." : msg;
   }
   run.done = true;
   run.percent = 1;
@@ -1330,27 +1328,54 @@ function choiceShort(name: string): string {
   return name.split(/[\\/]/).pop()!.replace(/\.(safetensors|gguf|ckpt|pt)$/i, "") || "the low-noise model";
 }
 
-async function collect(jobId: string, failure: Error): Promise<GenerateResult> {
-  if (failure.name === "AbortError") throw failure;
-  const deadline = Date.now() + 16 * 60_000;
+/** How long polls may keep failing — a proxy hiccup, the server restarting — before
+    the clip is given up on. It goes on regardless, and lands in the gallery. */
+const LOST_TOUCH_MS = 2 * 60_000;
+
+/**
+ * Follows a run's job to its end. `failure` is the call's own error when the call was
+ * cut off: a job the server has never heard of then means the call never reached it,
+ * and that is the error to show. One it stops knowing part way means it restarted.
+ */
+async function collect(jobId: string, progress: (percent: number) => void, failure?: Error): Promise<GenerateResult> {
+  if (failure?.name === "AbortError") throw failure;
+  const deadline = Date.now() + 20 * 60_000;
+  let seen = false;
+  let lastAnswer = Date.now();
   while (Date.now() < deadline) {
     let state;
     try {
       state = await api.genProgress(jobId, -1);
-    } catch {
-      throw failure;
+      seen = true;
+      lastAnswer = Date.now();
+    } catch (e) {
+      const msg = (e as Error).message;
+      if (/no such generation/i.test(msg)) {
+        if (!seen && failure) throw failure;
+        throw new Error(seen
+          ? "The server restarted while the clip was being made and lost track of it. If ComfyUI finished it, it isn't in the gallery — make it again."
+          : "The server never started the clip.");
+      }
+      if (Date.now() - lastAnswer > LOST_TOUCH_MS) {
+        throw new Error(`Lost touch with the server while the clip was being made (${msg}). If it finishes, it lands in the gallery.`);
+      }
     }
-    if (state.done) {
+    if (state?.done) {
       if (state.result) return state.result;
-      throw state.error ? new Error(state.error) : failure;
+      throw new Error(state.error || failure?.message || "ComfyUI finished without a clip.");
     }
-    await new Promise((r) => setTimeout(r, 3000));
+    if (state) progress(state.percent);
+    await new Promise((r) => setTimeout(r, 2500));
   }
-  throw failure;
+  throw new Error("The clip ran past twenty minutes without finishing. If it does finish, it lands in the gallery.");
 }
 
 async function pictureDataURL(url: string): Promise<string> {
-  const res = await fetch(url, { credentials: "same-origin" });
+  // A picture made in this page (a file, a grabbed frame) that has since been let go
+  // of fails as a bare network error; say what it means instead.
+  const res = await fetch(url, { credentials: "same-origin" }).catch(() => {
+    throw new Error("Couldn't read the picture to start from any more — pick it again.");
+  });
   if (!res.ok) throw new Error("Couldn't read the picture — a result on the canvas expires after a while; pick it again.");
   const blob = await res.blob();
   return new Promise<string>((resolve, reject) => {

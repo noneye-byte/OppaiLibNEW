@@ -33,8 +33,10 @@ import (
 // proxy's error page reads the pictures from its last poll instead.
 
 // genJobGrace is how long a finished job stays readable after its request returned.
-// Long enough for a studio that lost its call to notice and collect the result.
-const genJobGrace = 3 * time.Minute
+// Long enough for a studio that lost its call to notice and collect the result — or
+// that follows a detached clip from a background tab, whose timers a browser may slow
+// to one a minute.
+const genJobGrace = 10 * time.Minute
 
 // genJobIDPattern is what a client-made id may look like: short, URL-safe.
 var genJobIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{4,64}$`)
