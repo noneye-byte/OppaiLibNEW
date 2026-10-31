@@ -86,6 +86,15 @@ func a1111Fixture(t *testing.T) (*Client, *a1111FolderFake, string, string) {
 	c := New()
 	c.ModelsDir = func() string { return dir }
 	c.HashCachePath = filepath.Join(t.TempDir(), "hashes.json")
+	// The background hasher writes its answers beside the test's files after a listing
+	// has queued them; removing the folders under it failed the test now and then with
+	// "directory not empty". Cleanups run last-first, so this waits before they go.
+	t.Cleanup(func() {
+		h := c.hashes()
+		for deadline := time.Now().Add(5 * time.Second); !h.idle() && time.Now().Before(deadline); {
+			time.Sleep(10 * time.Millisecond)
+		}
+	})
 	return c, fake, srv.URL, dir
 }
 

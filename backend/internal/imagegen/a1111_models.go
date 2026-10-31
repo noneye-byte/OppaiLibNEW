@@ -1243,13 +1243,22 @@ func (h *fileHashes) queue(local string) {
 func (h *fileHashes) run() {
 	for local := range h.work {
 		sum, err := sha256File(local)
-		h.mu.Lock()
-		delete(h.pending, local)
-		h.mu.Unlock()
 		if err == nil {
 			h.record(local, sum)
 		}
+		// Done once the answer is on disk, not before: idle is what says the hasher
+		// has stopped writing.
+		h.mu.Lock()
+		delete(h.pending, local)
+		h.mu.Unlock()
 	}
+}
+
+// idle says no file is waiting to be hashed or having its hash written down.
+func (h *fileHashes) idle() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return len(h.pending) == 0
 }
 
 // a1111Templates lists A1111's saved styles as templates. A style's prompt may hold
