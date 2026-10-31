@@ -226,6 +226,12 @@ type Settings struct {
 	// (imagegen/comfy_wan.go). A picked model wins over a pasted workflow.
 	ClipImageModels ClipModels `json:"clipImageModels"`
 	ClipTextModels  ClipModels `json:"clipTextModels"`
+	// ClipKeepImageModel leaves the image generator's checkpoint on the card while a
+	// clip renders. Off, the default, it is unloaded first: a 14B Wan pair wants every
+	// gigabyte there is, and a checkpoint left resident beside it pushes ComfyUI into
+	// offloading to system memory, which turns a ten-minute clip into an hour's. See
+	// api/gpu_share.go.
+	ClipKeepImageModel bool `json:"clipKeepImageModel"`
 	// The folders installs from Civitai's video mode write into, as this container
 	// sees them, one per kind: ComfyUI has no API that takes a download. Each is
 	// exactly what was typed and a blank one is not installed into; nothing is
@@ -337,6 +343,7 @@ const (
 	keyClipTextWorkflow   = "clip.text_workflow"
 	keyClipImageModels    = "clip.image_models"
 	keyClipTextModels     = "clip.text_models"
+	keyClipKeepImageModel = "clip.keep_image_model"
 	keyComfyModelsDir     = "clip.comfy_models_dir" // read once, by comfyFolderDefaults
 	keyComfyDiffusionDir  = "clip.comfy_diffusion_dir"
 	keyComfyCheckpointDir = "clip.comfy_checkpoint_dir"
@@ -425,7 +432,15 @@ type ClipModels struct {
 	Steps int     `json:"steps"`
 	CFG   float64 `json:"cfg"`
 	Shift float64 `json:"shift"`
+	// Sampler and Scheduler are ComfyUI's names for them; blank is euler and simple,
+	// what Wan's own templates sample with.
+	Sampler   string `json:"sampler"`
+	Scheduler string `json:"scheduler"`
 }
+
+// MaxClipLoras bounds the LoRA files on one clip. A pair's LoRA is two of them, and
+// each is another model ComfyUI loads per expert.
+const MaxClipLoras = 16
 
 // ClipLora is a LoRA on a clip, and which of Wan 2.2's two experts it is for: "high",
 // "low", or blank for both.
@@ -638,6 +653,9 @@ func Merge(base Settings, stored map[string]string) Settings {
 	if v, ok := parseBool(stored[keyLibbyStories]); ok {
 		s.LibbyStories = v
 	}
+	if v, ok := parseBool(stored[keyClipKeepImageModel]); ok {
+		s.ClipKeepImageModel = v
+	}
 	if v, err := strconv.Atoi(stored[keyLibbyStoriesPerDay]); err == nil {
 		s.LibbyStoriesPerDay = v
 	}
@@ -718,6 +736,7 @@ func (s Settings) Map() map[string]string {
 		keyComfyVaeDir:        s.ComfyVaeDir,
 		keyLibbyStories:       strconv.FormatBool(s.LibbyStories),
 		keyLibbyStoriesPerDay: strconv.Itoa(s.LibbyStoriesPerDay),
+		keyClipKeepImageModel: strconv.FormatBool(s.ClipKeepImageModel),
 		keyChatToolMode:       s.ChatToolMode,
 
 		keyIncognito: strconv.FormatBool(s.Incognito),
@@ -973,7 +992,7 @@ func cleanClipModels(m ClipModels) ClipModels {
 		l.Weight = min(max(l.Weight, -2), 2)
 		l.Stage = oneOf(l.Stage, "high", "low")
 		loras = append(loras, l)
-		if len(loras) == maxLibbyGenLoras {
+		if len(loras) == MaxClipLoras {
 			break
 		}
 	}
@@ -981,8 +1000,14 @@ func cleanClipModels(m ClipModels) ClipModels {
 	m.Steps = min(max(m.Steps, 0), 100)
 	m.CFG = min(max(m.CFG, 0), 30)
 	m.Shift = min(max(m.Shift, 0), 50)
+	m.Sampler = cutLine(m.Sampler, 64)
+	m.Scheduler = cutLine(m.Scheduler, 64)
 	return m
 }
+
+// CleanClipModels is cleanClipModels for files picked somewhere other than Settings:
+// the Video studio's, which are sent with each clip.
+func CleanClipModels(m ClipModels) ClipModels { return cleanClipModels(m) }
 
 func clipModelsJSON(m ClipModels) string {
 	raw, err := json.Marshal(cleanClipModels(m))

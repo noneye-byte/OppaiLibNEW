@@ -30,6 +30,8 @@ type GenImage struct {
 	Height    int64
 	InfoEnc   []byte
 	CreatedAt int64
+	// MIME is a clip's type; blank is a picture.
+	MIME string
 }
 
 // GenScope picks which pictures a listing covers: every one, the unsorted ones, or
@@ -165,11 +167,11 @@ func (d *DB) DeleteGenFolder(ctx context.Context, id int64) error {
 	return tx.Commit()
 }
 
-const genImageColumns = `id, COALESCE(folder_id, 0), sha256, size, blob_path, thumb_path, width, height, info_enc, created_at`
+const genImageColumns = `id, COALESCE(folder_id, 0), sha256, size, blob_path, thumb_path, width, height, info_enc, created_at, mime`
 
 func scanGenImage(row interface{ Scan(...any) error }) (GenImage, error) {
 	var g GenImage
-	err := row.Scan(&g.ID, &g.FolderID, &g.SHA256, &g.Size, &g.BlobPath, &g.ThumbPath, &g.Width, &g.Height, &g.InfoEnc, &g.CreatedAt)
+	err := row.Scan(&g.ID, &g.FolderID, &g.SHA256, &g.Size, &g.BlobPath, &g.ThumbPath, &g.Width, &g.Height, &g.InfoEnc, &g.CreatedAt, &g.MIME)
 	return g, err
 }
 
@@ -184,9 +186,9 @@ func (d *DB) AddGenImage(ctx context.Context, g *GenImage) error {
 		folder = g.FolderID
 	}
 	res, err := d.sql.ExecContext(ctx, `
-		INSERT INTO gen_images(folder_id, sha256, size, blob_path, thumb_path, width, height, info_enc, created_at)
-		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		folder, g.SHA256, g.Size, g.BlobPath, g.ThumbPath, g.Width, g.Height, g.InfoEnc, g.CreatedAt)
+		INSERT INTO gen_images(folder_id, sha256, size, blob_path, thumb_path, width, height, info_enc, created_at, mime)
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		folder, g.SHA256, g.Size, g.BlobPath, g.ThumbPath, g.Width, g.Height, g.InfoEnc, g.CreatedAt, g.MIME)
 	if err != nil {
 		return err
 	}

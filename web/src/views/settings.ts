@@ -2543,6 +2543,26 @@ export class OppaiSettings extends LitElement {
                 (<code>umt5_xxl</code>) and the VAE (<code>wan_2.1_vae</code>; only the 5B model uses
                 <code>wan2.2_vae</code>). An all-in-one checkpoint has both inside and needs nothing beside it.
               </div>
+              <div class="field">
+                <div class="field-text">
+                  <div class="field-label">Give clips the whole card</div>
+                  <div class="field-help">
+                    Before a clip renders, the image generator lets go of its checkpoint, and the next picture asks
+                    ComfyUI to let go of Wan and loads it back. A 14B Wan pair wants every gigabyte there is; beside a
+                    checkpoint ComfyUI offloads to system memory, and a ten-minute clip takes an hour. Off when the two
+                    are on different cards, or the card has room for both.
+                  </div>
+                </div>
+                <div class="field-control">
+                  <button class="switch ${s.clipKeepImageModel ? "" : "on"}" role="switch"
+                    aria-checked=${s.clipKeepImageModel ? "false" : "true"} aria-label="Unload the image model while a clip renders"
+                    ?disabled=${!this.canEdit} @click=${() => this.edit({ clipKeepImageModel: !s.clipKeepImageModel })}></button>
+                </div>
+              </div>
+              <div class="field-help" style="margin:0 0 4px;">
+                The files below are where the Video studio starts and what Libby's clips run; the studio picks its own
+                over them for each clip, as the Image studio picks a checkpoint.
+              </div>
               ${this.renderClipModels("From a picture", html`Image to video: brings a still to life — what Animate on a
                 picture and Libby's clips run.`, true, image, (m) => this.edit({ clipImageModels: m }))}
               ${workflow(s.libbyClipWorkflow ?? "", (v) => this.edit({ libbyClipWorkflow: v }), !image?.model)}
@@ -2746,6 +2766,11 @@ export class OppaiSettings extends LitElement {
             <input type="number" min="0" max="50" step="0.5" placeholder="8" aria-label="${label}: shift"
               .value=${m.shift ? String(m.shift) : ""} ?disabled=${!this.canEdit}
               @change=${(e: Event) => patch({ shift: Number((e.target as HTMLInputElement).value) || 0 })} />
+          </div>
+          <span>Sampler · scheduler</span>
+          <div class="clip-lora">
+            ${pick(`${label}: sampler`, c?.samplers ?? [], m.sampler ?? "", "euler", (v) => patch({ sampler: v }))}
+            ${pick(`${label}: scheduler`, c?.schedulers ?? [], m.scheduler ?? "", "simple", (v) => patch({ scheduler: v }))}
           </div>
           <span></span>
           <div class="field-help" style="margin:0;">Blank is Wan's own: 20 steps, CFG 3.5, shift 8 — or 4 steps at

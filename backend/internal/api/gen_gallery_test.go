@@ -24,6 +24,8 @@ type galleryA1111 struct {
 	initPic string
 	hold    chan struct{} // when set, txt2img waits for it
 	asked   chan struct{} // closed once txt2img has been called, when set
+	// calls is each time it was told to unload or reload its checkpoint.
+	calls []string
 }
 
 func newGalleryA1111(t *testing.T, g *galleryA1111) *httptest.Server {
@@ -52,6 +54,11 @@ func newGalleryA1111(t *testing.T, g *galleryA1111) *httptest.Server {
 				<-hold
 			}
 			_, _ = w.Write([]byte(`{"images":["` + pic + `"],"info":"{\"seed\":4242,\"all_seeds\":[4242]}"}`))
+		case "/sdapi/v1/unload-checkpoint", "/sdapi/v1/reload-checkpoint":
+			g.mu.Lock()
+			g.calls = append(g.calls, strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/sdapi/v1/"), "-checkpoint"))
+			g.mu.Unlock()
+			_, _ = w.Write([]byte(`{}`))
 		default:
 			http.NotFound(w, r)
 		}

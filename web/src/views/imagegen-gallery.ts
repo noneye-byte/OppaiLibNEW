@@ -38,6 +38,10 @@ const SIZE_KEY = "oppai.gallerySize";
  * the bar that appears along the bottom; the viewer files the open picture and steps
  * on, so a run of keepers is a click each. More pages arrive as the grid is scrolled.
  *
+ * Clips from the Video studio are kept here too (OppaiLib's own gallery only), drawn
+ * with a play mark and played in the viewer; what a clip can be used for is the Video
+ * studio's, so its actions open it there ("open-clip") rather than in the Image studio.
+ *
  * The host view calls refresh() after a generation so new images appear without
  * a manual reload. A picture can go back to the studio as the one to start from
  * ("use-picture": image to image, paint to fix, its faces redone, enlarged, or
@@ -213,6 +217,15 @@ export class OppaiInvokeGallery extends LitElement {
       .tile.picked { outline-color: var(--oppai-primary); }
       .tile.picked img { transform: scale(0.88); border-radius: 6px; }
       .tile.dragged { opacity: 0.45; }
+      /* A clip: a play mark over its still, or a film where it has none. */
+      .film { width: 100%; height: 100%; display: grid; place-items: center; color: var(--oppai-text-muted);
+        background: linear-gradient(135deg, var(--oppai-surface-2), var(--oppai-surface)); }
+      .film .material-symbols-rounded { font-size: 34px; }
+      .play {
+        position: absolute; top: 4px; right: 4px; display: inline-flex; align-items: center; gap: 2px; padding: 1px 6px 1px 3px;
+        border-radius: 9px; background: rgba(0, 0, 0, 0.6); color: #fff; font-size: 10px; font-weight: 700; pointer-events: none;
+      }
+      .play .material-symbols-rounded { font-size: 15px; }
       .tile .shade {
         position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity 0.15s ease;
         background: linear-gradient(to bottom, rgba(0, 0, 0, 0.45), transparent 35%, transparent 60%, rgba(0, 0, 0, 0.55));
@@ -329,10 +342,11 @@ export class OppaiInvokeGallery extends LitElement {
       /* Laid over its row rather than sized by it: a percentage height on a grid
          item has nothing to resolve against, and a tall picture ran on under the
          filmstrip. */
-      .picture img {
+      .picture img, .picture video {
         position: absolute; inset: 0; width: 100%; height: 100%; padding: 0 64px; box-sizing: border-box; object-fit: contain;
         animation: oppai-fade-in 0.2s ease both;
       }
+      .picture video { background: transparent; }
       .picture .nav { position: absolute; top: 50%; transform: translateY(-50%); }
       .picture .nav.prev { left: 12px; }
       .picture .nav.next { right: 12px; }
@@ -379,7 +393,7 @@ export class OppaiInvokeGallery extends LitElement {
       @media (max-width: 900px) {
         .viewer { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(55vh, 1fr) auto; overflow-y: auto; }
         .stage { min-height: 55vh; }
-        .picture img { padding: 0 8px; }
+        .picture img, .picture video { padding: 0 8px; }
         .picture .nav { display: none; }
         .info { border-left: none; overflow: visible; }
       }
@@ -445,6 +459,26 @@ export class OppaiInvokeGallery extends LitElement {
 
   private labelOf(img: GalleryImage): string {
     return img.label || img.name;
+  }
+
+  private isClip(img: GalleryImage): boolean {
+    return img.kind === "video";
+  }
+
+  /** Hands a clip to the Video studio: to watch and carry on from, or to enlarge. */
+  private openClip(img: GalleryImage, upscale = false) {
+    this.viewing = null;
+    this.dispatchEvent(new CustomEvent("open-clip", {
+      detail: { gallery: img.name, name: this.labelOf(img), width: img.width, height: img.height, upscale },
+      bubbles: true, composed: true,
+    }));
+  }
+
+  /** A tile's still: the picture's, a clip's frame, or a film for a clip with none. */
+  private still(img: GalleryImage, alt: string) {
+    return this.isClip(img) && !img.tile
+      ? html`<span class="film"><span class="material-symbols-rounded">movie</span></span>`
+      : html`<img src=${api.galleryThumbURL(img.name)} alt=${alt} loading="lazy" draggable="false" />`;
   }
 
   /** Opens a picture and reads its settings for the side panel. */
@@ -681,7 +715,7 @@ export class OppaiInvokeGallery extends LitElement {
         this.savedNames = new Set(this.savedNames).add(img.name);
       }
       this.dispatchEvent(new CustomEvent<LibbyItemFacts>("imported", {
-        detail: { count: 1, kind: "image", title: this.labelOf(img) },
+        detail: { count: 1, kind: this.isClip(img) ? "video" : "image", title: this.labelOf(img) },
         bubbles: true, composed: true,
       }));
     } catch (e) {
@@ -879,6 +913,30 @@ export class OppaiInvokeGallery extends LitElement {
     e.preventDefault();
     e.stopPropagation();
     const targets = this.moveTargets();
+    const moves = [
+      ...targets.map((b) => ({ label: `Move to ${b.name}`, icon: b.id === "none" ? "inbox" : "drive_file_move", run: () => void this.moveNames([img.name], b.id) })),
+      ...(this.isFolder(this.board) ? [{ label: "Set as folder cover", icon: "folder_special", run: () => void this.setFolderCover(img) }] : []),
+    ];
+    if (this.isClip(img)) {
+      openMenu({
+        x: e.clientX,
+        y: e.clientY,
+        title: this.labelOf(img),
+        items: [
+          { label: "Play", icon: "play_arrow", run: () => this.open(img) },
+          { label: "Open in the Video studio", icon: "movie", run: () => this.openClip(img) },
+          { label: "Upscale…", icon: "open_in_full", run: () => this.openClip(img, true) },
+          { label: "Copy prompt", icon: "content_copy", run: () => void this.copyField(img, "prompt") },
+          menuDivider,
+          ...moves,
+          { label: "Move to library", icon: "save", run: () => void this.saveToLibrary(img) },
+          { label: "Download", icon: "download", run: () => this.downloadClip(img) },
+          menuDivider,
+          { label: "Delete", icon: "delete", danger: true, run: () => void this.deleteImage(img) },
+        ],
+      });
+      return;
+    }
     openMenu({
       x: e.clientX,
       y: e.clientY,
@@ -894,8 +952,7 @@ export class OppaiInvokeGallery extends LitElement {
         ...(this.upscaleLabel ? [{ label: this.upscaleLabel, icon: "open_in_full", run: () => this.usePicture(img, "upscale") }] : []),
         ...(this.canAnimate ? [{ label: "Animate", icon: "animation", run: () => this.usePicture(img, "animate") }] : []),
         menuDivider,
-        ...targets.map((b) => ({ label: `Move to ${b.name}`, icon: b.id === "none" ? "inbox" : "drive_file_move", run: () => void this.moveNames([img.name], b.id) })),
-        ...(this.isFolder(this.board) ? [{ label: "Set as folder cover", icon: "folder_special", run: () => void this.setFolderCover(img) }] : []),
+        ...moves,
         ...(this.canSetCovers ? [{ label: "Use as a LoRA's cover…", icon: "photo_library", run: () => this.openCover(img) }] : []),
         ...(this.own ? [{ label: "Move to library", icon: "save", run: () => void this.saveToLibrary(img) }] : []),
         { label: "Export PNG for Civitai", icon: "download", run: () => void this.exportImage(img) },
@@ -904,6 +961,13 @@ export class OppaiInvokeGallery extends LitElement {
         { label: "Delete", icon: "delete", danger: true, run: () => void this.deleteImage(img) },
       ],
     });
+  }
+
+  private downloadClip(img: GalleryImage) {
+    const a = document.createElement("a");
+    a.href = api.galleryFullURL(img.name);
+    a.download = `${this.labelOf(img).replace(/\s+/g, "-").toLowerCase()}.mp4`;
+    a.click();
   }
 
   private async copyMetadata(img: GalleryImage) {
@@ -1148,7 +1212,8 @@ export class OppaiInvokeGallery extends LitElement {
       @keydown=${(e: KeyboardEvent) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); this.selecting ? this.pick(e as unknown as MouseEvent, img) : this.open(img); } }}
       @contextmenu=${(e: MouseEvent) => { if (!this.selecting) this.openImageMenu(img, e); }}
       @dragstart=${(e: DragEvent) => this.dragStart(e, img)} @dragend=${() => this.dragEnd()}>
-      <img src=${api.galleryThumbURL(img.name)} alt="Generated image" loading="lazy" draggable="false" />
+      ${this.still(img, this.isClip(img) ? "Generated clip" : "Generated image")}
+      ${this.isClip(img) ? html`<span class="play"><span class="material-symbols-rounded">play_arrow</span>Clip</span>` : nothing}
       <span class="shade"></span>
       <button class="tick" title=${picked ? "Unpick" : "Pick — then drag onto a folder, or use the bar below"} aria-label="Pick"
         @click=${(e: MouseEvent) => this.pick(e, img)}>
@@ -1291,8 +1356,11 @@ export class OppaiInvokeGallery extends LitElement {
               <span class="material-symbols-rounded">close</span></button>
           </div>
           <div class="picture" @click=${(e: Event) => { if (e.target === e.currentTarget) this.viewing = null; }}>
-            ${keyed(img.name, html`<img src=${api.galleryFullURL(img.name)} alt="Generated image"
-              @contextmenu=${(e: MouseEvent) => this.openImageMenu(img, e)} />`)}
+            ${keyed(img.name, this.isClip(img)
+              ? html`<video src=${api.galleryFullURL(img.name)} controls autoplay loop muted playsinline
+                  @contextmenu=${(e: MouseEvent) => this.openImageMenu(img, e)}></video>`
+              : html`<img src=${api.galleryFullURL(img.name)} alt="Generated image"
+                  @contextmenu=${(e: MouseEvent) => this.openImageMenu(img, e)} />`)}
             <button class="vbtn nav prev" title="Previous (←)" aria-label="Previous" ?disabled=${at <= 0} @click=${() => void this.step(-1)}>
               <span class="material-symbols-rounded">chevron_left</span></button>
             <button class="vbtn nav next" title="Next (→)" aria-label="Next" ?disabled=${!hasNext} @click=${() => void this.step(1)}>
@@ -1300,7 +1368,7 @@ export class OppaiInvokeGallery extends LitElement {
           </div>
           <div class="strip">
             ${strip.map((i) => html`<button class=${i.name === img.name ? "on" : ""} title=${this.labelOf(i)} @click=${() => this.open(i)}>
-              <img src=${api.galleryThumbURL(i.name)} alt="" loading="lazy" /></button>`)}
+              ${this.still(i, "")}</button>`)}
           </div>
         </div>
         <aside class="info">
@@ -1309,7 +1377,13 @@ export class OppaiInvokeGallery extends LitElement {
             <span class="material-symbols-rounded">${saved ? "check" : "save"}</span>
             ${saved ? "In the library" : this.own ? "Move to library" : "Save to library"}
           </button>
-          <div>
+          ${this.isClip(img) ? html`<div>
+            <div class="k">Carry on with it</div>
+            <div class="uses">
+              ${use("movie", "Video studio", "Put it on the Video studio's stage: carry on from its last frame, take a frame, compare", () => this.openClip(img))}
+              ${use("open_in_full", "Upscale", "Enlarge it through ComfyUI; the enlarged clip lands beside it", () => this.openClip(img, true))}
+            </div>
+          </div>` : html`<div>
             <div class="k">Make another from it</div>
             <div class="uses">
               ${use("add_photo_alternate", "Start from", "Start the next picture from this one", () => this.usePicture(img, "img2img"))}
@@ -1322,7 +1396,7 @@ export class OppaiInvokeGallery extends LitElement {
                 detail: { url: api.galleryFullURL(img.name), name: img.name }, bubbles: true, composed: true,
               })))}
             </div>
-          </div>
+          </div>`}
           <div>
             <div class="k">File it</div>
             <div class="rowbtns">
@@ -1333,7 +1407,7 @@ export class OppaiInvokeGallery extends LitElement {
               </select>` : nothing}
               ${this.isFolder(this.board) ? html`<button title="Show it on this folder's card" @click=${() => void this.setFolderCover(img)}>
                 <span class="material-symbols-rounded">folder_special</span>Folder cover</button>` : nothing}
-              ${this.canSetCovers ? html`<button title="Make it a LoRA's or a model's cover" @click=${() => this.openCover(img)}>
+              ${this.canSetCovers && !this.isClip(img) ? html`<button title="Make it a LoRA's or a model's cover" @click=${() => this.openCover(img)}>
                 <span class="material-symbols-rounded">photo_library</span>LoRA cover</button>` : nothing}
             </div>
           </div>
@@ -1341,10 +1415,12 @@ export class OppaiInvokeGallery extends LitElement {
           <div>
             <div class="k">Share</div>
             <div class="rowbtns">
+              ${this.isClip(img) ? html`<button @click=${() => this.downloadClip(img)}>
+                <span class="material-symbols-rounded">download</span>Download</button>` : html`
               <button ?disabled=${this.busy} @click=${(e: MouseEvent) => void this.openShareMenu(img, e.clientX, e.clientY)}>
                 <span class="material-symbols-rounded">forum</span>Send to chat</button>
               <button ?disabled=${this.busy} @click=${() => void this.exportImage(img)}>
-                <span class="material-symbols-rounded">download</span>Export for Civitai</button>
+                <span class="material-symbols-rounded">download</span>Export for Civitai</button>`}
             </div>
           </div>
           ${this.renderInfo(img)}

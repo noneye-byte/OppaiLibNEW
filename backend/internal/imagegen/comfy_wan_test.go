@@ -218,6 +218,8 @@ func TestModelsAreListedFromEachLoaderInEitherSchema(t *testing.T) {
 		"CLIPLoader":             `{"CLIPLoader":{"input":{"required":{"clip_name":[["umt5.safetensors"]]}}}}`,
 		"VAELoader":              `{"VAELoader":{"input":{"required":{"vae_name":[["wan_2.1_vae.safetensors"]]}}}}`,
 		"LoraLoaderModelOnly":    `{"LoraLoaderModelOnly":{"input":{"required":{"lora_name":[["wan/lightx2v_high.safetensors"]]}}}}`,
+		"KSampler":               `{"KSampler":{"input":{"required":{"sampler_name":[["euler","uni_pc"]],"scheduler":[["simple","beta"]]}}}}`,
+		"UpscaleModelLoader":     `{"UpscaleModelLoader":{"input":{"required":{"model_name":[["4x-UltraSharp.pth"]]}}}}`,
 		"WanImageToVideo":        `{"WanImageToVideo":{}}`,
 		"ModelSamplingSD3":       `{"ModelSamplingSD3":{}}`,
 		"CreateVideo":            `{"CreateVideo":{}}`,
@@ -236,7 +238,8 @@ func TestModelsAreListedFromEachLoaderInEitherSchema(t *testing.T) {
 	}
 	raw, _ := json.Marshal(got)
 	want := `{"diffusion":["high.safetensors","low.safetensors","high.gguf"],"checkpoints":["aio.safetensors"],` +
-		`"textEncoders":["umt5.safetensors"],"vaes":["wan_2.1_vae.safetensors"],"loras":["wan/lightx2v_high.safetensors"],"missing":["SaveVideo"]}`
+		`"textEncoders":["umt5.safetensors"],"vaes":["wan_2.1_vae.safetensors"],"loras":["wan/lightx2v_high.safetensors"],` +
+		`"samplers":["euler","uni_pc"],"schedulers":["simple","beta"],"upscalers":["4x-UltraSharp.pth"],"missing":["SaveVideo"]}`
 	if string(raw) != want {
 		t.Fatalf("got  %s\nwant %s", raw, want)
 	}

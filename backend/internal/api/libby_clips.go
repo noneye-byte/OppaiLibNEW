@@ -48,7 +48,7 @@ func (s *Server) makeClip(ctx context.Context, userID int64, imageID, motion str
 	}
 	ctx, cancel := context.WithTimeout(ctx, clipTimeout)
 	defer cancel()
-	release := s.lendCardToImages(ctx)
+	release := s.lendCardToVideo(ctx)
 	defer release()
 	outs, err := recipe.run(ctx, s.imagegen, cur.LibbyClipURL, vars, nil, raw, func(p imagegen.Progress) {
 		if progress != nil {

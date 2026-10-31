@@ -219,6 +219,10 @@ type GalleryImage struct {
 	// bytes. InvokeAI's names read as they are and it reports no size.
 	Label string `json:"label,omitempty"`
 	Size  int64  `json:"size,omitempty"`
+	// Kind is "video" for a clip from the Video studio (OppaiLib's own gallery only),
+	// and Tile says it has a still to show; a clip without one is drawn as a film.
+	Kind string `json:"kind,omitempty"`
+	Tile bool   `json:"tile,omitempty"`
 }
 
 // GalleryPage is one page of a board's images, newest first.

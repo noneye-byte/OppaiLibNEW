@@ -1,10 +1,11 @@
-// Picking the files for a Wan clip, as the Video settings do it.
+// Picking the files for a Wan clip, as the Video settings and the Video studio do it.
 //
 // Wan 2.2's 14B models come as a pair of experts, high noise and low noise, and so do
 // the LoRAs made for them — a file per expert, told apart only by "high" or "low"
 // somewhere in the name. Which is which is the part people get wrong in ComfyUI, so
 // these read it off the names: what a LoRA is for, its other half, and a first guess
-// at the whole set from what ComfyUI has installed.
+// at the whole set from what ComfyUI has installed. The studio offers a pair as one
+// model and a pair's LoRA as one LoRA, and sends the files back out as ComfyUI has them.
 
 import type { ClipLora, ClipModels, ComfyFolderKind, ComfyModels } from "./api.js";
 
@@ -55,8 +56,7 @@ export const SPEED_SETTINGS = { steps: 4, cfg: 1 } as const;
 
 /** Whether picked files are a speed one at a CFG that burns it, as the Test says. */
 export function speedAtFullCFG(m: ClipModels): boolean {
-  const files = [m.model, m.lowModel, ...m.loras.filter((l) => l.weight !== 0).map((l) => l.name)];
-  return files.some((n) => n && isSpeedFile(n)) && m.cfg > 1.5;
+  return clipIsFast(m) && m.cfg > 1.5;
 }
 
 /** One LoRA as the Video studio offers it: a pair's two halves are one choice. */
@@ -127,7 +127,7 @@ export function suggestClipModels(lists: ComfyModels, fromImage: boolean): ClipM
   const high = lists.diffusion.find((n) => wan(n) && loraStage(n) === "high");
   const low = high ? loraTwin(high, lists.diffusion) || lists.diffusion.find((n) => wan(n) && loraStage(n) === "low") : undefined;
   const textEncoder = lists.textEncoders.find((n) => /umt5/i.test(n)) ?? "";
-  const base: ClipModels = { model: "", checkpoint: false, lowModel: "", textEncoder, vae: "", loras: [], steps: 0, cfg: 0, shift: 0 };
+  const base: ClipModels = { ...NO_CLIP_MODELS, textEncoder };
   if (high && low) return { ...base, model: high, lowModel: low, vae: wanVAE(lists.vaes, false) };
   const single = lists.diffusion.find((n) => wan(n) && !loraStage(n));
   if (single) return { ...base, model: single, vae: wanVAE(lists.vaes, /5b/i.test(single)) };
@@ -138,9 +138,118 @@ export function suggestClipModels(lists: ComfyModels, fromImage: boolean): ClipM
 
 /** Wan 2.1's VAE serves every model but the 5B, which has a 2.2 VAE of its own. */
 function wanVAE(vaes: readonly string[], fiveB: boolean): string {
-  const v22 = (n: string) => /wan[\s_.-]?2[._]?2/i.test(n);
-  const own = vaes.filter((n) => /wan/i.test(n) && v22(n) === fiveB);
+  const own = vaes.filter((n) => /wan/i.test(n) && isWan22VAE(n) === fiveB);
   return own[0] ?? "";
+}
+
+function isWan22VAE(name: string): boolean {
+  return /wan[\s_.-]?2[._]?2/i.test(name);
+}
+
+/** No files at all: what a direction Settings has nothing for starts from. Zero steps,
+    CFG and shift, and a blank sampler, are Wan's own. */
+export const NO_CLIP_MODELS: ClipModels = {
+  model: "", checkpoint: false, lowModel: "", textEncoder: "", vae: "", loras: [], steps: 0, cfg: 0, shift: 0, sampler: "", scheduler: "",
+};
+
+/** One model as the Video studio offers it: a Wan 2.2 pair's two experts are one. */
+export interface ClipModelChoice {
+  /** The file it is picked by: the high-noise expert's for a pair. */
+  key: string;
+  label: string;
+  /** A high/low pair from diffusion_models, one model from there, or an all-in-one
+      checkpoint with its own text encoder and VAE. */
+  kind: "pair" | "single" | "checkpoint";
+  lowModel: string;
+  speed: boolean;
+}
+
+/** ComfyUI's models as choices: each high-noise expert folded with its low-noise twin,
+    the rest one by one, then the checkpoints, each kind in name order. */
+export function clipModelChoices(lists: Pick<ComfyModels, "diffusion" | "checkpoints">): ClipModelChoice[] {
+  const taken = new Set<string>();
+  const pairs: ClipModelChoice[] = [];
+  const singles: ClipModelChoice[] = [];
+  for (const name of lists.diffusion) {
+    if (taken.has(name)) continue;
+    taken.add(name);
+    const stage = loraStage(name);
+    const twin = stage ? loraTwin(name, lists.diffusion) : "";
+    if (twin && !taken.has(twin)) {
+      taken.add(twin);
+      const [high, low] = stage === "high" ? [name, twin] : [twin, name];
+      pairs.push({ key: high, label: choiceLabel(high, true), kind: "pair", lowModel: low, speed: isSpeedFile(high) || isSpeedFile(low) });
+    } else {
+      singles.push({ key: name, label: choiceLabel(name, false), kind: "single", lowModel: "", speed: isSpeedFile(name) });
+    }
+  }
+  const checkpoints = lists.checkpoints.map((name): ClipModelChoice =>
+    ({ key: name, label: choiceLabel(name, false), kind: "checkpoint", lowModel: "", speed: isSpeedFile(name) }));
+  const byLabel = (a: ClipModelChoice, b: ClipModelChoice) => a.label.localeCompare(b.label, undefined, { sensitivity: "base", numeric: true });
+  return [...pairs.sort(byLabel), ...singles.sort(byLabel), ...checkpoints.sort(byLabel)];
+}
+
+/** The choice a recipe's files are, when ComfyUI still lists them. */
+export function clipModelChoiceOf(m: ClipModels, choices: readonly ClipModelChoice[]): ClipModelChoice | undefined {
+  return choices.find((c) => c.key === m.model && (c.kind === "checkpoint") === m.checkpoint);
+}
+
+/** A recipe with a model picked. A pair brings its twin; a checkpoint its own text
+    encoder and VAE; a bare model keeps the encoder it had, or is given umt5, and the
+    VAE it had when that fits it — Wan 2.1's for everything but the 5B, which has
+    2.2's — or the one that does. */
+export function withClipModel(m: ClipModels, c: ClipModelChoice, lists: Pick<ComfyModels, "textEncoders" | "vaes">): ClipModels {
+  if (c.kind === "checkpoint") return settleSpeed(m, { ...m, model: c.key, checkpoint: true, lowModel: "", textEncoder: "", vae: "" });
+  const fiveB = /5b/i.test(c.key);
+  const vae = m.vae && isWan22VAE(m.vae) === fiveB ? m.vae : wanVAE(lists.vaes, fiveB) || m.vae;
+  const textEncoder = m.textEncoder || lists.textEncoders.find((n) => /umt5/i.test(n)) || "";
+  return settleSpeed(m, { ...m, model: c.key, checkpoint: false, lowModel: c.lowModel, textEncoder, vae });
+}
+
+/** Whether anything a recipe samples with is a speed file. */
+export function clipIsFast(m: ClipModels): boolean {
+  return [m.model, m.lowModel, ...m.loras.filter((l) => l.weight !== 0).map((l) => l.name)].some((n) => !!n && isSpeedFile(n));
+}
+
+/** Past this many steps the numbers are a full model's: a speed file is run at four to
+    eight, and twenty with one is minutes spent for nothing. */
+const FEW_STEPS = 8;
+
+/** A recipe that has just taken on a speed file loses the numbers set for a full
+    model, which would burn it, and one that has just lost its last keeps no 4 steps
+    at CFG 1, which a full model makes mush of. Both go back to blank — the server's
+    own, which knows which is which. Numbers a speed file can take stand. */
+export function settleSpeed(before: ClipModels, after: ClipModels): ClipModels {
+  const was = clipIsFast(before);
+  const is = clipIsFast(after);
+  if (!was && is && (after.steps > FEW_STEPS || after.cfg > 1.5)) return { ...after, steps: 0, cfg: 0 };
+  if (was && !is && after.steps === SPEED_SETTINGS.steps && after.cfg === SPEED_SETTINGS.cfg) return { ...after, steps: 0, cfg: 0 };
+  return after;
+}
+
+/** A clip's files as the studio holds them: the files and numbers, and the LoRAs on by
+    the choice they are picked as, with their weights. */
+export interface StudioClipRecipe {
+  models: ClipModels;
+  loras: Record<string, number>;
+}
+
+/** The studio's start: what Settings has, its LoRAs read as choices. A LoRA ComfyUI no
+    longer lists has nothing to be picked as, and would not load anyway. */
+export function studioClipRecipe(settings: ClipModels | undefined, loraChoices: readonly ClipLoraChoice[]): StudioClipRecipe {
+  const models = { ...NO_CLIP_MODELS, ...settings, loras: [] };
+  const loras: Record<string, number> = {};
+  for (const l of settings?.loras ?? []) {
+    const c = loraChoices.find((x) => x.files.some((f) => f.name === l.name));
+    if (c && loras[c.key] === undefined && l.weight !== 0) loras[c.key] = l.weight;
+  }
+  return { models, loras };
+}
+
+/** The recipe as the clip call takes it, every file of each LoRA at its weight. */
+export function studioClipModels(r: StudioClipRecipe, loraChoices: readonly ClipLoraChoice[]): ClipModels {
+  const pair = !!r.models.lowModel && !r.models.checkpoint;
+  return { ...r.models, loras: clipLoraPicks(r.loras, loraChoices, pair) };
 }
 
 // The merges that bundle their own text encoder and VAE say so in their name, and the

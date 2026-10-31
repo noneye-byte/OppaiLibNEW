@@ -30,6 +30,13 @@ import (
 // only against a backend that exposes load and unload (text-generation-webui), and it
 // never fights a load somebody started by hand: a model operation already in progress
 // means this generation runs beside her rather than evicting anything.
+//
+// A clip is the other tenant that wants the whole card, and wants it whatever the chat
+// setting says: a Wan pair is two 14B models, and ComfyUI given less than it needs
+// offloads to system memory and crawls. So a clip asks the image generator to let go of
+// its checkpoint first, unless Settings says to keep it (ClipKeepImageModel), and the
+// next picture asks ComfyUI to let go of Wan and the generator to load its checkpoint
+// back. Neither program knows the other is on the card; this is where that is known.
 
 // cardReturnGrace is how long the generator must be idle before her model goes back.
 // Long enough to cover the gap between one studio run and the tweak-and-rerun after it;
@@ -50,9 +57,16 @@ type cardShare struct {
 	active int
 	// parked is the chat model unloaded for them, "" while she has the card.
 	parked string
-	// freed says the generator was last asked to let go of its checkpoint, so the next
-	// generation should ask for it back (Automatic1111 does not reload on its own).
+	// freed says the generator was last asked to let go of its checkpoint — for her
+	// model, or for a clip — so the next picture should ask for it back (Automatic1111
+	// does not reload on its own).
 	freed bool
+	// images is how many pictures are being drawn right now, in any sharing mode: a
+	// clip does not pull the checkpoint out from under one.
+	images int
+	// comfyHeld says a clip has run since the last picture, so ComfyUI is still holding
+	// its models and is asked to let go before the generator needs the room.
+	comfyHeld bool
 	// timer is the pending hand-back, nil when none is pending.
 	timer *time.Timer
 	// swap serialises the backend operations themselves — an unload, a reload — so two
@@ -68,9 +82,108 @@ func (c *cardShare) parkedModel() string {
 	return c.parked
 }
 
-// lendCardToImages is called before a generation. It returns the function to call when
+// lendCardToImages is called before a picture. It returns the function to call when
 // the generation ends, which is always safe to call and a no-op when nothing was lent.
 func (s *Server) lendCardToImages(ctx context.Context) func() {
+	c := s.card
+	c.mu.Lock()
+	c.images++
+	c.mu.Unlock()
+	swapped := s.lendSwap(ctx)
+	s.readyGenerator(ctx)
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			c.mu.Lock()
+			c.images--
+			c.mu.Unlock()
+			swapped()
+		})
+	}
+}
+
+// lendCardToVideo is lendCardToImages for a clip: her model steps off the card as it
+// does for a picture, and the image generator's checkpoint goes too, so ComfyUI has
+// all of it.
+func (s *Server) lendCardToVideo(ctx context.Context) func() {
+	swapped := s.lendSwap(ctx)
+	cur := s.settings.Get()
+	unload := !cur.ClipKeepImageModel && cur.ImageGenEnabled && strings.TrimSpace(cur.ImageGenURL) != ""
+	if unload {
+		s.freeGenerator(ctx)
+	}
+	c := s.card
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			if unload {
+				c.mu.Lock()
+				c.comfyHeld = true
+				c.mu.Unlock()
+			}
+			swapped()
+		})
+	}
+}
+
+// freeGenerator asks the image generator to let go of its checkpoint for a clip. It is
+// asked every time rather than trusting freed, since a checkpoint may have been loaded
+// in the generator's own UI since; letting go of nothing is a no-op there.
+func (s *Server) freeGenerator(ctx context.Context) {
+	c := s.card
+	c.swap.Lock()
+	defer c.swap.Unlock()
+	c.mu.Lock()
+	busy := c.images > 0
+	c.mu.Unlock()
+	if busy {
+		s.log.Info("card share: a picture is being drawn; the clip renders beside the generator's checkpoint")
+		return
+	}
+	opCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+	defer cancel()
+	if err := s.imagegen.FreeMemory(opCtx, s.settings.Get().ImageGenURL); err != nil {
+		s.log.Warn("card share: the generator would not let go of its checkpoint for the clip", "err", err)
+		return
+	}
+	c.mu.Lock()
+	c.freed = true
+	c.mu.Unlock()
+}
+
+// readyGenerator puts the card back the way a picture needs it: ComfyUI's models off
+// it when a clip left them there, and the generator's checkpoint back on it when it was
+// let go of. Best-effort, as the rest of this is — a generator that will not reload
+// fails the picture with its own error, which says more than this could.
+func (s *Server) readyGenerator(ctx context.Context) {
+	c := s.card
+	c.swap.Lock()
+	defer c.swap.Unlock()
+	c.mu.Lock()
+	freed, held := c.freed, c.comfyHeld
+	c.freed, c.comfyHeld = false, false
+	c.mu.Unlock()
+	if !freed && !held {
+		return
+	}
+	cur := s.settings.Get()
+	opCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+	defer cancel()
+	if held {
+		if err := s.imagegen.FreeComfyMemory(opCtx, cur.LibbyClipURL); err != nil {
+			s.log.Warn("card share: ComfyUI did not let go of its models", "err", err)
+		}
+	}
+	if freed && cur.ImageGenURL != "" {
+		if err := s.imagegen.ReclaimMemory(opCtx, cur.ImageGenURL); err != nil {
+			s.log.Warn("card share: generator did not reload its checkpoint", "err", err)
+		}
+	}
+}
+
+// lendSwap is the swap with her model, for any generation: nothing unless Settings
+// chose swap. It returns the function to call when the generation ends.
+func (s *Server) lendSwap(ctx context.Context) func() {
 	cur := s.settings.Get()
 	if cur.GPUShare != "swap" || cur.ChatURL == "" {
 		return func() {}
@@ -95,12 +208,11 @@ func (s *Server) parkChatModel(ctx context.Context) {
 	c.swap.Lock()
 	defer c.swap.Unlock()
 	c.mu.Lock()
-	already, freed := c.parked != "", c.freed
+	already := c.parked != ""
 	c.mu.Unlock()
 	if already {
 		return
 	}
-	cur := s.settings.Get()
 	opCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
 	defer cancel()
 	// A load someone started by hand is theirs to finish. The generation runs beside
@@ -124,14 +236,6 @@ func (s *Server) parkChatModel(ctx context.Context) {
 	c.mu.Unlock()
 	s.writeParkedModel(probe.Loaded)
 	s.log.Info("card share: her model is parked for the generator", "model", probe.Loaded)
-	if freed {
-		if err := s.imagegen.ReclaimMemory(opCtx, cur.ImageGenURL); err != nil {
-			s.log.Warn("card share: generator did not reload its checkpoint", "err", err)
-		}
-		c.mu.Lock()
-		c.freed = false
-		c.mu.Unlock()
-	}
 }
 
 // returnCard is the end of one generation: once none is left running, the hand-back is

@@ -42,6 +42,10 @@ type WanClip struct {
 	Steps int
 	CFG   float64
 	Shift float64
+	// Sampler and Scheduler are ComfyUI's names; blank is euler and simple, as Wan's
+	// own templates have them.
+	Sampler   string
+	Scheduler string
 
 	// Image is the uploaded starting picture's name; blank makes the clip from words.
 	Image    string
@@ -133,6 +137,12 @@ func (w WanClip) Settled() WanClip {
 	if w.Shift <= 0 {
 		w.Shift = 8
 	}
+	if w.Sampler == "" {
+		w.Sampler = "euler"
+	}
+	if w.Scheduler == "" {
+		w.Scheduler = "simple"
+	}
 	return w
 }
 
@@ -141,6 +151,10 @@ func (w WanClip) Settled() WanClip {
 func (w WanClip) Recipe() string {
 	w = w.Settled()
 	s := fmt.Sprintf("%d steps · CFG %s · shift %s", w.Steps, strconv.FormatFloat(w.CFG, 'f', -1, 64), strconv.FormatFloat(w.Shift, 'f', -1, 64))
+	// Wan's own sampling goes unsaid; anything else is part of what made the clip.
+	if w.Sampler != "euler" || w.Scheduler != "simple" {
+		s += " · " + w.Sampler + "/" + w.Scheduler
+	}
 	// Counted as the studio lists them: a pair's two halves are one LoRA.
 	both, halves := 0, map[string]int{}
 	for _, l := range w.Loras {
@@ -173,10 +187,7 @@ func BuildWanGraph(w WanClip) (map[string]any, error) {
 	if negative == "" {
 		negative = wanNegative
 	}
-	width, height := w.Width/16*16, w.Height/16*16
-	if width <= 0 || height <= 0 {
-		width, height = 832, 480
-	}
+	width, height := w.Size(nil)
 	// Wan's latent holds the first frame and then blocks of four.
 	frames := 81
 	if w.Frames > 0 {
@@ -246,14 +257,14 @@ func BuildWanGraph(w WanClip) (map[string]any, error) {
 			}
 			return slot(g.add("KSamplerAdvanced", map[string]any{
 				"model": m, "add_noise": onOff(first), "noise_seed": w.Seed, "steps": steps, "cfg": cfg,
-				"sampler_name": "euler", "scheduler": "simple", "positive": positive, "negative": negCond,
+				"sampler_name": w.Sampler, "scheduler": w.Scheduler, "positive": positive, "negative": negCond,
 				"latent_image": from, "start_at_step": start, "end_at_step": end, "return_with_leftover_noise": onOff(first),
 			}), 0)
 		}
 		samples = half(low, half(model, latent, 0, split, true), split, 10000, false)
 	} else {
 		samples = slot(g.add("KSampler", map[string]any{
-			"model": model, "seed": w.Seed, "steps": steps, "cfg": cfg, "sampler_name": "euler", "scheduler": "simple",
+			"model": model, "seed": w.Seed, "steps": steps, "cfg": cfg, "sampler_name": w.Sampler, "scheduler": w.Scheduler,
 			"positive": positive, "negative": negCond, "latent_image": latent, "denoise": 1,
 		}), 0)
 	}
@@ -328,17 +339,30 @@ func (c *Client) RunWanClip(ctx context.Context, base string, w WanClip, init []
 			return nil, err
 		}
 		w.Image = name
-		if w.Width <= 0 || w.Height <= 0 {
-			if cfg, _, err := image.DecodeConfig(bytes.NewReader(init)); err == nil {
-				w.Width, w.Height = longSide(cfg.Width, cfg.Height, 832)
-			}
-		}
+		w.Width, w.Height = w.Size(init)
 	}
 	graph, err := BuildWanGraph(w)
 	if err != nil {
 		return nil, err
 	}
 	return c.runComfyGraph(ctx, base, graph, progress)
+}
+
+// Size is the frame size the clip is built at: the size given, in sixteens, or with
+// none the starting picture's shape at Wan's trained 832 on the long side, or Wan's
+// own 832×480.
+func (w WanClip) Size(init []byte) (int, int) {
+	width, height := w.Width, w.Height
+	if (width <= 0 || height <= 0) && len(init) > 0 {
+		if cfg, _, err := image.DecodeConfig(bytes.NewReader(init)); err == nil {
+			width, height = longSide(cfg.Width, cfg.Height, 832)
+		}
+	}
+	width, height = width/16*16, height/16*16
+	if width <= 0 || height <= 0 {
+		return 832, 480
+	}
+	return width, height
 }
 
 // longSide is w×h scaled so its longer side is long, both sides in sixteens.
@@ -360,6 +384,11 @@ type ComfyModels struct {
 	TextEncoders []string `json:"textEncoders"`
 	VAEs         []string `json:"vaes"`
 	Loras        []string `json:"loras"`
+	// Samplers and Schedulers are KSampler's choices; Upscalers the models in
+	// models/upscale_models, which a finished clip can be enlarged with.
+	Samplers   []string `json:"samplers"`
+	Schedulers []string `json:"schedulers"`
+	Upscalers  []string `json:"upscalers"`
 	// Missing names the core nodes a built clip needs that this ComfyUI lacks: one from
 	// before Wan 2.2 (summer 2025) has no WanImageToVideo or SaveVideo, and the fix is
 	// updating it, which is worth saying before a clip fails half way.
@@ -371,7 +400,8 @@ type ComfyModels struct {
 // name — a path relative to the folder, subfolders and all.
 func (c *Client) ListComfyModels(ctx context.Context, base string) (ComfyModels, error) {
 	base = strings.TrimRight(strings.TrimSpace(base), "/")
-	out := ComfyModels{Diffusion: []string{}, Checkpoints: []string{}, TextEncoders: []string{}, VAEs: []string{}, Loras: []string{}, Missing: []string{}}
+	out := ComfyModels{Diffusion: []string{}, Checkpoints: []string{}, TextEncoders: []string{}, VAEs: []string{}, Loras: []string{},
+		Samplers: []string{}, Schedulers: []string{}, Upscalers: []string{}, Missing: []string{}}
 	if base == "" {
 		return out, fmt.Errorf("ComfyUI's address is not set")
 	}
@@ -386,6 +416,9 @@ func (c *Client) ListComfyModels(ctx context.Context, base string) (ComfyModels,
 		{"CLIPLoaderGGUF", "clip_name", &out.TextEncoders},
 		{"VAELoader", "vae_name", &out.VAEs},
 		{"LoraLoaderModelOnly", "lora_name", &out.Loras},
+		{"KSampler", "sampler_name", &out.Samplers},
+		{"KSampler", "scheduler", &out.Schedulers},
+		{"UpscaleModelLoader", "model_name", &out.Upscalers},
 	}
 	for i, l := range lists {
 		info, err := c.comfyNodeInfo(ctx, base, l.class)

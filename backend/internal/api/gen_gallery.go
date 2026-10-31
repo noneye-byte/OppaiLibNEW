@@ -9,6 +9,7 @@ import (
 	"image"
 	"io"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -16,6 +17,8 @@ import (
 	"github.com/youruser/oppailib/internal/crypto"
 	"github.com/youruser/oppailib/internal/db"
 	"github.com/youruser/oppailib/internal/imagegen"
+	"github.com/youruser/oppailib/internal/recognize"
+	"github.com/youruser/oppailib/internal/thumbnail"
 )
 
 // The studio's own gallery, on Automatic1111.
@@ -37,6 +40,9 @@ const genGalleryAll = "all"
 
 // genGalleryMaxBytes bounds one kept picture; a generated PNG is a few megabytes.
 const genGalleryMaxBytes = 64 << 20
+
+// genClipMaxBytes bounds one kept clip: what ComfyUI is read for (imagegen.comfyView).
+const genClipMaxBytes = 96 << 20
 
 // ownGallery says whether the gallery endpoints are this store rather than the
 // generator's: anything that is not InvokeAI. A generator that cannot be reached
@@ -74,8 +80,27 @@ type genRecord struct {
 	Hires          *genRecordUpscale            `json:"hires,omitempty"`
 	Upscaled       *genRecordUpscale            `json:"upscaled,omitempty"`
 	Regions        *genRecordRegions            `json:"regions,omitempty"`
-	Backend        string                       `json:"backend"`
-	At             int64                        `json:"at"`
+	// Clip is what only a clip has, beside the fields a picture shares with it.
+	Clip    *genRecordClip `json:"clip,omitempty"`
+	Backend string         `json:"backend"`
+	At      int64          `json:"at"`
+}
+
+// genRecordClip is how a clip was made, past what a picture's record holds: Model is
+// its (high-noise) model and Sampler its sampler, as for a picture.
+type genRecordClip struct {
+	// From is "image" or "text".
+	From        string  `json:"from"`
+	Frames      int     `json:"frames,omitempty"`
+	FPS         int     `json:"fps,omitempty"`
+	Shift       float64 `json:"shift,omitempty"`
+	LowModel    string  `json:"lowModel,omitempty"`
+	TextEncoder string  `json:"textEncoder,omitempty"`
+	Scheduler   string  `json:"scheduler,omitempty"`
+	// Recipe is the line said under the clip in the studio.
+	Recipe string `json:"recipe,omitempty"`
+	// Source is the gallery clip this one was enlarged from, when it was.
+	Source string `json:"source,omitempty"`
 }
 
 type genRecordRefiner struct {
@@ -250,6 +275,73 @@ func (s *Server) keepGenImage(ctx context.Context, data []byte, folder int64, re
 	return g, nil
 }
 
+// keepGenClip stores one clip with its record. Its tile is a frame of it when ffmpeg
+// is there to take one (the container image has it), else the picture it started
+// from, else none, and the gallery draws it as a film. Its size is read off the clip
+// when ffprobe can, else the record's stands.
+func (s *Server) keepGenClip(ctx context.Context, data []byte, mime string, folder int64, rec genRecord, still []byte) (db.GenImage, error) {
+	if len(data) == 0 || len(data) > genClipMaxBytes {
+		return db.GenImage{}, errors.New("the clip is empty or too large")
+	}
+	w, h, tile := clipPoster(ctx, data)
+	if tile == nil && len(still) > 0 {
+		if img, _, err := image.Decode(bytes.NewReader(still)); err == nil {
+			tile, _ = trainThumb(img)
+		}
+	}
+	if w > 0 && h > 0 {
+		rec.Width, rec.Height = w, h
+	}
+	put, err := s.store.Put(bytes.NewReader(data))
+	if err != nil {
+		return db.GenImage{}, err
+	}
+	g := db.GenImage{FolderID: folder, SHA256: put.SHA256, Size: put.Size, BlobPath: put.RelPath,
+		Width: int64(rec.Width), Height: int64(rec.Height), MIME: mime}
+	if tile != nil {
+		if tp, err := s.store.Put(bytes.NewReader(tile)); err == nil {
+			g.ThumbPath = tp.RelPath
+		}
+	}
+	if raw, err := json.Marshal(rec); err == nil {
+		g.InfoEnc, _ = crypto.SealBytes(s.kek, raw, []byte("generation"))
+	}
+	if err := s.db.AddGenImage(ctx, &g); err != nil {
+		s.unlinkUnheld(ctx, g.BlobPath, g.ThumbPath)
+		return db.GenImage{}, err
+	}
+	return g, nil
+}
+
+// clipPoster is a clip's size and a JPEG tile of it, or zeros and nil without ffmpeg
+// or with a clip it cannot read. ffmpeg wants a seekable file, so the clip is written
+// to one for the moment it takes.
+func clipPoster(ctx context.Context, data []byte) (w, h int, tile []byte) {
+	if !thumbnail.Available() {
+		return 0, 0, nil
+	}
+	tmp, err := os.CreateTemp("", "oppai-clip-*")
+	if err != nil {
+		return 0, 0, nil
+	}
+	defer os.Remove(tmp.Name())
+	_, err = tmp.Write(data)
+	if cerr := tmp.Close(); err != nil || cerr != nil {
+		return 0, 0, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, thumbnail.DefaultTimeout)
+	defer cancel()
+	meta, err := thumbnail.Probe(ctx, tmp.Name())
+	if err != nil {
+		return 0, 0, nil
+	}
+	tile, _ = thumbnail.Frame(ctx, tmp.Name(), meta.Duration, trainThumbSide)
+	return meta.Width, meta.Height, tile
+}
+
+// isClip says a kept item is a clip rather than a picture.
+func isClip(g db.GenImage) bool { return g.MIME != "" }
+
 // genInfo opens a kept picture's record, nil when it has none.
 func (s *Server) genInfo(g db.GenImage) json.RawMessage {
 	if len(g.InfoEnc) == 0 {
@@ -299,6 +391,9 @@ func (s *Server) galleryPicture(ctx context.Context, base, name string) ([]byte,
 		g, err := s.genImageNamed(ctx, name)
 		if err != nil {
 			return nil, err
+		}
+		if isClip(g) {
+			return nil, errors.New("that is a clip, not a picture — a frame of it can be taken in the Video studio")
 		}
 		return s.genImageBytes(g, false)
 	}
@@ -470,11 +565,15 @@ func (s *Server) ownGalleryImages(w http.ResponseWriter, r *http.Request, board,
 	}
 	page := imagegen.GalleryPage{Items: make([]imagegen.GalleryImage, 0, len(rows)), Total: total}
 	for _, g := range rows {
-		page.Items = append(page.Items, imagegen.GalleryImage{
+		item := imagegen.GalleryImage{
 			Name: strconv.FormatInt(g.ID, 10), Width: int(g.Width), Height: int(g.Height), Size: g.Size,
 			Created: time.Unix(g.CreatedAt, 0).UTC().Format(time.RFC3339),
 			Label:   fmt.Sprintf("Picture %d", g.ID),
-		})
+		}
+		if isClip(g) {
+			item.Kind, item.Label, item.Tile = "video", fmt.Sprintf("Clip %d", g.ID), g.ThumbPath != ""
+		}
+		page.Items = append(page.Items, item)
 	}
 	writeJSON(w, http.StatusOK, page)
 }
@@ -485,15 +584,26 @@ func (s *Server) ownGalleryServe(w http.ResponseWriter, r *http.Request, name st
 		writeErr(w, http.StatusNotFound, err.Error())
 		return
 	}
+	// A clip with no tile has nothing to show as a picture; the gallery draws a film.
+	if thumb && isClip(g) && g.ThumbPath == "" {
+		writeErr(w, http.StatusNotFound, "this clip has no tile")
+		return
+	}
 	data, err := s.genImageBytes(g, thumb)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, err.Error())
 		return
 	}
-	w.Header().Set("Content-Type", safeInlineContentType(http.DetectContentType(data)))
+	ct := http.DetectContentType(data)
+	if isClip(g) && !thumb {
+		ct = g.MIME
+	}
+	w.Header().Set("Content-Type", safeInlineContentType(ct))
 	// A kept picture never changes under its id.
 	w.Header().Set("Cache-Control", "private, max-age=86400")
-	_, _ = w.Write(data)
+	// Served as content rather than written whole, for the ranges a <video> asks for
+	// to seek, and that Safari will not play a clip without.
+	http.ServeContent(w, r, "", time.Unix(g.CreatedAt, 0), bytes.NewReader(data))
 }
 
 func (s *Server) ownGalleryMetadata(w http.ResponseWriter, r *http.Request, name string) {
@@ -558,8 +668,17 @@ func (s *Server) moveGenToLibrary(ctx context.Context, g db.GenImage, title stri
 		_ = json.Unmarshal(info, &rec)
 		prompt = strings.TrimSpace(rec.Prompt)
 	}
+	kind := "image"
+	if isClip(g) {
+		kind = s.storedKind(g.BlobPath)
+	}
 	if title = strings.TrimSpace(title); title == "" {
 		title = genTitle(prompt)
+		if kind != "image" && prompt != "" {
+			title = "Clip: " + title
+		} else if kind != "image" {
+			title = "Generated clip"
+		}
 	}
 	titleEnc, _ := crypto.SealBytes(s.kek, []byte(title), []byte("title"))
 	var notesEnc []byte
@@ -567,13 +686,13 @@ func (s *Server) moveGenToLibrary(ctx context.Context, g db.GenImage, title stri
 		notesEnc, _ = crypto.SealBytes(s.kek, []byte(prompt), []byte("notes"))
 	}
 	id, existed, err := s.db.InsertMedia(ctx, &db.MediaRow{
-		Kind: "image", SHA256: g.SHA256, Size: g.Size, BlobPath: g.BlobPath, TitleEnc: titleEnc, NotesEnc: notesEnc,
+		Kind: kind, SHA256: g.SHA256, Size: g.Size, BlobPath: g.BlobPath, TitleEnc: titleEnc, NotesEnc: notesEnc,
 	})
 	if err != nil {
 		return 0, false, err
 	}
 	if !existed {
-		s.processIngestAsync(id, g.BlobPath, "image", g.Size, 0)
+		s.processIngestAsync(id, g.BlobPath, kind, g.Size, 0)
 		if info != nil {
 			if genEnc, err := crypto.SealBytes(s.kek, info, []byte("generation")); err == nil {
 				_ = s.db.SetGeneration(ctx, id, genEnc)
@@ -595,6 +714,18 @@ func (s *Server) moveGenToLibrary(ctx context.Context, g db.GenImage, title stri
 	s.unlinkUnheld(ctx, blob, thumb)
 	s.touchLibraryIndex()
 	return id, existed, nil
+}
+
+// storedKind is a kept clip's library kind, by its first bytes as an upload's is: a
+// video, or an animated GIF or WebP, which the library files apart.
+func (s *Server) storedKind(blob string) string {
+	rc, err := s.store.Open(blob)
+	if err != nil {
+		return "video"
+	}
+	defer rc.Close()
+	head, _ := io.ReadAll(io.LimitReader(rc, 4<<10))
+	return string(recognize.KindFromBytes(head, ""))
 }
 
 // genTitle is a moved picture's title when none was given: the start of its prompt,

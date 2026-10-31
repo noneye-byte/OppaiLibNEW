@@ -111,7 +111,7 @@ func TestAClipFromAPictureRunsThePictureWorkflowAndWaitsAsAPlayablePreview(t *te
 	}
 }
 
-func TestAClipFromWordsIsRefusedUntilItsWorkflowIsSetUp(t *testing.T) {
+func TestAClipFromWordsIsRefusedUntilAModelOrWorkflowIsSetUp(t *testing.T) {
 	s, token := newTestServer(t)
 	cur := s.settings.Get()
 	cur.LibbyClipURL = "http://127.0.0.1:1"
@@ -121,8 +121,19 @@ func TestAClipFromWordsIsRefusedUntilItsWorkflowIsSetUp(t *testing.T) {
 	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "Video") {
 		t.Fatalf("got %d %s", rec.Code, rec.Body)
 	}
-	if st := clipsStatus(s.settings.Get()); st.Image == nil || st.Text != nil || strings.Join(st.Image.Takes, ",") != "image,width,height,frames,prompt" {
-		t.Fatalf("status = %+v", st)
+	st := clipsStatus(s.settings.Get())
+	if st.Image == nil || st.Image.NeedsModel || strings.Join(st.Image.Takes, ",") != "image,width,height,frames,prompt" {
+		t.Fatalf("picture status = %+v", st.Image)
+	}
+	// Words are offered with nothing set up, for the studio to pick a model for.
+	if st.Text == nil || !st.Text.NeedsModel || strings.Join(st.Text.Takes, ",") != strings.Join(st.Text.Built, ",") {
+		t.Fatalf("words status = %+v", st.Text)
+	}
+	// With no address there is nothing to offer at all.
+	cur.LibbyClipURL = ""
+	s.settings.Set(cur)
+	if st := clipsStatus(s.settings.Get()); st.Image != nil || st.Text != nil {
+		t.Fatalf("status with no ComfyUI = %+v", st)
 	}
 }
 

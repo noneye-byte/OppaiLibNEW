@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/youruser/oppailib/internal/imagegen"
 	"github.com/youruser/oppailib/internal/settings"
@@ -17,10 +18,12 @@ import (
 //
 // The work is ComfyUI's, through the two workflows set up under Settings → Image
 // generation → Video — each either Wan files picked there, which imagegen/comfy_wan.go
-// wires, or a pasted workflow imagegen/comfy.go fills in; this side picks the workflow,
-// fills in what the studio asked for and keeps the result as a preview like any other
-// run, so nothing reaches the library until it is saved. Her own clips
-// (libby_clips.go) use the same server and the same picture workflow.
+// wires, or a pasted workflow imagegen/comfy.go fills in. The Video studio picks files
+// of its own the way the Image studio picks a checkpoint, starting from Settings', and
+// sends them with each clip; Settings' are then only where it starts, and what her own
+// clips (libby_clips.go) run. A finished clip is a preview like any other run, and on
+// Automatic1111 it is kept in the studio's gallery beside the pictures (gen_gallery.go),
+// so nothing reaches the library until it is saved.
 //
 // A clip takes minutes, longer than a reverse proxy holds a request open. A named run
 // is detached from its request the way a picture's is (imagegen_jobs.go), and the
@@ -47,6 +50,12 @@ type clipReq struct {
 	// Loras are put on for this clip alone, over the ones Settings always puts on: a
 	// built clip only, since a pasted workflow has its LoRAs written in.
 	Loras []settings.ClipLora `json:"loras"`
+	// Models are the files the studio picked, over Settings' own: the whole recipe,
+	// its LoRAs and numbers too, so Loras above is not merged over them. Nil, or no
+	// model in it, runs what Settings has.
+	Models *settings.ClipModels `json:"models"`
+	// Board is the gallery folder open beside the studio, which the clip is filed in.
+	Board string `json:"board"`
 }
 
 // genClip is a finished clip as the studio is given it: a preview, like a picture's,
@@ -57,6 +66,11 @@ type genClip struct {
 	Seed int64  `json:"seed"`
 	// Recipe is the steps, CFG and shift a built clip ran at, said under it.
 	Recipe string `json:"recipe,omitempty"`
+	// Gallery is its name in the studio's gallery when it was kept there.
+	Gallery string `json:"gallery,omitempty"`
+	// Width and Height are its frame size when known, which an upscale goes by.
+	Width  int `json:"width,omitempty"`
+	Height int `json:"height,omitempty"`
 }
 
 // clipStatus is what the studio is told: which workflows are set up and what each
@@ -68,28 +82,44 @@ type clipStatus struct {
 
 type clipWorkflowStatus struct {
 	Takes []string `json:"takes"`
-	// For a built clip, the LoRAs Settings always puts on, which the studio shows above
-	// its own picks, and whether the model is Wan 2.2's pair, whose LoRAs come in halves.
+	// For a built clip, the LoRAs Settings always puts on, and whether the model is
+	// Wan 2.2's pair, whose LoRAs come in halves.
 	Loras []settings.ClipLora `json:"loras,omitempty"`
 	Pair  bool                `json:"pair,omitempty"`
+	// Models is Settings' files for a built clip, which the studio starts from.
+	Models *settings.ClipModels `json:"models,omitempty"`
+	// Built is what a clip of files takes, for a studio that picks files of its own
+	// over a pasted workflow, or over nothing set up at all.
+	Built []string `json:"built"`
+	// NeedsModel says Settings has neither files nor a workflow for this direction, so
+	// a clip runs only once the studio picks a model.
+	NeedsModel bool `json:"needsModel,omitempty"`
 }
 
+// clipsStatus is both directions once ComfyUI's address is set. A direction Settings
+// has nothing for is still offered: the studio can pick its files, as the Image studio
+// picks a checkpoint without Settings naming one.
 func clipsStatus(set settings.Settings) clipStatus {
 	var out clipStatus
-	if r := clipRecipeFor(set, true); r.ready(set.LibbyClipURL) {
-		out.Image = r.status(true)
+	if strings.TrimSpace(set.LibbyClipURL) == "" {
+		return out
 	}
-	if r := clipRecipeFor(set, false); r.ready(set.LibbyClipURL) {
-		out.Text = r.status(false)
-	}
+	out.Image = clipRecipeFor(set, true).status(set.LibbyClipURL, true)
+	out.Text = clipRecipeFor(set, false).status(set.LibbyClipURL, false)
 	return out
 }
 
-func (r clipRecipe) status(fromImage bool) *clipWorkflowStatus {
-	st := &clipWorkflowStatus{Takes: r.takes(fromImage)}
+func (r clipRecipe) status(clipURL string, fromImage bool) *clipWorkflowStatus {
+	st := &clipWorkflowStatus{Takes: r.takes(fromImage), Built: builtTakes(fromImage)}
+	if !r.ready(clipURL) {
+		st.Takes, st.NeedsModel = st.Built, true
+		return st
+	}
 	if r.built() {
-		st.Loras = r.models.Loras
-		st.Pair = r.models.LowModel != "" && !r.models.Checkpoint
+		models := r.models
+		st.Loras = models.Loras
+		st.Pair = models.LowModel != "" && !models.Checkpoint
+		st.Models = &models
 	}
 	return st
 }
@@ -121,6 +151,11 @@ func (r clipRecipe) takes(fromImage bool) []string {
 	if !r.built() {
 		return imagegen.ComfyPlaceholders(r.workflow)
 	}
+	return builtTakes(fromImage)
+}
+
+// builtTakes is what the drawer may set on a clip of picked files.
+func builtTakes(fromImage bool) []string {
 	knobs := []string{"prompt", "negative", "seed", "width", "height", "frames", "fps", "loras"}
 	if fromImage {
 		return append([]string{"image"}, knobs...)
@@ -150,7 +185,8 @@ func (r clipRecipe) wanClip(vars map[string]string, extra []settings.ClipLora) i
 	m := r.models
 	clip := imagegen.WanClip{
 		Model: m.Model, Checkpoint: m.Checkpoint, LowModel: m.LowModel, TextEncoder: m.TextEncoder, VAE: m.VAE,
-		Steps: m.Steps, CFG: m.CFG, Shift: m.Shift, Prompt: vars["prompt"], Negative: vars["negative"],
+		Steps: m.Steps, CFG: m.CFG, Shift: m.Shift, Sampler: m.Sampler, Scheduler: m.Scheduler,
+		Prompt: vars["prompt"], Negative: vars["negative"],
 	}
 	set := clip
 	set.Loras = wanLoras(m.Loras)
@@ -177,9 +213,8 @@ func wanLoras(in []settings.ClipLora) []imagegen.WanLora {
 	return out
 }
 
-// maxClipLoras bounds the LoRAs on one clip, Settings' and the studio's together. A
-// pair's LoRA is two files, and each is another model ComfyUI loads per expert.
-const maxClipLoras = 16
+// maxClipLoras bounds the LoRAs on one clip, Settings' and the studio's together.
+const maxClipLoras = settings.MaxClipLoras
 
 // mergeClipLoras is Settings' LoRAs with the studio's picks over them: a pick of one
 // already there sets its weight for this clip, and the rest are added after.
@@ -264,13 +299,16 @@ func (s *Server) handleImageGenClip(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fromImage := req.From == "image"
-	recipe := clipRecipeFor(set, fromImage)
+	recipe, extra := clipRecipeFor(set, fromImage), req.Loras
+	if req.Models != nil && strings.TrimSpace(req.Models.Model) != "" {
+		recipe, extra = clipRecipe{models: settings.CleanClipModels(*req.Models)}, nil
+	}
 	if !recipe.ready(set.LibbyClipURL) {
 		what := "words"
 		if fromImage {
 			what = "a picture"
 		}
-		writeErr(w, http.StatusConflict, "clips from "+what+" are not set up: Settings → Image generation → Video")
+		writeErr(w, http.StatusConflict, "clips from "+what+" have no model: pick one in the Video studio, or in Settings → Image generation → Video")
 		return
 	}
 	req.Prompt = strings.TrimSpace(req.Prompt)
@@ -305,10 +343,11 @@ func (s *Server) handleImageGenClip(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	// The card is lent for the clip, not the request: a proxy that cuts the call off
 	// does not stop ComfyUI, and her model must not come back onto the card mid-render.
-	release := s.lendCardToImages(ctx)
+	// The image generator's checkpoint steps off it too, unless Settings keeps it.
+	release := s.lendCardToVideo(ctx)
 	defer release()
 	vars := clipVars(req)
-	outs, err := recipe.run(ctx, s.imagegen, set.LibbyClipURL, vars, req.Loras, init, func(p imagegen.Progress) {
+	outs, err := recipe.run(ctx, s.imagegen, set.LibbyClipURL, vars, extra, init, func(p imagegen.Progress) {
 		if job != nil {
 			job.report(p)
 		}
@@ -332,15 +371,236 @@ func (s *Server) handleImageGenClip(w http.ResponseWriter, r *http.Request) {
 	}
 	out := outs[0]
 	mime := safeInlineContentType(out.MIME)
-	id := s.genCache.put(&genPreview{
-		data: out.Data, mime: mime, prompt: req.Prompt, negative: req.NegativePrompt, seed: req.Seed,
-	})
-	result := genResult{
-		Images: []genResultImage{}, Prompt: req.Prompt, Positive: req.Prompt, Negative: req.NegativePrompt,
-		Clip: &genClip{ID: id, MIME: mime, Seed: req.Seed, Recipe: recipe.recipe(vars, req.Loras)},
-	}
+	rec := clipRecord(req, recipe, vars, extra, init)
+	clip := &genClip{MIME: mime, Seed: req.Seed, Recipe: rec.Clip.Recipe, Width: rec.Width, Height: rec.Height}
+	preview := &genPreview{data: out.Data, mime: mime, prompt: req.Prompt, negative: req.NegativePrompt, seed: req.Seed, model: rec.Model}
+	s.keepClip(ctx, set, req.Board, out, rec, init, preview, clip)
+	clip.ID = s.genCache.put(preview)
+	result := genResult{Images: []genResultImage{}, Prompt: req.Prompt, Positive: req.Prompt, Negative: req.NegativePrompt, Clip: clip}
 	if job != nil {
 		job.succeed(result)
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+// keepClip files a finished clip in the studio's gallery, as a picture is as it comes
+// back — on Automatic1111, whose gallery is OppaiLib's; InvokeAI's boards hold pictures
+// alone, and there it stays a preview until saved. still is the picture it started
+// from, the tile when ffmpeg cannot take one. The preview and the result are told
+// where it went.
+func (s *Server) keepClip(ctx context.Context, set settings.Settings, board string, out imagegen.ComfyOutput, rec genRecord, still []byte, preview *genPreview, clip *genClip) {
+	if !set.ImageGenEnabled || !s.ownGallery(ctx, set.ImageGenURL) {
+		return
+	}
+	g, err := s.keepGenClip(ctx, out.Data, safeInlineContentType(out.MIME), s.genFolderOf(ctx, board), rec, still)
+	if err != nil {
+		s.log.Warn("studio gallery: keep clip", "err", err)
+		return
+	}
+	preview.galleryID = g.ID
+	clip.Gallery = strconv.FormatInt(g.ID, 10)
+	clip.Width, clip.Height = int(g.Width), int(g.Height)
+}
+
+// clipRecord is how a clip was made, as the gallery keeps it: the files and numbers it
+// ran at for a built clip, the knobs alone for a pasted workflow's.
+func clipRecord(req clipReq, recipe clipRecipe, vars map[string]string, extra []settings.ClipLora, init []byte) genRecord {
+	from := "text"
+	if req.From == "image" {
+		from = "image"
+	}
+	rec := genRecord{
+		Prompt: req.Prompt, NegativePrompt: req.NegativePrompt, Seed: req.Seed,
+		Loras: []imagegen.ImageMetadataLora{}, Triggers: []string{}, Characters: []string{},
+		Backend: "comfyui", At: time.Now().UnixMilli(),
+		Clip: &genRecordClip{From: from},
+	}
+	rec.Width, _ = strconv.Atoi(vars["width"])
+	rec.Height, _ = strconv.Atoi(vars["height"])
+	rec.Clip.Frames, _ = strconv.Atoi(vars["frames"])
+	rec.Clip.FPS, _ = strconv.Atoi(vars["fps"])
+	rec.Steps, _ = strconv.Atoi(vars["steps"])
+	if !recipe.built() {
+		return rec
+	}
+	w := recipe.wanClip(vars, extra)
+	rec.Clip.Recipe = w.Recipe()
+	w = w.Settled()
+	rec.Width, rec.Height = w.Size(init)
+	rec.Model, rec.VAE, rec.Sampler, rec.Steps, rec.CfgScale = w.Model, w.VAE, w.Sampler, w.Steps, w.CFG
+	rec.Clip.LowModel, rec.Clip.TextEncoder, rec.Clip.Shift, rec.Clip.Scheduler = w.LowModel, w.TextEncoder, w.Shift, w.Scheduler
+	for _, l := range w.Loras {
+		if l.Name != "" && l.Weight != 0 {
+			rec.Loras = append(rec.Loras, imagegen.ImageMetadataLora{Name: l.Name, Weight: l.Weight})
+		}
+	}
+	return rec
+}
+
+// ── enlarging a finished clip ───────────────────────────────────────────────
+
+type clipUpscaleReq struct {
+	JobID string `json:"jobId"`
+	// The clip, by its name in the studio's gallery or by its preview's id.
+	Gallery string `json:"gallery"`
+	ID      string `json:"id"`
+	// Upscaler is an upscale model as ComfyUI lists it; blank resizes alone.
+	Upscaler string  `json:"upscaler"`
+	Scale    float64 `json:"scale"`
+	Board    string  `json:"board"`
+}
+
+// clipVideoExt is the extension ComfyUI's video loader knows a clip of this type by.
+// A GIF or an animated WebP is a picture to it, and it will not take one.
+func clipVideoExt(mime string) (string, bool) {
+	switch strings.ToLower(mime) {
+	case "video/mp4":
+		return ".mp4", true
+	case "video/webm":
+		return ".webm", true
+	case "video/quicktime":
+		return ".mov", true
+	}
+	return "", false
+}
+
+// handleClipUpscale enlarges a finished clip through ComfyUI. The enlarged clip is a
+// new one beside it — a preview, and kept in the gallery as clips are — so the
+// original is there to compare against and to go back to.
+func (s *Server) handleClipUpscale(w http.ResponseWriter, r *http.Request) {
+	set := s.settings.Get()
+	if strings.TrimSpace(set.LibbyClipURL) == "" {
+		writeErr(w, http.StatusConflict, "clips are not set up: Settings → Image generation → Video")
+		return
+	}
+	var req clipUpscaleReq
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	if req.Scale <= 1 || req.Scale > imagegen.MaxClipUpscale {
+		writeErr(w, http.StatusBadRequest, "a clip can be enlarged by more than 1× and up to 4×")
+		return
+	}
+	src, ok := s.clipToUpscale(w, r, set, req)
+	if !ok {
+		return
+	}
+	ext, ok := clipVideoExt(src.mime)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "only a video clip can be enlarged — ComfyUI reads a GIF or a WebP as a picture")
+		return
+	}
+
+	ctx := r.Context()
+	var job *genJob
+	if genJobIDPattern.MatchString(req.JobID) {
+		ctx, job = s.genJobs.start(context.WithoutCancel(r.Context()), req.JobID)
+		defer s.genJobs.finish(req.JobID, job)
+	}
+	ctx, cancel := context.WithTimeout(ctx, clipTimeout)
+	defer cancel()
+	release := s.lendCardToVideo(ctx)
+	defer release()
+	up := imagegen.ClipUpscale{Model: strings.TrimSpace(req.Upscaler), Scale: req.Scale, Width: src.width, Height: src.height}
+	outs, err := s.imagegen.RunClipUpscale(ctx, set.LibbyClipURL, src.data, ext, up, func(p imagegen.Progress) {
+		if job != nil {
+			job.report(p)
+		}
+	})
+	if err != nil {
+		if job != nil && job.wasCancelled() {
+			job.fail("generation cancelled")
+			writeErr(w, http.StatusConflict, "generation cancelled")
+			return
+		}
+		msg := err.Error()
+		if errors.Is(err, context.DeadlineExceeded) {
+			msg = "the upscale took longer than a quarter of an hour and was stopped"
+		}
+		s.log.Warn("clip upscale", "err", err)
+		if job != nil {
+			job.fail(msg)
+		}
+		writeErr(w, http.StatusBadGateway, msg)
+		return
+	}
+	out := outs[0]
+	mime := safeInlineContentType(out.MIME)
+	rec := src.record
+	by := up.Model
+	if by == "" {
+		by = "lanczos"
+	}
+	rec.Upscaled = &genRecordUpscale{Upscaler: by, Scale: up.Scale}
+	if rec.Clip == nil {
+		rec.Clip = &genRecordClip{}
+	}
+	rec.Clip.Recipe, rec.Clip.Source = up.Recipe(), req.Gallery
+	if up.Width > 0 && up.Height > 0 {
+		rec.Width, rec.Height = imagegen.ClipUpscaleSize(up.Width, up.Height, up.Scale)
+	}
+	rec.At = time.Now().UnixMilli()
+	clip := &genClip{MIME: mime, Seed: rec.Seed, Recipe: up.Recipe(), Width: rec.Width, Height: rec.Height}
+	preview := &genPreview{data: out.Data, mime: mime, prompt: rec.Prompt, negative: rec.NegativePrompt, seed: rec.Seed, model: rec.Model}
+	s.keepClip(ctx, set, req.Board, out, rec, src.still, preview, clip)
+	clip.ID = s.genCache.put(preview)
+	result := genResult{Images: []genResultImage{}, Prompt: rec.Prompt, Positive: rec.Prompt, Negative: rec.NegativePrompt, Clip: clip}
+	if job != nil {
+		job.succeed(result)
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+// clipSource is a clip to enlarge, with what is known of it.
+type clipSource struct {
+	data          []byte
+	mime          string
+	width, height int
+	record        genRecord
+	// still is its gallery tile, for the enlarged clip's when ffmpeg cannot take one.
+	still []byte
+}
+
+// clipToUpscale reads the clip an upscale names: from the gallery, which keeps its
+// record and size, or from its preview, which keeps only the prompt and seed. It
+// writes the error itself when there is none.
+func (s *Server) clipToUpscale(w http.ResponseWriter, r *http.Request, set settings.Settings, req clipUpscaleReq) (clipSource, bool) {
+	base := genRecord{Loras: []imagegen.ImageMetadataLora{}, Triggers: []string{}, Characters: []string{}, Backend: "comfyui"}
+	if req.Gallery != "" {
+		if !set.ImageGenEnabled || !s.ownGallery(r.Context(), set.ImageGenURL) {
+			writeErr(w, http.StatusConflict, "this gallery keeps no clips")
+			return clipSource{}, false
+		}
+		g, err := s.genImageNamed(r.Context(), req.Gallery)
+		if err != nil {
+			writeErr(w, http.StatusNotFound, err.Error())
+			return clipSource{}, false
+		}
+		if !isClip(g) {
+			writeErr(w, http.StatusBadRequest, "that is a picture, not a clip")
+			return clipSource{}, false
+		}
+		data, err := s.genImageBytes(g, false)
+		if err != nil {
+			writeErr(w, http.StatusNotFound, err.Error())
+			return clipSource{}, false
+		}
+		src := clipSource{data: data, mime: g.MIME, width: int(g.Width), height: int(g.Height), record: base}
+		if raw := s.genInfo(g); raw != nil {
+			_ = json.Unmarshal(raw, &src.record)
+		}
+		if g.ThumbPath != "" {
+			src.still, _ = s.genImageBytes(g, true)
+		}
+		return src, true
+	}
+	p, ok := s.genCache.get(req.ID)
+	if !ok || p.mime == "" {
+		writeErr(w, http.StatusNotFound, "that clip is no longer here — previews are kept for a few hours")
+		return clipSource{}, false
+	}
+	base.Prompt, base.NegativePrompt, base.Seed, base.Model = p.prompt, p.negative, p.seed, p.model
+	base.Clip = &genRecordClip{}
+	return clipSource{data: p.data, mime: p.mime, record: base}, true
 }

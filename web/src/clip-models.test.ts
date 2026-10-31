@@ -1,7 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-const { clipLoraChoices, clipLoraPicks, comfyFolderOf, isSpeedFile, loraStage, loraTwin, speedAtFullCFG, suggestClipModels } = await import("./clip-models.ts");
+const {
+  clipLoraChoices, clipLoraPicks, clipModelChoiceOf, clipModelChoices, comfyFolderOf, isSpeedFile, loraStage, loraTwin, NO_CLIP_MODELS,
+  settleSpeed, speedAtFullCFG, studioClipModels, studioClipRecipe, suggestClipModels, withClipModel,
+} = await import("./clip-models.ts");
 
 test("a LoRA's half of the pair is read off its name however it is written", () => {
   assert.equal(loraStage("Wan2.2-Lightning_I2V-A14B-4steps-lora_HIGH_fp16.safetensors"), "high");
@@ -132,4 +135,79 @@ test("a speed file at a full-strength CFG is told apart from one at its own", ()
   assert.ok(speedAtFullCFG(m));
   assert.ok(!speedAtFullCFG({ ...m, cfg: 1 }));
   assert.ok(!speedAtFullCFG({ ...m, loras: [{ ...m.loras[0], weight: 0 }] }));
+});
+
+const offeredFiles = {
+  diffusion: [
+    "wan2.2_i2v_low_noise_14B_fp8.safetensors", "wan2.2_i2v_high_noise_14B_fp8.safetensors",
+    "wan2.2_ti2v_5B_fp16.safetensors", "solo_high_noise.gguf",
+  ],
+  checkpoints: ["wan2.2-rapid-mega-aio-v10.safetensors"],
+  textEncoders: ["clip_l.safetensors", "umt5_xxl_fp8.safetensors"],
+  vaes: ["wan_2.1_vae.safetensors", "wan2.2_vae.safetensors"],
+};
+
+test("a pair of experts is one model to pick, then single models, then checkpoints", () => {
+  const choices = clipModelChoices(offeredFiles);
+  assert.deepEqual(choices.map((c) => [c.kind, c.key]), [
+    ["pair", "wan2.2_i2v_high_noise_14B_fp8.safetensors"],
+    ["single", "solo_high_noise.gguf"],
+    ["single", "wan2.2_ti2v_5B_fp16.safetensors"],
+    ["checkpoint", "wan2.2-rapid-mega-aio-v10.safetensors"],
+  ]);
+  assert.equal(choices[0].lowModel, "wan2.2_i2v_low_noise_14B_fp8.safetensors");
+  assert.equal(choices[0].label, "wan2.2 i2v 14B fp8");
+  assert.ok(choices[3].speed && !choices[0].speed);
+});
+
+test("picking a model brings what it needs beside it and keeps what still fits", () => {
+  const [pair, , fiveB, aio] = clipModelChoices(offeredFiles);
+  const m = withClipModel(NO_CLIP_MODELS, pair, offeredFiles);
+  assert.equal(m.lowModel, "wan2.2_i2v_low_noise_14B_fp8.safetensors");
+  assert.equal(m.textEncoder, "umt5_xxl_fp8.safetensors");
+  assert.equal(m.vae, "wan_2.1_vae.safetensors");
+  // The 5B model has a VAE of its own; the encoder picked stays.
+  const five = withClipModel({ ...m, textEncoder: "mine.safetensors" }, fiveB, offeredFiles);
+  assert.deepEqual([five.lowModel, five.textEncoder, five.vae], ["", "mine.safetensors", "wan2.2_vae.safetensors"]);
+  // A checkpoint carries both.
+  const all = withClipModel(m, aio, offeredFiles);
+  assert.deepEqual([all.checkpoint, all.lowModel, all.textEncoder, all.vae], [true, "", "", ""]);
+  assert.equal(clipModelChoiceOf(all, clipModelChoices(offeredFiles))?.kind, "checkpoint");
+});
+
+test("taking on a speed file drops numbers that would burn it, and losing it drops its four steps", () => {
+  const full = { ...NO_CLIP_MODELS, model: "wan.safetensors", steps: 20, cfg: 3.5 };
+  const fast = { ...full, loras: [{ name: "lightx2v.safetensors", weight: 1, stage: "" as const }] };
+  assert.deepEqual([settleSpeed(full, fast).steps, settleSpeed(full, fast).cfg], [0, 0]);
+  // Numbers a speed file can take stand.
+  const six = { ...fast, steps: 6, cfg: 1 };
+  assert.equal(settleSpeed(full, six).steps, 6);
+  const back = { ...fast, steps: 4, cfg: 1, loras: [] };
+  assert.deepEqual([settleSpeed({ ...fast, steps: 4, cfg: 1 }, back).steps, settleSpeed({ ...fast, steps: 4, cfg: 1 }, back).cfg], [0, 0]);
+  // An AIO picked as the model counts as one.
+  const [, , , aio] = clipModelChoices(offeredFiles);
+  assert.equal(withClipModel(full, aio, offeredFiles).steps, 0);
+});
+
+test("Settings' LoRAs are read as the studio's choices and go back out as the same files", () => {
+  const loraChoices = clipLoraChoices(["bounce_high.safetensors", "bounce_low.safetensors", "style.safetensors", "gone.safetensors"]);
+  const settings = {
+    ...NO_CLIP_MODELS, model: "h.safetensors", lowModel: "l.safetensors", steps: 6,
+    loras: [
+      { name: "bounce_high.safetensors", weight: 0.7, stage: "high" as const },
+      { name: "bounce_low.safetensors", weight: 0.7, stage: "low" as const },
+      { name: "style.safetensors", weight: 0.5, stage: "" as const },
+      { name: "not-listed.safetensors", weight: 1, stage: "" as const },
+    ],
+  };
+  const recipe = studioClipRecipe(settings, loraChoices);
+  assert.deepEqual(recipe.loras, { "bounce_high.safetensors": 0.7, "style.safetensors": 0.5 });
+  assert.equal(recipe.models.steps, 6);
+  assert.deepEqual(studioClipModels(recipe, loraChoices).loras, [
+    { name: "bounce_high.safetensors", weight: 0.7, stage: "high" },
+    { name: "bounce_low.safetensors", weight: 0.7, stage: "low" },
+    { name: "style.safetensors", weight: 0.5, stage: "" },
+  ]);
+  // Nothing in Settings is nothing picked.
+  assert.deepEqual(studioClipRecipe(undefined, loraChoices), { models: NO_CLIP_MODELS, loras: {} });
 });

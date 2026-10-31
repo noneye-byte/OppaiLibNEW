@@ -86,7 +86,7 @@ import "./imagegen-gallery.js";
 import { LORA_DRAG_TYPE } from "./imagegen-loras.js";
 import "./rename-dialog.js";
 import "./imagegen-detailer.js";
-import { animatePicture, clipsRunning, onClipsChange, type ClipPicture } from "./imagegen-video.js";
+import { animatePicture, clipsRunning, onClipKept, onClipsChange, openGalleryClip, type ClipPicture, type GalleryClip } from "./imagegen-video.js";
 import { GALLERY_DRAG_TYPE } from "./imagegen-gallery.js";
 import {
   loadLayout, loadPrompts, moveItem, patchShot, rememberPrompt, rememberShots, saveLayout, savePrompts, stepThrough,
@@ -612,6 +612,7 @@ export class OppaiImageGen extends LitElement {
   private sourceData = "";
   @query("input.source-file") private sourceFile?: HTMLInputElement;
   private unwatchClips?: () => void;
+  private unwatchKept?: () => void;
 
 
   @state() private speech = "";
@@ -1930,6 +1931,8 @@ export class OppaiImageGen extends LitElement {
     if (this.studio) this.enterStudio();
     // The mode switch counts the clips being made, which go on in any mode.
     this.unwatchClips = onClipsChange(() => this.requestUpdate());
+    // A finished clip lands in the gallery, which is beside every mode.
+    this.unwatchKept = onClipKept(() => void this.galleryPanel?.refresh());
     this.unsubscribeStore = onStoreChange(() => {
       this.history = store.history;
       this.queue = store.queue;
@@ -1958,6 +1961,7 @@ export class OppaiImageGen extends LitElement {
   disconnectedCallback() {
     super.disconnectedCallback();
     this.unwatchClips?.();
+    this.unwatchKept?.();
     this.unsubscribeStore?.();
     window.removeEventListener("keydown", this.onKey);
     this.stopFlip();
@@ -4693,7 +4697,7 @@ export class OppaiImageGen extends LitElement {
     return html`<div class="workspace create">
       <div class="create-shell ${video ? "video" : "image"} ${tab && !video ? "drawer-open" : ""} ${galleryOut ? "with-gallery" : ""} ${this.loraDrag ? "lora-dragging" : ""}">
         ${video
-          ? html`<oppai-video-studio .clips=${st.clips ?? {}}
+          ? html`<oppai-video-studio .clips=${st.clips ?? {}} .board=${this.board}
               @use-frame=${(e: CustomEvent<ClipPicture>) => void this.usePicture(e.detail.url, e.detail.name, "img2img", true)}
               @find-video-models=${() => { this.civitaiMode = "video"; this.civitaiOpen = true; }}></oppai-video-studio>`
           : html`${this.renderCreateRail()}
@@ -4734,6 +4738,10 @@ export class OppaiImageGen extends LitElement {
                 @covers-changed=${() => this.bumpThumbs()}
                 @use-picture=${(e: CustomEvent<UsePicture>) =>
                   void this.usePicture(e.detail.url, e.detail.name, e.detail.mode, false, e.detail.gallery)}
+                @open-clip=${(e: CustomEvent<GalleryClip & { upscale?: boolean }>) => {
+                  openGalleryClip(e.detail, e.detail.upscale);
+                  this.switchMode("video");
+                }}
                 @boards-changed=${() => this.loadStatus()}
                 @board-changed=${(e: CustomEvent<{ board: string }>) => (this.board = e.detail.board)}
                 @cut-out=${(e: CustomEvent<{ url: string; name: string }>) =>

@@ -1,9 +1,12 @@
 import { LitElement, html, css, nothing } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { iconStyles, motionStyles } from "../theme.js";
-import { api, type ClipParams, type ClipWorkflow, type GenerateResult } from "../api.js";
+import { api, type ClipModels, type ClipParams, type ClipUpscaleParams, type ClipWorkflow, type ComfyModels, type GenClip, type GenerateResult } from "../api.js";
 import { CLIP_ASPECTS, CLIP_SIDES, clipFrames, clipSize, lastFrameTime, type ClipAspect } from "../clip-shape.js";
-import { clipLoraChoices, clipLoraPicks, type ClipLoraChoice } from "../clip-models.js";
+import {
+  clipIsFast, clipLoraChoices, clipModelChoiceOf, clipModelChoices, settleSpeed, SPEED_SETTINGS, speedAtFullCFG, studioClipModels,
+  studioClipRecipe, withClipModel, type ClipLoraChoice, type ClipModelChoice, type StudioClipRecipe,
+} from "../clip-models.js";
 import { MOTION_PRESETS, hasPhrase, togglePhrase } from "../motion-presets.js";
 import { GALLERY_DRAG_TYPE } from "./imagegen-gallery.js";
 
@@ -23,8 +26,13 @@ import { GALLERY_DRAG_TYPE } from "./imagegen-gallery.js";
  *
  * A clip takes minutes, so the run is not the element's: it lives in `session` below,
  * and goes on while the studio is on another mode or another screen. What comes back
- * is a preview like a picture's, kept on the server for a few hours and in the library
- * only once saved.
+ * is a preview like a picture's, and on Automatic1111 it is kept in the gallery beside
+ * the pictures, reaching the library only once moved there.
+ *
+ * The files are picked here, as a checkpoint and LoRAs are in the Image studio:
+ * Settings' are where each direction starts, and a clip sends the studio's whole
+ * recipe. A finished clip can be enlarged through ComfyUI, which comes back as a take
+ * of its own beside it.
  */
 
 /** A picture a clip starts from, as Animate hands it over. */
@@ -52,11 +60,23 @@ interface ClipRun {
   startedAt: number;
   endedAt?: number;
   error?: string;
-  /** `recipe` is the steps, CFG and shift a built clip ran at. */
-  clip?: { id: string; mime: string; seed: number; recipe?: string };
+  /** `recipe` is the steps, CFG and shift a built clip ran at. A clip opened from the
+      gallery has no preview id, and plays from the gallery. */
+  clip?: GenClip;
+  /** The take it is an enlargement of, by its number in the reel. */
+  upscaleOf?: number;
   /** The library row once saved. */
   savedId?: number;
   saving?: boolean;
+}
+
+/** Where a clip plays from: its preview, or the gallery when it has none. */
+function clipURL(clip: GenClip): string {
+  return clip.id ? api.genPreviewURL(clip.id) : api.galleryFullURL(clip.gallery ?? "");
+}
+
+function newJobId(): string {
+  return `clip-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 /** What the studio was left at, and its runs: kept for the page, not the element. */
@@ -74,9 +94,12 @@ const session = {
   variations: 1,
   /** Reuse the selected clip's seed, to see what a changed prompt does to the same take. */
   keepSeed: false,
-  /** LoRAs put on for the next clips, by choice key, with their weights. */
-  loras: {} as Record<string, number>,
+  /** Each direction's files once the studio has changed them from Settings'. */
+  recipes: {} as Partial<Record<"image" | "text", StudioClipRecipe>>,
   loraQuery: "",
+  /** How a clip is enlarged: an upscale model ComfyUI has ("" is Lanczos), and by how much. */
+  upscaler: "",
+  upscaleBy: 2,
   runs: [] as ClipRun[],
   /** The run on the stage. */
   selected: "" as string,
@@ -100,6 +123,41 @@ export function clipsRunning(): number {
   return session.runs.filter((r) => !r.done).length;
 }
 
+const keptListeners = new Set<() => void>();
+
+/** Calls fn when a finished clip has been kept in the gallery, so the gallery beside
+    the studio can show it — whichever mode is open by then. */
+export function onClipKept(fn: () => void): () => void {
+  keptListeners.add(fn);
+  return () => keptListeners.delete(fn);
+}
+
+/** A clip from the gallery, put on the stage as a take: to watch, carry on from,
+    enlarge or move to the library. */
+export interface GalleryClip {
+  gallery: string;
+  name: string;
+  width?: number;
+  height?: number;
+}
+
+export function openGalleryClip(c: GalleryClip, upscale = false) {
+  let run = session.runs.find((r) => r.clip?.gallery === c.gallery);
+  if (!run) {
+    run = {
+      jobId: newJobId(), from: "image", prompt: c.name, fps: ASSUMED_FPS, percent: 1, done: true, startedAt: Date.now(), endedAt: Date.now(),
+      thumb: api.galleryThumbURL(c.gallery), clip: { id: "", mime: "video/mp4", seed: 0, gallery: c.gallery, width: c.width, height: c.height },
+    };
+    session.runs = [run, ...session.runs];
+  }
+  session.selected = run.jobId;
+  pendingUpscale = upscale;
+  changed();
+}
+
+/** The upscale panel opens on the next render, for a clip opened to be enlarged. */
+let pendingUpscale = false;
+
 /** Makes a picture the one the next clip starts from. */
 export function animatePicture(pic: ClipPicture) {
   const old = session.picture;
@@ -110,27 +168,33 @@ export function animatePicture(pic: ClipPicture) {
 }
 
 /**
- * ComfyUI's LoRAs, asked for once a page: it is a live call to ComfyUI rather than
- * something the studio's status carries, since the status is read on every visit and
- * ComfyUI may be another machine that is asleep.
+ * ComfyUI's models, LoRAs, samplers and upscalers, asked for once a page: it is a live
+ * call to ComfyUI rather than something the studio's status carries, since the status
+ * is read on every visit and ComfyUI may be another machine that is asleep. Until it
+ * answers, a clip runs on Settings' files.
  */
-const comfyLoras = {
-  choices: null as ClipLoraChoice[] | null,
+const comfy = {
+  lists: null as ComfyModels | null,
+  loras: null as ClipLoraChoice[] | null,
+  models: [] as ClipModelChoice[],
   loading: false,
   error: "",
 };
 
-async function loadComfyLoras() {
-  if (comfyLoras.loading) return;
-  comfyLoras.loading = true;
-  comfyLoras.error = "";
+async function loadComfyLists() {
+  if (comfy.loading) return;
+  comfy.loading = true;
+  comfy.error = "";
   changed();
   try {
-    comfyLoras.choices = clipLoraChoices((await api.comfyModels()).loras);
+    const lists = await api.comfyModels();
+    comfy.lists = lists;
+    comfy.loras = clipLoraChoices(lists.loras);
+    comfy.models = clipModelChoices(lists);
   } catch (e) {
-    comfyLoras.error = (e as Error).message;
+    comfy.error = (e as Error).message;
   } finally {
-    comfyLoras.loading = false;
+    comfy.loading = false;
     changed();
   }
 }
@@ -143,6 +207,10 @@ const ASSUMED_FPS = 16;
 
 const SPEEDS = [0.5, 1, 2] as const;
 
+/** How many times larger a clip can be made. Past 4× of Wan's 720p is past 4K, with
+    every frame of it held in ComfyUI's memory at once. */
+const UPSCALES = [1.5, 2, 3, 4] as const;
+
 function elapsed(ms: number): string {
   const s = Math.max(0, Math.round(ms / 1000));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
@@ -152,7 +220,10 @@ function elapsed(ms: number): string {
 export class OppaiVideoStudio extends LitElement {
   /** The workflows set up, from the studio's status. */
   @property({ attribute: false }) clips: { image?: ClipWorkflow; text?: ClipWorkflow } = {};
+  /** The gallery folder open beside the studio, which a clip is filed in. */
+  @property() board = "";
   @state() private negOpen = false;
+  @state() private upscaleOpen = false;
   @state() private error = "";
   @state() private dropping = false;
   @state() private playing = true;
@@ -287,6 +358,44 @@ export class OppaiVideoStudio extends LitElement {
         height: 30px; padding: 0 8px; border-radius: 15px; border: 1px solid var(--oppai-border-strong);
         background: var(--oppai-bg); color: var(--oppai-text); font-size: 12px;
       }
+      /* The model, as the Image studio's checkpoint: one picker, the files beside it
+         folded away, since they follow from the model nearly always. */
+      .model-pick { width: 100%; height: 38px; border-radius: 12px; padding: 0 10px; font-size: 12.5px; }
+      .model-note { display: flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 11.5px; color: var(--oppai-text-muted); }
+      .model-note .material-symbols-rounded { font-size: 15px; }
+      .model-note.speed { color: var(--oppai-primary-bright, var(--oppai-primary)); }
+      details.files { margin-top: 8px; border-radius: 12px; border: 1px solid var(--oppai-border); background: var(--oppai-bg); }
+      details.files summary {
+        display: flex; align-items: center; gap: 6px; min-height: 32px; padding: 0 10px; font-size: 12px; color: var(--oppai-text-dim);
+        cursor: pointer; list-style: none;
+      }
+      details.files summary::-webkit-details-marker { display: none; }
+      details.files summary .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--oppai-text-muted); }
+      details.files[open] summary .chev { transform: rotate(180deg); }
+      .files-grid { display: grid; grid-template-columns: 84px minmax(0, 1fr); gap: 6px 8px; align-items: center; padding: 4px 10px 10px; font-size: 11.5px; color: var(--oppai-text-muted); }
+      .files-grid select, .sampling select { width: 100%; min-width: 0; }
+      .sampling { display: grid; grid-template-columns: 52px minmax(0, 1fr) 54px; gap: 6px 8px; align-items: center; font-size: 12px; color: var(--oppai-text-dim); }
+      .sampling input[type="range"] { width: 100%; accent-color: var(--oppai-primary); }
+      .sampling b { text-align: right; font-size: 12px; font-variant-numeric: tabular-nums; }
+      .sampling b.auto { color: var(--oppai-text-muted); font-weight: 500; }
+      .sampling .two { grid-column: 2 / 4; display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+      .warn { margin-top: 8px; padding: 8px 10px; border-radius: 10px; font-size: 12px; line-height: 1.45;
+        background: color-mix(in srgb, var(--oppai-error, #f2b8b5) 14%, transparent); color: var(--oppai-text); }
+      .warn .link { padding: 4px 0 0; display: block; }
+      .k-btns { margin-left: auto; display: flex; align-items: center; gap: 2px; }
+      .k-btns .link { padding: 0 6px; font-size: 11px; font-weight: 600; letter-spacing: 0; text-transform: none; }
+      .k-btns + small { margin-left: 6px; }
+
+      /* Enlarging the clip on the stage: a bar over the transport. */
+      .upscale {
+        flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; padding: 10px 16px;
+        border-top: 1px solid var(--oppai-border); background: color-mix(in srgb, var(--oppai-primary) 7%, var(--oppai-surface));
+        animation: oppai-fade-in 0.16s ease both;
+      }
+      .upscale .lbl { font-size: 12px; font-weight: 650; color: var(--oppai-text-dim); display: flex; align-items: center; gap: 6px; }
+      .upscale select { flex: 0 1 200px; min-width: 120px; }
+      .upscale .to { font-size: 11.5px; color: var(--oppai-text-muted); font-variant-numeric: tabular-nums; }
+
       .slider { display: flex; align-items: center; gap: 10px; }
       .slider input { flex: 1; accent-color: var(--oppai-primary); }
       .slider b { min-width: 44px; text-align: right; font-size: 12.5px; font-variant-numeric: tabular-nums; }
@@ -414,7 +523,7 @@ export class OppaiVideoStudio extends LitElement {
     this.unsubscribe = onClipsChange(() => this.requestUpdate());
     // A studio that opens on a mode with no workflow behind it opens on the other one.
     if (session.from === "image" && !this.clips.image && this.clips.text) session.from = "text";
-    if (!comfyLoras.choices && (this.clips.image?.takes.includes("loras") || this.clips.text?.takes.includes("loras"))) void loadComfyLoras();
+    if (!comfy.lists && (this.clips.image || this.clips.text)) void loadComfyLists();
     // Running clips show how long they have taken; a second's tick is enough for that.
     this.ticker = window.setInterval(() => { if (clipsRunning()) this.requestUpdate(); }, 1000);
   }
@@ -425,12 +534,69 @@ export class OppaiVideoStudio extends LitElement {
     window.clearInterval(this.ticker);
   }
 
+  protected updated() {
+    if (pendingUpscale) {
+      pendingUpscale = false;
+      this.upscaleOpen = true;
+    }
+  }
+
   private get workflow(): ClipWorkflow | undefined {
     return session.from === "image" ? this.clips.image : this.clips.text;
   }
 
+  /** The files this direction's next clip runs: the studio's once changed, Settings'
+      until then — null while ComfyUI's lists are not in, when Settings' run as they are. */
+  private recipe(): StudioClipRecipe | null {
+    const own = session.recipes[session.from];
+    if (own) return own;
+    return comfy.loras ? studioClipRecipe(this.workflow?.models, comfy.loras) : null;
+  }
+
+  /** Whether the next clip is built from picked files rather than a pasted workflow. */
+  private get built(): boolean {
+    return !!this.recipe()?.models.model;
+  }
+
   private takes(name: string): boolean {
-    return !!this.workflow?.takes.includes(name);
+    const w = this.workflow;
+    return !!(this.built ? w?.built ?? w?.takes : w?.takes)?.includes(name);
+  }
+
+  /** Changes this direction's recipe. A change that brings a speed file in, or takes
+      the last one out, settles the steps and CFG with it, as Settings does. */
+  private edit(fn: (r: StudioClipRecipe) => StudioClipRecipe) {
+    const r = this.recipe();
+    if (!r || !comfy.loras) return;
+    const next = fn(r);
+    const settled = settleSpeed(studioClipModels(r, comfy.loras), studioClipModels(next, comfy.loras));
+    session.recipes = { ...session.recipes, [session.from]: { ...next, models: { ...next.models, steps: settled.steps, cfg: settled.cfg } } };
+    changed();
+  }
+
+  private editModels(patch: Partial<ClipModels>) {
+    this.edit((r) => ({ ...r, models: { ...r.models, ...patch } }));
+  }
+
+  private pickModel(value: string) {
+    if (!value) {
+      // Back to Settings' pasted workflow, which has no files to pick.
+      this.edit((r) => ({ ...r, models: { ...r.models, model: "", lowModel: "", checkpoint: false } }));
+      return;
+    }
+    const choice = comfy.models.find((c) => `${c.kind}:${c.key}` === value);
+    if (!choice || !comfy.lists || !comfy.loras) return;
+    const loras = comfy.loras;
+    const lists = comfy.lists;
+    this.edit((r) => ({ ...r, models: { ...withClipModel(studioClipModels(r, loras), choice, lists), loras: [] } }));
+  }
+
+  /** Back to Settings' files for this direction. */
+  private resetRecipe() {
+    const next = { ...session.recipes };
+    delete next[session.from];
+    session.recipes = next;
+    changed();
   }
 
   private set<K extends keyof typeof session>(key: K, value: (typeof session)[K]) {
@@ -516,6 +682,13 @@ export class OppaiVideoStudio extends LitElement {
       this.error = "Say what the clip should show.";
       return;
     }
+    const recipe = this.recipe();
+    if (this.workflow?.needsModel && !recipe?.models.model) {
+      this.error = comfy.error
+        ? `ComfyUI didn't list its models, so there is nothing to pick from: ${comfy.error}`
+        : "Pick a model under Model first.";
+      return;
+    }
     let initImage: string | undefined;
     try {
       if (from === "image" && pic && !pic.gallery) initImage = await pictureDataURL(pic.url);
@@ -527,19 +700,17 @@ export class OppaiVideoStudio extends LitElement {
     const made: ClipRun[] = [];
     for (let i = 0; i < Math.max(1, session.variations); i++) {
       const params: ClipParams = {
-        jobId: `clip-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+        jobId: newJobId(),
         from,
         prompt: session.prompt.trim(),
         negativePrompt: session.negative.trim(),
+        board: this.board,
       };
       if (this.takes("width") || this.takes("height")) Object.assign(params, this.size());
       if (this.takes("frames")) params.frames = clipFrames(session.seconds, this.fps());
       if (this.takes("fps")) params.fps = session.fps;
       if (this.takes("steps")) params.steps = session.steps;
-      if (this.takes("loras") && comfyLoras.choices) {
-        const loras = clipLoraPicks(session.loras, comfyLoras.choices, !!this.workflow?.pair);
-        if (loras.length) params.loras = loras;
-      }
+      if (recipe?.models.model && comfy.loras) params.models = studioClipModels(recipe, comfy.loras);
       // Variations of a kept seed walk along from it, so they are still variations.
       if (kept) params.seed = kept + i;
       if (from === "image" && pic) {
@@ -551,11 +722,28 @@ export class OppaiVideoStudio extends LitElement {
         fps: this.fps(), percent: 0, done: false, startedAt: Date.now(),
       };
       made.push(run);
-      void runClip(run, params);
+      void runClip(run, () => api.makeClip(params));
     }
     session.runs = [...made.reverse(), ...session.runs];
     session.selected = session.runs[0].jobId;
     changed();
+  }
+
+  /** Enlarges a finished clip: a new take beside it, so the two can be compared. */
+  private upscale(run: ClipRun) {
+    if (!run.clip) return;
+    const params: ClipUpscaleParams = { jobId: newJobId(), upscaler: session.upscaler, scale: session.upscaleBy, board: this.board };
+    if (run.clip.gallery) params.gallery = run.clip.gallery;
+    else params.id = run.clip.id;
+    const up: ClipRun = {
+      jobId: params.jobId!, from: run.from, prompt: run.prompt, thumb: run.thumb, fps: run.fps,
+      percent: 0, done: false, startedAt: Date.now(), upscaleOf: session.runs.length - session.runs.indexOf(run),
+    };
+    session.runs = [up, ...session.runs];
+    session.selected = up.jobId;
+    this.upscaleOpen = false;
+    changed();
+    void runClip(up, () => api.upscaleClip(params));
   }
 
   private async save(run: ClipRun) {
@@ -564,7 +752,10 @@ export class OppaiVideoStudio extends LitElement {
     changed();
     try {
       const title = run.prompt ? `Clip: ${run.prompt.slice(0, 80)}` : "Generated clip";
-      run.savedId = (await api.saveGenerated({ id: run.clip.id, title, tags: ["clip"] })).id;
+      run.savedId = run.clip.id
+        ? (await api.saveGenerated({ id: run.clip.id, title, tags: ["clip"] })).id
+        // Opened from the gallery: moved from there, as the gallery's own button does.
+        : (await api.saveGalleryImage({ name: run.clip.gallery ?? "", tags: ["clip"] })).id;
     } catch (e) {
       run.error = (e as Error).message;
     } finally {
@@ -575,7 +766,8 @@ export class OppaiVideoStudio extends LitElement {
 
   private dismiss(run: ClipRun) {
     // An unsaved clip is a few megabytes of the server's memory; let it go now.
-    if (run.clip && !run.savedId) void api.deleteGenPreview(run.clip.id).catch(() => {});
+    // Its gallery copy stays where it is.
+    if (run.clip?.id && !run.savedId) void api.deleteGenPreview(run.clip.id).catch(() => {});
     const at = session.runs.indexOf(run);
     session.runs = session.runs.filter((r) => r !== run);
     if (session.selected === run.jobId) session.selected = session.runs[Math.min(at, session.runs.length - 1)]?.jobId ?? "";
@@ -725,6 +917,7 @@ export class OppaiVideoStudio extends LitElement {
             : html`<button class="link" @click=${() => (this.negOpen = true)}>+ What it should avoid</button>`) : nothing}
         ` : nothing}
 
+        ${this.renderModel()}
         ${this.takes("loras") ? this.renderLoras() : nothing}
 
         ${this.takes("width") || this.takes("height") ? html`
@@ -774,7 +967,8 @@ export class OppaiVideoStudio extends LitElement {
         ${this.error ? html`<div class="err">${this.error}</div>` : nothing}
       </div>
       <div class="ins-foot">
-        <button class="make" ?disabled=${from === "image" && !session.picture} title="Make the clip (Ctrl+Enter)" @click=${() => void this.make()}>
+        <button class="make" ?disabled=${(from === "image" && !session.picture) || (!!this.workflow?.needsModel && !this.built)}
+          title="Make the clip (Ctrl+Enter)" @click=${() => void this.make()}>
           <span class="material-symbols-rounded">movie</span>${session.variations > 1 ? `Make ${session.variations} clips` : "Make the clip"}</button>
         <div class="make-sub">${running ? `${running} clip${running === 1 ? "" : "s"} in the works · ` : ""}${session.seconds}s at ${size.width}×${size.height} · takes minutes</div>
       </div>
@@ -782,39 +976,118 @@ export class OppaiVideoStudio extends LitElement {
   }
 
   /**
-   * LoRAs for the next clips. Settings' own are listed first, locked, so a speed LoRA
-   * that is always on is not a mystery when a clip comes out fast; a pair's two files
+   * The model, picked as the Image studio's checkpoint is: a Wan 2.2 pair is one
+   * choice, its two experts wired by the server; its text encoder and VAE follow from
+   * it and are folded away beside it. Then how it samples.
+   */
+  private renderModel() {
+    const w = this.workflow;
+    if (!w) return nothing;
+    const r = this.recipe();
+    const pasted = !w.needsModel && !w.models;
+    const own = !!session.recipes[session.from];
+    const head = html`<div class="k">Model
+      <span class="k-btns">
+        ${own ? html`<button class="link" title="Back to the files in Settings → Image generation → Video" @click=${() => this.resetRecipe()}>Settings'</button>` : nothing}
+        <button class="k-btn" title="Read ComfyUI's models again" aria-label="Read ComfyUI's models again" ?disabled=${comfy.loading}
+          @click=${() => void loadComfyLists()}><span class="material-symbols-rounded">refresh</span></button>
+      </span></div>`;
+    if (!r || !comfy.lists) {
+      return html`${head}<div class=${comfy.error ? "err" : "note"}>${comfy.error
+        ? `ComfyUI didn't list its models: ${comfy.error}. ${w.needsModel ? "" : "Clips run on Settings' files meanwhile."}`
+        : "Asking ComfyUI what it has…"}</div>`;
+    }
+    const m = r.models;
+    const lists = comfy.lists;
+    const choice = clipModelChoiceOf(m, comfy.models);
+    const value = choice ? `${choice.kind}:${choice.key}` : m.model ? "current" : "";
+    const group = (label: string, kind: ClipModelChoice["kind"]) => {
+      const list = comfy.models.filter((c) => c.kind === kind);
+      return list.length ? html`<optgroup label=${label}>${list.map((c) =>
+        html`<option value="${c.kind}:${c.key}" ?selected=${`${c.kind}:${c.key}` === value}>${c.label}${c.speed ? " ⚡" : ""}</option>`)}</optgroup>` : nothing;
+    };
+    const fileSelect = (aria: string, list: readonly string[], current: string, blank: string, set: (v: string) => void) => html`
+      <select aria-label=${aria} @change=${(e: Event) => set((e.target as HTMLSelectElement).value)}>
+        <option value="" ?selected=${!current}>${blank}</option>
+        ${(current && !list.includes(current) ? [current, ...list] : list).map((n) => html`<option value=${n} ?selected=${n === current}>${n}</option>`)}
+      </select>`;
+    const full = studioClipModels(r, comfy.loras ?? []);
+    const fast = clipIsFast(full);
+    const auto = (v: number, fastV: number, slowV: number) => (v ? String(v) : `${fast ? fastV : slowV}`);
+    return html`${head}
+      <select class="model-pick" aria-label="Model" @change=${(e: Event) => this.pickModel((e.target as HTMLSelectElement).value)}>
+        ${!m.model || pasted ? html`<option value="" ?selected=${!m.model}>${pasted ? "Settings' pasted workflow" : "Pick a model…"}</option>` : nothing}
+        ${m.model && !choice ? html`<option value="current" selected>${m.model} (not listed)</option>` : nothing}
+        ${group("Wan 2.2 pairs — high + low noise", "pair")}
+        ${group("Single models", "single")}
+        ${group("All-in-one checkpoints", "checkpoint")}
+      </select>
+      ${!comfy.models.length ? html`<div class="note" style="margin-top:6px">ComfyUI has no Wan models yet.
+        <button class="link" @click=${() => this.dispatchEvent(new CustomEvent("find-video-models", { bubbles: true, composed: true }))}>Find them on Civitai</button></div>` : nothing}
+      ${m.model ? html`
+        ${choice?.kind === "pair" ? html`<div class="model-note"><span class="material-symbols-rounded">animation</span>
+          High noise lays out the motion, then ${choiceShort(m.lowModel)} finishes it</div>` : nothing}
+        ${fast ? html`<div class="model-note speed"><span class="material-symbols-rounded">bolt</span>A speed file is in: ${SPEED_SETTINGS.steps} steps at CFG 1, several times faster</div>` : nothing}
+        <details class="files">
+          <summary><span class="material-symbols-rounded" style="font-size:16px">description</span>Encoder · VAE
+            <span class="nm">${m.checkpoint && !m.textEncoder && !m.vae ? "the checkpoint's own" : [m.textEncoder || "—", m.vae || "—"].join(" · ")}</span>
+            <span class="material-symbols-rounded chev" style="font-size:18px">expand_more</span></summary>
+          <div class="files-grid">
+            <span>Text encoder</span>${fileSelect("Text encoder", lists.textEncoders, m.textEncoder, m.checkpoint ? "The checkpoint's own" : "Pick one (umt5_xxl)", (v) => this.editModels({ textEncoder: v }))}
+            <span>VAE</span>${fileSelect("VAE", lists.vaes, m.vae, m.checkpoint ? "The checkpoint's own" : "Pick one (wan_2.1_vae)", (v) => this.editModels({ vae: v }))}
+          </div>
+        </details>
+        ${!m.checkpoint && (!m.textEncoder || !m.vae) ? html`<div class="err">A model from diffusion_models needs a text encoder and a VAE beside it.</div>` : nothing}
+
+        <div class="k">Sampling<small>0 is Wan's own</small></div>
+        <div class="sampling">
+          <span>Steps</span>
+          <input type="range" min="0" max="40" step="1" .value=${String(m.steps)} aria-label="Steps"
+            @input=${(e: Event) => this.editModels({ steps: Number((e.target as HTMLInputElement).value) })} />
+          <b class=${m.steps ? "" : "auto"}>${auto(m.steps, SPEED_SETTINGS.steps, 20)}</b>
+          <span>CFG</span>
+          <input type="range" min="0" max="10" step="0.5" .value=${String(m.cfg)} aria-label="CFG"
+            @input=${(e: Event) => this.editModels({ cfg: Number((e.target as HTMLInputElement).value) })} />
+          <b class=${m.cfg ? "" : "auto"}>${auto(m.cfg, SPEED_SETTINGS.cfg, 3.5)}</b>
+          <span>Shift</span>
+          <input type="range" min="0" max="20" step="0.5" .value=${String(m.shift)} aria-label="Shift"
+            @input=${(e: Event) => this.editModels({ shift: Number((e.target as HTMLInputElement).value) })} />
+          <b class=${m.shift ? "" : "auto"}>${m.shift || 8}</b>
+          <span>Sampler</span>
+          <div class="two">
+            ${fileSelect("Sampler", lists.samplers ?? [], m.sampler ?? "", "euler", (v) => this.editModels({ sampler: v }))}
+            ${fileSelect("Scheduler", lists.schedulers ?? [], m.scheduler ?? "", "simple", (v) => this.editModels({ scheduler: v }))}
+          </div>
+        </div>
+        ${speedAtFullCFG(full) ? html`<div class="warn">A speed file at CFG ${m.cfg} comes out burned, and takes many times as long.
+          <button class="link" @click=${() => this.editModels({ steps: SPEED_SETTINGS.steps, cfg: SPEED_SETTINGS.cfg })}>Use ${SPEED_SETTINGS.steps} steps at CFG 1</button></div>` : nothing}
+      ` : nothing}`;
+  }
+
+  /**
+   * LoRAs for the next clips, Settings' among them to start with; a pair's two files
    * are one choice, put on each at its own expert.
    */
   private renderLoras() {
-    const fixed = clipLoraChoices((this.workflow?.loras ?? []).filter((l) => l.weight !== 0).map((l) => l.name));
-    const fixedWeight = (c: ClipLoraChoice) => this.workflow?.loras?.find((l) => l.name === c.key)?.weight ?? 1;
-    const fixedFiles = new Set(fixed.flatMap((c) => c.files.map((f) => f.name)));
-    const all = comfyLoras.choices ?? [];
-    const on = all.filter((c) => session.loras[c.key] !== undefined && !fixedFiles.has(c.key));
+    const r = this.recipe();
+    if (!r) return nothing;
+    const all = comfy.loras ?? [];
+    const on = all.filter((c) => r.loras[c.key] !== undefined);
     const q = session.loraQuery.trim().toLowerCase();
-    const rest = all.filter((c) => session.loras[c.key] === undefined && !fixedFiles.has(c.key)
+    const rest = all.filter((c) => r.loras[c.key] === undefined
       && (!q || c.label.toLowerCase().includes(q) || c.key.toLowerCase().includes(q)));
-    const count = on.length + fixed.length;
-    const put = (key: string, weight: number) => this.set("loras", { ...session.loras, [key]: weight });
-    const takeOff = (key: string) => {
-      const next = { ...session.loras };
-      delete next[key];
-      this.set("loras", next);
-    };
-    const speedPicked = on.some((c) => c.speed) && !fixed.some((c) => c.speed);
+    const count = on.length;
+    const put = (key: string, weight: number) => this.edit((x) => ({ ...x, loras: { ...x.loras, [key]: weight } }));
+    const takeOff = (key: string) => this.edit((x) => {
+      const loras = { ...x.loras };
+      delete loras[key];
+      return { ...x, loras };
+    });
     return html`
-      <div class="k">LoRAs<small>${count ? `${count} on` : ""}</small>
-        <button class="k-btn" title="Read ComfyUI's LoRAs again" aria-label="Read ComfyUI's LoRAs again" ?disabled=${comfyLoras.loading}
-          @click=${() => void loadComfyLoras()}><span class="material-symbols-rounded">refresh</span></button>
-      </div>
+      <div class="k">LoRAs<small>${count ? `${count} on` : ""}</small></div>
       ${count ? html`<div class="loras-on">
-        ${fixed.map((c) => html`<div class="lora-row fixed ${c.speed ? "speed" : ""}" title="Put on for every clip in Settings → Image generation → Video">
-          <span class="lora-ic material-symbols-rounded">lock</span>
-          <span class="lora-name">${c.label}<span class="lora-tag">${c.files.length > 1 ? "high + low · " : ""}${fixedWeight(c)} · Settings</span></span>
-        </div>`)}
         ${on.map((c) => {
-          const weight = session.loras[c.key];
+          const weight = r.loras[c.key];
           return html`<div class="lora-row ${c.speed ? "speed" : ""}">
             <span class="lora-ic material-symbols-rounded">${c.speed ? "bolt" : "style"}</span>
             <span class="lora-name" title=${c.files.map((f) => f.name).join("\n")}>${c.label}${c.files.length > 1 ? html`<span class="lora-tag">high + low</span>` : nothing}</span>
@@ -828,10 +1101,7 @@ export class OppaiVideoStudio extends LitElement {
           </div>`;
         })}
       </div>` : nothing}
-      ${speedPicked ? html`<div class="note" style="margin-bottom:10px">A speed LoRA is on, so these clips run at 4 steps and CFG 1, several times faster.</div>` : nothing}
-      ${comfyLoras.error ? html`<div class="err">ComfyUI didn't list its LoRAs: ${comfyLoras.error}</div>`
-        : !comfyLoras.choices ? html`<div class="note">Asking ComfyUI for its LoRAs…</div>`
-        : !all.length ? html`<div class="note">ComfyUI has no LoRAs in models/loras.
+      ${!all.length ? html`<div class="note">ComfyUI has no LoRAs in models/loras.
             <button class="link" @click=${() => this.dispatchEvent(new CustomEvent("find-video-models", { bubbles: true, composed: true }))}>Find Wan LoRAs on Civitai</button></div>`
         : html`
           ${all.length > 6 ? html`<label class="lora-search"><span class="material-symbols-rounded">search</span>
@@ -894,7 +1164,7 @@ export class OppaiVideoStudio extends LitElement {
           </div>`;
     }
     if (run.clip) {
-      const url = api.genPreviewURL(run.clip.id);
+      const url = clipURL(run.clip);
       return run.clip.mime.startsWith("video/")
         ? html`<div class="player"><video src=${url} autoplay playsinline muted .loop=${session.loop} .playbackRate=${session.speed}
             @click=${() => this.togglePlay()}
@@ -913,7 +1183,7 @@ export class OppaiVideoStudio extends LitElement {
             stroke-dasharray=${c} stroke-dashoffset=${c * (1 - run.percent)} /></svg>
           <span class="pct"><b>${pct}%</b>${elapsed(Date.now() - run.startedAt)}</span>
         </div>
-        <span class="what">${run.prompt || "Animating the picture…"}</span>
+        <span class="what">${run.upscaleOf ? `Enlarging take ${run.upscaleOf} ${session.upscaleBy}×…` : run.prompt || "Animating the picture…"}</span>
       </div>`;
     }
     return html`<div class="failed"><span class="material-symbols-rounded">error</span>
@@ -926,7 +1196,7 @@ export class OppaiVideoStudio extends LitElement {
     if (!run) return nothing;
     const isVideo = !!run.clip?.mime.startsWith("video/");
     const took = run.endedAt ? elapsed(run.endedAt - run.startedAt) : "";
-    return html`<div class="transport">
+    return html`${this.upscaleOpen && isVideo ? this.renderUpscale(run) : nothing}<div class="transport">
       ${isVideo ? html`
         <button class="icon-btn" title=${this.playing ? "Pause" : "Play"} aria-label=${this.playing ? "Pause" : "Play"} @click=${() => this.togglePlay()}>
           <span class="material-symbols-rounded">${this.playing ? "pause" : "play_arrow"}</span></button>
@@ -945,18 +1215,45 @@ export class OppaiVideoStudio extends LitElement {
           @click=${() => void this.continueFrom(run)}><span class="material-symbols-rounded">start</span>Continue from last frame</button>
         <button class="chip" ?disabled=${this.grabbing} title="Start a picture in the Image studio from the frame on screen"
           @click=${() => void this.frameToImage(run)}><span class="material-symbols-rounded">screenshot</span>Frame to Image</button>
+        <button class="chip ${this.upscaleOpen ? "on" : ""}" title="Enlarge this clip through ComfyUI; the enlarged one is a new take beside it"
+          aria-expanded=${this.upscaleOpen ? "true" : "false"} @click=${() => (this.upscaleOpen = !this.upscaleOpen)}>
+          <span class="material-symbols-rounded">open_in_full</span>Upscale</button>
       ` : html`<span class="t-meta" style="flex:1">${!run.done ? `Started ${elapsed(Date.now() - run.startedAt)} ago` : run.error ? "Didn't finish" : ""}</span>`}
       <span class="toolbar-spacer" style="flex:1"></span>
-      ${run.clip ? html`<span class="t-meta">seed ${run.clip.seed}${run.clip.recipe ? ` · ${run.clip.recipe}` : ""}${took ? ` · ${took}` : ""}</span>` : nothing}
+      ${run.clip ? html`<span class="t-meta">${run.clip.seed ? `seed ${run.clip.seed}` : "from the gallery"}${run.clip.recipe ? ` · ${run.clip.recipe}` : ""}${took && run.clip.id ? ` · ${took}` : ""}</span>` : nothing}
       ${!run.done ? html`<button class="chip" @click=${() => void api.cancelGenerate(run.jobId).catch(() => {})}>
         <span class="material-symbols-rounded">stop</span>Stop</button>` : nothing}
       ${run.clip ? html`
-        <a class="chip" href=${api.genPreviewURL(run.clip.id)} download="clip-${run.clip.seed}" title="Download">
+        <a class="chip" href=${clipURL(run.clip)} download="clip-${run.clip.seed || run.clip.gallery}" title="Download">
           <span class="material-symbols-rounded">download</span></a>
         <button class="chip ${run.savedId ? "" : "primary"}" ?disabled=${run.saving || !!run.savedId} @click=${() => void this.save(run)}>
-          <span class="material-symbols-rounded">${run.savedId ? "check" : "save"}</span>${run.savedId ? "In the library" : "Save"}</button>` : nothing}
+          <span class="material-symbols-rounded">${run.savedId ? "check" : "save"}</span>${run.savedId ? "In the library" : run.clip.gallery ? "Move to library" : "Save"}</button>` : nothing}
       ${run.done ? html`<button class="icon-btn" title="Dismiss this clip" aria-label="Dismiss this clip" @click=${() => this.dismiss(run)}>
         <span class="material-symbols-rounded">delete</span></button>` : nothing}
+    </div>`;
+  }
+
+  /** The enlargement's choices, over the transport: an upscale model ComfyUI has, or
+      Lanczos alone, and by how much. */
+  private renderUpscale(run: ClipRun) {
+    const upscalers = comfy.lists?.upscalers ?? [];
+    const c = run.clip!;
+    const to = c.width && c.height
+      ? `→ ${Math.round((c.width * session.upscaleBy) / 16) * 16}×${Math.round((c.height * session.upscaleBy) / 16) * 16}`
+      : "";
+    return html`<div class="upscale" role="group" aria-label="Upscale the clip">
+      <span class="lbl"><span class="material-symbols-rounded">open_in_full</span>Upscale with</span>
+      <select aria-label="Upscaler" @change=${(e: Event) => this.set("upscaler", (e.target as HTMLSelectElement).value)}>
+        <option value="" ?selected=${!session.upscaler}>Lanczos — quick, softer</option>
+        ${upscalers.map((u) => html`<option value=${u} ?selected=${u === session.upscaler}>${u}</option>`)}
+      </select>
+      <div class="seg" role="group" aria-label="How much larger">${UPSCALES.map((s) => html`<button class=${session.upscaleBy === s ? "on" : ""}
+        aria-pressed=${session.upscaleBy === s ? "true" : "false"} @click=${() => this.set("upscaleBy", s)}>${s}×</button>`)}</div>
+      ${to ? html`<span class="to" title="From ${c.width}×${c.height}">${to}</span>` : nothing}
+      <span style="flex:1"></span>
+      ${!upscalers.length && comfy.lists ? html`<span class="to" title="Put ESRGAN-style models (4x-UltraSharp, RealESRGAN) in ComfyUI's models/upscale_models">No upscale models in ComfyUI</span>` : nothing}
+      <button class="chip primary" @click=${() => this.upscale(run)}><span class="material-symbols-rounded">auto_awesome</span>Upscale</button>
+      <button class="icon-btn" title="Close" aria-label="Close" @click=${() => (this.upscaleOpen = false)}><span class="material-symbols-rounded">close</span></button>
     </div>`;
   }
 
@@ -969,14 +1266,14 @@ export class OppaiVideoStudio extends LitElement {
         const pct = Math.round(r.percent * 100);
         const media = r.clip
           ? r.clip.mime.startsWith("video/")
-            ? html`<video src=${`${api.genPreviewURL(r.clip.id)}#t=0.1`} muted playsinline preload="metadata"></video>`
-            : html`<img src=${api.genPreviewURL(r.clip.id)} alt="" />`
+            ? html`<video src=${`${clipURL(r.clip)}#t=0.1`} muted playsinline preload="metadata"></video>`
+            : html`<img src=${clipURL(r.clip)} alt="" />`
           : r.thumb ? html`<img src=${r.thumb} alt="" />` : nothing;
         return html`<button class="take ${r.jobId === current ? "on" : ""} ${r.done ? "" : "running"}" role="option"
           aria-selected=${r.jobId === current ? "true" : "false"} title=${r.prompt || "Clip"}
           @click=${() => this.set("selected", r.jobId)}>
           ${media}
-          <span class="take-n">${count - i}</span>
+          <span class="take-n">${count - i}${r.upscaleOf ? html` · ${r.upscaleOf}↑` : nothing}</span>
           ${!r.done
             ? html`<span class="badge">${pct}%</span><span class="mini-bar"><span style="width:${pct}%"></span></span>`
             : r.savedId ? html`<span class="badge saved"><span class="material-symbols-rounded">check</span>Saved</span>`
@@ -994,7 +1291,7 @@ export class OppaiVideoStudio extends LitElement {
  * by polling the job, as the studio's own runs are (collectRun in imagegen.ts). A job
  * the server never heard of means the call itself was refused: that is the error.
  */
-async function runClip(run: ClipRun, params: ClipParams) {
+async function runClip(run: ClipRun, call: () => Promise<GenerateResult>) {
   const poll = window.setInterval(async () => {
     try {
       const p = await api.genProgress(run.jobId, -1);
@@ -1008,7 +1305,7 @@ async function runClip(run: ClipRun, params: ClipParams) {
   }, 2000);
   let res: GenerateResult | undefined;
   try {
-    res = await api.makeClip(params);
+    res = await call();
   } catch (e) {
     try {
       res = await collect(run.jobId, e as Error);
@@ -1025,6 +1322,12 @@ async function runClip(run: ClipRun, params: ClipParams) {
   if (res?.clip) run.clip = res.clip;
   else if (!run.error) run.error = "ComfyUI finished without a clip.";
   changed();
+  if (res?.clip?.gallery) for (const fn of keptListeners) fn();
+}
+
+/** The low-noise file's name without its folder or extension, to say what it does. */
+function choiceShort(name: string): string {
+  return name.split(/[\\/]/).pop()!.replace(/\.(safetensors|gguf|ckpt|pt)$/i, "") || "the low-noise model";
 }
 
 async function collect(jobId: string, failure: Error): Promise<GenerateResult> {

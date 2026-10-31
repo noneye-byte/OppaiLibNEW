@@ -590,6 +590,9 @@ export interface Settings {
       server itself. A picked model wins over a pasted workflow. */
   clipImageModels?: ClipModels;
   clipTextModels?: ClipModels;
+  /** Leave the image generator's checkpoint on the card while a clip renders; off, it
+      is unloaded first so ComfyUI has the whole card. */
+  clipKeepImageModel?: boolean;
   /** The folders Civitai's video mode installs into, as the container sees them, one
       per kind. Each is used exactly as given; a blank one is not installed into. */
   comfyDiffusionDir?: string;
@@ -1543,10 +1546,16 @@ export interface ImageGenStatus {
     fps and steps it has a placeholder for. The studio offers only those. */
 export interface ClipWorkflow {
   takes: string[];
-  /** A built clip's LoRAs from Settings, always on, under the studio's own picks. */
+  /** A built clip's LoRAs from Settings. */
   loras?: ClipLora[];
   /** The model is Wan 2.2's high/low pair, whose LoRAs come a file per expert. */
   pair?: boolean;
+  /** Settings' files for a built clip, which the studio starts from. */
+  models?: ClipModels;
+  /** What a clip of files takes, for when the studio picks files of its own. */
+  built?: string[];
+  /** Settings has nothing for this direction: a clip needs a model picked first. */
+  needsModel?: boolean;
 }
 
 /** A Wan clip as files, named exactly as ComfyUI lists them. `model` is Wan 2.2's
@@ -1563,6 +1572,9 @@ export interface ClipModels {
   steps: number;
   cfg: number;
   shift: number;
+  /** ComfyUI's sampler and scheduler; blank is euler and simple, Wan's own. */
+  sampler?: string;
+  scheduler?: string;
 }
 
 /** A LoRA on a clip, and which of Wan 2.2's experts it is for: "high", "low", or "" for both. */
@@ -1587,6 +1599,10 @@ export interface ComfyModels {
   textEncoders: string[];
   vaes: string[];
   loras: string[];
+  /** KSampler's choices, and the models in models/upscale_models. */
+  samplers?: string[];
+  schedulers?: string[];
+  upscalers?: string[];
   missing: string[];
 }
 
@@ -1606,6 +1622,33 @@ export interface ClipParams {
   seed?: number;
   /** LoRAs for this clip alone, over Settings' own (a built clip only). */
   loras?: ClipLora[];
+  /** The studio's own files, the whole recipe, over Settings'. */
+  models?: ClipModels;
+  /** The gallery folder the clip is filed in. */
+  board?: string;
+}
+
+/** A finished clip: its preview, and its name in the studio's gallery when it was kept
+    there. `recipe` is the numbers it ran at, or how it was enlarged. */
+export interface GenClip {
+  id: string;
+  mime: string;
+  seed: number;
+  recipe?: string;
+  gallery?: string;
+  width?: number;
+  height?: number;
+}
+
+/** A finished clip enlarged through ComfyUI: named in the gallery, or by its preview. */
+export interface ClipUpscaleParams {
+  jobId?: string;
+  gallery?: string;
+  id?: string;
+  /** An upscale model ComfyUI lists; blank resizes alone. */
+  upscaler: string;
+  scale: number;
+  board?: string;
 }
 
 /** One link a Test tried: for Image generation the generator, its rescan route, the
@@ -1665,7 +1708,7 @@ export interface GenerateResult {
   negative?: string;
   rolled?: boolean;
   /** A clip run's one result, a preview like a picture's (genPreviewURL). */
-  clip?: { id: string; mime: string; seed: number; recipe?: string };
+  clip?: GenClip;
 }
 
 /** One txt2img job. Only `prompt` is required; the server clamps the rest to sane ranges. */
@@ -1954,6 +1997,9 @@ export interface GalleryImage {
   label?: string;
   /** The file's bytes (the studio's own gallery only). */
   size?: number;
+  /** "video" for a clip from the Video studio, and whether it has a still for a tile. */
+  kind?: "video";
+  tile?: boolean;
 }
 
 /** The orders a gallery page can come back in. InvokeAI sorts by date alone. */
@@ -3211,6 +3257,9 @@ export const api = {
       the run past a proxy's timeout, and the result is collected with genProgress. */
   makeClip: (params: ClipParams) =>
     request<GenerateResult>("/api/imagegen/clip", { method: "POST", body: JSON.stringify(params) }, 16 * 60_000),
+  /** A finished clip, enlarged: a new clip beside it, collected as a clip is. */
+  upscaleClip: (params: ClipUpscaleParams) =>
+    request<GenerateResult>("/api/imagegen/clip/upscale", { method: "POST", body: JSON.stringify(params) }, 16 * 60_000),
 
   /** The model files the saved ComfyUI offers, for the Video settings' pickers. */
   comfyModels: () => request<ComfyModels>("/api/imagegen/comfy/models"),

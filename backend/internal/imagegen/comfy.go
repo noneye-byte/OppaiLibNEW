@@ -262,10 +262,18 @@ func comfyMIME(name string, data []byte) string {
 }
 
 func (c *Client) comfyUpload(ctx context.Context, base string, data []byte) (string, error) {
+	return c.comfyUploadAs(ctx, base, data, ".png", "the starting picture")
+}
+
+// comfyUploadAs puts a file in ComfyUI's input folder under a fresh name ending in ext.
+// The upload route is called /upload/image but takes any file, and the extension is
+// what matters: LoadVideo offers only the input files whose name says video, and
+// ComfyUI refuses a workflow that names a file its node does not offer.
+func (c *Client) comfyUploadAs(ctx context.Context, base string, data []byte, ext, what string) (string, error) {
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)
 	h := make(textproto.MIMEHeader)
-	h.Set("Content-Disposition", `form-data; name="image"; filename="oppailib-`+comfyClientID()+`.png"`)
+	h.Set("Content-Disposition", `form-data; name="image"; filename="oppailib-`+comfyClientID()+ext+`"`)
 	h.Set("Content-Type", http.DetectContentType(data))
 	part, err := mw.CreatePart(h)
 	if err != nil {
@@ -290,14 +298,14 @@ func (c *Client) comfyUpload(ctx context.Context, base string, data []byte) (str
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<10))
-		return "", fmt.Errorf("ComfyUI returned %d taking the starting picture: %s", resp.StatusCode, bytes.TrimSpace(msg))
+		return "", fmt.Errorf("ComfyUI returned %d taking %s: %s", resp.StatusCode, what, bytes.TrimSpace(msg))
 	}
 	var out struct {
 		Name      string `json:"name"`
 		Subfolder string `json:"subfolder"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil || out.Name == "" {
-		return "", fmt.Errorf("ComfyUI did not say where it put the starting picture")
+		return "", fmt.Errorf("ComfyUI did not say where it put %s", what)
 	}
 	if out.Subfolder != "" {
 		return out.Subfolder + "/" + out.Name, nil
@@ -325,6 +333,18 @@ func (c *Client) comfyView(ctx context.Context, base string, f comfyFile) ([]byt
 	// A clip is a few megabytes; the bound is there for a workflow that saved a
 	// lossless sequence by mistake.
 	return io.ReadAll(io.LimitReader(resp.Body, 96<<20))
+}
+
+// FreeComfyMemory asks ComfyUI to unload its models and give the card's memory back,
+// for an image generator about to need it. ComfyUI keeps a clip's models resident
+// for the next clip and makes room only for its own work; it cannot know another
+// program on the card wants the space.
+func (c *Client) FreeComfyMemory(ctx context.Context, base string) error {
+	base = strings.TrimRight(strings.TrimSpace(base), "/")
+	if base == "" {
+		return nil
+	}
+	return c.postJSON(ctx, base+"/free", map[string]any{"unload_models": true, "free_memory": true}, nil)
 }
 
 // comfyInterrupt stops the run on the server when the caller gave up on it, so a

@@ -475,7 +475,10 @@ CREATE TABLE IF NOT EXISTS gen_images (
     width      INTEGER NOT NULL DEFAULT 0,
     height     INTEGER NOT NULL DEFAULT 0,
     info_enc   BLOB,
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL,
+    -- A clip's type (video/mp4…); '' is a picture. Clips from the Video studio are
+    -- kept here beside the pictures, as the studio's runs all are.
+    mime       TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_gen_images_folder ON gen_images(folder_id, id);
 CREATE INDEX IF NOT EXISTS idx_gen_images_blob ON gen_images(blob_path);
