@@ -67,6 +67,9 @@ type cardShare struct {
 	// comfyHeld says a clip has run since the last picture, so ComfyUI is still holding
 	// its models and is asked to let go before the generator needs the room.
 	comfyHeld bool
+	// holder is the program the card was last given to — "chat", "images" or
+	// "video" — by a generation or by the switch (gpu_switch.go); "" until then.
+	holder string
 	// timer is the pending hand-back, nil when none is pending.
 	timer *time.Timer
 	// swap serialises the backend operations themselves — an unload, a reload — so two
@@ -88,6 +91,7 @@ func (s *Server) lendCardToImages(ctx context.Context) func() {
 	c := s.card
 	c.mu.Lock()
 	c.images++
+	c.holder = "images"
 	c.mu.Unlock()
 	swapped := s.lendSwap(ctx)
 	s.readyGenerator(ctx)
@@ -113,6 +117,9 @@ func (s *Server) lendCardToVideo(ctx context.Context) func() {
 		s.freeGenerator(ctx)
 	}
 	c := s.card
+	c.mu.Lock()
+	c.holder = "video"
+	c.mu.Unlock()
 	var once sync.Once
 	return func() {
 		once.Do(func() {
@@ -313,6 +320,9 @@ func (s *Server) handBackCard() {
 		s.log.Error("card share: could not load her model back", "model", model, "err", err)
 		return
 	}
+	c.mu.Lock()
+	c.holder = "chat"
+	c.mu.Unlock()
 	s.log.Info("card share: her model is back", "model", model)
 }
 

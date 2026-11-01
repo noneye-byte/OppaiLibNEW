@@ -209,6 +209,19 @@ export class CutoutSession {
     this.removeEnclosedBackdrop(tolerance);
   }
 
+  /**
+   * A matte from the server's segmentation model (internal/matte): how much of each
+   * pixel is her, 0–255, at this picture's size. It replaces the mask, as the
+   * automatic pass does — it is the other way of starting — and is undoable like any
+   * edit. The model's soft rim is cut at half: the mask is keep-or-cut by design, and
+   * the edge is the feather's to soften, re-tunable as it always is.
+   */
+  applyMatte(alpha: ArrayLike<number>, threshold = 128) {
+    if (alpha.length !== this.mask.length) throw new Error("The matte is not the picture's size.");
+    this.checkpoint();
+    for (let i = 0; i < this.mask.length; i++) this.mask[i] = alpha[i] >= threshold ? KEEP : CUT;
+  }
+
   /** Removes enclosed backdrop holes only when the ring around them looks unlike the
    * backdrop. This is deliberately stricter than the border flood: highlights and
    * reflections can match a white screen, but their skin-toned boundary is much closer

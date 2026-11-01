@@ -432,6 +432,8 @@ type ComfyModels struct {
 	// before Wan 2.2 (summer 2025) has no WanImageToVideo or SaveVideo, and the fix is
 	// updating it, which is worth saying before a clip fails half way.
 	Missing []string `json:"missing"`
+	// CanRestart says ComfyUI-Manager is there to restart it (comfy_restart.go).
+	CanRestart bool `json:"canRestart"`
 }
 
 // ListComfyModels asks a ComfyUI which files its loader nodes offer. Each node's input

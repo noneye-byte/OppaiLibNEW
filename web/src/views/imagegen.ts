@@ -88,7 +88,8 @@ import "./imagegen-gallery.js";
 import { LORA_DRAG_TYPE } from "./imagegen-loras.js";
 import "./rename-dialog.js";
 import "./imagegen-detailer.js";
-import { animatePicture, clipsRunning, onClipKept, onClipsChange, openGalleryClip, type ClipPicture, type GalleryClip } from "./imagegen-video.js";
+import "./gpu-switch.js";
+import { animatePicture, clipsRunning, onClipKept, onClipsChange, openGalleryClip, refreshComfyLists, type ClipPicture, type GalleryClip } from "./imagegen-video.js";
 import { GALLERY_DRAG_TYPE } from "./imagegen-gallery.js";
 import {
   loadLayout, loadPrompts, moveItem, patchShot, rememberPrompt, rememberShots, saveLayout, savePrompts, stepThrough,
@@ -4684,6 +4685,7 @@ export class OppaiImageGen extends LitElement {
       ${mode !== "video" ? html`<button class="head-btn" title="Train a LoRA on your own pictures" @click=${() => (this.trainOpen = true)}>
           <span class="material-symbols-rounded">model_training</span><span class="head-label">Train</span>
         </button>` : nothing}
+      <oppai-gpu-switch></oppai-gpu-switch>
       <span class="head-sep"></span>
       ${mode !== "video" ? html`<button class="head-icon ${inspectorOut ? "on" : ""}" aria-pressed=${inspectorOut ? "true" : "false"}
           title=${this.studio ? "The recipe ([)" : "The inspector ([)"} @click=${() => this.toggleInspector()}>
@@ -4746,7 +4748,7 @@ export class OppaiImageGen extends LitElement {
     return html`<div class="workspace create">
       <div class="create-shell ${video ? "video" : "image"} ${tab && !video ? "drawer-open" : ""} ${galleryOut ? "with-gallery" : ""} ${this.loraDrag ? "lora-dragging" : ""}">
         ${video
-          ? html`<oppai-video-studio .clips=${st.clips ?? {}} .board=${this.board}
+          ? html`<oppai-video-studio .clips=${st.clips ?? {}} .board=${this.board} ?matte=${!!st.matte} .matteProblem=${st.matteProblem ?? ""}
               @use-frame=${(e: CustomEvent<ClipPicture>) => void this.usePicture(e.detail.url, e.detail.name, "img2img", true)}
               @find-video-models=${() => { this.civitaiMode = "video"; this.civitaiOpen = true; }}></oppai-video-studio>`
           : html`${this.renderCreateRail()}
@@ -5855,9 +5857,11 @@ export class OppaiImageGen extends LitElement {
   }
 
   // Closing the Civitai browser refreshes the model list: an install may have
-  // finished while it was open, and a new checkpoint should appear right away.
+  // finished while it was open, and a new checkpoint should appear right away. In
+  // video mode the installs went to ComfyUI, whose lists the Video studio keeps.
   private onCivitaiClose() {
     this.civitaiOpen = false;
+    if (this.civitaiMode === "video") refreshComfyLists();
     void this.loadStatus();
   }
 
@@ -6867,6 +6871,44 @@ export class OppaiImageGen extends LitElement {
     await this.paintCutout();
   }
 
+  /**
+   * Starts the mask from the server's background-removal model instead of the colour
+   * pass: for a picture whose backdrop is not flat — a room, a gradient, a clip's frame
+   * — which a colour key cannot tell from her. The brushes correct it as they do the
+   * automatic pass.
+   */
+  private async matteCutout() {
+    const session = this.session;
+    const cut = this.cutout;
+    if (!session || !cut || this.cutoutBusy) return;
+    this.cutoutBusy = true;
+    this.cutoutError = "";
+    let maskURL = "";
+    try {
+      const res = await fetch(cut.url, { credentials: "same-origin" });
+      if (!res.ok) throw new Error("Couldn't read the picture to send it — it may have expired.");
+      maskURL = URL.createObjectURL(await api.matteMask(await res.blob()));
+      const mask = await loadImage(maskURL);
+      const canvas = document.createElement("canvas");
+      canvas.width = session.width;
+      canvas.height = session.height;
+      const g = canvas.getContext("2d", { willReadFrequently: true });
+      if (!g) throw new Error("This browser wouldn't give us a canvas to work on.");
+      g.drawImage(mask, 0, 0, session.width, session.height);
+      const rgba = g.getImageData(0, 0, session.width, session.height).data;
+      const alpha = new Uint8Array(session.width * session.height);
+      for (let i = 0; i < alpha.length; i++) alpha[i] = rgba[i * 4];
+      session.applyMatte(alpha);
+      this.cutoutTool = "remove";
+      await this.paintCutout();
+    } catch (e) {
+      this.cutoutError = (e as Error).message;
+    } finally {
+      if (maskURL) URL.revokeObjectURL(maskURL);
+      this.cutoutBusy = false;
+    }
+  }
+
   /** Turns a pointer event into source-image coordinates.
    *
    * The canvas is displayed scaled to fit the dialog, so the ratio between its intrinsic
@@ -7134,6 +7176,15 @@ export class OppaiImageGen extends LitElement {
                     <span class="material-symbols-rounded" style="font-size:17px;">auto_fix_high</span>
                     Re-run automatic pass
                   </button>
+                  ${this.status?.matte || this.status?.matteProblem ? html`<button class="btn"
+                    ?disabled=${this.cutoutBusy || !this.status?.matte}
+                    title=${this.status?.matte
+                      ? "Find her with the background-removal model instead — for a backdrop that isn't one flat colour"
+                      : this.status?.matteProblem ?? ""}
+                    @click=${() => void this.matteCutout()}>
+                    <span class="material-symbols-rounded" style="font-size:17px;">person</span>
+                    Find her (AI)
+                  </button>` : nothing}
                 </div>
               `}
 

@@ -182,6 +182,12 @@ func (s *Server) handleImageGenStatus(w http.ResponseWriter, r *http.Request) {
 	s.overlayStatusDefaults(ctx, models, loras)
 	s.overlayLoraCategories(ctx, loras)
 	out := map[string]any{"enabled": true, "reachable": true, "backend": backend, "models": models, "loras": loras}
+	// Background removal runs here rather than on a generator, so it is offered
+	// whatever the generator is; the problem says why not when it can't run.
+	out["matte"] = s.matteProblem() == ""
+	if p := s.matteProblem(); p != "" {
+		out["matteProblem"] = p
+	}
 	if loraErr != nil {
 		out["loraError"] = loraErr.Error()
 	}

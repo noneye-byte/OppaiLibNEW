@@ -45,6 +45,9 @@ type InstallSpec struct {
 	FileName string
 	// Token authorises the download: many of Civitai's files need an account.
 	Token string
+	// Done, when set, is called with the file's name once a ComfyUI install has it in
+	// place, for what OppaiLib keeps about it that ComfyUI does not.
+	Done func(name string)
 }
 
 // downloadHTTP has no overall timeout — a checkpoint is gigabytes — but gives up on a

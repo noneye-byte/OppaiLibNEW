@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -87,6 +88,22 @@ func (g *genJobs) finish(id string, job *genJob) {
 	job.endedAt = time.Now()
 	job.mu.Unlock()
 	job.cancel()
+}
+
+// running counts the runs still going whose id starts with prefix — the studio names
+// its clips "clip-…".
+func (g *genJobs) running(prefix string) int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	n := 0
+	for id, job := range g.jobs {
+		job.mu.Lock()
+		if !job.done && strings.HasPrefix(id, prefix) {
+			n++
+		}
+		job.mu.Unlock()
+	}
+	return n
 }
 
 func (g *genJobs) get(id string) *genJob {

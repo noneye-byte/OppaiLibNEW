@@ -18,6 +18,7 @@ import (
 	"github.com/youruser/oppailib/internal/db"
 	"github.com/youruser/oppailib/internal/gamesites"
 	"github.com/youruser/oppailib/internal/imagegen"
+	"github.com/youruser/oppailib/internal/matte"
 	"github.com/youruser/oppailib/internal/obs"
 	"github.com/youruser/oppailib/internal/scraper"
 	"github.com/youruser/oppailib/internal/settings"
@@ -60,6 +61,8 @@ type Server struct {
 	// speaker is Libby's voice: piper on this box and/or a remote speech server.
 	// Nil only in tests built without one. See handlers_tts.go.
 	speaker      *tts.Speaker
+	// matte cuts backgrounds off sprites and clips; its model loads on first use.
+	matte        *matte.Matter
 	ttsMu        sync.Mutex
 	ttsDownloads map[string]bool
 	ttsErrors    map[string]string
@@ -244,6 +247,7 @@ func NewServer(cfg *config.Config, database *db.DB, store *storage.Store, sc *sc
 			tts.FindPiper(cfg.TTSPiper, dirOr(cfg.TTSVoiceDir, filepath.Join(cfg.ConfigDir, "tts")), cfg.TTSBundledVoiceDir),
 			nil,
 		),
+		matte:        matte.New(cfg.MatteModel),
 		ttsDownloads: map[string]bool{},
 		ttsErrors:    map[string]string{},
 		characterDir: dirOr(cfg.CharacterDir, filepath.Join(cfg.ConfigDir, "characters")),
@@ -479,8 +483,17 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/imagegen/generate", s.requireAuth(s.handleImageGenGenerate))
 	mux.HandleFunc("POST /api/imagegen/clip", s.requireAuth(s.handleImageGenClip))
 	mux.HandleFunc("POST /api/imagegen/clip/upscale", s.requireAuth(s.handleClipUpscale))
+	mux.HandleFunc("POST /api/imagegen/clip/matte", s.requireAuth(s.handleClipMatte))
+	mux.HandleFunc("POST /api/imagegen/matte", s.requireAuth(s.handleMatte))
 	mux.HandleFunc("GET /api/imagegen/comfy/models", s.requireAuth(s.handleComfyModels))
 	mux.HandleFunc("POST /api/imagegen/comfy/check", s.requireAuth(s.requireAdmin(s.handleComfyCheck)))
+	mux.HandleFunc("POST /api/imagegen/comfy/restart", s.requireAuth(s.handleComfyRestart))
+	mux.HandleFunc("GET /api/gpu", s.requireAuth(s.handleGPUState))
+	mux.HandleFunc("POST /api/gpu", s.requireAuth(s.handleGPUSwitch))
+	mux.HandleFunc("GET /api/imagegen/comfy/notes", s.requireAuth(s.handleComfyNotes))
+	mux.HandleFunc("PUT /api/imagegen/comfy/notes", s.requireAuth(s.handlePutComfyTriggers))
+	mux.HandleFunc("GET /api/imagegen/comfy/cover", s.requireAuth(s.handleComfyCover))
+	mux.HandleFunc("PUT /api/imagegen/comfy/cover", s.requireAuth(s.handlePutComfyCover))
 	mux.HandleFunc("GET /api/imagegen/progress/{id}", s.requireAuth(s.handleImageGenProgress))
 	mux.HandleFunc("POST /api/imagegen/cancel/{id}", s.requireAuth(s.handleImageGenCancel))
 	// Preview ids are 128-bit random capabilities and expire from memory. Keeping the

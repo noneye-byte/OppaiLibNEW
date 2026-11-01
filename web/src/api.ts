@@ -1540,6 +1540,10 @@ export interface ImageGenStatus {
   canRestart?: boolean;
   /** The ComfyUI workflows set up for clips, each with the placeholders it takes. */
   clips?: { image?: ClipWorkflow; text?: ClipWorkflow };
+  /** Background removal runs on this server (its matting model is in the image), and
+      why not when it can't. */
+  matte?: boolean;
+  matteProblem?: string;
 }
 
 /** One clip workflow: which of image, prompt, negative, seed, width, height, frames,
@@ -1604,6 +1608,36 @@ export interface ComfyModels {
   schedulers?: string[];
   upscalers?: string[];
   missing: string[];
+  /** ComfyUI-Manager is there, so ComfyUI can be restarted from here. */
+  canRestart?: boolean;
+}
+
+/** What OppaiLib keeps of a ComfyUI file that ComfyUI does not: the words that call it
+    up, and whether it has a cover; `v` changes with either. Keyed by the file's name. */
+export interface ComfyNote {
+  triggers: string[];
+  cover: boolean;
+  v: number;
+}
+
+/** Who has the graphics card, program by program (api/gpu_switch.go). */
+export interface GpuApp {
+  id: "chat" | "images" | "video";
+  name: string;
+  set: boolean;
+  holding: boolean;
+  detail: string;
+  canTake: boolean;
+}
+
+export interface GpuState {
+  apps: GpuApp[];
+  /** The program last given the card, "" when not known. */
+  holder: "" | GpuApp["id"];
+  /** Something being made, which a switch would wait for. */
+  busy?: string;
+  vramTotal?: number;
+  vramFree?: number;
 }
 
 /** One clip, from words or from a picture. Knobs left out keep the workflow's own. */
@@ -1643,6 +1677,8 @@ export interface GenClip {
   gallery?: string;
   width?: number;
   height?: number;
+  /** Its background was cut away: a WebM whose alpha is the matte. */
+  cutout?: boolean;
 }
 
 /** A finished clip enlarged through ComfyUI: named in the gallery, or by its preview. */
@@ -2112,6 +2148,8 @@ export interface CivitaiVersion {
   downloadUrl: string;
   sizeMB?: number;
   images: string[];
+  /** Beside images: the showcase clip a still stands in for, "" for a picture. */
+  videos?: string[];
   description?: string;
   publishedAt?: string;
   downloads?: number;
@@ -2156,6 +2194,8 @@ export interface CivitaiImage {
   /** The upload this picture was part of, and when. Absent on showcase stills. */
   postId?: number;
   createdAt?: string;
+  /** For a clip: the clip, small enough to play in a tile; `url` is its first frame. */
+  video?: string;
 }
 
 /** One upload of several pictures, rebuilt from someone's image feed (Civitai's
@@ -2778,13 +2818,48 @@ async function requestOnce<T>(path: string, opts: RequestInit = {}, timeoutMs = 
     // from the job, which an error bubble here would have contradicted. Its polls are
     // quiet too: one that lands before the server has registered the run is a 404
     // the caller expects, not "no such generation" for her to announce.
+    // ComfyUI's lists are the Video studio's to explain, and are polled while ComfyUI
+    // restarts, when every failure is expected.
     if (path !== "/api/auth/login" && path !== "/api/imagegen/generate" && path !== "/api/imagegen/clip" &&
-      !path.startsWith("/api/imagegen/progress/") && e instanceof Error && e.message !== "unauthorized") {
+      !path.startsWith("/api/imagegen/progress/") && !path.startsWith("/api/imagegen/comfy/models") &&
+      e instanceof Error && e.message !== "unauthorized") {
       mascotSay(e.message || "Something went wrong.");
     }
     throw e;
   } finally {
     if (timer) clearTimeout(timer);
+  }
+}
+
+/**
+ * A call whose answer is a file rather than JSON, by request's rules otherwise: the
+ * session token, a 401 signs out, an error body's message is what is thrown.
+ */
+async function fetchBlob(path: string, opts: RequestInit, timeoutMs: number): Promise<Blob> {
+  const headers = new Headers(opts.headers);
+  const token = getToken();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), timeoutMs);
+  try {
+    const res = await fetch(path, { ...opts, headers, signal: ctl.signal }).catch((e) => {
+      throw ctl.signal.aborted ? new Error("Timed out — the server took too long.") : e;
+    });
+    if (res.status === 401) {
+      setToken(null);
+      window.dispatchEvent(new CustomEvent("oppai-logout"));
+      throw new Error("unauthorized");
+    }
+    if (!res.ok) {
+      let msg = "";
+      try {
+        msg = (await res.json())?.error ?? "";
+      } catch { /* not ours */ }
+      throw new Error(msg || replyWithoutMessage(res.status, res.statusText));
+    }
+    return await res.blob();
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -3314,8 +3389,31 @@ export const api = {
   upscaleClip: (params: ClipUpscaleParams) =>
     request<GenerateResult>("/api/imagegen/clip/upscale", { method: "POST", body: JSON.stringify(params) }, params.detach ? 2 * 60_000 : 16 * 60_000),
 
-  /** The model files the saved ComfyUI offers, for the Video settings' pickers. */
-  comfyModels: () => request<ComfyModels>("/api/imagegen/comfy/models"),
+  /** A finished clip with its background cut away on the server: a new clip beside it. */
+  matteClip: (params: { jobId?: string; gallery?: string; id?: string; board?: string; detach?: boolean }) =>
+    request<GenerateResult>("/api/imagegen/clip/matte", { method: "POST", body: JSON.stringify(params) }, params.detach ? 2 * 60_000 : 16 * 60_000),
+  /** A picture's matte from the server's background-removal model: a greyscale PNG at
+      its size, white where she is. */
+  matteMask: (picture: Blob) => fetchBlob("/api/imagegen/matte", { method: "POST", body: picture }, 150_000),
+
+  /** The model files the saved ComfyUI offers, for the Video settings' pickers.
+      `rescan` first nudges a ComfyUI on a share that hides new files from it. */
+  comfyModels: (rescan = false) => request<ComfyModels>(`/api/imagegen/comfy/models${rescan ? "?rescan=1" : ""}`),
+  /** Asks ComfyUI-Manager to restart ComfyUI; follow comfyModels until it answers. */
+  comfyRestart: () => request<{ status: string }>("/api/imagegen/comfy/restart", { method: "POST" }, 40_000),
+  comfyNotes: () => request<{ notes: Record<string, ComfyNote> }>("/api/imagegen/comfy/notes"),
+  comfyCoverURL: (name: string, v: number) => `/api/imagegen/comfy/cover?name=${encodeURIComponent(name)}&v=${v}`,
+  setComfyTriggers: (name: string, triggers: string[]) =>
+    request<void>("/api/imagegen/comfy/notes", { method: "PUT", body: JSON.stringify({ name, triggers }) }),
+  /** A cover from a picture (a data URL), a gallery picture or clip, or none. */
+  setComfyCover: (name: string, from: { imageData?: string; galleryName?: string; clear?: boolean }) =>
+    request<void>("/api/imagegen/comfy/cover", { method: "PUT", body: JSON.stringify({ name, ...from }) }, 40_000),
+
+  /** Who has the graphics card, and giving it to one program. A switch to her model
+      waits for it to load, which takes a minute or two. */
+  gpuState: () => request<GpuState>("/api/gpu", {}, 15_000),
+  gpuSwitch: (to: GpuApp["id"]) =>
+    request<{ state: GpuState; problems: string[] }>("/api/gpu", { method: "POST", body: JSON.stringify({ to }) }, 11 * 60_000),
   comfyCheck: () => request<{ checks: GenCheck[] }>("/api/imagegen/comfy/check", { method: "POST" }, 65_000),
 
   /**

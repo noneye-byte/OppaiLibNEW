@@ -150,7 +150,7 @@ func (s *Server) civitaiComfySpecs(ctx context.Context, source string, modelID, 
 		if versionID > 0 && v.ID != versionID {
 			continue
 		}
-		spec := imagegen.InstallSpec{Source: source, Type: kind, Token: token}
+		spec := imagegen.InstallSpec{Source: source, Type: kind, Token: token, Done: s.comfyNoteHook(v)}
 		f := civitaiPrimaryFile(v, source)
 		if f != nil {
 			spec.FileName = f.Name
@@ -163,11 +163,24 @@ func (s *Server) civitaiComfySpecs(ctx context.Context, source string, modelID, 
 		if tf == nil || !civitaiHostAllowed(tf.DownloadURL) {
 			return []imagegen.InstallSpec{spec}, nil
 		}
-		other := imagegen.InstallSpec{Source: tf.DownloadURL, Type: kind, Token: token}
+		// The two halves are one LoRA in the studio, so they share the first half's
+		// words and cover; the second's own page usually repeats them anyway.
+		other := imagegen.InstallSpec{Source: tf.DownloadURL, Type: kind, Token: token, Done: spec.Done}
 		spec.FileName, other.FileName = wanPairNames(f.Name, tf.Name, wanStage(v.Name), v.BaseModel)
 		return []imagegen.InstallSpec{spec, other}, nil
 	}
 	return []imagegen.InstallSpec{{Source: source, Type: kind, Token: token}}, nil
+}
+
+// comfyNoteHook is what a finished download of version v does next: the file gets
+// v's trigger words and first showcase still, which ComfyUI has nowhere to keep.
+func (s *Server) comfyNoteHook(v civitaiRawVersion) func(string) {
+	words := append([]string(nil), v.TrainedWords...)
+	cover := ""
+	if stills := civitaiPreviewURLs(v.Images, 1); len(stills) > 0 {
+		cover = stills[0]
+	}
+	return func(name string) { s.noteComfyInstall(name, words, cover) }
 }
 
 // comfyPlaces is where installs into ComfyUI go, by the Video settings' folders.
@@ -179,8 +192,8 @@ func (s *Server) comfyPlaces() imagegen.ComfyPlaces {
 }
 
 // civitaiComfyInstall downloads a version, and its other half, into ComfyUI's folder
-// for its kind. Nothing is recorded for the catalogue's dressing afterwards: ComfyUI
-// keeps no cover or description, and the file's name already says what it is.
+// for its kind. ComfyUI keeps no cover or trigger words, so once each file is in,
+// OppaiLib keeps them for it (comfy_notes.go).
 func (s *Server) civitaiComfyInstall(w http.ResponseWriter, r *http.Request, req civitaiInstallReq) {
 	places := s.comfyPlaces()
 	if !places.Any() {

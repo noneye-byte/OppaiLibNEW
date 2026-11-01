@@ -80,6 +80,9 @@ type Config struct {
 	// Either missing, or a build without ONNX Runtime, means no Kokoro.
 	TTSKokoroDir string
 	TTSEspeak    string
+	// MatteModel is the background-removal model (internal/matte), baked into the onnx
+	// image; missing, or a build without ONNX Runtime, means no background removal.
+	MatteModel string
 	TTSURL             string
 
 	// ImageGenURL is the base URL of a local Automatic1111 / SD.Next-compatible
@@ -157,6 +160,7 @@ func Load() *Config {
 		TTSBundledVoiceDir:  env("OPPAI_TTS_BUNDLED_VOICE_DIR", "/opt/oppailib/voices"),
 		TTSKokoroDir:        env("OPPAI_TTS_KOKORO_DIR", "/opt/oppailib/kokoro"),
 		TTSEspeak:           env("OPPAI_TTS_ESPEAK", ""),
+		MatteModel:          env("OPPAI_MATTE_MODEL", "/opt/oppailib/matte/isnetis.onnx"),
 		TTSURL:              env("OPPAI_TTS_URL", ""),
 		CivitaiAPIURL:       env("OPPAI_CIVITAI_API_URL", "https://civitai.red/api/v1"),
 		CivitaiAPIKey:       env("OPPAI_CIVITAI_API_KEY", ""),

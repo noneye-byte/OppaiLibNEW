@@ -49,6 +49,8 @@ type kindEntry struct {
 
 type boolEntry struct {
 	value bool
+	// route is what was found, for a probe that finds a path rather than a yes.
+	route string
 	at    time.Time
 }
 

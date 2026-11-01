@@ -1,13 +1,14 @@
 import { LitElement, html, css, nothing } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { iconStyles, motionStyles } from "../theme.js";
-import { api, type ClipModels, type ClipParams, type ClipUpscaleParams, type ClipWorkflow, type ComfyModels, type GenClip, type GenerateResult } from "../api.js";
+import { api, type ClipModels, type ClipParams, type ClipUpscaleParams, type ClipWorkflow, type ComfyModels, type ComfyNote, type GenClip, type GenerateResult } from "../api.js";
 import { CLIP_ASPECTS, CLIP_SIDES, clipFrames, clipSize, lastFrameTime, startFrameSize, type ClipAspect } from "../clip-shape.js";
 import {
   canLoop, clipIsFast, clipLoraChoices, clipModelChoiceOf, clipModelChoices, settleSpeed, SPEED_SETTINGS, speedAtFullCFG, studioClipModels,
   studioClipRecipe, withClipModel, type ClipLoraChoice, type ClipModelChoice, type StudioClipRecipe,
 } from "../clip-models.js";
 import { MOTION_PRESETS, hasPhrase, isShowcase, togglePhrase, toggleShowcase } from "../motion-presets.js";
+import { noteFor, parseTriggers, withTriggers, withoutTriggers } from "../clip-notes.js";
 import { GALLERY_DRAG_TYPE } from "./imagegen-gallery.js";
 
 /**
@@ -31,8 +32,14 @@ import { GALLERY_DRAG_TYPE } from "./imagegen-gallery.js";
  *
  * The files are picked here, as a checkpoint and LoRAs are in the Image studio:
  * Settings' are where each direction starts, and a clip sends the studio's whole
- * recipe. A finished clip can be enlarged through ComfyUI, which comes back as a take
- * of its own beside it.
+ * recipe. A finished clip can be enlarged through ComfyUI, or cut out of its
+ * background on the server (internal/matte), and either comes back as a take of its own
+ * beside it.
+ *
+ * ComfyUI keeps nothing about a file but the file, so a LoRA's cover and trigger words
+ * are OppaiLib's (api/comfy_notes.go): filled from Civitai on install, set here by hand
+ * — a frame of the clip on the stage makes a good cover — and the words go into the
+ * prompt as the LoRA goes on, as the Image studio's do.
  */
 
 /** A picture a clip starts from, as Animate hands it over. */
@@ -65,6 +72,8 @@ interface ClipRun {
   clip?: GenClip;
   /** The take it is an enlargement of, by its number in the reel. */
   upscaleOf?: number;
+  /** The take it is a background cut of, by its number in the reel. */
+  cutoutOf?: number;
   /** The library row once saved. */
   savedId?: number;
   saving?: boolean;
@@ -179,26 +188,85 @@ const comfy = {
   lists: null as ComfyModels | null,
   loras: null as ClipLoraChoice[] | null,
   models: [] as ClipModelChoice[],
+  /** Covers and trigger words, by file name. */
+  notes: {} as Record<string, ComfyNote>,
+  canRestart: false,
+  restarting: false,
   loading: false,
   error: "",
 };
 
-async function loadComfyLists() {
+function takeLists(lists: ComfyModels) {
+  comfy.lists = lists;
+  comfy.loras = clipLoraChoices(lists.loras);
+  comfy.models = clipModelChoices(lists);
+  comfy.canRestart = !!lists.canRestart;
+}
+
+/** Asks ComfyUI what it has. `rescan` first sets the time on the folders installs go
+    to, which is what a ComfyUI on an Unraid share needs to see a new file at all
+    (imagegen/comfy_install.go); the Refresh button and a finished install ask it. */
+async function loadComfyLists(rescan = false) {
   if (comfy.loading) return;
   comfy.loading = true;
   comfy.error = "";
   changed();
   try {
-    const lists = await api.comfyModels();
-    comfy.lists = lists;
-    comfy.loras = clipLoraChoices(lists.loras);
-    comfy.models = clipModelChoices(lists);
+    const [lists, notes] = await Promise.all([api.comfyModels(rescan), api.comfyNotes().catch(() => null)]);
+    takeLists(lists);
+    if (notes) comfy.notes = notes.notes ?? {};
   } catch (e) {
     comfy.error = (e as Error).message;
   } finally {
     comfy.loading = false;
     changed();
   }
+}
+
+/** Reads ComfyUI's files again, for the screens around the studio: the Civitai browser
+    when it closes on an install. */
+export function refreshComfyLists() {
+  if (comfy.lists || comfy.error) void loadComfyLists(true);
+}
+
+async function loadComfyNotes() {
+  try {
+    comfy.notes = (await api.comfyNotes()).notes ?? {};
+  } catch {
+    // The covers stay as they were; nothing here depends on them.
+  }
+  changed();
+}
+
+/** Restarts ComfyUI through its Manager and waits for it to answer again, which takes
+    as long as its custom nodes take to import. Resolves with what went wrong, "" when
+    it is back. */
+async function restartComfy(): Promise<string> {
+  comfy.restarting = true;
+  changed();
+  try {
+    await api.comfyRestart();
+  } catch (e) {
+    comfy.restarting = false;
+    changed();
+    return (e as Error).message;
+  }
+  const deadline = Date.now() + 4 * 60_000;
+  await new Promise((r) => setTimeout(r, 4000));
+  while (Date.now() < deadline) {
+    try {
+      takeLists(await api.comfyModels());
+      comfy.error = "";
+      comfy.restarting = false;
+      changed();
+      return "";
+    } catch {
+      await new Promise((r) => setTimeout(r, 3000));
+    }
+  }
+  comfy.restarting = false;
+  changed();
+  return "ComfyUI hasn't answered in four minutes since it was asked to restart — look at it where it runs.";
 }
 
 /** How many choices the list shows before the search has to narrow it. */
@@ -224,6 +292,15 @@ export class OppaiVideoStudio extends LitElement {
   @property({ attribute: false }) clips: { image?: ClipWorkflow; text?: ClipWorkflow } = {};
   /** The gallery folder open beside the studio, which a clip is filed in. */
   @property() board = "";
+  /** Background removal runs on the server, from the studio's status; the problem
+      says why not when it can't. */
+  @property({ type: Boolean }) matte = false;
+  @property() matteProblem = "";
+  /** The LoRA or model whose cover and trigger words are being edited: its files, the
+      first being the one a new note is kept under. */
+  @state() private noting: { files: string[]; label: string; words: boolean } | null = null;
+  @state() private noteDraft = "";
+  @state() private noteBusy = false;
   @state() private negOpen = false;
   @state() private upscaleOpen = false;
   @state() private error = "";
@@ -368,6 +445,31 @@ export class OppaiVideoStudio extends LitElement {
       .lora-pick:hover { background: var(--oppai-surface-2); color: var(--oppai-text); }
       .lora-pick .material-symbols-rounded { font-size: 17px; flex: none; }
       .lora-pick .lora-name { flex: 1; font-weight: 500; }
+      img.lora-ic { object-fit: cover; padding: 0; }
+      .lora-thumb { width: 22px; height: 22px; border-radius: 6px; object-fit: cover; flex: none; }
+      .lora-row .lora-x + .lora-x { margin-left: -4px; }
+      /* A LoRA's cover and words, edited where the LoRA sits. */
+      .note-edit {
+        display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 10px; margin: 2px 0 6px; padding: 10px;
+        border-radius: 12px; border: 1px solid var(--oppai-border-strong); background: var(--oppai-bg);
+        animation: oppai-fade-in 0.16s ease both;
+      }
+      .ne-cover { width: 72px; height: 90px; border-radius: 10px; overflow: hidden; display: grid; place-items: center; background: var(--oppai-surface-2); color: var(--oppai-text-muted); }
+      .ne-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+      .ne-cover .material-symbols-rounded { font-size: 26px; }
+      .ne-side { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+      .ne-side b { font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .ne-side .row .chip { height: 26px; padding: 0 9px; font-size: 11.5px; }
+      .ne-words { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 4px; font-size: 11.5px; color: var(--oppai-text-muted); }
+      .ne-words input {
+        height: 32px; padding: 0 10px; border-radius: 10px; border: 1px solid var(--oppai-border-strong);
+        background: var(--oppai-surface); color: var(--oppai-text); font-size: 12.5px;
+      }
+      .ne-words input:focus { outline: none; border-color: var(--oppai-primary); }
+      .ne-foot { grid-column: 1 / -1; display: flex; gap: 6px; justify-content: flex-end; }
+      .model-row { display: flex; align-items: center; gap: 8px; }
+      .model-row .model-pick { flex: 1; min-width: 0; }
+      .model-row img { width: 38px; height: 38px; border-radius: 10px; object-fit: cover; flex: none; }
       select {
         height: 30px; padding: 0 8px; border-radius: 15px; border: 1px solid var(--oppai-border-strong);
         background: var(--oppai-bg); color: var(--oppai-text); font-size: 12px;
@@ -442,6 +544,11 @@ export class OppaiVideoStudio extends LitElement {
       .player video, .player img.still {
         display: block; max-width: 100cqw; max-height: 100cqh; min-height: 160px; border-radius: 14px; background: #000;
         box-shadow: 0 20px 60px rgba(0,0,0,.5); cursor: pointer;
+      }
+      /* A clip cut out of its background plays over a checkerboard, so what was cut
+         shows as gone rather than as black. */
+      .player video.cutout, .take video.cutout {
+        background: repeating-conic-gradient(#3b3b3b 0 25%, #262626 0 50%) 0 0 / 20px 20px;
       }
       .waiting {
         position: relative; height: min(100cqh, 640px); max-width: 100cqw; aspect-ratio: 4 / 5; border-radius: 18px; overflow: hidden;
@@ -1034,9 +1141,15 @@ export class OppaiVideoStudio extends LitElement {
     const head = html`<div class="k">Model
       <span class="k-btns">
         ${own ? html`<button class="link" title="Back to the files in Settings → Image generation → Video" @click=${() => this.resetRecipe()}>Settings'</button>` : nothing}
-        <button class="k-btn" title="Read ComfyUI's models again" aria-label="Read ComfyUI's models again" ?disabled=${comfy.loading}
-          @click=${() => void loadComfyLists()}><span class="material-symbols-rounded">refresh</span></button>
-      </span></div>`;
+        <button class="k-btn" title="Read ComfyUI's models and LoRAs again — a file just added shows without a restart"
+          aria-label="Read ComfyUI's models again" ?disabled=${comfy.loading || comfy.restarting}
+          @click=${() => void loadComfyLists(true)}><span class="material-symbols-rounded">refresh</span></button>
+        ${comfy.lists || comfy.restarting ? html`<button class="k-btn" ?disabled=${comfy.restarting || clipsRunning() > 0}
+          title=${comfy.restarting ? "ComfyUI is restarting…" : clipsRunning() ? "Wait for the clips being made"
+            : comfy.canRestart ? "Restart ComfyUI, through its Manager — for a new custom node or extra_model_paths.yaml"
+            : "Restart ComfyUI — needs ComfyUI-Manager installed in it"}
+          aria-label="Restart ComfyUI" @click=${() => void this.restart()}><span class="material-symbols-rounded">restart_alt</span></button>` : nothing}
+      </span></div>${comfy.restarting ? html`<div class="note">ComfyUI is restarting — its custom nodes take a minute to load…</div>` : nothing}`;
     if (!r || !comfy.lists) {
       return html`${head}<div class=${comfy.error ? "err" : "note"}>${comfy.error
         ? `ComfyUI didn't list its models: ${comfy.error}. ${w.needsModel ? "" : "Clips run on Settings' files meanwhile."}`
@@ -1059,7 +1172,12 @@ export class OppaiVideoStudio extends LitElement {
     const full = studioClipModels(r, comfy.loras ?? []);
     const fast = clipIsFast(full);
     const auto = (v: number, fastV: number, slowV: number) => (v ? String(v) : `${fast ? fastV : slowV}`);
+    const modelFiles = choice ? [choice.key, choice.lowModel].filter(Boolean) : [];
+    const modelCover = this.coverOf(modelFiles);
+    const editing = !!choice && this.noting?.files[0] === modelFiles[0];
     return html`${head}
+      <div class="model-row">
+      ${modelCover ? html`<img src=${modelCover} alt="" />` : nothing}
       <select class="model-pick" aria-label="Model" @change=${(e: Event) => this.pickModel((e.target as HTMLSelectElement).value)}>
         ${!m.model || pasted ? html`<option value="" ?selected=${!m.model}>${pasted ? "Settings' pasted workflow" : "Pick a model…"}</option>` : nothing}
         ${m.model && !choice ? html`<option value="current" selected>${m.model} (not listed)</option>` : nothing}
@@ -1067,6 +1185,10 @@ export class OppaiVideoStudio extends LitElement {
         ${group("Single models", "single")}
         ${group("All-in-one checkpoints", "checkpoint")}
       </select>
+      ${choice ? html`<button class="lora-x" title="Its cover" aria-label="Edit ${choice.label}'s cover"
+        @click=${() => this.openNote(modelFiles, choice.label, false)}><span class="material-symbols-rounded">edit</span></button>` : nothing}
+      </div>
+      ${editing ? this.renderNoteEditor() : nothing}
       ${!comfy.models.length ? html`<div class="note" style="margin-top:6px">ComfyUI has no Wan models yet.
         <button class="link" @click=${() => this.dispatchEvent(new CustomEvent("find-video-models", { bubbles: true, composed: true }))}>Find them on Civitai</button></div>` : nothing}
       ${m.model ? html`
@@ -1123,27 +1245,45 @@ export class OppaiVideoStudio extends LitElement {
       && (!q || c.label.toLowerCase().includes(q) || c.key.toLowerCase().includes(q)));
     const count = on.length;
     const put = (key: string, weight: number) => this.edit((x) => ({ ...x, loras: { ...x.loras, [key]: weight } }));
-    const takeOff = (key: string) => this.edit((x) => {
-      const loras = { ...x.loras };
-      delete loras[key];
-      return { ...x, loras };
-    });
+    const words = (c: ClipLoraChoice) => noteFor(c.files, comfy.notes)?.note.triggers ?? [];
+    // A LoRA going on brings its words into the prompt, and coming off takes them out.
+    const turnOn = (c: ClipLoraChoice) => {
+      if (words(c).length) session.prompt = withTriggers(session.prompt, words(c));
+      put(c.key, 1);
+    };
+    const takeOff = (c: ClipLoraChoice) => {
+      if (words(c).length) session.prompt = withoutTriggers(session.prompt, words(c));
+      if (this.noting?.files[0] === c.files[0].name) this.noting = null;
+      this.edit((x) => {
+        const loras = { ...x.loras };
+        delete loras[c.key];
+        return { ...x, loras };
+      });
+    };
     return html`
       <div class="k">LoRAs<small>${count ? `${count} on` : ""}</small></div>
       ${count ? html`<div class="loras-on">
         ${on.map((c) => {
           const weight = r.loras[c.key];
+          const files = c.files.map((f) => f.name);
+          const cover = this.coverOf(files);
+          const said = words(c);
           return html`<div class="lora-row ${c.speed ? "speed" : ""}">
-            <span class="lora-ic material-symbols-rounded">${c.speed ? "bolt" : "style"}</span>
-            <span class="lora-name" title=${c.files.map((f) => f.name).join("\n")}>${c.label}${c.files.length > 1 ? html`<span class="lora-tag">high + low</span>` : nothing}</span>
-            <button class="lora-x" title="Take it off" aria-label="Take ${c.label} off" @click=${() => takeOff(c.key)}>
-              <span class="material-symbols-rounded">close</span></button>
+            ${cover ? html`<img class="lora-ic" src=${cover} alt="" />` : html`<span class="lora-ic material-symbols-rounded">${c.speed ? "bolt" : "style"}</span>`}
+            <span class="lora-name" title=${[...files, ...(said.length ? [`Trigger words: ${said.join(", ")}`] : [])].join("\n")}>${c.label}${c.files.length > 1 ? html`<span class="lora-tag">high + low</span>` : nothing}</span>
+            <span style="display:flex">
+              <button class="lora-x" title="Its cover and trigger words" aria-label="Edit ${c.label}'s cover and trigger words"
+                @click=${() => this.openNote(files, c.label, true)}><span class="material-symbols-rounded">edit</span></button>
+              <button class="lora-x" title="Take it off" aria-label="Take ${c.label} off" @click=${() => takeOff(c)}>
+                <span class="material-symbols-rounded">close</span></button>
+            </span>
             <label class="lora-weight">
               <input type="range" min="-1" max="2" step="0.05" .value=${String(weight)} aria-label="${c.label} strength"
                 @input=${(e: Event) => put(c.key, Number((e.target as HTMLInputElement).value))} />
               <b>${weight.toFixed(2)}</b>
             </label>
-          </div>`;
+          </div>
+          ${this.noting?.files[0] === files[0] ? this.renderNoteEditor() : nothing}`;
         })}
       </div>` : nothing}
       ${!all.length ? html`<div class="note">ComfyUI has no LoRAs in models/loras.
@@ -1153,15 +1293,155 @@ export class OppaiVideoStudio extends LitElement {
             <input type="search" placeholder="Search ${all.length} LoRAs" .value=${session.loraQuery} aria-label="Search LoRAs"
               @input=${(e: Event) => this.set("loraQuery", (e.target as HTMLInputElement).value)} /></label>` : nothing}
           ${rest.length ? html`<div class="lora-list">
-            ${rest.slice(0, LORA_LIST).map((c) => html`<button class="lora-pick" title=${c.files.map((f) => f.name).join("\n")} @click=${() => put(c.key, 1)}>
-              <span class="material-symbols-rounded">${c.speed ? "bolt" : "add"}</span>
+            ${rest.slice(0, LORA_LIST).map((c) => {
+              const cover = this.coverOf(c.files.map((f) => f.name));
+              return html`<button class="lora-pick" title=${c.files.map((f) => f.name).join("\n")} @click=${() => turnOn(c)}>
+              ${cover ? html`<img class="lora-thumb" src=${cover} alt="" />` : html`<span class="material-symbols-rounded">${c.speed ? "bolt" : "add"}</span>`}
               <span class="lora-name">${c.label}</span>
               ${c.files.length > 1 ? html`<span class="lora-tag">pair</span>` : nothing}
-            </button>`)}
+            </button>`;
+            })}
           </div>
           ${rest.length > LORA_LIST ? html`<div class="note" style="margin-top:6px">${rest.length - LORA_LIST} more — search to find them.</div>` : nothing}`
           : html`<div class="note">${q ? "No LoRA by that name." : "Every LoRA ComfyUI has is on."}</div>`}`}
     `;
+  }
+
+  /** A file's cover as the studio shows it, "" when none of its files has one. */
+  private coverOf(files: readonly string[]): string {
+    const found = noteFor(files.map((name) => ({ name })), comfy.notes);
+    return found?.note.cover ? api.comfyCoverURL(found.name, found.note.v) : "";
+  }
+
+  private openNote(files: string[], label: string, words: boolean) {
+    if (this.noting?.files[0] === files[0]) {
+      this.noting = null;
+      return;
+    }
+    this.noting = { files, label, words };
+    this.noteDraft = (noteFor(files.map((name) => ({ name })), comfy.notes)?.note.triggers ?? []).join(", ");
+  }
+
+  /** The name the open note is kept under: the file that has one already, or the first. */
+  private get noteName(): string {
+    const n = this.noting;
+    if (!n) return "";
+    return noteFor(n.files.map((name) => ({ name })), comfy.notes)?.name ?? n.files[0];
+  }
+
+  private async noteCover(from: "frame" | File | "clear") {
+    const name = this.noteName;
+    if (!name || this.noteBusy) return;
+    this.noteBusy = true;
+    this.error = "";
+    try {
+      if (from === "clear") {
+        await api.setComfyCover(name, { clear: true });
+      } else if (from === "frame") {
+        const run = this.selectedRun;
+        const pic = run ? await this.grabFrame("current", run) : null;
+        if (!pic) throw new Error("Put a clip on the stage first — the frame it's paused on becomes the cover.");
+        try {
+          await api.setComfyCover(name, { imageData: await pictureDataURL(pic.url) });
+        } finally {
+          URL.revokeObjectURL(pic.url);
+        }
+      } else {
+        await api.setComfyCover(name, { imageData: await fileDataURL(from) });
+      }
+      await loadComfyNotes();
+    } catch (e) {
+      this.error = (e as Error).message;
+    } finally {
+      this.noteBusy = false;
+    }
+  }
+
+  private async saveNoteWords() {
+    const name = this.noteName;
+    if (!name || this.noteBusy) return;
+    this.noteBusy = true;
+    this.error = "";
+    const before = noteFor((this.noting?.files ?? []).map((n) => ({ name: n })), comfy.notes)?.note.triggers ?? [];
+    const next = parseTriggers(this.noteDraft);
+    try {
+      await api.setComfyTriggers(name, next);
+      // A LoRA already on swaps its old words in the prompt for the new ones.
+      if (before.length) session.prompt = withoutTriggers(session.prompt, before);
+      if (next.length) session.prompt = withTriggers(session.prompt, next);
+      await loadComfyNotes();
+      this.noting = null;
+    } catch (e) {
+      this.error = (e as Error).message;
+    } finally {
+      this.noteBusy = false;
+    }
+  }
+
+  /** The cover and, for a LoRA, its trigger words, edited where it sits. */
+  private renderNoteEditor() {
+    const n = this.noting;
+    if (!n) return nothing;
+    const cover = this.coverOf(n.files);
+    const onStage = !!this.selectedRun?.clip?.mime.startsWith("video/");
+    const file = html`<input type="file" accept="image/*" @change=${(e: Event) => {
+      const input = e.target as HTMLInputElement;
+      const picked = input.files?.[0];
+      input.value = "";
+      if (picked) void this.noteCover(picked);
+    }} />`;
+    return html`<div class="note-edit" role="group" aria-label="${n.label}'s cover${n.words ? " and trigger words" : ""}">
+      <div class="ne-cover">${cover ? html`<img src=${cover} alt="" />` : html`<span class="material-symbols-rounded">image</span>`}</div>
+      <div class="ne-side">
+        <b title=${n.files.join("\n")}>${n.label}</b>
+        <div class="row">
+          <button class="chip" ?disabled=${!onStage || this.noteBusy || this.grabbing}
+            title=${onStage ? "The frame the clip on the stage is showing" : "Put a clip on the stage to take a frame of it"}
+            @click=${() => void this.noteCover("frame")}><span class="material-symbols-rounded">photo_camera</span>This frame</button>
+          <button class="chip" ?disabled=${this.noteBusy}
+            @click=${(e: Event) => (e.currentTarget as HTMLElement).parentElement?.querySelector<HTMLInputElement>("input[type=file]")?.click()}>
+            <span class="material-symbols-rounded">upload</span>A picture</button>
+          ${cover ? html`<button class="chip" ?disabled=${this.noteBusy} @click=${() => void this.noteCover("clear")}>
+            <span class="material-symbols-rounded">delete</span>No cover</button>` : nothing}
+          ${file}
+        </div>
+      </div>
+      ${n.words ? html`<label class="ne-words">Trigger words — put in the prompt as it goes on
+        <input type="text" .value=${this.noteDraft} placeholder="comma-separated, as on its Civitai page"
+          @input=${(e: Event) => (this.noteDraft = (e.target as HTMLInputElement).value)}
+          @keydown=${(e: KeyboardEvent) => { if (e.key === "Enter") { e.preventDefault(); void this.saveNoteWords(); } }} /></label>` : nothing}
+      <div class="ne-foot">
+        <button class="chip" @click=${() => (this.noting = null)}>${n.words ? "Cancel" : "Done"}</button>
+        ${n.words ? html`<button class="chip primary" ?disabled=${this.noteBusy} @click=${() => void this.saveNoteWords()}>
+          <span class="material-symbols-rounded">check</span>Save words</button>` : nothing}
+      </div>
+    </div>`;
+  }
+
+  private async restart() {
+    if (!comfy.canRestart) {
+      this.error = "ComfyUI has no restart of its own; ComfyUI-Manager adds one. Install the Manager in ComfyUI (or restart it where it runs) — "
+        + "a model or LoRA just added needs no restart, only Refresh.";
+      return;
+    }
+    if (!window.confirm("Restart ComfyUI?\n\nOnly needed for a new custom node or a change to extra_model_paths.yaml — a model or LoRA just added shows with Refresh.")) return;
+    this.error = await restartComfy();
+  }
+
+  /** Cuts the background off a finished clip, on the server: a new take beside it. */
+  private cutOut(run: ClipRun) {
+    if (!run.clip) return;
+    const params: { jobId: string; board: string; detach: boolean; gallery?: string; id?: string } = { jobId: newJobId(), board: this.board, detach: true };
+    if (run.clip.gallery) params.gallery = run.clip.gallery;
+    else params.id = run.clip.id;
+    const cut: ClipRun = {
+      jobId: params.jobId, from: run.from, prompt: run.prompt, thumb: run.thumb, fps: run.fps,
+      percent: 0, done: false, startedAt: Date.now(), cutoutOf: session.runs.length - session.runs.indexOf(run),
+    };
+    session.runs = [cut, ...session.runs];
+    session.selected = cut.jobId;
+    changed();
+    void runClip(cut, () => api.matteClip(params));
   }
 
   private renderFrame() {
@@ -1211,7 +1491,7 @@ export class OppaiVideoStudio extends LitElement {
     if (run.clip) {
       const url = clipURL(run.clip);
       return run.clip.mime.startsWith("video/")
-        ? html`<div class="player"><video src=${url} autoplay playsinline muted .loop=${session.loop} .playbackRate=${session.speed}
+        ? html`<div class="player"><video class=${run.clip.cutout ? "cutout" : ""} src=${url} autoplay playsinline muted .loop=${session.loop} .playbackRate=${session.speed}
             @click=${() => this.togglePlay()}
             @play=${() => (this.playing = true)} @pause=${() => (this.playing = false)}
             @loadedmetadata=${(e: Event) => { const v = e.target as HTMLVideoElement; this.duration = v.duration; v.playbackRate = session.speed; }}
@@ -1228,7 +1508,9 @@ export class OppaiVideoStudio extends LitElement {
             stroke-dasharray=${c} stroke-dashoffset=${c * (1 - run.percent)} /></svg>
           <span class="pct"><b>${pct}%</b>${elapsed(Date.now() - run.startedAt)}</span>
         </div>
-        <span class="what">${run.upscaleOf ? `Enlarging take ${run.upscaleOf} ${session.upscaleBy}×…` : run.prompt || "Animating the picture…"}</span>
+        <span class="what">${run.upscaleOf ? `Enlarging take ${run.upscaleOf} ${session.upscaleBy}×…`
+          : run.cutoutOf ? `Cutting take ${run.cutoutOf} out of its background, a frame at a time…`
+          : run.prompt || "Animating the picture…"}</span>
       </div>`;
     }
     return html`<div class="failed"><span class="material-symbols-rounded">error</span>
@@ -1263,6 +1545,10 @@ export class OppaiVideoStudio extends LitElement {
         <button class="chip ${this.upscaleOpen ? "on" : ""}" title="Enlarge this clip through ComfyUI; the enlarged one is a new take beside it"
           aria-expanded=${this.upscaleOpen ? "true" : "false"} @click=${() => (this.upscaleOpen = !this.upscaleOpen)}>
           <span class="material-symbols-rounded">open_in_full</span>Upscale</button>
+        ${this.matte || this.matteProblem ? html`<button class="chip" ?disabled=${!this.matte || !!run.clip?.cutout}
+          title=${!this.matte ? this.matteProblem : run.clip?.cutout ? "This one is already cut out"
+            : "Cut her out of the background, frame by frame, on the server — a new take with transparency, beside this one"}
+          @click=${() => this.cutOut(run)}><span class="material-symbols-rounded">background_replace</span>Remove background</button>` : nothing}
       ` : html`<span class="t-meta" style="flex:1">${!run.done ? `Started ${elapsed(Date.now() - run.startedAt)} ago` : run.error ? "Didn't finish" : ""}</span>`}
       <span class="toolbar-spacer" style="flex:1"></span>
       ${run.clip ? html`<span class="t-meta">${run.clip.seed ? `seed ${run.clip.seed}` : "from the gallery"}${run.clip.recipe ? ` · ${run.clip.recipe}` : ""}${took && run.clip.id ? ` · ${took}` : ""}</span>` : nothing}
@@ -1311,14 +1597,14 @@ export class OppaiVideoStudio extends LitElement {
         const pct = Math.round(r.percent * 100);
         const media = r.clip
           ? r.clip.mime.startsWith("video/")
-            ? html`<video src=${`${clipURL(r.clip)}#t=0.1`} muted playsinline preload="metadata"></video>`
+            ? html`<video class=${r.clip.cutout ? "cutout" : ""} src=${`${clipURL(r.clip)}#t=0.1`} muted playsinline preload="metadata"></video>`
             : html`<img src=${clipURL(r.clip)} alt="" />`
           : r.thumb ? html`<img src=${r.thumb} alt="" />` : nothing;
         return html`<button class="take ${r.jobId === current ? "on" : ""} ${r.done ? "" : "running"}" role="option"
           aria-selected=${r.jobId === current ? "true" : "false"} title=${r.prompt || "Clip"}
           @click=${() => this.set("selected", r.jobId)}>
           ${media}
-          <span class="take-n">${count - i}${r.upscaleOf ? html` · ${r.upscaleOf}↑` : nothing}</span>
+          <span class="take-n">${count - i}${r.upscaleOf ? html` · ${r.upscaleOf}↑` : nothing}${r.cutoutOf ? html` · ${r.cutoutOf} cut` : nothing}</span>
           ${!r.done
             ? html`<span class="badge">${pct}%</span><span class="mini-bar"><span style="width:${pct}%"></span></span>`
             : r.savedId ? html`<span class="badge saved"><span class="material-symbols-rounded">check</span>Saved</span>`
@@ -1412,6 +1698,15 @@ async function collect(jobId: string, progress: (percent: number) => void, failu
     await new Promise((r) => setTimeout(r, 2500));
   }
   throw new Error("The clip ran past twenty minutes without finishing. If it does finish, it lands in the gallery.");
+}
+
+function fileDataURL(file: Blob): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error("couldn't read that file"));
+    reader.readAsDataURL(file);
+  });
 }
 
 async function pictureDataURL(url: string): Promise<string> {

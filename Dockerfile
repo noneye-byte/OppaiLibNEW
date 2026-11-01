@@ -7,7 +7,8 @@
 #   --target runtime-onnx   default; bakes in ONNX Runtime + the wd14 tagger
 #                           model for real NSFW content tagging (~540MB, of
 #                           which the model is 379MB and the runtime .so 23MB),
-#                           and Kokoro, Libby's natural voice (~165MB more)
+#                           Kokoro, Libby's natural voice (~165MB more), and
+#                           the background-removal model (~176MB)
 
 # --- Stage 1: web UI ----------------------------------------------------
 FROM node:22-alpine AS web
@@ -149,6 +150,20 @@ RUN base="https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/${K
         && [ "$(wc -c < "/out/kokoro/voices/${v}.bin")" -eq 522240 ]; \
     done
 
+# --- Stage 2f: background removal ---------------------------------------
+# skytnt's anime-seg (ISNet trained on drawn characters), one ONNX file run on the CPU
+# by the same runtime, for cutting her out of sprites and clips. Pinned to a revision
+# of the repo, and sized like the others so a truncated download fails the build
+# rather than the first cut. See backend/internal/matte.
+FROM debian:bookworm-slim AS mattedeps
+ARG MATTE_REV=493cb60893f47441b26ec4fb9a306bce9e342982
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+RUN mkdir -p /out/matte \
+    && curl -fL --retry 8 --retry-all-errors --retry-delay 3 -C - -o /out/matte/isnetis.onnx \
+        "https://huggingface.co/skytnt/anime-seg/resolve/${MATTE_REV}/isnetis.onnx" \
+    && [ "$(wc -c < /out/matte/isnetis.onnx)" -gt 170000000 ]
+
 # --- Stage 3: lean runtime (no AI model) --------------------------------
 FROM debian:bookworm-slim AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -192,6 +207,8 @@ COPY --from=piperdeps /out/piper/ /opt/piper/
 COPY --from=piperdeps /out/voices/ /opt/oppailib/voices/
 # Her natural voice, preferred over piper wherever it is (Settings → Libby's voice).
 COPY --from=kokorodeps /out/kokoro/ /opt/oppailib/kokoro/
+# Background removal for sprites and clips.
+COPY --from=mattedeps /out/matte/ /opt/oppailib/matte/
 # The model lives outside /config on purpose. /config is a VOLUME, and a bind
 # mount over it (what the Unraid template does) would hide anything baked
 # underneath — the model would silently vanish and tagging would fall back to
@@ -211,6 +228,7 @@ ENV OPPAI_HTTP_ADDR=:8080 \
     OPPAI_TTS_PIPER=/opt/piper/piper \
     OPPAI_TTS_BUNDLED_VOICE_DIR=/opt/oppailib/voices \
     OPPAI_TTS_KOKORO_DIR=/opt/oppailib/kokoro \
+    OPPAI_MATTE_MODEL=/opt/oppailib/matte/isnetis.onnx \
     ONNXRUNTIME_LIB_PATH=/usr/local/lib/libonnxruntime.so
 
 VOLUME ["/media", "/config", "/db"]

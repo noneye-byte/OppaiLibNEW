@@ -360,6 +360,7 @@ export class OppaiCivitai extends LitElement {
       }
       .card:hover { transform: translateY(-2px); }
       .card img,
+      .card video,
       .card .noimg {
         width: 100%;
         aspect-ratio: 3 / 4;
@@ -368,6 +369,12 @@ export class OppaiCivitai extends LitElement {
         background: var(--oppai-surface);
       }
       .card .noimg { display: grid; place-items: center; color: var(--oppai-text-muted); }
+      /* A showcase clip: its first frame until pointed at, then it plays. */
+      .clip-mark {
+        position: absolute; left: 8px; top: 8px; width: 24px; height: 24px; border-radius: 12px; display: grid; place-items: center;
+        background: rgba(0, 0, 0, 0.6); color: #fff; pointer-events: none;
+      }
+      .clip-mark .material-symbols-rounded { font-size: 16px; }
       .card .meta { padding: 8px 10px 10px; }
       .card .name {
         font-size: 13px;
@@ -489,7 +496,7 @@ export class OppaiCivitai extends LitElement {
       /* The gallery of posted pictures. */
       .gal-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; margin-top: 8px; }
       .gal-grid button { border: none; padding: 0; background: var(--oppai-surface); border-radius: 10px; overflow: hidden; cursor: pointer; position: relative; }
-      .gal-grid img { width: 100%; aspect-ratio: 3 / 4; object-fit: cover; display: block; }
+      .gal-grid img, .gal-grid video { width: 100%; aspect-ratio: 3 / 4; object-fit: cover; display: block; }
       .gal-grid .has { position: absolute; right: 6px; bottom: 6px; background: rgba(0,0,0,.6); color: #fff; border-radius: 6px; font-size: 10px; padding: 2px 6px; }
 
       /* Zoomed picture, with its prompt when there is one. */
@@ -498,7 +505,7 @@ export class OppaiCivitai extends LitElement {
         display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 360px); cursor: zoom-out;
       }
       .zoom.plain { grid-template-columns: minmax(0, 1fr); place-items: center; }
-      .zoom img { max-width: 100%; max-height: 100vh; object-fit: contain; margin: auto; display: block; }
+      .zoom img, .zoom video { max-width: 100%; max-height: 100vh; object-fit: contain; margin: auto; display: block; }
       .zoom .pane {
         background: var(--oppai-surface-2); color: var(--oppai-text); padding: 16px; overflow-y: auto; cursor: default;
         font-size: 13px; display: flex; flex-direction: column; gap: 10px;
@@ -1206,12 +1213,29 @@ export class OppaiCivitai extends LitElement {
     `;
   }
 
+  /**
+   * A tile's picture. A still that stands in for a showcase clip is the clip's poster,
+   * and the clip plays while the tile is pointed at (or always, for the one being
+   * looked at): a grid of thirty clips all playing is thirty downloads at once, and the
+   * CDN answers a burst like that with 429s. The still stays if the clip never loads.
+   */
+  private tileMedia(still: string, clip: string | undefined, alt: string, always = false, cls = "") {
+    if (!clip) return html`<img class=${cls} src=${api.civitaiImageURL(still)} alt=${alt} loading="lazy" />`;
+    return html`<video class=${cls} poster=${api.civitaiImageURL(still)} src=${api.civitaiImageURL(clip)} muted loop playsinline
+      preload=${always ? "auto" : "none"} ?autoplay=${always} aria-label=${alt}
+      @mouseenter=${(e: Event) => void (e.target as HTMLVideoElement).play().catch(() => {})}
+      @mouseleave=${(e: Event) => { if (!always) (e.target as HTMLVideoElement).pause(); }}></video>
+      ${always ? nothing : html`<span class="clip-mark" title="A clip — point at it to play"><span class="material-symbols-rounded">play_arrow</span></span>`}`;
+  }
+
   private renderCard(m: CivitaiModel) {
     const img = m.versions[0]?.images[0];
     return html`
-      <button class="card" @click=${() => this.openDetail(m)}>
+      <button class="card" @click=${() => this.openDetail(m)}
+        @mouseenter=${(e: Event) => void (e.currentTarget as HTMLElement).querySelector("video")?.play().catch(() => {})}
+        @mouseleave=${(e: Event) => (e.currentTarget as HTMLElement).querySelector("video")?.pause()}>
         ${img
-          ? html`<img src=${api.civitaiImageURL(img)} alt=${m.name} loading="lazy" />`
+          ? this.tileMedia(img, m.versions[0]?.videos?.[0], m.name)
           : html`<div class="noimg"><span class="material-symbols-rounded" style="font-size:34px;">image</span></div>`}
         ${m.installed && !this.video ? html`<span class="badge ok"><span class="material-symbols-rounded" style="font-size:13px;">check</span> Installed</span>` : nothing}
         ${m.nsfw ? html`<span class="badge right">18+</span>` : nothing}
@@ -1233,7 +1257,10 @@ export class OppaiCivitai extends LitElement {
       <div class="overlay" @click=${(e: Event) => { if (e.target === e.currentTarget) this.closeDetail(); }}>
         <div class="detail" role="dialog" aria-label=${m.name}>
           <div>
-            ${this.shownImage
+            ${this.shownImage && clipOf(v, this.shownImage)
+              ? html`<video class="big" poster=${api.civitaiImageURL(this.shownImage)} src=${api.civitaiImageURL(clipOf(v, this.shownImage))}
+                  autoplay muted loop playsinline controls aria-label=${m.name}></video>`
+              : this.shownImage
               ? html`<img class="big" src=${api.civitaiImageURL(this.shownImage)} alt=${m.name}
                   @click=${() => (this.zoomed = this.shownImage)} />`
               : html`<div class="big" style="display:grid; place-items:center;">
@@ -1403,8 +1430,10 @@ export class OppaiCivitai extends LitElement {
       ${this.gallery.length
         ? html`<div class="gal-grid">
             ${this.gallery.map(
-              (img) => html`<button title=${img.prompt ? "Has a prompt" : "No prompt kept"} @click=${() => (this.picked = img)}>
-                <img src=${api.civitaiImageURL(img.url)} alt="" loading="lazy" />
+              (img) => html`<button title=${img.prompt ? "Has a prompt" : "No prompt kept"} @click=${() => (this.picked = img)}
+                @mouseenter=${(e: Event) => void (e.currentTarget as HTMLElement).querySelector("video")?.play().catch(() => {})}
+                @mouseleave=${(e: Event) => (e.currentTarget as HTMLElement).querySelector("video")?.pause()}>
+                ${this.tileMedia(img.url, img.video, "")}
                 ${img.prompt ? html`<span class="has">prompt</span>` : nothing}
               </button>`,
             )}
@@ -1425,7 +1454,10 @@ export class OppaiCivitai extends LitElement {
     const settings = promptSettingsFrom(img);
     return html`
       <div class="zoom ${settings ? "" : "plain"}" @click=${(e: Event) => { if (e.target === e.currentTarget) this.picked = null; }}>
-        <img src=${api.civitaiImageURL(img.url)} alt="" @click=${() => (this.picked = null)} />
+        ${img.video
+          ? html`<video poster=${api.civitaiImageURL(img.url)} src=${api.civitaiImageURL(img.video)} autoplay muted loop playsinline controls
+              @click=${(e: Event) => e.stopPropagation()}></video>`
+          : html`<img src=${api.civitaiImageURL(img.url)} alt="" @click=${() => (this.picked = null)} />`}
         ${settings
           ? html`<div class="pane">
               <div style="display:flex; align-items:center; gap:8px; justify-content:space-between;">
@@ -1576,8 +1608,10 @@ export class OppaiCivitai extends LitElement {
     if (!images.length) return nothing;
     return html`<div class="gal-grid">
       ${images.map(
-        (img) => html`<button title=${img.prompt ? "Has a prompt" : "No prompt kept"} @click=${() => (this.picked = img)}>
-          <img src=${api.civitaiImageURL(img.url)} alt="" loading="lazy" />
+        (img) => html`<button title=${img.prompt ? "Has a prompt" : "No prompt kept"} @click=${() => (this.picked = img)}
+          @mouseenter=${(e: Event) => void (e.currentTarget as HTMLElement).querySelector("video")?.play().catch(() => {})}
+          @mouseleave=${(e: Event) => (e.currentTarget as HTMLElement).querySelector("video")?.pause()}>
+          ${this.tileMedia(img.url, img.video, "")}
           ${img.prompt ? html`<span class="has">prompt</span>` : nothing}
         </button>`,
       )}
@@ -1814,6 +1848,12 @@ const COMFY_FOLDER_WHAT: Record<ComfyFolderKind, string> = {
   loras: "LoRAs",
   vae: "VAEs",
 };
+
+/** The showcase clip a version's still stands in for, "" for a picture. */
+function clipOf(v: CivitaiVersion | undefined, still: string): string {
+  if (!v?.videos) return "";
+  return v.videos[v.images.indexOf(still)] ?? "";
+}
 
 function typeLabel(t: string): string {
   switch (t) {

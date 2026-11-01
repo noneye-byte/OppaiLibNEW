@@ -80,6 +80,9 @@ type genClip struct {
 	// Width and Height are its frame size when known, which an upscale goes by.
 	Width  int `json:"width,omitempty"`
 	Height int `json:"height,omitempty"`
+	// Cutout says its background was cut away, so the studio plays it over a
+	// checkerboard rather than black.
+	Cutout bool `json:"cutout,omitempty"`
 }
 
 // clipStatus is what the studio is told: which workflows are set up and what each
@@ -258,12 +261,17 @@ func mergeClipLoras(base, extra []settings.ClipLora) []settings.ClipLora {
 }
 
 // handleComfyModels lists what the saved ComfyUI has for the settings screen's pickers.
-// Unreachable is a 502, never a 401: see the web client's sign-out on 401.
+// Unreachable is a 502, never a 401: see the web client's sign-out on 401. ?rescan=1
+// first sets the time on the folders installs go to, so a ComfyUI on a share that
+// hides new files from it lists them afresh (imagegen/comfy_install.go).
 func (s *Server) handleComfyModels(w http.ResponseWriter, r *http.Request) {
 	set := s.settings.Get()
 	if strings.TrimSpace(set.LibbyClipURL) == "" {
 		writeErr(w, http.StatusConflict, "give ComfyUI's address and save first")
 		return
+	}
+	if r.URL.Query().Get("rescan") == "1" {
+		s.comfyPlaces().TouchComfyFolders()
 	}
 	// The first call is the one a firewall would hang, so it is the reachability probe
 	// the Test makes, with its limit and its explanation.
@@ -276,7 +284,40 @@ func (s *Server) handleComfyModels(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
 	}
+	models.CanRestart = s.imagegen.ComfyCanRestart(r.Context(), set.LibbyClipURL)
 	writeJSON(w, http.StatusOK, models)
+}
+
+// handleComfyRestart asks ComfyUI-Manager to restart ComfyUI, for what ComfyUI reads
+// only at start: a custom node, extra_model_paths.yaml. It answers at once; the studio
+// follows the model list until ComfyUI is back. A ComfyUI that cannot be restarted
+// from here is a 409 saying what to change, never a 401.
+func (s *Server) handleComfyRestart(w http.ResponseWriter, r *http.Request) {
+	set := s.settings.Get()
+	if strings.TrimSpace(set.LibbyClipURL) == "" {
+		writeErr(w, http.StatusConflict, "give ComfyUI's address and save first")
+		return
+	}
+	if s.genJobs.running("clip-") > 0 {
+		writeErr(w, http.StatusConflict, "a clip is being made — restarting ComfyUI now would lose it")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	if err := s.imagegen.ComfyRestart(ctx, set.LibbyClipURL); err != nil {
+		status := http.StatusBadGateway
+		if errors.Is(err, imagegen.ErrRestartUnsupported) {
+			status = http.StatusConflict
+		}
+		writeErr(w, status, err.Error())
+		return
+	}
+	// Whatever ComfyUI held is gone with the process.
+	s.card.mu.Lock()
+	s.card.comfyHeld = false
+	s.card.mu.Unlock()
+	s.log.Info("imagegen: asked ComfyUI-Manager to restart ComfyUI")
+	writeJSON(w, http.StatusAccepted, map[string]any{"status": "restarting"})
 }
 
 // clipVars is what fills the workflow's placeholders. Sizes go down to a multiple of
@@ -372,6 +413,13 @@ func (s *Server) handleImageGenClip(w http.ResponseWriter, r *http.Request) {
 // keeps it. what names the work in its errors.
 func (s *Server) serveClipJob(w http.ResponseWriter, r *http.Request, jobID string, detach bool, what string,
 	work func(ctx context.Context, report func(imagegen.Progress)) (genResult, error)) {
+	s.serveLongJob(w, r, jobID, detach, what, s.lendCardToVideo, work)
+}
+
+// serveLongJob is serveClipJob with the card's part left to lend: nil for work that
+// runs on this box rather than a generator, as a background cut does.
+func (s *Server) serveLongJob(w http.ResponseWriter, r *http.Request, jobID string, detach bool, what string,
+	lend func(context.Context) func(), work func(ctx context.Context, report func(imagegen.Progress)) (genResult, error)) {
 	named := genJobIDPattern.MatchString(jobID)
 	if detach && !named {
 		writeErr(w, http.StatusBadRequest, "a detached "+what+" needs a job id to be followed by")
@@ -385,8 +433,9 @@ func (s *Server) serveClipJob(w http.ResponseWriter, r *http.Request, jobID stri
 	run := func() (genResult, int, string) {
 		ctx, cancel := context.WithTimeout(ctx, clipTimeout)
 		defer cancel()
-		release := s.lendCardToVideo(ctx)
-		defer release()
+		if lend != nil {
+			defer lend(ctx)()
+		}
 		res, err := work(ctx, func(p imagegen.Progress) {
 			if job != nil {
 				job.report(p)

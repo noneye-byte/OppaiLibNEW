@@ -240,7 +240,7 @@ func TestModelsAreListedFromEachLoaderInEitherSchema(t *testing.T) {
 	raw, _ := json.Marshal(got)
 	want := `{"diffusion":["high.safetensors","low.safetensors","high.gguf"],"checkpoints":["aio.safetensors"],` +
 		`"textEncoders":["umt5.safetensors"],"vaes":["wan_2.1_vae.safetensors"],"loras":["wan/lightx2v_high.safetensors"],` +
-		`"samplers":["euler","uni_pc"],"schedulers":["simple","beta"],"upscalers":["4x-UltraSharp.pth"],"missing":["SaveVideo"]}`
+		`"samplers":["euler","uni_pc"],"schedulers":["simple","beta"],"upscalers":["4x-UltraSharp.pth"],"missing":["SaveVideo"],"canRestart":false}`
 	if string(raw) != want {
 		t.Fatalf("got  %s\nwant %s", raw, want)
 	}

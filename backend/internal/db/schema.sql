@@ -386,6 +386,19 @@ CREATE TABLE IF NOT EXISTS model_defaults (
     updated_at INTEGER NOT NULL
 );
 
+-- What OppaiLib knows of a ComfyUI file that ComfyUI does not keep: a cover picture
+-- and the words that call it up. Automatic1111 keeps both beside the file and InvokeAI
+-- in its model manager; ComfyUI keeps nothing but the file, so the Video studio's
+-- LoRAs and models get them here, filled from Civitai when installed from it and
+-- edited by hand after. Keyed by the name ComfyUI lists the file under. The cover is
+-- a small JPEG sealed under the KEK, as a LoRA's cover is a picture of what it makes.
+CREATE TABLE IF NOT EXISTS comfy_notes (
+    name       TEXT PRIMARY KEY,
+    triggers   TEXT NOT NULL DEFAULT '[]',  -- JSON list
+    cover_enc  BLOB,
+    updated_at INTEGER NOT NULL
+);
+
 -- A LoRA being trained on the trainer (trainer/ in the repo, its own container), from
 -- the first picture sent to the file installed in the generator. The trainer keeps
 -- its own record of the run while it lasts; this is what outlives it, and what the

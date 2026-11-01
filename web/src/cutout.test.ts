@@ -298,3 +298,25 @@ test("a click outside the image is clamped rather than throwing", () => {
   assert.doesNotThrow(() => s.paint(-20, -20, 10, "subtract"));
   assert.doesNotThrow(() => s.paint(9999, 9999, 10, "add"));
 });
+
+test("a matte from the model replaces the mask, cut at half, and can be undone", () => {
+  const session = new CutoutSession(picture(withHole));
+  const alpha = new Uint8Array(session.width * session.height);
+  // Her in the left half, a soft rim at the edge.
+  for (let y = 0; y < session.height; y++) {
+    for (let x = 0; x < session.width; x++) alpha[y * session.width + x] = x < 4 ? 255 : x === 4 ? 140 : x === 5 ? 90 : 0;
+  }
+  session.applyMatte(alpha);
+  const out = session.composePixels(hard);
+  assert.equal(alphaAt(out, 0, 0), 255);
+  assert.equal(alphaAt(out, 4, 2), 255);
+  assert.equal(alphaAt(out, 5, 2), 0);
+  assert.equal(alphaAt(out, 9, 5), 0);
+  assert.ok(session.undo());
+  assert.equal(alphaAt(session.composePixels(hard), 9, 5), 255);
+});
+
+test("a matte of the wrong size is refused rather than smeared", () => {
+  const session = new CutoutSession(picture(withHole));
+  assert.throws(() => session.applyMatte(new Uint8Array(3)));
+});

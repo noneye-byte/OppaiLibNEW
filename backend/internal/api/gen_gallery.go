@@ -105,8 +105,10 @@ type genRecordClip struct {
 	Recipe string `json:"recipe,omitempty"`
 	// Loop says it ends on the picture it starts from.
 	Loop bool `json:"loop,omitempty"`
-	// Source is the gallery clip this one was enlarged from, when it was.
+	// Source is the gallery clip this one was enlarged or cut out from, when it was.
 	Source string `json:"source,omitempty"`
+	// Cutout says its background was cut away: a WebM whose alpha is the matte.
+	Cutout bool `json:"cutout,omitempty"`
 }
 
 type genRecordRefiner struct {

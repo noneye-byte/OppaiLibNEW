@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -221,6 +222,9 @@ type civitaiVersionOut struct {
 	DownloadURL  string   `json:"downloadUrl"`
 	SizeMB       int64    `json:"sizeMB,omitempty"`
 	Images       []string `json:"images"`
+	// Videos runs beside Images: for a still that stands in for a showcase clip, the
+	// clip itself, small enough to play in a tile; "" for a picture.
+	Videos []string `json:"videos"`
 	// The rest is filled in on the detail page only; a search page stays light.
 	Description string           `json:"description,omitempty"`
 	PublishedAt string           `json:"publishedAt,omitempty"`
@@ -261,13 +265,23 @@ type civitaiCategoryOut struct {
 // civitaiPreviewURLs keeps the stills of a version, proxied later, capped so a
 // version with ninety showcase images does not become ninety proxied loads.
 func civitaiPreviewURLs(images []civitaiRawImage, max int) []string {
-	out := []string{}
+	stills, _ := civitaiPreviews(images, max)
+	return stills
+}
+
+// civitaiPreviews is civitaiPreviewURLs with the clips beside the stills: for each
+// still that stands in for a showcase clip, the clip at a size a tile plays, and ""
+// for a picture. The still stays the tile's poster, so a clip the CDN will not
+// transcode is still a picture rather than a blank.
+func civitaiPreviews(images []civitaiRawImage, max int) (stills, clips []string) {
+	stills, clips = []string{}, []string{}
 	for _, img := range images {
-		u := img.URL
+		u, clip := img.URL, ""
 		switch img.Type {
 		case "", "image":
 		case "video":
 			// Wan's showcases are all clips; their first frame stands in for them.
+			clip = civitaiVideoPlay(u)
 			if u = civitaiVideoStill(u); u == "" {
 				continue
 			}
@@ -275,13 +289,16 @@ func civitaiPreviewURLs(images []civitaiRawImage, max int) []string {
 			continue
 		}
 		if civitaiHostAllowed(u) {
-			out = append(out, u)
+			if !civitaiHostAllowed(clip) {
+				clip = ""
+			}
+			stills, clips = append(stills, u), append(clips, clip)
 		}
-		if len(out) >= max {
+		if len(stills) >= max {
 			break
 		}
 	}
-	return out
+	return stills, clips
 }
 
 // civitaiVideoStill is the address of a showcase clip's first frame as a JPEG. The
@@ -290,6 +307,18 @@ func civitaiPreviewURLs(images []civitaiRawImage, max int) []string {
 // .jpeg name it answers with a frame rather than the video. "" for an address not
 // in that shape.
 func civitaiVideoStill(raw string) string {
+	return civitaiCDNVariant(raw, "anim=false,transcode=true,width=720", ".jpeg")
+}
+
+// civitaiVideoPlay is a showcase clip as the catalogue's own tiles play it: an MP4 a
+// few hundred kilobytes, 450 pixels wide, where the original may be tens of megabytes.
+func civitaiVideoPlay(raw string) string {
+	return civitaiCDNVariant(raw, "transcode=true,width=450,optimized=true", ".mp4")
+}
+
+// civitaiCDNVariant is an image CDN address with its options segment replaced by opts
+// and its file's extension by ext, "" for an address not in the CDN's shape.
+func civitaiCDNVariant(raw, opts, ext string) string {
 	u, err := url.Parse(raw)
 	if err != nil {
 		return ""
@@ -299,8 +328,7 @@ func civitaiVideoStill(raw string) string {
 		return ""
 	}
 	name := parts[len(parts)-1]
-	name = strings.TrimSuffix(name, path.Ext(name)) + ".jpeg"
-	const opts = "anim=false,transcode=true,width=720"
+	name = strings.TrimSuffix(name, path.Ext(name)) + ext
 	if strings.Contains(parts[len(parts)-2], "=") {
 		parts = append(parts[:len(parts)-2], opts, name)
 	} else {
@@ -317,7 +345,7 @@ func civitaiVersionOutOf(v civitaiRawVersion, installed map[string]string, detai
 		ID: v.ID, Name: v.Name, Base: v.BaseModel,
 		TrainedWords: v.TrainedWords,
 		DownloadURL:  v.DownloadURL,
-		Images:       civitaiPreviewURLs(v.Images, 4),
+		Videos:       []string{},
 	}
 	if ver.TrainedWords == nil {
 		ver.TrainedWords = []string{}
@@ -338,8 +366,9 @@ func civitaiVersionOutOf(v civitaiRawVersion, installed map[string]string, detai
 			})
 		}
 	}
+	ver.Images, ver.Videos = civitaiPreviews(v.Images, 4)
 	if detail {
-		ver.Images = civitaiPreviewURLs(v.Images, 12)
+		ver.Images, ver.Videos = civitaiPreviews(v.Images, 12)
 		ver.Description = sanitizeCivitaiHTML(v.Description)
 		ver.PublishedAt = v.PublishedAt
 		ver.Downloads, ver.Likes = v.Stats.DownloadCount, v.Stats.ThumbsUpCount
@@ -676,6 +705,9 @@ type civitaiImageOut struct {
 	Seed           int64   `json:"seed,omitempty"`
 	Model          string  `json:"model,omitempty"`
 	Size           string  `json:"size,omitempty"`
+	// Video is the clip a still stands in for, for a post that is one (URL is then
+	// its first frame); "" for a picture.
+	Video string `json:"video,omitempty"`
 }
 
 func metaString(m map[string]any, keys ...string) string {
@@ -780,13 +812,26 @@ func (s *Server) civitaiImages(ctx context.Context, q civitaiImageQuery) (*civit
 	}
 	out := make([]civitaiImageOut, 0, len(listing.Items))
 	for _, it := range listing.Items {
-		if (it.Type != "" && it.Type != "image") || !civitaiHostAllowed(it.URL) {
+		still, clip := it.URL, ""
+		switch it.Type {
+		case "", "image":
+		case "video":
+			// A Wan model's showcase feed is nearly all clips; each is shown by its
+			// first frame and plays from the CDN's small transcode.
+			still, clip = civitaiVideoStill(it.URL), civitaiVideoPlay(it.URL)
+		default:
 			continue
 		}
+		if !civitaiHostAllowed(still) {
+			continue
+		}
+		if !civitaiHostAllowed(clip) {
+			clip = ""
+		}
 		img := civitaiImageOut{
-			ID: it.ID, URL: it.URL, Width: it.Width, Height: it.Height,
+			ID: it.ID, URL: still, Width: it.Width, Height: it.Height,
 			NSFWLevel: int(it.NSFWLevel), Username: it.Username,
-			PostID: it.PostID, CreatedAt: it.CreatedAt,
+			PostID: it.PostID, CreatedAt: it.CreatedAt, Video: clip,
 		}
 		if m := it.Meta; m != nil {
 			img.Prompt = metaString(m, "prompt")
@@ -860,8 +905,9 @@ func (s *Server) handleCivitaiImage(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", safeInlineContentType(ct))
 	w.Header().Set("Cache-Control", "private, max-age=3600")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(data)
+	// A showcase clip comes this way too, and a <video> asks for ranges — Safari
+	// will not play one that cannot be sought in.
+	http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(data))
 }
 
 // civitaiFetchImage downloads one preview, for the proxy and for cover art.

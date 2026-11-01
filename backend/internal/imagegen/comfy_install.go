@@ -7,15 +7,21 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // Installing into ComfyUI, for the Wan clips comfy_wan.go builds.
 //
 // ComfyUI has no API that takes a download either, so this is Automatic1111's way
 // again (a1111_install.go): the file is streamed into the folder its kind goes to,
-// mapped into this container, and renamed into place once whole. ComfyUI needs no
-// rescan — it reads its folders afresh whenever a loader's list is asked for, which
-// is what the Video settings' Refresh does.
+// mapped into this container, and renamed into place once whole. ComfyUI has no
+// rescan to ask for: it lists a folder afresh only when the folder's modified time has
+// changed since it last looked (folder_paths' filename cache), and adding a file
+// changes it — except where it doesn't. An Unraid user share whose folder lives on two
+// disks reports one disk's time while the new file lands on the other, and ComfyUI goes
+// on listing what it had until it is restarted. So a finished install, and the
+// studio's Refresh, set each folder's time by hand (TouchComfyFolders), which every
+// filesystem passes on.
 
 // ComfyFolders are the folders a Wan install can land in, one per kind, each exactly
 // as the operator typed it under Settings → Image generation → Video. Nothing is
@@ -182,6 +188,12 @@ func (c *Client) ComfyInstall(places ComfyPlaces, spec InstallSpec) (*InstallJob
 			key = shown + "/" + name
 			return filepath.Join(dir, name), key
 		})
+		if err == nil {
+			touchFolder(dir)
+			if spec.Done != nil {
+				spec.Done(strings.TrimPrefix(key, shown+"/"))
+			}
+		}
 		jobs.update(job, func(j *InstallJob) {
 			if err != nil {
 				j.Status, j.Error = "error", err.Error()
@@ -200,4 +212,23 @@ func (c *Client) ComfyInstall(places ComfyPlaces, spec InstallSpec) (*InstallJob
 // ComfyInstallJobs lists the downloads into ComfyUI, newest first.
 func (c *Client) ComfyInstallJobs() []InstallJob {
 	return c.comfyJobList().list()
+}
+
+// TouchComfyFolders sets the modified time of every folder installs go to, so ComfyUI
+// lists them afresh the next time it is asked (see the top of this file). Folders that
+// are not set, or cannot be touched, are passed over.
+func (p ComfyPlaces) TouchComfyFolders() {
+	for _, f := range p {
+		if f.Dir != "" {
+			touchFolder(f.Dir)
+		}
+	}
+}
+
+// touchFolder sets a folder's modified time to now. ComfyUI records the time of each
+// folder it walked under a kind and lists the kind afresh when any of them moved, so
+// the top one is enough.
+func touchFolder(dir string) {
+	now := time.Now()
+	_ = os.Chtimes(dir, now, now)
 }
