@@ -7,8 +7,12 @@
 // their own at the front, where the motion presets will not split them, and come out
 // as that sentence when the LoRA is taken off. Words since edited into the user's own
 // sentence are the user's, and stay.
+//
+// A LoRA also goes on at the strength kept for it (its page's recommendation, read on
+// install, or set by hand), and its negative words join the clip's negative while it is
+// on. A negative is a list, not sentences, so those go on and come off as phrases.
 
-import type { ComfyNote } from "./api.js";
+import type { ComfyFileKind, ComfyNote } from "./api.js";
 
 /** The note for a choice: the first of its files that has one, since a pair's two
     halves are one LoRA and either may have been the one given words or a cover. */
@@ -61,4 +65,38 @@ export function withoutTriggers(prompt: string, words: readonly string[]): strin
     motion presets do (motion-presets.ts), so the two agree on what a sentence is. */
 function sentences(prompt: string): string[] {
   return prompt.split(/(?<=[.!?])\s+|\n+/).map((s) => s.trim().replace(/[.!?]+$/, "").trim()).filter(Boolean);
+}
+
+/** The strength a LoRA goes on at: the one kept for it, else 1. */
+export function startWeight(note: ComfyNote | undefined): number {
+  const w = note?.defaults?.weight;
+  return w && Number.isFinite(w) ? w : 1;
+}
+
+/** A negative with a LoRA's negative words added at its end, each phrase that is not
+    in it already. */
+export function withNegative(negative: string, words: string): string {
+  const have = phrases(negative);
+  const lower = new Set(have.map((p) => p.toLowerCase()));
+  const missing = phrases(words).filter((p) => !lower.has(p.toLowerCase()));
+  return missing.length ? [...have, ...missing].join(", ") : negative;
+}
+
+/** A negative with a LoRA's negative words taken back out, phrase by phrase. */
+export function withoutNegative(negative: string, words: string): string {
+  const drop = new Set(phrases(words).map((p) => p.toLowerCase()));
+  if (!drop.size) return negative;
+  const have = phrases(negative);
+  const kept = have.filter((p) => !drop.has(p.toLowerCase()));
+  return kept.length === have.length ? negative : kept.join(", ");
+}
+
+function phrases(text: string): string[] {
+  return text.split(/[,\n]+/).map((p) => p.trim()).filter(Boolean);
+}
+
+/** The ComfyUI folder a studio choice's files are in: a LoRA's, an all-in-one
+    checkpoint's, or the Wan models'. */
+export function comfyKindOf(choice: "lora" | "pair" | "single" | "checkpoint"): ComfyFileKind {
+  return choice === "lora" ? "loras" : choice === "checkpoint" ? "checkpoints" : "diffusion_models";
 }

@@ -1613,12 +1613,34 @@ export interface ComfyModels {
 }
 
 /** What OppaiLib keeps of a ComfyUI file that ComfyUI does not: the words that call it
-    up, and whether it has a cover; `v` changes with either. Keyed by the file's name. */
+    up, whether it has a cover, what a LoRA goes on with and the Civitai version it is;
+    `v` changes with any of them. Keyed by the file's name. */
 export interface ComfyNote {
   triggers: string[];
   cover: boolean;
+  defaults?: ComfyDefaults;
+  civitai?: ComfyCivitai;
   v: number;
 }
+
+/** What a video LoRA goes on with: its strength (0 is 1), the range its page says it
+    works over, and words for the clip's negative while it is on. */
+export interface ComfyDefaults {
+  weight?: number;
+  weightMin?: number;
+  weightMax?: number;
+  negative?: string;
+}
+
+export interface ComfyCivitai {
+  modelId?: number;
+  versionId?: number;
+  modelName?: string;
+  versionName?: string;
+}
+
+/** The ComfyUI folders a file can be deleted from or hashed in, by kind. */
+export type ComfyFileKind = "diffusion_models" | "checkpoints" | "loras" | "vae";
 
 /** Who has the graphics card, program by program (api/gpu_switch.go). */
 export interface GpuApp {
@@ -3434,9 +3456,21 @@ export const api = {
   comfyCoverURL: (name: string, v: number) => `/api/imagegen/comfy/cover?name=${encodeURIComponent(name)}&v=${v}`,
   setComfyTriggers: (name: string, triggers: string[]) =>
     request<void>("/api/imagegen/comfy/notes", { method: "PUT", body: JSON.stringify({ name, triggers }) }),
-  /** A cover from a picture (a data URL), a gallery picture or clip, or none. */
-  setComfyCover: (name: string, from: { imageData?: string; galleryName?: string; clear?: boolean }) =>
+  /** Words, defaults or both; what is left out stays as it is. */
+  setComfyNote: (name: string, note: { triggers?: string[]; defaults?: ComfyDefaults }) =>
+    request<void>("/api/imagegen/comfy/notes", { method: "PUT", body: JSON.stringify({ name, ...note }) }),
+  /** A cover from a picture (a data URL), a gallery picture or clip, a Civitai still by
+      its address, or none. */
+  setComfyCover: (name: string, from: { imageData?: string; galleryName?: string; url?: string; clear?: boolean }) =>
     request<void>("/api/imagegen/comfy/cover", { method: "PUT", body: JSON.stringify({ name, ...from }) }, 40_000),
+  /** Links a file to the Civitai version it is — by a version id, a page's address, or
+      with neither by hashing the file — and fills what the file has no words, defaults
+      or cover for. `unlink` forgets the link. Answers the note as it is now. */
+  comfyLink: (body: { name: string; kind?: ComfyFileKind; versionId?: number; url?: string; unlink?: boolean }) =>
+    request<{ note: ComfyNote }>("/api/imagegen/comfy/civitai", { method: "POST", body: JSON.stringify(body) }, 250_000),
+  /** Deletes one file from ComfyUI's folder for its kind, and what was kept of it. */
+  deleteComfyFile: (kind: ComfyFileKind, name: string) =>
+    request<void>(`/api/imagegen/comfy/file?kind=${kind}&name=${encodeURIComponent(name)}`, { method: "DELETE" }, 40_000),
 
   /** Who has the graphics card, and giving it to one program. A switch to her model
       waits for it to load, which takes a minute or two. */

@@ -150,7 +150,7 @@ func (s *Server) civitaiComfySpecs(ctx context.Context, source string, modelID, 
 		if versionID > 0 && v.ID != versionID {
 			continue
 		}
-		spec := imagegen.InstallSpec{Source: source, Type: kind, Token: token, Done: s.comfyNoteHook(v)}
+		spec := imagegen.InstallSpec{Source: source, Type: kind, Token: token, Done: s.comfyNoteHook(m, v)}
 		f := civitaiPrimaryFile(v, source)
 		if f != nil {
 			spec.FileName = f.Name
@@ -164,7 +164,7 @@ func (s *Server) civitaiComfySpecs(ctx context.Context, source string, modelID, 
 			return []imagegen.InstallSpec{spec}, nil
 		}
 		// The two halves are one LoRA in the studio, so they share the first half's
-		// words and cover; the second's own page usually repeats them anyway.
+		// words, defaults and cover; the second's own page usually repeats them anyway.
 		other := imagegen.InstallSpec{Source: tf.DownloadURL, Type: kind, Token: token, Done: spec.Done}
 		spec.FileName, other.FileName = wanPairNames(f.Name, tf.Name, wanStage(v.Name), v.BaseModel)
 		return []imagegen.InstallSpec{spec, other}, nil
@@ -173,14 +173,11 @@ func (s *Server) civitaiComfySpecs(ctx context.Context, source string, modelID, 
 }
 
 // comfyNoteHook is what a finished download of version v does next: the file gets
-// v's trigger words and first showcase still, which ComfyUI has nowhere to keep.
-func (s *Server) comfyNoteHook(v civitaiRawVersion) func(string) {
-	words := append([]string(nil), v.TrainedWords...)
-	cover := ""
-	if stills := civitaiPreviewURLs(v.Images, 1); len(stills) > 0 {
-		cover = stills[0]
-	}
-	return func(name string) { s.noteComfyInstall(name, words, cover) }
+// v's trigger words, recommended strength and first showcase still, which ComfyUI has
+// nowhere to keep, and is marked as v, so its other stills can be picked as covers.
+func (s *Server) comfyNoteHook(m *civitaiRawModel, v civitaiRawVersion) func(string) {
+	fill := civitaiComfyFill(m, v)
+	return func(name string) { s.noteComfyInstall(name, fill) }
 }
 
 // comfyPlaces is where installs into ComfyUI go, by the Video settings' folders.

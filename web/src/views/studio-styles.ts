@@ -371,6 +371,19 @@ export const studioStyles = css`
   .canvas-empty strong { color: var(--oppai-text-dim); font-size: 14px; }
   .canvas-empty > span:last-child { max-width: 300px; font-size: 12px; line-height: 1.5; }
   .canvas-empty.welcome { width: min(480px, 92%); border-style: solid; border-color: var(--oppai-border); gap: 10px; padding: 30px 26px; }
+  /* The welcome is taller than a short stage: centred, it overflowed it at both ends and
+     the stage clipped its top, so it sat off-centre with its heading cut. "safe" keeps
+     its top in view and the stage scrolls the rest; on a short stage the tips, which
+     are the least of it, go first. */
+  .viewer-stage:has(> .welcome) { overflow: auto; }
+  .canvas-empty.welcome { place-self: safe center; }
+  @container (max-height: 470px) {
+    .canvas-empty.welcome { padding: 20px 22px; gap: 8px; }
+    .canvas-empty.welcome .welcome-tips { display: none; }
+  }
+  @container (max-height: 300px) {
+    .canvas-empty.welcome .welcome-glyph, .canvas-empty.welcome .welcome-recent { display: none; }
+  }
   .canvas-empty.welcome strong { font-size: 18px; color: var(--oppai-text); }
   .welcome-glyph {
     width: 64px; height: 64px; border-radius: 20px; display: grid; place-items: center; margin-bottom: 2px;

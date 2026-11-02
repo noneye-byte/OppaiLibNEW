@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"slices"
 	"testing"
+
+	"github.com/youruser/oppailib/internal/db"
 )
 
 type comfyNotesOut struct {
@@ -74,15 +76,52 @@ func TestAnInstallFromCivitaiFillsOnlyWhatWasNotSetByHand(t *testing.T) {
 	if err := s.db.PutComfyTriggers(t.Context(), "mine.safetensors", []string{"my words"}); err != nil {
 		t.Fatal(err)
 	}
-	// No cover fetch: the address is not Civitai's, so only the words are considered.
-	s.noteComfyInstall("mine.safetensors", []string{"their words"}, "")
-	s.noteComfyInstall("fresh.safetensors", []string{"twirl", "twirl"}, "https://example.com/x.jpeg")
-	notes := comfyNotes(t, s, token)
-	if got := notes["mine.safetensors"].Triggers; !slices.Equal(got, []string{"my words"}) {
-		t.Fatalf("hand-set words replaced: %v", got)
+	if err := s.db.PutComfyDefaults(t.Context(), "mine.safetensors", db.ComfyDefaults{Weight: 0.4}); err != nil {
+		t.Fatal(err)
 	}
-	if got := notes["fresh.safetensors"]; !slices.Equal(got.Triggers, []string{"twirl"}) || got.Cover {
+	link := db.ComfyCivitai{ModelID: 7, VersionID: 70, ModelName: "Twirl", VersionName: "v1"}
+	their := db.ComfyDefaults{Weight: 0.8, WeightMin: 0.6, WeightMax: 1, Negative: "static"}
+	// No cover fetch: the address is not Civitai's, so only the rest is considered.
+	s.noteComfyInstall("mine.safetensors", comfyFill{Triggers: []string{"their words"}, Defaults: their, Civitai: link})
+	s.noteComfyInstall("fresh.safetensors", comfyFill{Triggers: []string{"twirl", "twirl"}, Cover: "https://example.com/x.jpeg", Defaults: their, Civitai: link})
+	notes := comfyNotes(t, s, token)
+	mine := notes["mine.safetensors"]
+	if !slices.Equal(mine.Triggers, []string{"my words"}) {
+		t.Fatalf("hand-set words replaced: %v", mine.Triggers)
+	}
+	// The strength set by hand stays; what was blank beside it is filled.
+	if d := mine.Defaults; d == nil || d.Weight != 0.4 || d.WeightMin != 0.6 || d.WeightMax != 1 || d.Negative != "static" {
+		t.Fatalf("defaults: %+v", mine.Defaults)
+	}
+	if mine.Civitai == nil || *mine.Civitai != link {
+		t.Fatalf("the install should say which version the file is: %+v", mine.Civitai)
+	}
+	if got := notes["fresh.safetensors"]; !slices.Equal(got.Triggers, []string{"twirl"}) || got.Cover || got.Defaults == nil || got.Defaults.Weight != 0.8 {
 		t.Fatalf("fresh install: %+v", got)
+	}
+}
+
+func TestALorasDefaultsAreKeptBesideItsWordsAndCleaned(t *testing.T) {
+	s, token := newTestServer(t)
+	const name = "wan/sway_high.safetensors"
+	rec := do(t, s.Handler(), token, http.MethodPut, "/api/imagegen/comfy/notes",
+		`{"name":"`+name+`","defaults":{"weight":9,"weightMin":1.2,"weightMax":0.5,"negative":"  blur  "}}`)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("put defaults: %d %s", rec.Code, rec.Body)
+	}
+	// Words alone, as an older client sends them, leave the defaults be.
+	do(t, s.Handler(), token, http.MethodPut, "/api/imagegen/comfy/notes", `{"name":"`+name+`","triggers":["sway"]}`)
+	n := comfyNotes(t, s, token)[name]
+	if d := n.Defaults; d == nil || d.Weight != 5 || d.WeightMin != 0.5 || d.WeightMax != 1.2 || d.Negative != "blur" {
+		t.Fatalf("defaults: %+v", n.Defaults)
+	}
+	if !slices.Equal(n.Triggers, []string{"sway"}) {
+		t.Fatalf("words: %v", n.Triggers)
+	}
+	// With its words and defaults gone the note is nothing, and goes.
+	do(t, s.Handler(), token, http.MethodPut, "/api/imagegen/comfy/notes", `{"name":"`+name+`","triggers":[],"defaults":{}}`)
+	if _, ok := comfyNotes(t, s, token)[name]; ok {
+		t.Fatal("an empty note should be dropped")
 	}
 }
 

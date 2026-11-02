@@ -139,6 +139,14 @@ func Open(path string) (*DB, error) {
 	if err := ensureColumn(sqldb, "gen_images", "upscaled", "INTEGER"); err != nil {
 		return nil, err
 	}
+	// A ComfyUI file's defaults and Civitai entry, beside the cover and words it kept
+	// before; '{}' is none, as it is for the rows written before them.
+	if err := ensureColumn(sqldb, "comfy_notes", "defaults", "TEXT NOT NULL DEFAULT '{}'"); err != nil {
+		return nil, err
+	}
+	if err := ensureColumn(sqldb, "comfy_notes", "civitai", "TEXT NOT NULL DEFAULT '{}'"); err != nil {
+		return nil, err
+	}
 	if err := migrateLoraFolders(sqldb); err != nil {
 		return nil, fmt.Errorf("move lora categories: %w", err)
 	}

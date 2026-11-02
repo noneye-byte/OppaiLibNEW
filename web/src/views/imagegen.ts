@@ -93,7 +93,7 @@ import "./imagegen-detailer.js";
 import "./gpu-switch.js";
 import {
   animatePicture, clipFormProblem, clipParamsFor, clipsRunning, comfyListsReady, followClip, newClipJobId, onClipKept, onClipsChange,
-  openGalleryClip, refreshComfyLists, spriteForm, type ClipPicture, type GalleryClip,
+  openGalleryClip, refreshComfyLists, spriteForm, toggleVideoDrawer, videoDrawerOpen, type ClipPicture, type GalleryClip,
 } from "./imagegen-video.js";
 import { startFrameSize } from "../clip-shape.js";
 import {
@@ -2192,14 +2192,21 @@ export class OppaiImageGen extends LitElement {
       this.spriteInspector = !this.spriteInspector;
       return;
     }
+    // The Video studio keeps its drawer itself, beside its own stage.
+    if (this.mode === "video") {
+      toggleVideoDrawer();
+      return;
+    }
     this.openCreateTab(this.createTab ? this.createTab : (CREATE_TABS.find((t) => t.id === loadLayout().tab)?.id ?? "models"), true);
   }
 
   /** Both panels away for the stage alone, or both back. */
   private toggleFocus() {
-    const anyOut = this.sidePanel || (this.studio ? this.spriteInspector : this.createTab !== "");
+    const video = !this.studio && this.mode === "video";
+    const anyOut = this.sidePanel || (this.studio ? this.spriteInspector : video ? videoDrawerOpen() : this.createTab !== "");
     this.sidePanel = !anyOut;
     if (this.studio) this.spriteInspector = !anyOut;
+    else if (video) { if (anyOut === videoDrawerOpen()) toggleVideoDrawer(); }
     else if (anyOut) this.createTab = "";
     else this.toggleInspector();
   }
@@ -4941,7 +4948,7 @@ export class OppaiImageGen extends LitElement {
     const model = (st.models ?? []).find((m) => m.title === this.checkpoint);
     const thumb = model ? `${api.modelThumbURL(model.title)}&v=${this.thumbVersion}` : "";
     const running = clipsRunning();
-    const inspectorOut = this.studio ? this.spriteInspector : this.createTab !== "";
+    const inspectorOut = this.studio ? this.spriteInspector : mode === "video" ? videoDrawerOpen() : this.createTab !== "";
     const busy = (m: StudioMode) => (m === "video" ? running > 0 : m === "sprites" ? this.studio && this.generating : !this.studio && this.generating);
     const wardrobe = this.wardrobes.find((o) => o.id === this.outfitWardrobeId);
     return html`<header class="studio-head">
@@ -4994,10 +5001,10 @@ export class OppaiImageGen extends LitElement {
         </button>` : nothing}
       <oppai-gpu-switch></oppai-gpu-switch>
       <span class="head-sep"></span>
-      ${mode !== "video" ? html`<button class="head-icon ${inspectorOut ? "on" : ""}" aria-pressed=${inspectorOut ? "true" : "false"}
-          title=${this.studio ? "The recipe ([)" : "The inspector ([)"} @click=${() => this.toggleInspector()}>
-          <span class="material-symbols-rounded">${inspectorOut ? "left_panel_close" : "left_panel_open"}</span>
-        </button>` : nothing}
+      <button class="head-icon ${inspectorOut ? "on" : ""}" aria-pressed=${inspectorOut ? "true" : "false"}
+        title=${this.studio ? "The recipe ([)" : "The inspector ([)"} @click=${() => this.toggleInspector()}>
+        <span class="material-symbols-rounded">${inspectorOut ? "left_panel_close" : "left_panel_open"}</span>
+      </button>
       <button class="head-icon ${this.sidePanel ? "on" : ""}" aria-pressed=${this.sidePanel ? "true" : "false"}
         title=${this.studio ? "The selected square (])" : "The gallery (])"} @click=${() => (this.sidePanel = !this.sidePanel)}>
         <span class="material-symbols-rounded">${this.sidePanel ? "right_panel_close" : "right_panel_open"}</span>

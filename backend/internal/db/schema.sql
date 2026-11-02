@@ -392,10 +392,15 @@ CREATE TABLE IF NOT EXISTS model_defaults (
 -- LoRAs and models get them here, filled from Civitai when installed from it and
 -- edited by hand after. Keyed by the name ComfyUI lists the file under. The cover is
 -- a small JPEG sealed under the KEK, as a LoRA's cover is a picture of what it makes.
+-- defaults is what a LoRA goes on with (its strength, the range it works over, words
+-- for the negative), and civitai the catalogue entry it came from, so its showcase can
+-- be offered as covers and its recommendations read again.
 CREATE TABLE IF NOT EXISTS comfy_notes (
     name       TEXT PRIMARY KEY,
     triggers   TEXT NOT NULL DEFAULT '[]',  -- JSON list
     cover_enc  BLOB,
+    defaults   TEXT NOT NULL DEFAULT '{}',  -- JSON ComfyDefaults
+    civitai    TEXT NOT NULL DEFAULT '{}',  -- JSON ComfyCivitai
     updated_at INTEGER NOT NULL
 );
 

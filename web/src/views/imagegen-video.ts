@@ -1,14 +1,17 @@
 import { LitElement, html, css, nothing } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { iconStyles, motionStyles } from "../theme.js";
-import { api, type ClipModels, type ClipParams, type ClipUpscaleParams, type ClipWorkflow, type ComfyModels, type ComfyNote, type GenClip, type GenerateResult } from "../api.js";
+import {
+  api, type CivitaiModel, type ClipModels, type ClipParams, type ClipUpscaleParams, type ClipWorkflow, type ComfyDefaults, type ComfyFileKind,
+  type ComfyModels, type ComfyNote, type GenClip, type GenerateResult,
+} from "../api.js";
 import { CLIP_ASPECTS, CLIP_SIDES, clipFrames, clipSize, lastFrameTime, startFrameSize, type ClipAspect } from "../clip-shape.js";
 import {
   canLoop, clipIsFast, clipLoraChoices, clipModelChoiceOf, clipModelChoices, settleSpeed, SPEED_SETTINGS, speedAtFullCFG, studioClipModels,
   studioClipRecipe, withClipModel, type ClipLoraChoice, type ClipModelChoice, type StudioClipRecipe,
 } from "../clip-models.js";
 import { MOTION_PRESETS, hasPhrase, isShowcase, togglePhrase, toggleShowcase } from "../motion-presets.js";
-import { noteFor, parseTriggers, withTriggers, withoutTriggers } from "../clip-notes.js";
+import { comfyKindOf, noteFor, parseTriggers, startWeight, withNegative, withoutNegative, withTriggers, withoutTriggers } from "../clip-notes.js";
 import { GALLERY_DRAG_TYPE } from "./imagegen-gallery.js";
 
 /**
@@ -36,10 +39,16 @@ import { GALLERY_DRAG_TYPE } from "./imagegen-gallery.js";
  * background on the server (internal/matte), and either comes back as a take of its own
  * beside it.
  *
- * ComfyUI keeps nothing about a file but the file, so a LoRA's cover and trigger words
- * are OppaiLib's (api/comfy_notes.go): filled from Civitai on install, set here by hand
- * — a frame of the clip on the stage makes a good cover — and the words go into the
- * prompt as the LoRA goes on, as the Image studio's do.
+ * ComfyUI keeps nothing about a file but the file, so a LoRA's cover, trigger words and
+ * defaults are OppaiLib's (api/comfy_notes.go): filled from Civitai on install or once
+ * the file is linked to its version, set here by hand — a frame of the clip on the stage
+ * makes a good cover, or another of the version's showcase stills — and the words go
+ * into the prompt as the LoRA goes on, at its own strength, as the Image studio's do.
+ *
+ * It is laid out as the Image studio is: a rail of tabs down the left, each a drawer
+ * beside the stage — the model, the LoRAs, the motion, the settings — and what the next
+ * clip is, its start picture and its words, in a composer under the stage. It was one
+ * long column of every control, which put the LoRAs a long scroll under the prompt.
  */
 
 /** A picture a clip starts from, as Animate hands it over. */
@@ -88,6 +97,29 @@ function newJobId(): string {
   return `clip-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+/** The drawers down the Video studio's rail, in this order. */
+type VideoTab = "models" | "loras" | "motion" | "settings";
+const VIDEO_TABS: { id: VideoTab; label: string; icon: string }[] = [
+  { id: "models", label: "Models", icon: "deployed_code" },
+  { id: "loras", label: "LoRAs", icon: "style" },
+  { id: "motion", label: "Motion", icon: "animation" },
+  { id: "settings", label: "Settings", icon: "tune" },
+];
+const TAB_KEY = "oppai.video.tab.v1";
+
+/** The drawer last open, "" for none: a per-browser convenience, so storage failing
+    only opens the first one. */
+function loadTab(): VideoTab | "" {
+  try {
+    const t = localStorage.getItem(TAB_KEY);
+    if (t === "") return "";
+    if (VIDEO_TABS.some((x) => x.id === t)) return t as VideoTab;
+  } catch {
+    // Private window or blocked storage.
+  }
+  return "models";
+}
+
 /** What the studio was left at, and its runs: kept for the page, not the element. */
 const session = {
   from: "image" as "image" | "text",
@@ -116,7 +148,36 @@ const session = {
   selected: "" as string,
   loop: true,
   speed: 1,
+  /** The drawer open beside the stage. */
+  tab: loadTab(),
 };
+
+/** Opens a drawer, or with "" puts it away. */
+function setVideoTab(tab: VideoTab | "") {
+  session.tab = tab;
+  try {
+    localStorage.setItem(TAB_KEY, tab);
+  } catch {
+    // Remembered for this page only.
+  }
+  changed();
+}
+
+/** Whether the Video studio's drawer is out, for the studio header's inspector button. */
+export function videoDrawerOpen(): boolean {
+  return session.tab !== "";
+}
+
+/** The header's inspector button and [ in the Video studio: the drawer last open, or away. */
+export function toggleVideoDrawer() {
+  if (session.tab) {
+    lastTab = session.tab;
+    setVideoTab("");
+  } else {
+    setVideoTab(lastTab);
+  }
+}
+let lastTab: VideoTab = session.tab || "models";
 
 /**
  * The choices a clip is made with, as the inspector edits them. The Video studio's are
@@ -429,6 +490,43 @@ const SPEEDS = [0.5, 1, 2] as const;
     every frame of it held in ComfyUI's memory at once. */
 const UPSCALES = [1.5, 2, 3, 4] as const;
 
+/** A file the editor is open on: a LoRA (a pair's two halves are one), or a model. */
+interface FileEditor {
+  files: string[];
+  label: string;
+  kind: ComfyFileKind;
+  lora: boolean;
+  /** A LoRA's choice key, to know whether it is on. */
+  key?: string;
+}
+
+/** The editor's fields as typed, numbers included, so a half-typed "0." stays. */
+interface EditorDraft {
+  triggers: string;
+  weight: string;
+  weightMin: string;
+  weightMax: string;
+  negative: string;
+}
+
+function emptyDraft(): EditorDraft {
+  return { triggers: "", weight: "", weightMin: "", weightMax: "", negative: "" };
+}
+
+function draftOf(note: ComfyNote | undefined): EditorDraft {
+  const d = note?.defaults ?? {};
+  const num = (v?: number) => (v ? String(v) : "");
+  return {
+    triggers: (note?.triggers ?? []).join(", "),
+    weight: num(d.weight), weightMin: num(d.weightMin), weightMax: num(d.weightMax), negative: d.negative ?? "",
+  };
+}
+
+function defaultsOf(d: EditorDraft): ComfyDefaults {
+  const num = (v: string) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+  return { weight: num(d.weight), weightMin: num(d.weightMin), weightMax: num(d.weightMax), negative: d.negative.trim() };
+}
+
 function elapsed(ms: number): string {
   const s = Math.max(0, Math.round(ms / 1000));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
@@ -453,9 +551,14 @@ export class OppaiVideoStudio extends LitElement {
   @property({ type: Number }) keptSeed = 0;
   /** The LoRA or model whose cover and trigger words are being edited: its files, the
       first being the one a new note is kept under. */
-  @state() private noting: { files: string[]; label: string; words: boolean } | null = null;
-  @state() private noteDraft = "";
-  @state() private noteBusy = false;
+  /** The LoRA or model whose editor is open, and the editor's draft of it. */
+  @state() private editing: FileEditor | null = null;
+  @state() private draft: EditorDraft = emptyDraft();
+  @state() private editBusy = "";
+  @state() private editError = "";
+  /** Its Civitai page, for the version's showcase stills; null while it loads. */
+  @state() private civPage: CivitaiModel | null = null;
+  @state() private linkText = "";
   @state() private negOpen = false;
   @state() private upscaleOpen = false;
   @state() private error = "";
@@ -471,15 +574,49 @@ export class OppaiVideoStudio extends LitElement {
     iconStyles,
     motionStyles,
     css`
-      :host {
-        display: grid;
-        grid-template-columns: 340px minmax(0, 1fr);
-        height: 100%;
-        min-height: 0;
-        color: var(--oppai-text);
-      }
+      :host { display: block; height: 100%; min-height: 0; color: var(--oppai-text); }
       button, textarea, select, input { font: inherit; }
       .material-symbols-rounded { font-size: 18px; }
+
+      /* The Image studio's layout: the rail, a drawer beside the stage when one is
+         open, and the stage with the composer under it. */
+      .shell { position: relative; height: 100%; min-height: 0; display: grid; grid-template-columns: 72px minmax(0, 1fr); }
+      .shell.open { grid-template-columns: 72px 340px minmax(0, 1fr); }
+      .rail {
+        display: flex; flex-direction: column; gap: 4px; padding: 10px 6px; background: var(--oppai-surface);
+        border-right: 1px solid var(--oppai-border-strong); overflow-y: auto; scrollbar-width: none;
+      }
+      .rail-tab {
+        position: relative; display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 4px 0 6px; border: 0;
+        background: transparent; color: var(--oppai-text-muted); font-size: 10.5px; font-weight: 650; cursor: pointer;
+      }
+      .rail .rail-icon {
+        width: 48px; height: 32px; display: grid; place-items: center; border-radius: 12px; font-size: 21px;
+        transition: background 0.2s var(--oppai-ease-emphasized), color 0.2s ease;
+      }
+      .rail-tab:hover { color: var(--oppai-text); }
+      .rail-tab:hover .rail-icon { background: var(--oppai-surface-2); }
+      .rail-tab.on { color: var(--oppai-text); }
+      .rail-tab.on .rail-icon { background: var(--oppai-primary-container); color: var(--oppai-on-primary-container, var(--oppai-text)); }
+      .rail-badge {
+        position: absolute; top: 0; right: 6px; min-width: 16px; height: 16px; padding: 0 4px; box-sizing: border-box; border-radius: 8px;
+        background: var(--oppai-primary); color: var(--oppai-on-primary); font-size: 9.5px; font-weight: 800; line-height: 16px; text-align: center;
+      }
+      .drawer {
+        min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--oppai-surface);
+        border-right: 1px solid var(--oppai-border-strong); animation: vs-drawer-in 0.22s var(--oppai-ease-emphasized) both;
+      }
+      @keyframes vs-drawer-in { from { opacity: 0; transform: translateX(-12px); } to { opacity: 1; transform: none; } }
+      .drawer-head {
+        height: 50px; flex: 0 0 50px; display: flex; align-items: center; gap: 9px; padding: 0 8px 0 16px; box-sizing: border-box;
+        font-size: 14.5px; font-weight: 700; border-bottom: 1px solid var(--oppai-border);
+      }
+      .drawer-head > .material-symbols-rounded { font-size: 19px; color: var(--oppai-primary-bright, var(--oppai-primary)); }
+      .drawer-action { width: 34px; height: 34px; border-radius: 17px; border: 0; background: transparent; color: var(--oppai-text-muted); display: grid; place-items: center; cursor: pointer; }
+      .drawer-action:hover { background: var(--oppai-surface-2); color: var(--oppai-text); }
+      .drawer-action .material-symbols-rounded { font-size: 19px; }
+      .drawer-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; padding: 14px 14px 24px; }
+      .scrim { display: none; }
 
       /* ── inspector ── */
       .inspector {
@@ -505,28 +642,6 @@ export class OppaiVideoStudio extends LitElement {
       .modes button.on { background: var(--oppai-surface-2); color: var(--oppai-text); box-shadow: 0 1px 0 var(--oppai-border-strong) inset, 0 2px 8px rgba(0,0,0,.25); }
       .modes button:disabled { opacity: 0.4; cursor: default; }
 
-      /* The start frame is a drop target: a file from the desktop or a tile from the
-         gallery beside it. */
-      .frame {
-        position: relative; display: grid; place-items: center; min-height: 168px; border-radius: 16px; overflow: hidden;
-        border: 1.5px dashed var(--oppai-border-strong); background: var(--oppai-bg); text-align: center;
-        transition: border-color 0.15s ease, background 0.15s ease;
-      }
-      .frame.drop { border-color: var(--oppai-primary); background: color-mix(in srgb, var(--oppai-primary) 12%, var(--oppai-bg)); }
-      .frame.has { border-style: solid; border-color: var(--oppai-border); min-height: 0; }
-      .frame img { display: block; width: 100%; max-height: 260px; object-fit: contain; background: #000; }
-      .frame-empty { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 22px 16px; color: var(--oppai-text-muted); font-size: 12px; line-height: 1.5; }
-      .frame-empty .material-symbols-rounded { font-size: 32px; opacity: 0.75; }
-      .frame-bar {
-        position: absolute; left: 8px; right: 8px; bottom: 8px; display: flex; align-items: center; gap: 6px; padding: 6px 6px 6px 10px;
-        border-radius: 12px; background: rgba(0,0,0,.62); backdrop-filter: blur(8px); color: #fff; font-size: 11.5px; text-align: left;
-      }
-      .frame-bar .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      .frame-bar .nm small { opacity: 0.7; margin-left: 6px; font-variant-numeric: tabular-nums; }
-      .frame-bar button { width: 28px; height: 28px; border-radius: 9px; border: none; background: rgba(255,255,255,.12); color: #fff; cursor: pointer; display: grid; place-items: center; }
-      .frame-bar button:hover { background: rgba(255,255,255,.24); }
-      input[type="file"] { display: none; }
-
       .chip {
         display: inline-flex; align-items: center; gap: 5px; height: 30px; padding: 0 11px; border-radius: 15px; flex: none;
         border: 1px solid var(--oppai-border-strong); background: transparent; color: var(--oppai-text-dim); font-size: 12px; cursor: pointer;
@@ -536,6 +651,9 @@ export class OppaiVideoStudio extends LitElement {
       .chip.on { background: var(--oppai-primary-container); border-color: transparent; color: var(--oppai-on-primary-container, var(--oppai-text)); }
       .chip .material-symbols-rounded { font-size: 16px; }
       .chip.primary { background: var(--oppai-primary); color: var(--oppai-on-primary); border-color: transparent; font-weight: 650; }
+      .chip.danger { color: var(--oppai-error, #f2b8b5); border-color: color-mix(in srgb, var(--oppai-error, #f2b8b5) 45%, transparent); }
+      .chip.danger:hover { background: color-mix(in srgb, var(--oppai-error, #f2b8b5) 12%, transparent); }
+      input[type="file"] { display: none; }
       .chip:disabled { opacity: 0.5; cursor: default; }
       .row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
       .presets { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
@@ -603,25 +721,32 @@ export class OppaiVideoStudio extends LitElement {
       img.lora-ic { object-fit: cover; padding: 0; }
       .lora-thumb { width: 22px; height: 22px; border-radius: 6px; object-fit: cover; flex: none; }
       .lora-row .lora-x + .lora-x { margin-left: -4px; }
-      /* A LoRA's cover and words, edited where the LoRA sits. */
-      .note-edit {
-        display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 10px; margin: 2px 0 6px; padding: 10px;
-        border-radius: 12px; border: 1px solid var(--oppai-border-strong); background: var(--oppai-bg);
-        animation: oppai-fade-in 0.16s ease both;
+      .lora-hint { grid-column: 2 / 4; display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--oppai-text-muted); font-variant-numeric: tabular-nums; }
+      .lora-hint .link { padding: 0; font-size: 11px; }
+      /* The LoRAs that are off, as cover cards two up, as the Image studio's are: a LoRA
+         is known by its picture long before its file name. */
+      .cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+      .card { position: relative; min-width: 0; }
+      .card-main {
+        width: 100%; display: flex; flex-direction: column; padding: 0; border-radius: 14px; overflow: hidden; text-align: left; cursor: pointer;
+        border: 1px solid var(--oppai-border); background: var(--oppai-bg); color: var(--oppai-text);
+        transition: transform 0.16s var(--oppai-ease-spring), border-color 0.15s ease;
       }
-      .ne-cover { width: 72px; height: 90px; border-radius: 10px; overflow: hidden; display: grid; place-items: center; background: var(--oppai-surface-2); color: var(--oppai-text-muted); }
-      .ne-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
-      .ne-cover .material-symbols-rounded { font-size: 26px; }
-      .ne-side { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
-      .ne-side b { font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      .ne-side .row .chip { height: 26px; padding: 0 9px; font-size: 11.5px; }
-      .ne-words { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 4px; font-size: 11.5px; color: var(--oppai-text-muted); }
-      .ne-words input {
-        height: 32px; padding: 0 10px; border-radius: 10px; border: 1px solid var(--oppai-border-strong);
-        background: var(--oppai-surface); color: var(--oppai-text); font-size: 12.5px;
+      .card-main:hover { transform: translateY(-2px); border-color: var(--oppai-border-strong); }
+      .card-art, .card-blank { display: block; width: 100%; aspect-ratio: 4 / 5; object-fit: cover; background: var(--oppai-surface-2); }
+      .card-blank { display: grid; place-items: center; color: var(--oppai-text-muted); }
+      .card-blank .material-symbols-rounded { font-size: 30px; opacity: 0.7; }
+      .card.speed .card-blank { color: var(--oppai-primary-bright, var(--oppai-primary)); }
+      .card-name { padding: 7px 9px 8px; font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .card-tags { position: absolute; left: 6px; top: 6px; display: flex; gap: 4px; pointer-events: none; }
+      .card-tags span { padding: 2px 6px; border-radius: 7px; background: rgba(0,0,0,.6); color: #fff; font-size: 10.5px; font-weight: 650; font-variant-numeric: tabular-nums; }
+      .card-edit {
+        position: absolute; right: 6px; top: 6px; width: 30px; height: 30px; border-radius: 15px; border: none; display: grid; place-items: center;
+        background: rgba(0,0,0,.55); color: #fff; cursor: pointer; opacity: 0; transition: opacity 0.15s ease;
       }
-      .ne-words input:focus { outline: none; border-color: var(--oppai-primary); }
-      .ne-foot { grid-column: 1 / -1; display: flex; gap: 6px; justify-content: flex-end; }
+      .card:hover .card-edit, .card-edit:focus-visible { opacity: 1; }
+      @media (hover: none) { .card-edit { opacity: 1; } }
+      .card-edit .material-symbols-rounded { font-size: 16px; }
       .model-row { display: flex; align-items: center; gap: 8px; }
       .model-row .model-pick { flex: 1; min-width: 0; }
       .model-row img { width: 38px; height: 38px; border-radius: 10px; object-fit: cover; flex: none; }
@@ -679,7 +804,7 @@ export class OppaiVideoStudio extends LitElement {
       .switch:has(input:disabled) { opacity: 0.5; cursor: default; }
 
       .make {
-        width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; height: 48px; border-radius: 24px;
+        flex: none; display: flex; align-items: center; justify-content: center; gap: 8px; height: 44px; padding: 0 22px; border-radius: 22px;
         border: none; color: var(--oppai-on-primary); font-size: 14.5px; font-weight: 700; cursor: pointer;
         background: linear-gradient(135deg, var(--oppai-primary), color-mix(in srgb, var(--oppai-primary) 62%, #c58af9));
         box-shadow: 0 8px 22px color-mix(in srgb, var(--oppai-primary) 30%, transparent);
@@ -688,13 +813,20 @@ export class OppaiVideoStudio extends LitElement {
       .make:hover:not(:disabled) { transform: translateY(-1px); filter: brightness(1.06); }
       .make:disabled { opacity: 0.5; cursor: default; box-shadow: none; }
       .make .material-symbols-rounded { font-size: 20px; }
+      .make.wide { width: 100%; height: 48px; border-radius: 24px; }
       .make-sub { margin-top: 7px; text-align: center; font-size: 11.5px; color: var(--oppai-text-muted); font-variant-numeric: tabular-nums; }
 
       /* ── stage ── */
       .main { min-width: 0; min-height: 0; display: flex; flex-direction: column; background: color-mix(in srgb, var(--oppai-bg) 86%, #000); }
+      .main.bare { height: 100%; }
       /* Sized as a container so the clip fits whatever room the transport and the
          reel leave it, rather than guessing from the window's height. */
       .stage { position: relative; flex: 1; min-height: 0; display: grid; place-items: center; padding: 18px; overflow: hidden; container-type: size; }
+      .stage.drop::after {
+        content: "Drop to start the next clip from it"; position: absolute; inset: 12px; z-index: 9; display: grid; place-items: center;
+        border: 2px dashed var(--oppai-primary); border-radius: 18px; background: color-mix(in srgb, var(--oppai-primary) 12%, transparent);
+        color: var(--oppai-text); font-size: 14px; font-weight: 650; pointer-events: none;
+      }
       .player { position: relative; max-width: 100%; max-height: 100%; display: grid; place-items: center; }
       .player video, .player img.still {
         display: block; max-width: 100cqw; max-height: 100cqh; min-height: 160px; border-radius: 14px; background: #000;
@@ -781,6 +913,90 @@ export class OppaiVideoStudio extends LitElement {
       .take .mini-bar span { display: block; height: 100%; background: var(--oppai-primary); transition: width 0.6s ease; }
       .take-n { position: absolute; top: 5px; left: 7px; font-size: 10.5px; font-weight: 700; text-shadow: 0 1px 3px rgba(0,0,0,.7); }
 
+      /* ── composer ── */
+      .dock { flex: none; padding: 10px 14px 14px; background: color-mix(in srgb, var(--oppai-surface) 80%, transparent); border-top: 1px solid var(--oppai-border); }
+      .composer {
+        display: flex; flex-direction: column; gap: 9px; padding: 11px; border: 1px solid var(--oppai-border-strong); border-radius: 20px;
+        background: var(--oppai-surface-2); transition: border-color 0.2s ease, box-shadow 0.2s ease;
+      }
+      .composer:focus-within {
+        border-color: color-mix(in srgb, var(--oppai-primary) 65%, var(--oppai-border-strong));
+        box-shadow: 0 0 0 3px color-mix(in srgb, var(--oppai-primary) 14%, transparent);
+      }
+      .comp-main { display: flex; gap: 10px; min-width: 0; }
+      .composer textarea.motion { flex: 1; min-width: 0; min-height: 84px; max-height: 220px; border-radius: 14px; border-color: var(--oppai-border); font-size: 14px; }
+      .comp-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-height: 44px; }
+      .modes.small { display: inline-grid; grid-template-columns: auto auto; padding: 3px; border-radius: 13px; }
+      .modes.small button { height: 32px; padding: 0 12px; font-size: 12px; }
+      .comp-sum {
+        min-width: 0; border: none; background: none; padding: 0 4px; color: var(--oppai-text-muted); font-size: 11.5px; cursor: pointer;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums;
+      }
+      .comp-sum:hover { color: var(--oppai-text); }
+      .composer .err { margin-top: 0; }
+      /* The start picture: small, at the front of the words, and a drop target. */
+      .start {
+        position: relative; flex: none; width: 76px; height: 96px; border-radius: 14px; overflow: hidden;
+        border: 1.5px dashed var(--oppai-border-strong); background: var(--oppai-bg); transition: border-color 0.15s ease, background 0.15s ease;
+      }
+      .start.has { border-style: solid; border-color: var(--oppai-border); }
+      .start.drop { border-color: var(--oppai-primary); background: color-mix(in srgb, var(--oppai-primary) 12%, var(--oppai-bg)); }
+      .start img { display: block; width: 100%; height: 100%; object-fit: cover; background: #000; }
+      .start-empty {
+        width: 100%; height: 100%; border: none; background: none; color: var(--oppai-text-muted); cursor: pointer;
+        display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; font-size: 10.5px; font-weight: 650; text-align: center;
+      }
+      .start-empty:hover { color: var(--oppai-text); }
+      .start-empty .material-symbols-rounded { font-size: 24px; }
+      .start-x, .start-swap {
+        position: absolute; width: 24px; height: 24px; border-radius: 12px; border: none; display: grid; place-items: center;
+        background: rgba(0,0,0,.6); color: #fff; cursor: pointer;
+      }
+      .start-x { top: 4px; right: 4px; }
+      .start-swap { bottom: 4px; right: 4px; }
+      .start-x .material-symbols-rounded, .start-swap .material-symbols-rounded { font-size: 15px; }
+
+      /* ── the editor ── */
+      .overlay {
+        position: fixed; inset: 0; z-index: 200; display: grid; place-items: center; padding: 16px; box-sizing: border-box;
+        background: rgba(0,0,0,.55); animation: oppai-fade-in 0.16s ease both;
+      }
+      .dialog {
+        width: min(560px, 100%); max-height: min(860px, calc(100vh - 32px)); display: flex; flex-direction: column; min-height: 0;
+        border-radius: 22px; border: 1px solid var(--oppai-border-strong); background: var(--oppai-surface); box-shadow: 0 30px 80px rgba(0,0,0,.5);
+        animation: oppai-scale-in 0.2s var(--oppai-ease-emphasized) both;
+      }
+      .dlg-head { flex: none; display: flex; align-items: flex-start; gap: 14px; padding: 16px 12px 14px 16px; border-bottom: 1px solid var(--oppai-border); }
+      .dlg-cover { flex: none; width: 72px; height: 90px; border-radius: 12px; overflow: hidden; display: grid; place-items: center; background: var(--oppai-surface-2); color: var(--oppai-text-muted); }
+      .dlg-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+      .dlg-cover .material-symbols-rounded { font-size: 28px; }
+      .dlg-title { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; padding-top: 2px; }
+      .dlg-title b { font-size: 15.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .dlg-files { font-size: 11.5px; color: var(--oppai-text-muted); overflow-wrap: anywhere; }
+      .dlg-civ { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 650; color: var(--oppai-primary-bright, var(--oppai-primary)); text-decoration: none; }
+      .dlg-civ .material-symbols-rounded { font-size: 15px; }
+      .dlg-civ.off { color: var(--oppai-text-muted); font-weight: 500; }
+      .dlg-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 4px 16px 16px; }
+      .dlg-foot { flex: none; display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--oppai-border); }
+      .stills { display: grid; grid-template-columns: repeat(auto-fill, minmax(72px, 1fr)); gap: 6px; margin-top: 10px; }
+      .still { position: relative; padding: 0; border: 2px solid transparent; border-radius: 10px; overflow: hidden; aspect-ratio: 4 / 5; background: var(--oppai-bg); cursor: pointer; }
+      .still:hover:not(:disabled) { border-color: var(--oppai-primary); }
+      .still img { width: 100%; height: 100%; object-fit: cover; display: block; }
+      .still-play { position: absolute; right: 4px; bottom: 4px; color: #fff; font-size: 16px; text-shadow: 0 1px 4px rgba(0,0,0,.7); }
+      input.text {
+        width: 100%; box-sizing: border-box; height: 36px; padding: 0 12px; border-radius: 12px; border: 1px solid var(--oppai-border-strong);
+        background: var(--oppai-bg); color: var(--oppai-text); font-size: 13px;
+      }
+      input.text:focus, .dlg-grid input:focus { outline: none; border-color: var(--oppai-primary); }
+      .dlg-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+      .dlg-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 11.5px; color: var(--oppai-text-muted); }
+      .dlg-grid input {
+        height: 34px; padding: 0 10px; border-radius: 10px; border: 1px solid var(--oppai-border-strong); background: var(--oppai-bg);
+        color: var(--oppai-text); font-size: 13px; font-variant-numeric: tabular-nums; min-width: 0;
+      }
+      .link-row { display: flex; gap: 8px; align-items: center; }
+      .link-row input { flex: 1; min-width: 0; }
+
       /* In the Sprites recipe the inspector is a tab's body: it scrolls with the tab,
          and its foot stays at the bottom of the tab as it does here. */
       :host([variant="sprites"]) { display: block; height: auto; }
@@ -788,15 +1004,48 @@ export class OppaiVideoStudio extends LitElement {
       :host([variant="sprites"]) .ins-scroll { overflow: visible; padding: 0 0 12px; }
       :host([variant="sprites"]) .ins-foot { position: sticky; bottom: -1px; z-index: 2; padding: 12px 0; }
 
+      /* Narrower than a drawer, a stage and the gallery side by side: the drawer floats
+         over the stage instead of pushing it. */
+      @media (max-width: 1180px) {
+        .shell.open { grid-template-columns: 72px minmax(0, 1fr); }
+        .drawer { position: absolute; z-index: 30; top: 0; bottom: 0; left: 72px; width: 340px; box-shadow: 18px 0 46px rgba(0,0,0,.42); }
+      }
+      /* A short window: the composer thinner, so the clip keeps the height. */
+      @media (max-height: 820px) and (min-width: 901px) {
+        .composer textarea.motion { min-height: 62px; }
+        .start { width: 62px; height: 78px; }
+        .dock { padding: 8px 12px 10px; }
+      }
+      /* A tablet or a phone: one column that scrolls, the rail along the top, a drawer
+         as a sheet from the bottom, and the composer in reach under the clip. */
       @media (max-width: 900px) {
-        :host { display: flex; flex-direction: column; height: auto; }
-        .main { order: -1; }
+        :host { height: auto; }
+        .shell, .shell.open { display: flex; flex-direction: column; height: auto; }
+        .rail {
+          flex-direction: row; gap: 2px; padding: 6px 8px; overflow-x: auto; flex: none;
+          border-right: 0; border-bottom: 1px solid var(--oppai-border-strong);
+        }
+        .rail-tab { flex: 1 0 58px; }
+        .rail .rail-icon { width: 44px; height: 28px; font-size: 20px; }
+        .rail-badge { right: calc(50% - 24px); }
+        .scrim { display: block; position: fixed; inset: 0; z-index: 90; background: rgba(0,0,0,.5); animation: oppai-fade-in 0.2s ease both; }
+        .drawer {
+          position: fixed; z-index: 91; left: 0; right: 0; top: auto; bottom: 0; width: auto; max-height: 78vh; border: 1px solid var(--oppai-border-strong);
+          border-bottom: 0; border-radius: 24px 24px 0 0; box-shadow: 0 -18px 50px rgba(0,0,0,.5); animation: vs-sheet-in 0.28s var(--oppai-ease-emphasized) both;
+        }
+        @keyframes vs-sheet-in { from { transform: translateY(40px); opacity: 0; } to { transform: none; opacity: 1; } }
+        .drawer-scroll { padding-bottom: calc(24px + env(safe-area-inset-bottom, 0px)); }
+        .cards { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
         /* flex: 1 is a basis of 0%, which wins over a height in a column of auto height. */
         .stage { flex: none; height: 56vh; padding: 12px; }
-        .inspector { border-right: 0; border-top: 1px solid var(--oppai-border-strong); }
-        .ins-scroll { overflow: visible; }
-        .ins-foot { position: sticky; bottom: 0; z-index: 4; padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px)); box-shadow: 0 -10px 30px rgba(0,0,0,.3); }
         .transport { padding: 8px 10px; }
+        .dock { position: sticky; bottom: 0; z-index: 6; padding: 8px 10px calc(10px + env(safe-area-inset-bottom, 0px)); }
+        .composer { padding: 9px; border-radius: 18px; }
+        .composer textarea.motion { min-height: 64px; }
+        .start { width: 62px; height: 78px; }
+        .make { flex: 1 1 auto; }
+        .dlg-grid { grid-template-columns: 1fr 1fr; }
+        .dlg-grid label:first-child { grid-column: 1 / -1; }
       }
     `,
   ];
@@ -1136,18 +1385,28 @@ export class OppaiVideoStudio extends LitElement {
 
   render() {
     const { image, text } = this.clips;
-    if (this.variant === "sprites") return image ? this.renderInspector() : this.renderSpriteSetup();
+    if (this.variant === "sprites") return image ? html`${this.renderInspector()}${this.renderEditor()}` : this.renderSpriteSetup();
     if (!image && !text) return this.renderSetup();
-    return html`${this.renderInspector()}
-      <section class="main">
-        <div class="stage">${this.renderStage()}</div>
-        ${this.renderTransport()}
-        ${session.runs.length ? this.renderReel() : nothing}
-      </section>`;
+    const tab = session.tab;
+    return html`<div class="shell ${tab ? "open" : ""}">
+        ${this.renderRail()}
+        ${tab ? html`<div class="scrim" @click=${() => setVideoTab("")}></div>
+          <aside class="drawer" aria-label=${VIDEO_TABS.find((t) => t.id === tab)?.label ?? ""}>${this.renderDrawer(tab)}</aside>` : nothing}
+        <section class="main">
+          <div class="stage ${this.dropping && session.from === "image" ? "drop" : ""}"
+            @dragover=${(e: DragEvent) => { if (session.from === "image") this.onDragOver(e); }}
+            @dragleave=${(e: DragEvent) => { if (e.target === e.currentTarget) this.dropping = false; }}
+            @drop=${(e: DragEvent) => { if (session.from === "image") this.onDrop(e); }}>${this.renderStage()}</div>
+          ${this.renderTransport()}
+          ${session.runs.length ? this.renderReel() : nothing}
+          <div class="dock">${this.renderComposer()}</div>
+        </section>
+      </div>
+      ${this.renderEditor()}`;
   }
 
   private renderSetup() {
-    return html`<div class="main" style="grid-column:1 / -1">
+    return html`<div class="main bare">
       <div class="stage"><div class="hero">
         <span class="glyph"><span class="material-symbols-rounded">movie</span></span>
         <strong>Video needs ComfyUI</strong>
@@ -1160,7 +1419,7 @@ export class OppaiVideoStudio extends LitElement {
         <div class="row" style="justify-content:center">
           <button class="chip primary" @click=${() => this.dispatchEvent(new CustomEvent("open-settings", { bubbles: true, composed: true }))}>
             <span class="material-symbols-rounded">settings</span>Open Settings</button>
-          <button class="chip" @click=${() => this.dispatchEvent(new CustomEvent("find-video-models", { bubbles: true, composed: true }))}>
+          <button class="chip" @click=${() => this.findOnCivitai()}>
             <span class="material-symbols-rounded">travel_explore</span>Find Wan models on Civitai</button>
         </div>
       </div></div>
@@ -1173,25 +1432,97 @@ export class OppaiVideoStudio extends LitElement {
       <div class="row" style="margin-top:10px">
         <button class="chip primary" @click=${() => this.dispatchEvent(new CustomEvent("open-settings", { bubbles: true, composed: true }))}>
           <span class="material-symbols-rounded">settings</span>Open Settings</button>
-        <button class="chip" @click=${() => this.dispatchEvent(new CustomEvent("find-video-models", { bubbles: true, composed: true }))}>
+        <button class="chip" @click=${() => this.findOnCivitai()}>
           <span class="material-symbols-rounded">travel_explore</span>Find Wan models</button>
       </div>`;
   }
 
-  private renderInspector() {
+  private findOnCivitai() {
+    this.dispatchEvent(new CustomEvent("find-video-models", { bubbles: true, composed: true }));
+  }
+
+  /** Opens a drawer from the rail; its own tab again puts it away. Public for the
+      studio's screenshots and checks. */
+  openTab(id: VideoTab | "") {
+    if (id) lastTab = id;
+    setVideoTab(session.tab === id ? "" : id);
+  }
+
+  private renderRail() {
+    const r = this.recipe();
+    const badges: Partial<Record<VideoTab, number>> = {
+      loras: r ? Object.keys(r.loras).length : 0,
+      motion: MOTION_PRESETS.filter((p) => hasPhrase(session.prompt, p.phrase)).length,
+    };
+    return html`<nav class="rail" aria-label="Clip setup">
+      ${VIDEO_TABS.map((t) => html`<button class="rail-tab ${session.tab === t.id ? "on" : ""}"
+          aria-pressed=${session.tab === t.id ? "true" : "false"} title=${t.label} @click=${() => this.openTab(t.id)}>
+          <span class="material-symbols-rounded rail-icon">${t.icon}</span>
+          <span class="rail-label">${t.label}</span>
+          ${badges[t.id] ? html`<span class="rail-badge">${badges[t.id]}</span>` : nothing}
+        </button>`)}
+    </nav>`;
+  }
+
+  private renderDrawer(tab: VideoTab) {
+    const meta = VIDEO_TABS.find((t) => t.id === tab)!;
+    let body: unknown = nothing;
+    switch (tab) {
+      case "models":
+        body = this.renderModel();
+        break;
+      case "loras":
+        body = this.takes("loras")
+          ? this.renderLoras()
+          : html`<div class="note">${this.built ? "" : "Settings' pasted workflow has no place for LoRAs — pick a model under Models, and they go on here."}</div>`;
+        break;
+      case "motion":
+        body = this.renderMotion(false);
+        break;
+      case "settings":
+        body = html`${this.renderShape()}${this.renderTakes()}`;
+        break;
+    }
+    return html`
+      <div class="drawer-head">
+        <span class="material-symbols-rounded">${meta.icon}</span>${meta.label}
+        <span style="flex:1"></span>
+        ${tab === "models" || tab === "loras" ? html`<button class="drawer-action" title="Find Wan models and LoRAs on Civitai"
+          aria-label="Find on Civitai" @click=${() => this.findOnCivitai()}><span class="material-symbols-rounded">travel_explore</span></button>` : nothing}
+        <button class="drawer-action" title="Close ([)" aria-label="Close" @click=${() => setVideoTab("")}>
+          <span class="material-symbols-rounded">close</span></button>
+      </div>
+      <div class="drawer-scroll">${body}</div>`;
+  }
+
+  /**
+   * What the next clip is, under the stage as the Image studio's prompt is: the picture
+   * it starts from, what happens in it, and the button. Where it starts from is the
+   * first choice, so it sits at the front of the bar.
+   */
+  private renderComposer() {
     const { image, text } = this.clips;
-    const f = this.form;
-    const from = f.from;
-    const sprites = this.variant === "sprites";
+    const from = session.from;
     const size = this.size();
-    const frames = clipFrames(f.seconds, this.fps());
     const running = clipsRunning();
-    const keptSeed = sprites ? this.keptSeed || undefined : this.selectedRun?.clip?.seed;
-    return html`<aside class="inspector">
-      <div class="ins-scroll">
-        ${sprites ? html`<div class="note">Each square is animated from its own picture, on the flat backdrop it was drawn on —
-          which is what lets its background be cut off cleanly afterwards.</div>` : html`
-        <div class="modes" role="tablist" aria-label="What the clip starts from">
+    const r = this.recipe();
+    const loras = r ? Object.keys(r.loras).length : 0;
+    const summary = [`${session.seconds}s`, `${size.width}×${size.height}`,
+      ...(loras ? [`${loras} LoRA${loras === 1 ? "" : "s"}`] : []),
+      ...(session.variations > 1 ? [`${session.variations} takes`] : [])].join(" · ");
+    return html`<div class="composer">
+      <div class="comp-main">
+        ${from === "image" ? this.renderStartTile() : nothing}
+        ${this.takes("prompt") ? html`<textarea class="motion" .value=${session.prompt} aria-label=${from === "image" ? "What happens" : "What it shows"}
+          @input=${(e: Event) => this.setForm("prompt", (e.target as HTMLTextAreaElement).value)}
+          @keydown=${(e: KeyboardEvent) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); this.go(); } }}
+          placeholder=${from === "image"
+            ? "What happens — she turns to the camera, smiles and waves; her hair moves in the breeze"
+            : "What it shows — a woman with silver hair in a red dress turns to the camera and waves, soft evening light"}></textarea>`
+          : html`<div class="note" style="flex:1;align-self:center">Settings' workflow takes no prompt; it makes the clip it is written to make.</div>`}
+      </div>
+      <div class="comp-bar">
+        <div class="modes small" role="tablist" aria-label="What the clip starts from">
           <button role="tab" class=${from === "image" ? "on" : ""} aria-selected=${from === "image" ? "true" : "false"} ?disabled=${!image}
             title=${image ? "Bring a picture to life" : "No picture-to-video workflow is set up"} @click=${() => this.set("from", "image")}>
             <span class="material-symbols-rounded">animation</span>From a picture</button>
@@ -1199,111 +1530,174 @@ export class OppaiVideoStudio extends LitElement {
             title=${text ? "Make a clip from words alone" : "No words-to-video workflow is set up"} @click=${() => this.set("from", "text")}>
             <span class="material-symbols-rounded">text_fields</span>From words</button>
         </div>
+        ${from === "image" && this.takes("prompt") ? html`<button class="chip ${isShowcase(session.prompt) ? "on" : ""}"
+          aria-pressed=${isShowcase(session.prompt) ? "true" : "false"} title="She stays put and comes alive: blinks, breathes, her hair and clothes move${this.loopable ? " — and it loops" : ""}"
+          @click=${() => this.toggleShowcase()}><span class="material-symbols-rounded">auto_awesome</span>Showcase</button>` : nothing}
+        <button class="comp-sum" title="Length, size and takes are under Settings" @click=${() => this.openTab("settings")}>${summary}</button>
+        <span style="flex:1"></span>
+        ${running ? html`<span class="t-meta">${running} in the works</span>` : nothing}
+        <button class="make" ?disabled=${(from === "image" && !session.picture) || (!!this.workflow?.needsModel && !this.built)}
+          title="Make the clip (Ctrl+Enter)" @click=${() => void this.make()}>
+          <span class="material-symbols-rounded">movie</span>${session.variations > 1 ? `Make ${session.variations} clips` : "Make the clip"}</button>
+      </div>
+      ${this.error ? html`<div class="err">${this.error}</div>` : nothing}
+    </div>`;
+  }
 
-        ${from === "image" ? this.renderFrame() : nothing}`}
+  /** The picture a clip starts from, small at the front of the composer: a drop
+      target, and a button to choose one. */
+  private renderStartTile() {
+    const pic = session.picture;
+    const file = html`<input type="file" accept="image/*" @change=${(e: Event) => {
+      const input = e.target as HTMLInputElement;
+      this.pickFile(input.files?.[0]);
+      input.value = "";
+    }} />`;
+    const choose = (e: Event) => (e.currentTarget as HTMLElement).closest(".start")?.querySelector<HTMLInputElement>("input[type=file]")?.click();
+    return html`<div class="start ${pic ? "has" : ""} ${this.dropping ? "drop" : ""}"
+      @dragover=${(e: DragEvent) => this.onDragOver(e)} @dragleave=${() => (this.dropping = false)} @drop=${(e: DragEvent) => this.onDrop(e)}>
+      ${file}
+      ${pic
+        ? html`<img src=${pic.url} alt="" title="${pic.name} · ${pic.width}×${pic.height}" />
+            <button class="start-x" title="Let it go" aria-label="Let the picture go" @click=${() => this.set("picture", null)}>
+              <span class="material-symbols-rounded">close</span></button>
+            <button class="start-swap" title="Choose another picture" aria-label="Choose another picture" @click=${choose}>
+              <span class="material-symbols-rounded">upload</span></button>`
+        : html`<button class="start-empty" title="Choose a picture, or drop one here from the gallery or your desktop" @click=${choose}>
+            <span class="material-symbols-rounded">add_photo_alternate</span><span>Start picture</span></button>`}
+    </div>`;
+  }
 
-        ${this.takes("prompt") ? html`
-          <div class="k">${from === "image" ? "What happens" : "What it shows"}</div>
-          <textarea class="motion" .value=${f.prompt}
-            @input=${(e: Event) => this.setForm("prompt", (e.target as HTMLTextAreaElement).value)}
-            @keydown=${(e: KeyboardEvent) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); this.go(); } }}
-            placeholder=${from === "image"
-              ? "She turns to the camera, smiles and waves; her hair moves in the breeze"
-              : "A woman with silver hair in a red dress turns to the camera and waves, soft evening light"}></textarea>
-          ${from === "image" ? html`<button class="showcase ${isShowcase(f.prompt) ? "on" : ""}"
-            aria-pressed=${isShowcase(f.prompt) ? "true" : "false"} @click=${() => this.toggleShowcase()}>
-            <span class="material-symbols-rounded">auto_awesome</span>
-            <span class="sc-copy"><b>Showcase</b><small>She stays put and comes alive: blinks, breathes, her hair flows and her clothes move,
-              the camera holds still${this.loopable ? " — and it loops" : ""}.</small></span>
-          </button>` : nothing}
-          <div class="presets">
-            ${(["camera", "her", "scene"] as const).map((group) => html`<div class="row">
-              <span class="preset-group">${group === "her" ? "Her" : group === "camera" ? "Camera" : "Scene"}</span>
-              ${MOTION_PRESETS.filter((p) => p.group === group).map((p) => html`<button class="chip ${hasPhrase(f.prompt, p.phrase) ? "on" : ""}"
-                title=${p.phrase} @click=${() => this.setForm("prompt", togglePhrase(f.prompt, p.phrase))}>${p.label}</button>`)}
-            </div>`)}
-          </div>
-          ${this.takes("negative") ? (this.negOpen || f.negative ? html`
-            <div class="k">What it should avoid</div>
-            <textarea style="min-height:56px" .value=${f.negative} placeholder="blurry, distorted hands, flicker, static"
-              @input=${(e: Event) => this.setForm("negative", (e.target as HTMLTextAreaElement).value)}></textarea>`
-            : html`<button class="link" @click=${() => (this.negOpen = true)}>+ What it should avoid</button>`) : nothing}
-        ` : nothing}
-
+  /** The Sprites studio's Motion tab: every choice, down one column, over the set's
+      own form. */
+  private renderInspector() {
+    const f = this.form;
+    const size = this.size();
+    return html`<aside class="inspector">
+      <div class="ins-scroll">
+        <div class="note">Each square is animated from its own picture, on the flat backdrop it was drawn on —
+          which is what lets its background be cut off cleanly afterwards.</div>
+        ${this.renderMotion(true)}
         ${this.renderModel()}
         ${this.takes("loras") ? this.renderLoras() : nothing}
-
-        ${this.takes("width") || this.takes("height") ? html`
-          <div class="k">Shape<small>${size.width}×${size.height}</small></div>
-          <div class="row">
-            ${from === "text" ? CLIP_ASPECTS.map((a) => html`<button class="chip ${f.aspect === a.id ? "on" : ""}"
-              @click=${() => this.setForm("aspect", a.id)}>${a.label}</button>`) : nothing}
-            <select aria-label="Longer side" @change=${(e: Event) => this.setForm("long", Number((e.target as HTMLSelectElement).value))}>
-              ${CLIP_SIDES.map((s) => html`<option value=${s} ?selected=${s === f.long}>${s}px long side</option>`)}
-            </select>
-          </div>
-          ${from === "image" ? html`<div class="note" style="margin-top:6px">In the ${sprites ? "square's" : "picture's"} shape. Bigger is slower, by a lot.</div>` : nothing}
-        ` : nothing}
-
-        ${this.takes("frames") ? html`
-          <div class="k">Length<small>${frames} frames${this.takes("fps") ? "" : ` at ${ASSUMED_FPS} fps`}</small></div>
-          <label class="slider">
-            <input type="range" min="1" max="10" step="0.5" .value=${String(f.seconds)} aria-label="Length in seconds"
-              @input=${(e: Event) => this.setForm("seconds", Number((e.target as HTMLInputElement).value))} />
-            <b>${f.seconds}s</b>
-          </label>
-        ` : nothing}
-
-        ${from === "image" && this.takes("loop") ? html`
-          <label class="switch" title=${this.loopable ? "The clip ends on the picture it starts from, so it plays round without a jump"
-            : "Wan 2.2's 5B model can't be given a last frame — pick the 14B pair or Wan 2.1 to loop"}>
-            <input type="checkbox" .checked=${f.makeLoop && this.loopable} ?disabled=${!this.loopable}
-              @change=${(e: Event) => this.setForm("makeLoop", (e.target as HTMLInputElement).checked)} />
-            <span class="material-symbols-rounded" style="font-size:17px">loop</span>Seamless loop
-            <span style="opacity:.7">${this.loopable ? "· ends where it starts" : "· not on the 5B model"}</span>
-          </label>` : nothing}
-
-        ${this.takes("fps") ? html`
-          <div class="k">Frame rate</div>
-          <div class="seg" role="group" aria-label="Frame rate">${[8, 12, 16, 24].map((n) => html`<button class=${f.fps === n ? "on" : ""}
-            aria-pressed=${f.fps === n ? "true" : "false"} @click=${() => this.setForm("fps", n)}>${n}</button>`)}</div>
-        ` : nothing}
-
-        ${this.takes("steps") ? html`
-          <div class="k">Steps</div>
-          <label class="slider">
-            <input type="range" min="2" max="50" step="1" .value=${String(f.steps)} aria-label="Steps"
-              @input=${(e: Event) => this.setForm("steps", Number((e.target as HTMLInputElement).value))} />
-            <b>${f.steps}</b>
-          </label>
-        ` : nothing}
-
-        <div class="k">${sprites ? "Takes per square" : "Takes"}</div>
-        <div class="seg" role="group" aria-label="Clips per press">${[1, 2, 3].map((n) => html`<button class=${f.variations === n ? "on" : ""}
-          aria-pressed=${f.variations === n ? "true" : "false"} @click=${() => this.setForm("variations", n)}>${n}</button>`)}</div>
-        ${sprites && f.variations > 1 ? html`<div class="note" style="margin-top:6px">The first take is filed; the others wait beside the square to be picked instead.</div>` : nothing}
-        ${this.takes("seed") ? html`<label class="switch" title=${keptSeed ? `Seed ${keptSeed}` : sprites ? "Animate a square first — the selected square's seed is the one kept" : "Make a clip first — the selected clip's seed is the one kept"}>
-          <input type="checkbox" .checked=${f.keepSeed && !!keptSeed} ?disabled=${!keptSeed}
-            @change=${(e: Event) => this.setForm("keepSeed", (e.target as HTMLInputElement).checked)} />
-          ${sprites ? "Every square on the selected square's seed" : "Keep the selected clip's seed"}${keptSeed ? html` <span style="opacity:.7;font-variant-numeric:tabular-nums">· ${keptSeed}</span>` : nothing}
-        </label>` : nothing}
-        ${sprites ? this.renderEnlarge() : nothing}
+        ${this.renderShape()}
+        ${this.renderTakes()}
+        ${this.renderEnlarge()}
         ${this.error ? html`<div class="err">${this.error}</div>` : nothing}
       </div>
       <div class="ins-foot">
-        ${sprites ? html`
-          <button class="make" ?disabled=${!this.square || (!!this.workflow?.needsModel && !this.built)}
-            title=${this.square ? "Animate the selected square (Ctrl+Enter)" : "The selected square has no picture yet — its picture comes first"}
-            @click=${() => this.go()}>
-            <span class="material-symbols-rounded">animation</span>Animate this square</button>
-          <div class="make-sub">${f.seconds}s at ${size.width}×${size.height} · minutes a square</div>`
-        : html`
-          <button class="make" ?disabled=${(from === "image" && !session.picture) || (!!this.workflow?.needsModel && !this.built)}
-            title="Make the clip (Ctrl+Enter)" @click=${() => void this.make()}>
-            <span class="material-symbols-rounded">movie</span>${session.variations > 1 ? `Make ${session.variations} clips` : "Make the clip"}</button>
-          <div class="make-sub">${running ? `${running} clip${running === 1 ? "" : "s"} in the works · ` : ""}${session.seconds}s at ${size.width}×${size.height} · takes minutes</div>`}
+        <button class="make wide" ?disabled=${!this.square || (!!this.workflow?.needsModel && !this.built)}
+          title=${this.square ? "Animate the selected square (Ctrl+Enter)" : "The selected square has no picture yet — its picture comes first"}
+          @click=${() => this.go()}>
+          <span class="material-symbols-rounded">animation</span>Animate this square</button>
+        <div class="make-sub">${f.seconds}s at ${size.width}×${size.height} · minutes a square</div>
       </div>
     </aside>`;
+  }
+
+  /** How it moves: the showcase, the presets and what to avoid — with the prompt itself
+      where there is no composer to hold it (the Sprites tab). */
+  private renderMotion(withPrompt: boolean) {
+    if (!this.takes("prompt")) return html`<div class="note">Settings' workflow takes no prompt, so there is nothing to say about how it moves.</div>`;
+    const f = this.form;
+    const fromImage = f.from === "image";
+    return html`
+      ${withPrompt ? html`<div class="k">What happens</div>
+        <textarea class="motion" .value=${f.prompt}
+          @input=${(e: Event) => this.setForm("prompt", (e.target as HTMLTextAreaElement).value)}
+          @keydown=${(e: KeyboardEvent) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); this.go(); } }}
+          placeholder="She turns to the camera, smiles and waves; her hair moves in the breeze"></textarea>` : nothing}
+      ${fromImage ? html`<button class="showcase ${isShowcase(f.prompt) ? "on" : ""}"
+        aria-pressed=${isShowcase(f.prompt) ? "true" : "false"} @click=${() => this.toggleShowcase()}>
+        <span class="material-symbols-rounded">auto_awesome</span>
+        <span class="sc-copy"><b>Showcase</b><small>She stays put and comes alive: blinks, breathes, her hair flows and her clothes move,
+          the camera holds still${this.loopable ? " — and it loops" : ""}.</small></span>
+      </button>` : nothing}
+      ${withPrompt ? nothing : html`<div class="note" style="margin-top:12px">Each one adds its sentence to the prompt under the stage, and takes it out again.</div>`}
+      <div class="presets">
+        ${(["camera", "her", "scene"] as const).map((group) => html`<div class="row">
+          <span class="preset-group">${group === "her" ? "Her" : group === "camera" ? "Camera" : "Scene"}</span>
+          ${MOTION_PRESETS.filter((p) => p.group === group).map((p) => html`<button class="chip ${hasPhrase(f.prompt, p.phrase) ? "on" : ""}"
+            title=${p.phrase} @click=${() => this.setForm("prompt", togglePhrase(f.prompt, p.phrase))}>${p.label}</button>`)}
+        </div>`)}
+      </div>
+      ${this.takes("negative") ? (this.negOpen || f.negative || !withPrompt ? html`
+        <div class="k">What it should avoid</div>
+        <textarea style="min-height:56px" .value=${f.negative} placeholder="blurry, distorted hands, flicker, static"
+          @input=${(e: Event) => this.setForm("negative", (e.target as HTMLTextAreaElement).value)}></textarea>
+        <div class="note" style="margin-top:6px">Blank is Wan's own. A LoRA's negative words join it while the LoRA is on.</div>`
+        : html`<button class="link" @click=${() => (this.negOpen = true)}>+ What it should avoid</button>`) : nothing}`;
+  }
+
+  /** The clip's shape, length, loop, frame rate and steps: the knobs the workflow has. */
+  private renderShape() {
+    const f = this.form;
+    const from = f.from;
+    const sprites = this.variant === "sprites";
+    const size = this.size();
+    const frames = clipFrames(f.seconds, this.fps());
+    return html`
+      ${this.takes("width") || this.takes("height") ? html`
+        <div class="k">Shape<small>${size.width}×${size.height}</small></div>
+        <div class="row">
+          ${from === "text" ? CLIP_ASPECTS.map((a) => html`<button class="chip ${f.aspect === a.id ? "on" : ""}"
+            @click=${() => this.setForm("aspect", a.id)}>${a.label}</button>`) : nothing}
+          <select aria-label="Longer side" @change=${(e: Event) => this.setForm("long", Number((e.target as HTMLSelectElement).value))}>
+            ${CLIP_SIDES.map((s) => html`<option value=${s} ?selected=${s === f.long}>${s}px long side</option>`)}
+          </select>
+        </div>
+        ${from === "image" ? html`<div class="note" style="margin-top:6px">In the ${sprites ? "square's" : "picture's"} shape. Bigger is slower, by a lot.</div>` : nothing}
+      ` : nothing}
+
+      ${this.takes("frames") ? html`
+        <div class="k">Length<small>${frames} frames${this.takes("fps") ? "" : ` at ${ASSUMED_FPS} fps`}</small></div>
+        <label class="slider">
+          <input type="range" min="1" max="10" step="0.5" .value=${String(f.seconds)} aria-label="Length in seconds"
+            @input=${(e: Event) => this.setForm("seconds", Number((e.target as HTMLInputElement).value))} />
+          <b>${f.seconds}s</b>
+        </label>
+      ` : nothing}
+
+      ${from === "image" && this.takes("loop") ? html`
+        <label class="switch" title=${this.loopable ? "The clip ends on the picture it starts from, so it plays round without a jump"
+          : "Wan 2.2's 5B model can't be given a last frame — pick the 14B pair or Wan 2.1 to loop"}>
+          <input type="checkbox" .checked=${f.makeLoop && this.loopable} ?disabled=${!this.loopable}
+            @change=${(e: Event) => this.setForm("makeLoop", (e.target as HTMLInputElement).checked)} />
+          <span class="material-symbols-rounded" style="font-size:17px">loop</span>Seamless loop
+          <span style="opacity:.7">${this.loopable ? "· ends where it starts" : "· not on the 5B model"}</span>
+        </label>` : nothing}
+
+      ${this.takes("fps") ? html`
+        <div class="k">Frame rate</div>
+        <div class="seg" role="group" aria-label="Frame rate">${[8, 12, 16, 24].map((n) => html`<button class=${f.fps === n ? "on" : ""}
+          aria-pressed=${f.fps === n ? "true" : "false"} @click=${() => this.setForm("fps", n)}>${n}</button>`)}</div>
+      ` : nothing}
+
+      ${this.takes("steps") ? html`
+        <div class="k">Steps</div>
+        <label class="slider">
+          <input type="range" min="2" max="50" step="1" .value=${String(f.steps)} aria-label="Steps"
+            @input=${(e: Event) => this.setForm("steps", Number((e.target as HTMLInputElement).value))} />
+          <b>${f.steps}</b>
+        </label>
+      ` : nothing}`;
+  }
+
+  /** How many clips a press makes, and whether they keep the selected one's seed. */
+  private renderTakes() {
+    const f = this.form;
+    const sprites = this.variant === "sprites";
+    const keptSeed = sprites ? this.keptSeed || undefined : this.selectedRun?.clip?.seed;
+    return html`
+      <div class="k">${sprites ? "Takes per square" : "Takes"}</div>
+      <div class="seg" role="group" aria-label="Clips per press">${[1, 2, 3].map((n) => html`<button class=${f.variations === n ? "on" : ""}
+        aria-pressed=${f.variations === n ? "true" : "false"} @click=${() => this.setForm("variations", n)}>${n}</button>`)}</div>
+      ${sprites && f.variations > 1 ? html`<div class="note" style="margin-top:6px">The first take is filed; the others wait beside the square to be picked instead.</div>` : nothing}
+      ${this.takes("seed") ? html`<label class="switch" title=${keptSeed ? `Seed ${keptSeed}` : sprites ? "Animate a square first — the selected square's seed is the one kept" : "Make a clip first — the selected clip's seed is the one kept"}>
+        <input type="checkbox" .checked=${f.keepSeed && !!keptSeed} ?disabled=${!keptSeed}
+          @change=${(e: Event) => this.setForm("keepSeed", (e.target as HTMLInputElement).checked)} />
+        ${sprites ? "Every square on the selected square's seed" : "Keep the selected clip's seed"}${keptSeed ? html` <span style="opacity:.7;font-variant-numeric:tabular-nums">· ${keptSeed}</span>` : nothing}
+      </label>` : nothing}`;
   }
 
   /** A sprite's clip enlarged before its cut: what the stage's Upscale does to one
@@ -1372,7 +1766,6 @@ export class OppaiVideoStudio extends LitElement {
     const auto = (v: number, fastV: number, slowV: number) => (v ? String(v) : `${fast ? fastV : slowV}`);
     const modelFiles = choice ? [choice.key, choice.lowModel].filter(Boolean) : [];
     const modelCover = this.coverOf(modelFiles);
-    const editing = !!choice && this.noting?.files[0] === modelFiles[0];
     return html`${head}
       <div class="model-row">
       ${modelCover ? html`<img src=${modelCover} alt="" />` : nothing}
@@ -1383,12 +1776,12 @@ export class OppaiVideoStudio extends LitElement {
         ${group("Single models", "single")}
         ${group("All-in-one checkpoints", "checkpoint")}
       </select>
-      ${choice ? html`<button class="lora-x" title="Its cover" aria-label="Edit ${choice.label}'s cover"
-        @click=${() => this.openNote(modelFiles, choice.label, false)}><span class="material-symbols-rounded">edit</span></button>` : nothing}
+      ${choice ? html`<button class="lora-x" title="Its cover, its Civitai page, or delete it" aria-label="Edit ${choice.label}"
+        @click=${() => this.openEditor({ files: modelFiles, label: choice.label, kind: comfyKindOf(choice.kind), lora: false })}>
+        <span class="material-symbols-rounded">edit</span></button>` : nothing}
       </div>
-      ${editing ? this.renderNoteEditor() : nothing}
       ${!comfy.models.length ? html`<div class="note" style="margin-top:6px">ComfyUI has no Wan models yet.
-        <button class="link" @click=${() => this.dispatchEvent(new CustomEvent("find-video-models", { bubbles: true, composed: true }))}>Find them on Civitai</button></div>` : nothing}
+        <button class="link" @click=${() => this.findOnCivitai()}>Find them on Civitai</button></div>` : nothing}
       ${m.model ? html`
         ${choice?.kind === "pair" ? html`<div class="model-note"><span class="material-symbols-rounded">animation</span>
           High noise lays out the motion, then ${choiceShort(m.lowModel)} finishes it</div>` : nothing}
@@ -1431,7 +1824,8 @@ export class OppaiVideoStudio extends LitElement {
 
   /**
    * LoRAs for the next clips, Settings' among them to start with; a pair's two files
-   * are one choice, put on each at its own expert.
+   * are one choice, put on each at its own expert. Laid out as the Image studio's are:
+   * the ones on, with their strengths, above cover cards of the rest.
    */
   private renderLoras() {
     const r = this.recipe();
@@ -1443,67 +1837,100 @@ export class OppaiVideoStudio extends LitElement {
     const rest = all.filter((c) => r.loras[c.key] === undefined
       && (!q || c.label.toLowerCase().includes(q) || c.key.toLowerCase().includes(q)));
     const count = on.length;
-    const put = (key: string, weight: number) => this.edit((x) => ({ ...x, loras: { ...x.loras, [key]: weight } }));
-    const words = (c: ClipLoraChoice) => noteFor(c.files, comfy.notes)?.note.triggers ?? [];
-    // A LoRA going on brings its words into the prompt, and coming off takes them out.
-    const turnOn = (c: ClipLoraChoice) => {
-      if (words(c).length) f.prompt = withTriggers(f.prompt, words(c));
-      put(c.key, 1);
-    };
-    const takeOff = (c: ClipLoraChoice) => {
-      if (words(c).length) f.prompt = withoutTriggers(f.prompt, words(c));
-      if (this.noting?.files[0] === c.files[0].name) this.noting = null;
-      this.edit((x) => {
-        const loras = { ...x.loras };
-        delete loras[c.key];
-        return { ...x, loras };
-      });
-    };
     return html`
-      <div class="k">LoRAs<small>${count ? `${count} on` : ""}</small></div>
-      ${count ? html`<div class="loras-on">
-        ${on.map((c) => {
-          const weight = r.loras[c.key];
-          const files = c.files.map((f) => f.name);
-          const cover = this.coverOf(files);
-          const said = words(c);
-          return html`<div class="lora-row ${c.speed ? "speed" : ""}">
-            ${cover ? html`<img class="lora-ic" src=${cover} alt="" />` : html`<span class="lora-ic material-symbols-rounded">${c.speed ? "bolt" : "style"}</span>`}
-            <span class="lora-name" title=${[...files, ...(said.length ? [`Trigger words: ${said.join(", ")}`] : [])].join("\n")}>${c.label}${c.files.length > 1 ? html`<span class="lora-tag">high + low</span>` : nothing}</span>
-            <span style="display:flex">
-              <button class="lora-x" title="Its cover and trigger words" aria-label="Edit ${c.label}'s cover and trigger words"
-                @click=${() => this.openNote(files, c.label, true)}><span class="material-symbols-rounded">edit</span></button>
-              <button class="lora-x" title="Take it off" aria-label="Take ${c.label} off" @click=${() => takeOff(c)}>
-                <span class="material-symbols-rounded">close</span></button>
-            </span>
-            <label class="lora-weight">
-              <input type="range" min="-1" max="2" step="0.05" .value=${String(weight)} aria-label="${c.label} strength"
-                @input=${(e: Event) => put(c.key, Number((e.target as HTMLInputElement).value))} />
-              <b>${weight.toFixed(2)}</b>
-            </label>
-          </div>
-          ${this.noting?.files[0] === files[0] ? this.renderNoteEditor() : nothing}`;
-        })}
-      </div>` : nothing}
-      ${!all.length ? html`<div class="note">ComfyUI has no LoRAs in models/loras.
-            <button class="link" @click=${() => this.dispatchEvent(new CustomEvent("find-video-models", { bubbles: true, composed: true }))}>Find Wan LoRAs on Civitai</button></div>`
+      ${all.length > 6 ? html`<label class="lora-search"><span class="material-symbols-rounded">search</span>
+        <input type="search" placeholder="Search ${all.length} LoRAs" .value=${f.loraQuery} aria-label="Search LoRAs"
+          @input=${(e: Event) => this.setForm("loraQuery", (e.target as HTMLInputElement).value)} /></label>` : nothing}
+      ${count ? html`<div class="k">On<small>${count}</small></div>
+        <div class="loras-on">${on.map((c) => this.renderLoraOn(c, r.loras[c.key]))}</div>` : nothing}
+      ${!all.length ? html`<div class="k">LoRAs</div><div class="note">ComfyUI has no LoRAs in models/loras.
+            <button class="link" @click=${() => this.findOnCivitai()}>Find Wan LoRAs on Civitai</button></div>`
         : html`
-          ${all.length > 6 ? html`<label class="lora-search"><span class="material-symbols-rounded">search</span>
-            <input type="search" placeholder="Search ${all.length} LoRAs" .value=${f.loraQuery} aria-label="Search LoRAs"
-              @input=${(e: Event) => this.setForm("loraQuery", (e.target as HTMLInputElement).value)} /></label>` : nothing}
-          ${rest.length ? html`<div class="lora-list">
+          <div class="k">${count ? "More" : "LoRAs"}<small>${all.length} in ComfyUI</small></div>
+          ${rest.length ? html`<div class="cards">
             ${rest.slice(0, LORA_LIST).map((c) => {
-              const cover = this.coverOf(c.files.map((f) => f.name));
-              return html`<button class="lora-pick" title=${c.files.map((f) => f.name).join("\n")} @click=${() => turnOn(c)}>
-              ${cover ? html`<img class="lora-thumb" src=${cover} alt="" />` : html`<span class="material-symbols-rounded">${c.speed ? "bolt" : "add"}</span>`}
-              <span class="lora-name">${c.label}</span>
-              ${c.files.length > 1 ? html`<span class="lora-tag">pair</span>` : nothing}
-            </button>`;
+              const files = c.files.map((x) => x.name);
+              const cover = this.coverOf(files);
+              const note = this.noteOf(c);
+              return html`<div class="card ${c.speed ? "speed" : ""}">
+                <button class="card-main" title=${[...files, ...(note?.triggers.length ? [`Trigger words: ${note.triggers.join(", ")}`] : [])].join("\n")}
+                  @click=${() => this.loraOn(c)}>
+                  ${cover ? html`<img class="card-art" src=${cover} alt="" loading="lazy" />`
+                    : html`<span class="card-blank"><span class="material-symbols-rounded">${c.speed ? "bolt" : "style"}</span></span>`}
+                  <span class="card-name">${c.label}</span>
+                  ${c.files.length > 1 || note?.defaults?.weight ? html`<span class="card-tags">
+                    ${c.files.length > 1 ? html`<span>pair</span>` : nothing}
+                    ${note?.defaults?.weight ? html`<span>${note.defaults.weight}</span>` : nothing}</span>` : nothing}
+                </button>
+                <button class="card-edit" title="Its defaults, cover and Civitai page" aria-label="Edit ${c.label}"
+                  @click=${() => this.openEditor({ files, label: c.label, kind: "loras", lora: true, key: c.key })}>
+                  <span class="material-symbols-rounded">edit</span></button>
+              </div>`;
             })}
           </div>
-          ${rest.length > LORA_LIST ? html`<div class="note" style="margin-top:6px">${rest.length - LORA_LIST} more — search to find them.</div>` : nothing}`
+          ${rest.length > LORA_LIST ? html`<div class="note" style="margin-top:8px">${rest.length - LORA_LIST} more — search to find them.</div>` : nothing}`
           : html`<div class="note">${q ? "No LoRA by that name." : "Every LoRA ComfyUI has is on."}</div>`}`}
     `;
+  }
+
+  /** A LoRA that is on: its cover, its strength, and the way to its editor. */
+  private renderLoraOn(c: ClipLoraChoice, weight: number) {
+    const files = c.files.map((x) => x.name);
+    const cover = this.coverOf(files);
+    const note = this.noteOf(c);
+    const d = note?.defaults;
+    const said = note?.triggers ?? [];
+    const lo = Math.min(-1, d?.weightMin ?? 0);
+    const hi = Math.max(2, d?.weightMax ?? 0);
+    return html`<div class="lora-row ${c.speed ? "speed" : ""}">
+      ${cover ? html`<img class="lora-ic" src=${cover} alt="" />` : html`<span class="lora-ic material-symbols-rounded">${c.speed ? "bolt" : "style"}</span>`}
+      <span class="lora-name" title=${[...files, ...(said.length ? [`Trigger words: ${said.join(", ")}`] : [])].join("\n")}>${c.label}${c.files.length > 1 ? html`<span class="lora-tag">high + low</span>` : nothing}</span>
+      <span style="display:flex">
+        <button class="lora-x" title="Its defaults, cover and Civitai page" aria-label="Edit ${c.label}"
+          @click=${() => this.openEditor({ files, label: c.label, kind: "loras", lora: true, key: c.key })}><span class="material-symbols-rounded">edit</span></button>
+        <button class="lora-x" title="Take it off" aria-label="Take ${c.label} off" @click=${() => this.loraOff(c)}>
+          <span class="material-symbols-rounded">close</span></button>
+      </span>
+      <label class="lora-weight">
+        <input type="range" min=${lo} max=${hi} step="0.05" .value=${String(weight)} aria-label="${c.label} strength"
+          @input=${(e: Event) => this.putLora(c.key, Number((e.target as HTMLInputElement).value))} />
+        <b>${weight.toFixed(2)}</b>
+      </label>
+      ${d?.weightMin || d?.weightMax || (d?.weight && d.weight !== weight) ? html`<span class="lora-hint">
+        ${d.weightMin || d.weightMax ? `works ${d.weightMin || "…"}–${d.weightMax || "…"}` : ""}
+        ${d.weight && d.weight !== weight ? html`<button class="link" @click=${() => this.putLora(c.key, d.weight!)}>back to ${d.weight}</button>` : nothing}
+      </span>` : nothing}
+    </div>`;
+  }
+
+  private noteOf(c: ClipLoraChoice): ComfyNote | undefined {
+    return noteFor(c.files, comfy.notes)?.note;
+  }
+
+  private putLora(key: string, weight: number) {
+    this.edit((x) => ({ ...x, loras: { ...x.loras, [key]: weight } }));
+  }
+
+  /** A LoRA going on brings its words into the prompt and its negative words into the
+      negative, at the strength kept for it; coming off takes both out. */
+  private loraOn(c: ClipLoraChoice) {
+    const f = this.form;
+    const note = this.noteOf(c);
+    if (note?.triggers.length) f.prompt = withTriggers(f.prompt, note.triggers);
+    if (note?.defaults?.negative) f.negative = withNegative(f.negative, note.defaults.negative);
+    this.putLora(c.key, startWeight(note));
+  }
+
+  private loraOff(c: ClipLoraChoice) {
+    const f = this.form;
+    const note = this.noteOf(c);
+    if (note?.triggers.length) f.prompt = withoutTriggers(f.prompt, note.triggers);
+    if (note?.defaults?.negative) f.negative = withoutNegative(f.negative, note.defaults.negative);
+    this.edit((x) => {
+      const loras = { ...x.loras };
+      delete loras[c.key];
+      return { ...x, loras };
+    });
   }
 
   /** A file's cover as the studio shows it, "" when none of its files has one. */
@@ -1512,28 +1939,72 @@ export class OppaiVideoStudio extends LitElement {
     return found?.note.cover ? api.comfyCoverURL(found.name, found.note.v) : "";
   }
 
-  private openNote(files: string[], label: string, words: boolean) {
-    if (this.noting?.files[0] === files[0]) {
-      this.noting = null;
-      return;
-    }
-    this.noting = { files, label, words };
-    this.noteDraft = (noteFor(files.map((name) => ({ name })), comfy.notes)?.note.triggers ?? []).join(", ");
+  // ── the editor ──────────────────────────────────────────────────────────────
+  //
+  // One file's (or pair's) dialog: its cover, from a frame, a picture or the showcase of
+  // the Civitai version it is; for a LoRA its trigger words and what it goes on with;
+  // which version it is; and deleting it. A cover, a link and a delete happen as they
+  // are pressed; the words and defaults wait for Save, as the Image studio's do.
+
+  private openEditor(e: FileEditor) {
+    this.editing = e;
+    this.draft = draftOf(this.editNote);
+    this.editError = "";
+    this.editBusy = "";
+    this.linkText = "";
+    this.civPage = null;
+    void this.loadCivPage();
   }
 
-  /** The name the open note is kept under: the file that has one already, or the first. */
-  private get noteName(): string {
-    const n = this.noting;
-    if (!n) return "";
-    return noteFor(n.files.map((name) => ({ name })), comfy.notes)?.name ?? n.files[0];
+  private closeEditor() {
+    this.editing = null;
+    this.civPage = null;
   }
 
-  private async noteCover(from: "frame" | File | "clear") {
-    const name = this.noteName;
-    if (!name || this.noteBusy) return;
-    this.noteBusy = true;
-    this.error = "";
+  /** The name the open file's note is kept under: the half of a pair that has one, or the first. */
+  private get editName(): string {
+    const e = this.editing;
+    if (!e) return "";
+    return noteFor(e.files.map((name) => ({ name })), comfy.notes)?.name ?? e.files[0];
+  }
+
+  private get editNote(): ComfyNote | undefined {
+    const e = this.editing;
+    return e ? noteFor(e.files.map((name) => ({ name })), comfy.notes)?.note : undefined;
+  }
+
+  /** The linked version's Civitai page, for its showcase stills. */
+  private async loadCivPage() {
+    const id = this.editNote?.civitai?.modelId;
+    if (!id) return;
+    this.editBusy = "page";
     try {
+      const page = await api.civitaiModel(id);
+      if (this.editNote?.civitai?.modelId === id) this.civPage = page;
+    } catch (e) {
+      this.editError = `Civitai's page didn't load: ${(e as Error).message}`;
+    } finally {
+      if (this.editBusy === "page") this.editBusy = "";
+    }
+  }
+
+  /** Runs one of the editor's actions, with its button busy and its failure shown. */
+  private async editAction(what: string, fn: () => Promise<void>) {
+    if (this.editBusy && this.editBusy !== "page") return;
+    this.editBusy = what;
+    this.editError = "";
+    try {
+      await fn();
+    } catch (e) {
+      this.editError = (e as Error).message;
+    } finally {
+      this.editBusy = "";
+    }
+  }
+
+  private setCover(from: "frame" | "clear" | File | { url: string }) {
+    const name = this.editName;
+    return this.editAction("cover", async () => {
       if (from === "clear") {
         await api.setComfyCover(name, { clear: true });
       } else if (from === "frame") {
@@ -1545,75 +2016,204 @@ export class OppaiVideoStudio extends LitElement {
         } finally {
           URL.revokeObjectURL(pic.url);
         }
-      } else {
+      } else if (from instanceof File) {
         await api.setComfyCover(name, { imageData: await fileDataURL(from) });
+      } else {
+        await api.setComfyCover(name, { url: from.url });
       }
       await loadComfyNotes();
-    } catch (e) {
-      this.error = (e as Error).message;
-    } finally {
-      this.noteBusy = false;
-    }
+    });
   }
 
-  private async saveNoteWords() {
-    const name = this.noteName;
-    if (!name || this.noteBusy) return;
-    this.noteBusy = true;
-    this.error = "";
-    const before = noteFor((this.noting?.files ?? []).map((n) => ({ name: n })), comfy.notes)?.note.triggers ?? [];
-    const next = parseTriggers(this.noteDraft);
-    try {
-      await api.setComfyTriggers(name, next);
-      // A LoRA already on swaps its old words in the prompt for the new ones.
-      const f = this.form;
-      if (before.length) f.prompt = withoutTriggers(f.prompt, before);
-      if (next.length) f.prompt = withTriggers(f.prompt, next);
+  /** Links the file to its Civitai version — by the address typed, or by hashing the
+      file — and takes in what that filled. */
+  private link(by: "address" | "hash") {
+    const e = this.editing;
+    if (!e) return;
+    const name = this.editName;
+    return this.editAction(by === "hash" ? "hash" : "link", async () => {
+      const { note } = await api.comfyLink(by === "hash" ? { name, kind: e.kind } : { name, kind: e.kind, url: this.linkText.trim() });
+      comfy.notes = { ...comfy.notes, [name]: note };
+      // What the link filled shows in the fields still blank; what was typed stays.
+      const filled = draftOf(note);
+      const d = this.draft;
+      this.draft = {
+        triggers: d.triggers || filled.triggers, weight: d.weight || filled.weight,
+        weightMin: d.weightMin || filled.weightMin, weightMax: d.weightMax || filled.weightMax, negative: d.negative || filled.negative,
+      };
+      this.linkText = "";
+      this.civPage = null;
+      changed();
+      void this.loadCivPage();
+    });
+  }
+
+  private unlink() {
+    const name = this.editName;
+    return this.editAction("unlink", async () => {
+      const { note } = await api.comfyLink({ name, unlink: true });
+      comfy.notes = { ...comfy.notes, [name]: note };
+      this.civPage = null;
+      changed();
+    });
+  }
+
+  /** What the linked version's page recommends, into the fields: nothing is kept until Save. */
+  private fillFromCivitai() {
+    const versionId = this.editNote?.civitai?.versionId;
+    if (!versionId) return;
+    return this.editAction("fill", async () => {
+      const { suggestion: s } = await api.civitaiSuggest({ versionId });
+      const d = this.draft;
+      this.draft = {
+        triggers: s.triggerWords.length ? s.triggerWords.join(", ") : d.triggers,
+        weight: s.weight ? String(s.weight) : d.weight,
+        weightMin: s.weightMin ? String(s.weightMin) : d.weightMin,
+        weightMax: s.weightMax ? String(s.weightMax) : d.weightMax,
+        negative: s.negative || d.negative,
+      };
+    });
+  }
+
+  private saveEditor() {
+    const e = this.editing;
+    if (!e) return;
+    const name = this.editName;
+    const before = this.editNote;
+    return this.editAction("save", async () => {
+      const triggers = parseTriggers(this.draft.triggers);
+      const defaults = defaultsOf(this.draft);
+      await api.setComfyNote(name, e.lora ? { triggers, defaults } : { triggers });
+      // A LoRA already on swaps its old words for the new ones, in the prompt and the negative.
+      if (e.key && this.recipe()?.loras[e.key] !== undefined) {
+        const f = this.form;
+        if (before?.triggers.length) f.prompt = withoutTriggers(f.prompt, before.triggers);
+        if (triggers.length) f.prompt = withTriggers(f.prompt, triggers);
+        if (before?.defaults?.negative) f.negative = withoutNegative(f.negative, before.defaults.negative);
+        if (defaults.negative) f.negative = withNegative(f.negative, defaults.negative);
+      }
       await loadComfyNotes();
-      this.noting = null;
-    } catch (e) {
-      this.error = (e as Error).message;
-    } finally {
-      this.noteBusy = false;
-    }
+      this.closeEditor();
+    });
   }
 
-  /** The cover and, for a LoRA, its trigger words, edited where it sits. */
-  private renderNoteEditor() {
-    const n = this.noting;
-    if (!n) return nothing;
-    const cover = this.coverOf(n.files);
+  /** Deletes the file — both halves of a pair — from ComfyUI's folder. */
+  private deleteFiles() {
+    const e = this.editing;
+    if (!e) return;
+    const what = e.files.length > 1 ? `both files of ${e.label}` : e.label;
+    if (!window.confirm(`Delete ${what} from ComfyUI?\n\n${e.files.join("\n")}\n\nThe file${e.files.length > 1 ? "s are" : " is"} removed from ComfyUI's ${e.kind} folder, with ${e.files.length > 1 ? "their" : "its"} cover and words. This can't be undone.`)) return;
+    return this.editAction("delete", async () => {
+      const choice = e.key ? comfy.loras?.find((c) => c.key === e.key) : undefined;
+      if (choice && this.recipe()?.loras[choice.key] !== undefined) this.loraOff(choice);
+      for (const name of e.files) await api.deleteComfyFile(e.kind, name);
+      this.closeEditor();
+      await loadComfyLists(true);
+    });
+  }
+
+  private renderEditor() {
+    const e = this.editing;
+    if (!e) return nothing;
+    const note = this.editNote;
+    const civ = note?.civitai;
+    const cover = this.coverOf(e.files);
+    const busy = this.editBusy && this.editBusy !== "page";
     const onStage = !!this.selectedRun?.clip?.mime.startsWith("video/");
-    const file = html`<input type="file" accept="image/*" @change=${(e: Event) => {
-      const input = e.target as HTMLInputElement;
-      const picked = input.files?.[0];
-      input.value = "";
-      if (picked) void this.noteCover(picked);
-    }} />`;
-    return html`<div class="note-edit" role="group" aria-label="${n.label}'s cover${n.words ? " and trigger words" : ""}">
-      <div class="ne-cover">${cover ? html`<img src=${cover} alt="" />` : html`<span class="material-symbols-rounded">image</span>`}</div>
-      <div class="ne-side">
-        <b title=${n.files.join("\n")}>${n.label}</b>
-        <div class="row">
-          <button class="chip" ?disabled=${!onStage || this.noteBusy || this.grabbing}
-            title=${onStage ? "The frame the clip on the stage is showing" : "Put a clip on the stage to take a frame of it"}
-            @click=${() => void this.noteCover("frame")}><span class="material-symbols-rounded">photo_camera</span>This frame</button>
-          <button class="chip" ?disabled=${this.noteBusy}
-            @click=${(e: Event) => (e.currentTarget as HTMLElement).parentElement?.querySelector<HTMLInputElement>("input[type=file]")?.click()}>
-            <span class="material-symbols-rounded">upload</span>A picture</button>
-          ${cover ? html`<button class="chip" ?disabled=${this.noteBusy} @click=${() => void this.noteCover("clear")}>
-            <span class="material-symbols-rounded">delete</span>No cover</button>` : nothing}
-          ${file}
+    const version = this.civPage?.versions.find((v) => v.id === civ?.versionId);
+    const stills = version?.images ?? [];
+    const d = this.draft;
+    const setDraft = (patch: Partial<EditorDraft>) => (this.draft = { ...this.draft, ...patch });
+    const field = (key: keyof EditorDraft, label: string, placeholder: string) => html`<label>${label}
+      <input type="number" step="0.05" min="-5" max="5" .value=${d[key]} placeholder=${placeholder}
+        @input=${(ev: Event) => setDraft({ [key]: (ev.target as HTMLInputElement).value })} /></label>`;
+    const civURL = civ?.modelId ? `https://civitai.com/models/${civ.modelId}${civ.versionId ? `?modelVersionId=${civ.versionId}` : ""}` : "";
+    return html`<div class="overlay" @click=${(ev: Event) => { if (ev.target === ev.currentTarget && !busy) this.closeEditor(); }}
+      @keydown=${(ev: KeyboardEvent) => { if (ev.key === "Escape" && !busy) { ev.stopPropagation(); this.closeEditor(); } }}>
+      <div class="dialog" role="dialog" aria-modal="true" aria-label="Edit ${e.label}">
+        <div class="dlg-head">
+          <div class="dlg-cover">${cover ? html`<img src=${cover} alt="" />` : html`<span class="material-symbols-rounded">${e.lora ? "style" : "deployed_code"}</span>`}</div>
+          <div class="dlg-title">
+            <b>${e.label}</b>
+            <span class="dlg-files">${e.files.join(" · ")}</span>
+            ${civ ? html`<a class="dlg-civ" href=${civURL} target="_blank" rel="noopener noreferrer" title="Open its page on Civitai">
+                <span class="material-symbols-rounded">open_in_new</span>${civ.modelName ?? "Civitai"}${civ.versionName ? ` · ${civ.versionName}` : ""}</a>`
+              : html`<span class="dlg-civ off">Not linked to Civitai</span>`}
+          </div>
+          <button class="icon-btn" title="Close" aria-label="Close" ?disabled=${!!busy} @click=${() => this.closeEditor()}>
+            <span class="material-symbols-rounded">close</span></button>
         </div>
-      </div>
-      ${n.words ? html`<label class="ne-words">Trigger words — put in the prompt as it goes on
-        <input type="text" .value=${this.noteDraft} placeholder="comma-separated, as on its Civitai page"
-          @input=${(e: Event) => (this.noteDraft = (e.target as HTMLInputElement).value)}
-          @keydown=${(e: KeyboardEvent) => { if (e.key === "Enter") { e.preventDefault(); void this.saveNoteWords(); } }} /></label>` : nothing}
-      <div class="ne-foot">
-        <button class="chip" @click=${() => (this.noting = null)}>${n.words ? "Cancel" : "Done"}</button>
-        ${n.words ? html`<button class="chip primary" ?disabled=${this.noteBusy} @click=${() => void this.saveNoteWords()}>
-          <span class="material-symbols-rounded">check</span>Save words</button>` : nothing}
+        <div class="dlg-body">
+          <div class="k">Cover</div>
+          <div class="row">
+            <input type="file" accept="image/*" @change=${(ev: Event) => {
+              const input = ev.target as HTMLInputElement;
+              const picked = input.files?.[0];
+              input.value = "";
+              if (picked) void this.setCover(picked);
+            }} />
+            <button class="chip" ?disabled=${!onStage || !!busy || this.grabbing}
+              title=${onStage ? "The frame the clip on the stage is showing" : "Put a clip on the stage to take a frame of it"}
+              @click=${() => void this.setCover("frame")}><span class="material-symbols-rounded">photo_camera</span>This frame</button>
+            <button class="chip" ?disabled=${!!busy}
+              @click=${(ev: Event) => (ev.currentTarget as HTMLElement).parentElement?.querySelector<HTMLInputElement>("input[type=file]")?.click()}>
+              <span class="material-symbols-rounded">upload</span>A picture</button>
+            ${cover ? html`<button class="chip" ?disabled=${!!busy} @click=${() => void this.setCover("clear")}>
+              <span class="material-symbols-rounded">remove_circle</span>No cover</button>` : nothing}
+          </div>
+          ${civ ? html`<div class="stills" aria-label="Its showcase on Civitai">
+              ${stills.length ? stills.slice(0, 18).map((u, i) => html`<button class="still" ?disabled=${!!busy}
+                  title=${version?.videos?.[i] ? "A frame of this showcase clip as its cover" : "This picture as its cover"}
+                  @click=${() => void this.setCover({ url: u })}>
+                  <img src=${api.civitaiImageURL(u)} alt="" loading="lazy" />
+                  ${version?.videos?.[i] ? html`<span class="material-symbols-rounded still-play">play_circle</span>` : nothing}
+                </button>`)
+                : html`<span class="note">${this.editBusy === "page" ? "Fetching its showcase from Civitai…" : this.civPage ? "Its version has no showcase pictures." : ""}</span>`}
+            </div>` : nothing}
+
+          ${e.lora ? html`
+            <div class="k">Trigger words<small>put in the prompt as it goes on</small></div>
+            <input class="text" type="text" .value=${d.triggers} placeholder="comma-separated, as on its Civitai page"
+              @input=${(ev: Event) => setDraft({ triggers: (ev.target as HTMLInputElement).value })} />
+            <div class="k">Strength<small>what it goes on at</small></div>
+            <div class="dlg-grid">
+              ${field("weight", "Default", "1")}
+              ${field("weightMin", "Works from", "—")}
+              ${field("weightMax", "to", "—")}
+            </div>
+            <div class="k">Negative while it's on<small>joins What it should avoid</small></div>
+            <textarea style="min-height:52px" .value=${d.negative} placeholder="static, deformed, extra limbs"
+              @input=${(ev: Event) => setDraft({ negative: (ev.target as HTMLTextAreaElement).value })}></textarea>
+            ${civ ? html`<button class="chip" style="margin-top:8px" ?disabled=${!!busy}
+              title="Fill the words, strength and negative its Civitai page recommends — nothing is kept until Save"
+              @click=${() => void this.fillFromCivitai()}><span class="material-symbols-rounded">${this.editBusy === "fill" ? "hourglass_top" : "download"}</span>Fill from Civitai</button>` : nothing}
+          ` : nothing}
+
+          <div class="k">Civitai</div>
+          <div class="link-row">
+            <input class="text" type="text" .value=${this.linkText} placeholder=${civ ? "Another version: paste its page's address" : "Paste its Civitai page's address, or a version number"}
+              @input=${(ev: Event) => (this.linkText = (ev.target as HTMLInputElement).value)}
+              @keydown=${(ev: KeyboardEvent) => { if (ev.key === "Enter" && this.linkText.trim()) { ev.preventDefault(); void this.link("address"); } }} />
+            <button class="chip" ?disabled=${!!busy || !this.linkText.trim()} @click=${() => void this.link("address")}>
+              <span class="material-symbols-rounded">link</span>Link</button>
+          </div>
+          <div class="row" style="margin-top:8px">
+            ${civ ? html`<button class="chip" ?disabled=${!!busy} @click=${() => void this.unlink()}>
+              <span class="material-symbols-rounded">link_off</span>Unlink</button>` : html`<button class="chip" ?disabled=${!!busy}
+              title="Read the file through and ask Civitai which version it is — a minute or more for a large model"
+              @click=${() => void this.link("hash")}><span class="material-symbols-rounded">${this.editBusy === "hash" ? "hourglass_top" : "travel_explore"}</span>${this.editBusy === "hash" ? "Reading the file…" : "Find it on Civitai by its file"}</button>`}
+          </div>
+          <div class="note" style="margin-top:6px">Linked, its words, strength and cover are filled where they're blank, and its showcase can be its cover.</div>
+          ${this.editError ? html`<div class="err">${this.editError}</div>` : nothing}
+        </div>
+        <div class="dlg-foot">
+          <button class="chip danger" ?disabled=${!!busy} title="Delete the file${e.files.length > 1 ? "s" : ""} from ComfyUI's folder"
+            @click=${() => void this.deleteFiles()}><span class="material-symbols-rounded">delete</span>${this.editBusy === "delete" ? "Deleting…" : "Delete"}</button>
+          <span style="flex:1"></span>
+          <button class="chip" ?disabled=${!!busy} @click=${() => this.closeEditor()}>${e.lora ? "Cancel" : "Done"}</button>
+          ${e.lora ? html`<button class="chip primary" ?disabled=${!!busy} @click=${() => void this.saveEditor()}>
+            <span class="material-symbols-rounded">check</span>Save</button>` : nothing}
+        </div>
       </div>
     </div>`;
   }
@@ -1644,33 +2244,6 @@ export class OppaiVideoStudio extends LitElement {
     void runClip(cut, () => api.matteClip(params));
   }
 
-  private renderFrame() {
-    const pic = session.picture;
-    const file = html`<input type="file" accept="image/*" @change=${(e: Event) => {
-      const input = e.target as HTMLInputElement;
-      this.pickFile(input.files?.[0]);
-      input.value = "";
-    }} />`;
-    const choose = () => (this.renderRoot.querySelector<HTMLInputElement>(".frame input[type=file]"))?.click();
-    return html`<div class="k">Starts from</div>
-      <div class="frame ${pic ? "has" : ""} ${this.dropping ? "drop" : ""}"
-        @dragover=${(e: DragEvent) => this.onDragOver(e)} @dragleave=${() => (this.dropping = false)} @drop=${(e: DragEvent) => this.onDrop(e)}>
-        ${file}
-        ${pic
-          ? html`<img src=${pic.url} alt="" />
-              <div class="frame-bar">
-                <span class="nm">${pic.name}<small>${pic.width}×${pic.height}</small></span>
-                <button title="Choose another picture" aria-label="Choose another picture" @click=${choose}><span class="material-symbols-rounded">upload</span></button>
-                <button title="Let it go" aria-label="Let the picture go" @click=${() => this.set("picture", null)}><span class="material-symbols-rounded">close</span></button>
-              </div>`
-          : html`<div class="frame-empty">
-              <span class="material-symbols-rounded">add_photo_alternate</span>
-              <span>Drag a picture here from the gallery or your desktop, or press <b>Animate</b> on one.</span>
-              <button class="chip" @click=${choose}><span class="material-symbols-rounded">upload</span>Choose a picture</button>
-            </div>`}
-      </div>`;
-  }
-
   private renderStage() {
     const run = this.selectedRun;
     if (!run) {
@@ -1678,13 +2251,13 @@ export class OppaiVideoStudio extends LitElement {
       return pic
         ? html`<div class="hero">
             <div class="hero-frame"><img src=${pic.url} alt="" /></div>
-            <span>Say what happens under <b>What happens</b>, then <b>Make the clip</b>. It takes a few minutes and carries on while you do other things.</span>
+            <span>Say what happens in the prompt below, then <b>Make the clip</b>. It takes a few minutes and carries on while you do other things.</span>
           </div>`
         : html`<div class="hero">
             <span class="glyph"><span class="material-symbols-rounded">theaters</span></span>
             <strong>${session.from === "image" ? "Bring a picture to life" : "A clip from words"}</strong>
             <span>${session.from === "image"
-              ? "Drop a picture on Starts from, or press Animate on one in the gallery, the Image studio or a clip's frame."
+              ? "Drop a picture here, choose one at the front of the prompt, or press Animate on one in the gallery, the Image studio or a clip's frame."
               : "Describe the scene and what moves in it, in sentences — video models read words better than tags."}</span>
           </div>`;
     }
