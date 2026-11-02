@@ -549,6 +549,8 @@ type clipUpscaleReq struct {
 	// The clip, by its name in the studio's gallery or by its preview's id.
 	Gallery string `json:"gallery"`
 	ID      string `json:"id"`
+	// Outfit is a wardrobe square's stored clip, in place of the two above.
+	Outfit *outfitClipRef `json:"outfit,omitempty"`
 	// Upscaler is an upscale model as ComfyUI lists it; blank resizes alone.
 	Upscaler string  `json:"upscaler"`
 	Scale    float64 `json:"scale"`
@@ -648,6 +650,14 @@ type clipSource struct {
 // writes the error itself when there is none.
 func (s *Server) clipToUpscale(w http.ResponseWriter, r *http.Request, set settings.Settings, req clipUpscaleReq) (clipSource, bool) {
 	base := genRecord{Loras: []imagegen.ImageMetadataLora{}, Triggers: []string{}, Characters: []string{}, Backend: "comfyui"}
+	if req.Outfit != nil {
+		src, status, msg := s.libbyAnimClipSource(*req.Outfit, base)
+		if status != 0 {
+			writeErr(w, status, msg)
+			return clipSource{}, false
+		}
+		return src, true
+	}
 	if req.Gallery != "" {
 		if !set.ImageGenEnabled || !s.ownGallery(r.Context(), set.ImageGenURL) {
 			writeErr(w, http.StatusConflict, "this gallery keeps no clips")

@@ -719,7 +719,7 @@ export const studioStyles = css`
   .sprite-inspector {
     min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--oppai-surface); border-right: 1px solid var(--oppai-border-strong);
   }
-  .ins-tabs { flex: none; display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px; padding: 8px; border-bottom: 1px solid var(--oppai-border); }
+  .ins-tabs { flex: none; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 2px; padding: 8px; border-bottom: 1px solid var(--oppai-border); }
   .ins-tabs button {
     display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 7px 2px 6px; border: none; border-radius: 10px;
     background: transparent; color: var(--oppai-text-muted); font: inherit; font-size: 11px; font-weight: 650; cursor: pointer;
@@ -839,6 +839,17 @@ export const studioStyles = css`
   .cell-state.needs { background: #f5c469; }
   .cell-state.ready { background: #6ef7a5; }
   .cell-state.stale { background: transparent; border: 2px solid #d9a441; }
+  /* How far its animation has got: a clip, or a clip cut out (the finished sprite). */
+  .cell-motion { flex: none; display: grid; place-items: center; color: var(--oppai-text-muted); }
+  .cell-motion .material-symbols-rounded { font-size: 12px; }
+  .cell-motion.ready { color: var(--oppai-primary-bright, var(--oppai-primary)); }
+  .cell-motion.cut { color: #6ef7a5; }
+  .cell-motion.stale { color: #d9a441; }
+  .face-matrix.fit .cell-motion .material-symbols-rounded { font-size: 10px; }
+  /* A square being animated or cut breathes, so a run can be followed across the board. */
+  .sheet-cell.animating { outline: 2px solid color-mix(in srgb, var(--oppai-primary) 70%, transparent); outline-offset: -2px; animation: ms-pulse 1.6s ease-in-out infinite; }
+  @keyframes ms-pulse { 50% { outline-color: transparent; } }
+  @media (prefers-reduced-motion: reduce) { .sheet-cell.animating { animation: none; } }
   .sheet-progress {
     position: absolute; top: 58px; left: 50%; z-index: 6; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; padding: 6px 6px 6px 6px;
     border-radius: 16px; border: 1px solid var(--oppai-border-strong); background: color-mix(in srgb, var(--oppai-surface-2) 94%, transparent);
@@ -895,14 +906,16 @@ export const studioStyles = css`
       linear-gradient(45deg, transparent 75%, #5a5a5a 75%), linear-gradient(-45deg, transparent 75%, #5a5a5a 75%);
     background-size: 16px 16px; background-position: 0 0, 0 8px, 8px -8px, -8px 0;
   }
-  .focus-art img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .focus-art img, .focus-art video { width: 100%; height: 100%; object-fit: contain; display: block; }
+  /* A clip still has the backdrop it was drawn on; only the cut shows the checkerboard. */
+  .focus-art video.clip { background: #000; }
   /* As she appears in chat: standing in a warm room, her speech box above her in the
      peach pixel style the app's own pop-up uses (app.ts). */
   .focus-art.scene {
     background: radial-gradient(120% 70% at 50% 100%, #5b3a2c 0%, transparent 60%),
       linear-gradient(180deg, #2a2233 0%, #3d2b36 55%, #4a3128 100%);
   }
-  .focus-art.scene img { align-self: end; height: 82%; object-position: bottom center; filter: drop-shadow(0 6px 8px rgba(0,0,0,.45)); }
+  .focus-art.scene img, .focus-art.scene video { align-self: end; height: 82%; object-position: bottom center; filter: drop-shadow(0 6px 8px rgba(0,0,0,.45)); }
   .scene-speech {
     position: absolute; top: 12px; left: 12px; right: 12px; padding: 10px 12px 13px; border: 3px solid #29262a; border-radius: 6px;
     background: linear-gradient(180deg, #f7c994, #f3bd86); color: #35282a;
@@ -942,6 +955,37 @@ export const studioStyles = css`
   .tool:disabled, .tool.disabled { opacity: 0.4; cursor: default; pointer-events: none; }
   .tool.danger:hover:not(:disabled) { color: var(--oppai-error, #f2b8b5); }
   .focus-desc { line-height: 1.5; }
+  /* The square's animation: picture, clip and cut, each showing itself when pressed. */
+  .motion-steps { display: grid; gap: 8px; padding: 10px; border-radius: 12px; border: 1px solid var(--oppai-border); background: var(--oppai-bg); }
+  .ms-row { display: flex; align-items: center; gap: 2px; }
+  .ms-arrow { font-size: 16px; color: var(--oppai-text-muted); flex: none; }
+  .ms-step {
+    flex: 1; min-width: 0; display: inline-flex; align-items: center; justify-content: center; gap: 4px; height: 30px; padding: 0 6px;
+    border: 1px solid var(--oppai-border); border-radius: 10px; background: transparent; color: var(--oppai-text-dim);
+    font: inherit; font-size: 11.5px; font-weight: 650; cursor: pointer; white-space: nowrap;
+  }
+  .ms-step .material-symbols-rounded { font-size: 16px; }
+  .ms-step i { width: 6px; height: 6px; border-radius: 50%; flex: none; background: var(--oppai-border-strong); box-sizing: border-box; }
+  .ms-step.ready i { background: #6ef7a5; }
+  .ms-step.stale i { background: transparent; border: 1.5px solid #d9a441; }
+  .ms-step.on { border-color: var(--oppai-primary); color: var(--oppai-text); background: color-mix(in srgb, var(--oppai-primary) 12%, transparent); }
+  .ms-step:disabled { opacity: 0.45; cursor: default; }
+  .ms-actions { display: flex; align-items: center; gap: 6px; }
+  .ms-actions .btn { flex: 1; justify-content: center; min-width: 0; white-space: nowrap; padding-inline: 8px; }
+  .ms-busy { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px 8px; font-size: 11.5px; color: var(--oppai-text-muted); font-variant-numeric: tabular-nums; }
+  .ms-busy b { color: var(--oppai-text); }
+  .ms-busy .sp-bar { grid-column: 1; }
+  .ms-busy .icon-btn { grid-column: 2; grid-row: 1 / 3; }
+  .ms-takes { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: thin; }
+  .ms-take { position: relative; flex: none; width: 54px; aspect-ratio: 3 / 4; padding: 0; border: 2px solid transparent; border-radius: 9px; overflow: hidden; background: #000; cursor: pointer; }
+  .ms-take.on { border-color: var(--oppai-primary); }
+  .ms-take video { width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none; }
+  .ms-take b { position: absolute; left: 4px; top: 3px; font-size: 10px; color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,.8); }
+  .motion-run { display: inline-flex; align-items: center; gap: 6px; }
+  .motion-run select {
+    height: 34px; padding: 0 8px; border-radius: 12px; border: 1px solid var(--oppai-border-strong);
+    background: var(--oppai-bg); color: var(--oppai-text); font: inherit; font-size: 12px;
+  }
   .focus-meta { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; color: var(--oppai-text-muted); font-size: 11px; }
   .focus-meta span { display: inline-flex; align-items: center; gap: 3px; }
   .link-btn { border: 0; background: none; padding: 0; color: var(--oppai-primary-bright); font: inherit; font-size: 11px; cursor: pointer; }

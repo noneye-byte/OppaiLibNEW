@@ -86,6 +86,7 @@ func (s *Server) readLibbyWIP(id, emotion string, level int) (*libbyWIPSquare, e
 // removeLibbyWIP drops every square of one outfit. Called when the outfit is deleted,
 // which is the only thing that removes work in progress wholesale.
 func (s *Server) removeLibbyWIP(id string) {
+	s.removeLibbyAnims(id)
 	for _, e := range libbySlots {
 		for level := 0; level <= maxLibbyLevel; level++ {
 			_ = os.Remove(s.libbyWIPPath(id, e, level))
@@ -263,6 +264,10 @@ func (s *Server) handleDeleteLibbyOutfitWIP(w http.ResponseWriter, r *http.Reque
 	}
 	for _, l := range slotLevels(emotion, libbyLevelParam(r)) {
 		_ = os.Remove(s.libbyWIPPath(id, emotion, l))
+	}
+	// A square thrown away takes its clips with it: they were made of its picture.
+	for _, stage := range libbyAnimStages {
+		s.removeLibbyAnim(id, emotion, slotLevel(emotion, libbyLevelParam(r)), stage)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 }

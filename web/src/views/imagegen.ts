@@ -32,8 +32,10 @@ import {
   type GenerateParams,
   type GenerateResult,
   type ImageGenStatus,
+  type LibbyAnim,
   type LibbyLoadout,
   type LibbyOutfit,
+  type GenClip,
 } from "../api.js";
 import {
   buildGenInfo,
@@ -89,7 +91,15 @@ import { LORA_DRAG_TYPE } from "./imagegen-loras.js";
 import "./rename-dialog.js";
 import "./imagegen-detailer.js";
 import "./gpu-switch.js";
-import { animatePicture, clipsRunning, onClipKept, onClipsChange, openGalleryClip, refreshComfyLists, type ClipPicture, type GalleryClip } from "./imagegen-video.js";
+import {
+  animatePicture, clipFormProblem, clipParamsFor, clipsRunning, comfyListsReady, followClip, newClipJobId, onClipKept, onClipsChange,
+  openGalleryClip, refreshComfyLists, spriteForm, type ClipPicture, type GalleryClip,
+} from "./imagegen-video.js";
+import { startFrameSize } from "../clip-shape.js";
+import {
+  MOTION_STEPS, canMake, clipTake, nextStep, pictureTake, squareSteps, stepCounts, stepWork,
+  type MotionStep, type SquareMotion,
+} from "../sprite-motion.js";
 import { GALLERY_DRAG_TYPE } from "./imagegen-gallery.js";
 import {
   loadLayout, loadPrompts, moveItem, patchShot, rememberPrompt, rememberShots, saveLayout, savePrompts, stepThrough,
@@ -219,13 +229,25 @@ const CREATE_TABS: { id: CreateTab; label: string; icon: string }[] = [
 
 /** The Sprites inspector's tabs. The recipe was one accordion of eleven sections, read
     top to bottom; these are the four things it is actually about. */
-type SpriteTab = "outfit" | "look" | "prompt" | "generator";
+type SpriteTab = "outfit" | "look" | "prompt" | "generator" | "motion";
 const SPRITE_TABS: { id: SpriteTab; label: string; icon: string }[] = [
   { id: "outfit", label: "Outfit", icon: "checkroom" },
   { id: "look", label: "Look", icon: "photo_camera" },
   { id: "prompt", label: "Prompt", icon: "edit_note" },
   { id: "generator", label: "Generator", icon: "deployed_code" },
+  // How the squares move: the Video studio's inspector, over a set of choices of its own.
+  { id: "motion", label: "Motion", icon: "animation" },
 ];
+
+/** What each step of a square's animation is called on the board. */
+const STEP_NAMES: Record<MotionStep, string> = { picture: "Pictures", clip: "Clips", cut: "Background removal" };
+
+/**
+ * Takes of a square's clip past the one filed — previews, by wardrobe and square, to
+ * pick from instead. For the page rather than the element, as the session's pictures
+ * are: switching to the Image studio and back must not lose a clip that took minutes.
+ */
+const spriteTakes = new Map<string, GenClip[]>();
 
 const MODES: { id: StudioMode; label: string; icon: string }[] = [
   { id: "image", label: "Image", icon: "image" },
@@ -669,8 +691,19 @@ export class OppaiImageGen extends LitElement {
   /** Whether the Sprites recipe is out beside the board. */
   @state() private spriteInspector = true;
   @state() private boardFilter: BoardFilter = "all";
-  /** The selected square drawn cut out on a checkerboard, or as she appears in chat. */
-  @state() private focusView: "cutout" | "scene" = "cutout";
+  /** The selected square drawn cut out on a checkerboard, or as she appears in chat —
+      animated there once it has a cut — or its clip, or its cut clip, playing. */
+  @state() private focusView: "cutout" | "scene" | "clip" | "cut" = "cutout";
+  /** Each square's clip and cut on the board's wardrobe, by slot key. */
+  @state() private anims: Record<string, { clip?: LibbyAnim; cut?: LibbyAnim }> = {};
+  /** Squares being animated or cut now, by slot key: which step, how far, its job. */
+  @state() private motionBusy: Record<string, { step: "clip" | "upscale" | "cut"; percent: number; jobId: string }> = {};
+  /** The set being taken through its three steps, and how far it has got. */
+  @state() private motionRunning = false;
+  @state() private motionProgress = "";
+  /** Which squares a run animates: the whole set, or the open row (the misc block). */
+  @state() private motionScope: "set" | "row" = "set";
+  private stopMotion = false;
   /** The tier's expressions played one after another, to see whether they are one girl. */
   @state() private flipping = false;
   @state() private flipFace = -1;
@@ -1980,6 +2013,7 @@ export class OppaiImageGen extends LitElement {
     // A full wardrobe can take a while. Leaving Creation finishes only the request
     // already accepted by the generator, then stops the client-side queue.
     this.stopOutfitBatch = true;
+    this.stopMotion = true;
     this.stopListening();
     // Leaving the tab is exactly the moment the old version threw the work away.
     // Flushing here (rather than relying on the debounce having fired) is what makes
@@ -3012,6 +3046,279 @@ export class OppaiImageGen extends LitElement {
       ...restored,
     ];
     this.persistDraft();
+    void this.loadAnims(wardrobeId);
+  }
+
+  // ── animating the squares ───────────────────────────────────────────────────
+  //
+  // A square becomes an animated sprite in three steps, in order: its picture, a clip
+  // made from the picture, and that clip with its background cut away. Each is filed
+  // on the server beside the square (handlers_libby_anim.go) and remembers the take of
+  // the step before it, which is how sprite-motion.ts tells a clip of a redone picture
+  // from a current one.
+
+  /** Reads the wardrobe's clips and cuts. */
+  private async loadAnims(wardrobeId: string) {
+    let anims: LibbyAnim[];
+    try {
+      anims = (await api.libbyOutfitAnims(wardrobeId)).anims;
+    } catch {
+      anims = []; // an older server keeps none
+    }
+    if (wardrobeId !== this.outfitWardrobeId) return;
+    const next: typeof this.anims = {};
+    for (const a of anims) {
+      const key = slotKeyOf({ emotion: a.emotion, tier: a.level });
+      next[key] = { ...next[key], [a.stage]: a };
+    }
+    this.anims = next;
+  }
+
+  /** The take a square's picture is, as its clip remembers it. */
+  private pictureTakeOf(shot: Shot): string {
+    return pictureTake(shot.seed, shot.previewVersion ?? 0, shot.outfitConfig ?? "");
+  }
+
+  private squareMotion(slot: Pick<DraftOutfitSlot, "emotion" | "tier">): SquareMotion {
+    const shot = this.shotAt(slot);
+    const a = this.anims[slotKeyOf(slot)];
+    return { picture: shot ? this.pictureTakeOf(shot) : "", clip: a?.clip, cut: a?.cut };
+  }
+
+  private setMotionBusy(key: string, busy: { step: "clip" | "upscale" | "cut"; percent: number; jobId: string } | null) {
+    const next = { ...this.motionBusy };
+    if (busy) next[key] = busy;
+    else delete next[key];
+    this.motionBusy = next;
+  }
+
+  /**
+   * The picture a square's clip starts from. A reviewed square is cut out already, and
+   * a video model handed transparency sees whatever colour the empty pixels happen to
+   * hold, so it goes back onto the flat backdrop it was drawn on — which is also the
+   * backdrop the clip's own cut then takes away.
+   */
+  private async squareStartFrame(shot: Shot): Promise<{ dataURL: string; width: number; height: number }> {
+    const res = await fetch(this.liveURL(shot), { credentials: "same-origin" });
+    if (!res.ok) throw new Error(`the square's picture returned ${res.status}`);
+    const bitmap = await createImageBitmap(await res.blob());
+    const size = startFrameSize(bitmap.width, bitmap.height);
+    const canvas = document.createElement("canvas");
+    canvas.width = size.width;
+    canvas.height = size.height;
+    const g = canvas.getContext("2d")!;
+    let backdrop = this.outfitBackground;
+    try {
+      const drawn = (JSON.parse(shot.outfitConfig ?? "{}") as { background?: string }).background;
+      if (drawn === "black" || drawn === "white") backdrop = drawn;
+    } catch { /* a square from before the recipe was recorded */ }
+    g.fillStyle = backdrop === "black" ? "#000" : "#fff";
+    g.fillRect(0, 0, size.width, size.height);
+    g.imageSmoothingQuality = "high";
+    g.drawImage(bitmap, 0, 0, size.width, size.height);
+    bitmap.close();
+    return { dataURL: canvas.toDataURL("image/png"), width: size.width, height: size.height };
+  }
+
+  /** Files a finished clip as one step of a square, from where the server has it. */
+  private async fileMotion(wardrobeId: string, slot: DraftOutfitSlot, stage: "clip" | "cut", clip: GenClip, from: string) {
+    const a = await api.putLibbyOutfitAnim(wardrobeId, slot.emotion, slot.tier, stage, {
+      id: clip.id || undefined, gallery: clip.id ? undefined : clip.gallery, from, recipe: clip.recipe,
+    });
+    if (wardrobeId !== this.outfitWardrobeId) return;
+    const key = slotKeyOf(slot);
+    this.anims = { ...this.anims, [key]: { ...this.anims[key], [stage]: a } };
+  }
+
+  /**
+   * Animates one square from its picture with the Motion tab's choices, enlarging the
+   * clip first when they say to, and files the first take; any others wait beside the
+   * square to be picked instead. Resolves with what went wrong, "" when it worked.
+   */
+  private async animateSquare(slot: DraftOutfitSlot): Promise<string> {
+    const shot = this.shotAt(slot);
+    if (!shot) return "This square has no picture yet — its picture comes first.";
+    const key = slotKeyOf(slot);
+    if (this.motionBusy[key]) return "This square is being worked on already.";
+    const clips = this.status?.clips ?? {};
+    await comfyListsReady();
+    const problem = clipFormProblem(spriteForm, clips);
+    if (problem) return problem;
+    const from = this.pictureTakeOf(shot);
+    this.setMotionBusy(key, { step: "clip", percent: 0, jobId: "" });
+    try {
+      const wardrobeId = shot.wipOutfitId || await this.ensureWardrobe();
+      const start = await this.squareStartFrame(shot);
+      const kept = spriteForm.keepSeed ? this.selectedClipSeed() : 0;
+      const made: GenClip[] = [];
+      const takes = Math.max(1, spriteForm.variations);
+      for (let i = 0; i < takes; i++) {
+        const params = clipParamsFor(spriteForm, clips, start, this.board, kept ? kept + i : undefined);
+        params.initImage = start.dataURL;
+        const jobId = params.jobId!;
+        const follow = (step: "clip" | "upscale", id: string) => (percent: number) =>
+          this.setMotionBusy(key, { step, percent: (i + (step === "upscale" ? 0.5 + percent / 2 : spriteForm.enlarge ? percent / 2 : percent)) / takes, jobId: id });
+        this.setMotionBusy(key, { step: "clip", percent: i / takes, jobId });
+        let clip = await followClip(jobId, () => api.makeClip(params), follow("clip", jobId));
+        if (spriteForm.enlarge) {
+          const upId = newClipJobId();
+          clip = await followClip(upId, () => api.upscaleClip({
+            jobId: upId, id: clip.id || undefined, gallery: clip.id ? undefined : clip.gallery,
+            upscaler: spriteForm.upscaler, scale: spriteForm.upscaleBy, board: this.board, detach: true,
+          }), follow("upscale", upId));
+        }
+        made.push(clip);
+        if (i === 0) await this.fileMotion(wardrobeId, slot, "clip", clip, from);
+      }
+      spriteTakes.set(`${wardrobeId}|${key}`, made);
+      return "";
+    } catch (e) {
+      const msg = (e as Error).message;
+      return /cancelled/i.test(msg) ? "Stopped." : msg;
+    } finally {
+      this.setMotionBusy(key, null);
+    }
+  }
+
+  /** Cuts a square's clip out of its background, on the server, reading the clip from
+      the wardrobe — a set's clips outlast their previews. Resolves as animateSquare does. */
+  private async cutSquare(slot: DraftOutfitSlot): Promise<string> {
+    const key = slotKeyOf(slot);
+    const sq = this.squareMotion(slot);
+    if (!canMake("cut", sq)) return sq.clip ? "This square's clip is of an older picture — animate it again first." : "This square has no clip yet — its clip comes first.";
+    if (!this.status?.matte) return this.status?.matteProblem || "Background removal isn't available on this server.";
+    if (this.motionBusy[key]) return "This square is being worked on already.";
+    const wardrobeId = this.outfitWardrobeId;
+    const jobId = newClipJobId();
+    this.setMotionBusy(key, { step: "cut", percent: 0, jobId });
+    try {
+      const clip = await followClip(jobId, () => api.matteClip({
+        jobId, outfit: { outfit: wardrobeId, emotion: slot.emotion, level: slot.tier }, board: this.board, detach: true,
+      }), (percent) => this.setMotionBusy(key, { step: "cut", percent, jobId }));
+      await this.fileMotion(wardrobeId, slot, "cut", clip, clipTake(sq.clip!));
+      return "";
+    } catch (e) {
+      const msg = (e as Error).message;
+      return /cancelled/i.test(msg) ? "Stopped." : msg;
+    } finally {
+      this.setMotionBusy(key, null);
+    }
+  }
+
+  /** The selected square's clip's seed, which "every square on its seed" keeps. */
+  private selectedClipSeed(): number {
+    return this.anims[slotKeyOf(this.outfitSlot().slot)]?.clip?.seed ?? 0;
+  }
+
+  /** One step on the selected square, from its panel: the error is said there. */
+  private async runSquareStep(step: "clip" | "cut") {
+    const { slot } = this.outfitSlot();
+    const problem = step === "clip" ? await this.animateSquare(slot) : await this.cutSquare(slot);
+    if (problem) this.showToast(problem);
+    else if (slotKeyOf(this.outfitSlot().slot) === slotKeyOf(slot)) this.focusView = step;
+  }
+
+  /** Puts another take in as the square's clip. Its cut, of the old take, goes stale. */
+  private async useTake(slot: DraftOutfitSlot, clip: GenClip) {
+    const shot = this.shotAt(slot);
+    if (!shot) return;
+    try {
+      await this.fileMotion(shot.wipOutfitId || this.outfitWardrobeId, slot, "clip", clip, this.pictureTakeOf(shot));
+      this.focusView = "clip";
+    } catch (e) {
+      this.showToast(`Couldn't use that take: ${(e as Error).message}`);
+    }
+  }
+
+  private async deleteSquareMotion(slot: DraftOutfitSlot, stage: "clip" | "cut") {
+    const key = slotKeyOf(slot);
+    try {
+      await api.deleteLibbyOutfitAnim(this.outfitWardrobeId, slot.emotion, slot.tier, stage);
+      const left = { ...this.anims[key] };
+      delete left.cut;
+      if (stage === "clip") delete left.clip;
+      this.anims = { ...this.anims, [key]: left };
+      if (this.focusView === "cut" || stage === "clip" && this.focusView === "clip") this.focusView = "cutout";
+    } catch (e) {
+      this.showToast(`Couldn't delete it: ${(e as Error).message}`);
+    }
+  }
+
+  /** The squares a run takes through its steps: the whole set (with Misc when it is
+      included), or the open row — the misc block when that is open. */
+  private motionSlots(): DraftOutfitSlot[] {
+    if (this.motionScope === "row") {
+      return this.sheetTab === "misc"
+        ? OUTFIT_ACTIVITIES.map((item) => this.outfitSlot(0, 0, item.id).slot)
+        : OUTFIT_FACES.map((_, face) => this.outfitSlot(this.outfitTier, face, "").slot);
+    }
+    const slots = OUTFIT_TIERS.flatMap((_, tier) => OUTFIT_FACES.map((__, face) => this.outfitSlot(tier, face, "").slot));
+    if (this.outfitMiscBatch) slots.push(...OUTFIT_ACTIVITIES.map((item) => this.outfitSlot(0, 0, item.id).slot));
+    return slots;
+  }
+
+  /**
+   * Takes the set through its three steps: every missing picture first, then a clip of
+   * every picture, then every clip's cut — never square by square, because each clip
+   * borrows the card from the image generator and the cut needs no card at all. Each
+   * step asks again which squares it has, so a run that is stopped picks up where it
+   * left off, and a square whose picture failed is not animated. The first failure
+   * stops the run, as a failed picture stops the picture batch: a ComfyUI that refused
+   * one square would refuse the other fifty-nine.
+   */
+  private async runMotion() {
+    if (this.generating || this.motionRunning || this.outfitBatchRunning) return;
+    this.motionRunning = true;
+    this.stopMotion = false;
+    this.error = "";
+    const name = (slot: DraftOutfitSlot) => (slot.tierLabel === "Misc" ? slot.emotionLabel : `${slot.tierLabel} · ${slot.emotionLabel}`);
+    let failed = "";
+    try {
+      for (const [n, step] of MOTION_STEPS.entries()) {
+        if (this.stopMotion || failed) break;
+        const slots = this.motionSlots();
+        const work = stepWork(step, slots.map((slot) => this.squareMotion(slot)));
+        for (let i = 0; i < work.length && !this.stopMotion && !failed; i++) {
+          const slot = slots[work[i]];
+          this.selectOutfitSlot(slot.index);
+          this.motionProgress = `Step ${n + 1} of 3 · ${STEP_NAMES[step]} · ${i + 1} of ${work.length} · ${name(slot)}`;
+          if (step === "picture") {
+            if (!this.outfitOn || !this.assemblePrompts().prompt.trim()) {
+              failed = "The pictures need the outfit's prompt — turn the outfit terms on under Outfit.";
+              break;
+            }
+            this.generating = true;
+            try {
+              await this.generateOne(true);
+            } catch (e) {
+              failed = (e as Error).message;
+            } finally {
+              this.generating = false;
+              this.persistDraft();
+            }
+          } else {
+            failed = step === "clip" ? await this.animateSquare(slot) : await this.cutSquare(slot);
+            if (!failed) this.focusView = step;
+          }
+        }
+      }
+      const counts = stepCounts(this.motionSlots().map((slot) => this.squareMotion(slot)));
+      const total = this.motionSlots().length;
+      this.motionProgress = failed
+        ? `Paused: ${failed} Run it again to carry on from there.`
+        : this.stopMotion
+          ? `Stopped · ${counts.picture} pictures, ${counts.clip} clips, ${counts.cut} cut of ${total}.`
+          : `Done · ${counts.cut} of ${total} squares animated and cut out.`;
+    } finally {
+      this.motionRunning = false;
+      this.generating = false;
+      this.persistDraft();
+    }
+  }
+
+  private cancelMotion() {
+    this.stopMotion = true;
+    this.motionProgress = "Stopping after the current square…";
   }
 
   private selectOutfitSlot(index: number) {
@@ -5267,10 +5574,24 @@ export class OppaiImageGen extends LitElement {
             ${this.renderSettingsSection(invoke, st.boards ?? [])}
             ${this.renderDetailerSection(invoke)}
             ${this.renderGeneratorPane(st, invoke)}`;
+        case "motion":
+          return this.renderMotionTab(st);
       }
     } finally {
       this.flatTitles = false;
     }
+  }
+
+  /** How the squares move: the Video studio's inspector over the set's own choices.
+      The square's shape and its clip's seed are the selected square's. */
+  private renderMotionTab(st: ImageGenStatus) {
+    const { slot } = this.outfitSlot();
+    const shot = this.shotAt(slot);
+    const square = shot ? { width: shot.info?.width || this.width, height: shot.info?.height || this.height } : null;
+    return html`<oppai-video-studio variant="sprites" .clips=${st.clips ?? {}} .board=${this.board} ?matte=${!!st.matte}
+      .matteProblem=${st.matteProblem ?? ""} .square=${square} .keptSeed=${this.selectedClipSeed()}
+      @animate-square=${() => void this.runSquareStep("clip")}
+      @find-video-models=${() => { this.civitaiMode = "video"; this.civitaiOpen = true; }}></oppai-video-studio>`;
   }
 
   /** While a square draws: the picture forming, small, over the top of the sheet. */
@@ -5422,10 +5743,12 @@ export class OppaiImageGen extends LitElement {
   private renderSheetCell(slot: DraftOutfitSlot, current: boolean) {
     const shot = this.shotAt(slot);
     const state = this.squareStatus(shot).tone as SquareState;
+    const motion = squareSteps(this.squareMotion(slot));
+    const busy = this.motionBusy[slotKeyOf(slot)];
     const label = slot.tier === 0 && slot.tierLabel === "Misc" ? slot.emotionLabel : `${slot.tierLabel} · ${slot.emotionLabel}`;
     const dim = !matchesFilter(this.boardFilter, state);
     return html`<button
-      class="sheet-cell ${current ? "current" : ""} ${shot ? "" : "empty"} ${dim ? "dim" : ""} st-${state}"
+      class="sheet-cell ${current ? "current" : ""} ${shot ? "" : "empty"} ${dim ? "dim" : ""} st-${state} ${busy ? "animating" : ""}"
       title=${shot ? `${label}${state === "stale" ? " — older recipe" : state === "ready" ? " — reviewed" : " — needs a cutout review"}` : `${label} — not generated yet`}
       @click=${() => this.selectOutfitSlot(slot.index)}
       @dblclick=${() => { this.selectOutfitSlot(slot.index); void this.generateOutfitAndNext(); }}
@@ -5435,6 +5758,9 @@ export class OppaiImageGen extends LitElement {
         : html`<span class="art-empty"><span class="material-symbols-rounded">add</span></span>`}
       <span class="cell-foot">
         <span class="cell-name">${slot.emotionLabel}</span>
+        ${motion.clip !== "none" ? html`<span class="cell-motion ${motion.cut === "ready" ? "cut" : motion.clip}"
+          title=${motion.cut === "ready" ? "Animated and cut out" : motion.clip === "ready" ? "Animated — its background isn't cut yet" : "Its clip is of an older picture"}>
+          <span class="material-symbols-rounded">${motion.cut === "ready" ? "animation" : "movie"}</span></span>` : nothing}
         ${shot ? html`<span class="cell-state ${state}"></span>` : nothing}
       </span>
     </button>`;
@@ -5512,10 +5838,18 @@ export class OppaiImageGen extends LitElement {
     const face = isMisc ? undefined : OUTFIT_FACES[this.outfitFace];
     const { prompt, negative } = this.assemblePrompts();
     const busy = this.generating;
-    const canGenerate = !busy && this.outfitOn && !!prompt.trim();
+    const canGenerate = !busy && !this.motionRunning && this.outfitOn && !!prompt.trim();
     const flipSlot = this.flipping && this.flipFace >= 0 ? this.outfitSlot(this.outfitTier, this.flipFace, "").slot : undefined;
     const shown = flipSlot ? this.shotAt(flipSlot) : shot;
     const shownSlot = flipSlot ?? slot;
+    // A clip plays in place of the picture when one is asked for, and in chat once the
+    // square is cut out — as the animated sprite it will be. Never while flipping.
+    const anim = flipSlot ? undefined : this.anims[slotKeyOf(slot)];
+    const steps = squareSteps(this.squareMotion(slot));
+    const playing = this.focusView === "clip" ? anim?.clip
+      : this.focusView === "cut" || this.focusView === "scene" && steps.cut === "ready" ? anim?.cut : undefined;
+    const playURL = playing && this.outfitWardrobeId
+      ? api.libbyOutfitAnimURL(this.outfitWardrobeId, slot.emotion, slot.tier, playing.stage, playing.updatedAt) : "";
     return html`
       <div class="focus-head">
         <div class="focus-title">
@@ -5531,12 +5865,14 @@ export class OppaiImageGen extends LitElement {
       </div>
       <div class="panel-scroll focus-scroll">
         <div class="focus-art ${this.focusView}">
-          ${shown
+          ${playURL
+            ? html`<video class=${playing!.stage} src=${playURL} autoplay loop muted playsinline aria-label="${shownSlot.emotionLabel}, animated"></video>`
+            : shown
             ? html`<img src=${this.previewURL(shown)} alt=${shownSlot.emotionLabel} style="cursor:zoom-in" title="Expand"
                 @click=${() => (this.expandedShot = shown)} @contextmenu=${(e: MouseEvent) => this.openShotMenu(shown, e)} />`
             : html`<span class="focus-empty"><span class="material-symbols-rounded">add_photo_alternate</span>Nothing here yet</span>`}
           ${this.focusView === "scene" ? html`<div class="scene-speech">${sampleLine(shownSlot.emotion, shownSlot.emotionLabel)}</div>` : nothing}
-          ${!isMisc ? html`<button class="flip-btn ${this.flipping ? "on" : ""}" title="Play this tier's expressions one after another, to check they are one face"
+          ${!isMisc && !playURL ? html`<button class="flip-btn ${this.flipping ? "on" : ""}" title="Play this tier's expressions one after another, to check they are one face"
             @click=${() => this.toggleFlip()}>
             <span class="material-symbols-rounded">${this.flipping ? "stop" : "play_arrow"}</span>${this.flipping ? shownSlot.emotionLabel : "Flip through"}
           </button>` : nothing}
@@ -5580,6 +5916,7 @@ export class OppaiImageGen extends LitElement {
             <span class="material-symbols-rounded">delete</span><span>Delete</span>
           </button>
         </div>
+        ${this.renderSquareMotion(slot)}
         <div class="sec-note focus-desc">${activity ? `${activity.face}; ${activity.pose}.` : face ? `${face.face}; ${face.pose}.` : nothing}</div>
         ${shot ? html`<div class="focus-meta">
           <span title="Seed"><span class="material-symbols-rounded" style="font-size:14px;">casino</span>${shot.seed}</span>
@@ -5598,6 +5935,67 @@ export class OppaiImageGen extends LitElement {
         </div>` : nothing}
       </div>
     `;
+  }
+
+  /**
+   * The square's way to being an animated sprite: picture, clip, cut, each a button
+   * that shows it, with the step that is next made by the one button under them. A
+   * step is offered only once the one it is made of is there and current.
+   */
+  private renderSquareMotion(slot: DraftOutfitSlot) {
+    const key = slotKeyOf(slot);
+    const shot = this.shotAt(slot);
+    const sq = this.squareMotion(slot);
+    const steps = squareSteps(sq);
+    const anim = this.anims[key];
+    const busy = this.motionBusy[key];
+    const clips = this.status?.clips;
+    const matte = !!this.status?.matte;
+    const next = nextStep(sq);
+    const view = (v: typeof this.focusView) => () => { this.stopFlip(); this.focusView = v; };
+    const stepButton = (step: MotionStep, icon: string, label: string, state: string, on: boolean, enabled: boolean, title: string) =>
+      html`<button class="ms-step ${state} ${on ? "on" : ""}" ?disabled=${!enabled} title=${title} aria-pressed=${on ? "true" : "false"}
+        @click=${view(step === "picture" ? "cutout" : step)}>
+        <span class="material-symbols-rounded">${icon}</span>${label}<i></i></button>`;
+    const pct = busy ? Math.round(busy.percent * 100) : 0;
+    const others = (spriteTakes.get(`${this.outfitWardrobeId}|${key}`) ?? []).filter((c) => c.id);
+    const lock = !!busy || this.motionRunning || this.generating;
+    return html`<div class="motion-steps" role="group" aria-label="Animation">
+      <div class="ms-row">
+        ${stepButton("picture", "image", "Picture", shot ? "ready" : "none", this.focusView === "cutout", !!shot, "The still")}
+        <span class="ms-arrow material-symbols-rounded">chevron_right</span>
+        ${stepButton("clip", "movie", "Clip", steps.clip, this.focusView === "clip", !!anim?.clip,
+          steps.clip === "stale" ? "Its clip is of an older picture" : anim?.clip ? `Seed ${anim.clip.seed}${anim.clip.recipe ? ` · ${anim.clip.recipe}` : ""}` : "Not animated yet")}
+        <span class="ms-arrow material-symbols-rounded">chevron_right</span>
+        ${stepButton("cut", "background_replace", "Cut", steps.cut, this.focusView === "cut", !!anim?.cut,
+          steps.cut === "stale" ? "Its cut is of an older clip" : anim?.cut ? "The clip without its background — the animated sprite" : "Background not cut yet")}
+      </div>
+      ${busy ? html`<div class="ms-busy">
+          <span>${busy.step === "clip" ? "Animating" : busy.step === "upscale" ? "Enlarging" : "Cutting the background"}… <b>${pct}%</b></span>
+          <span class="sp-bar"><span style=${`width:${pct}%`}></span></span>
+          ${busy.jobId ? html`<button class="icon-btn" title="Stop" aria-label="Stop" @click=${() => void api.cancelGenerate(busy.jobId).catch(() => {})}>
+            <span class="material-symbols-rounded">close</span></button>` : nothing}
+        </div>`
+        : html`<div class="ms-actions">
+          <button class="btn ${next === "clip" ? "primary" : ""}" ?disabled=${lock || !shot || !clips?.image}
+            title=${!clips?.image ? "No picture-to-video model is set up — Settings → Image generation → Video" : !shot ? "Its picture comes first" : "Make a clip of the picture with the Motion tab's choices"}
+            @click=${() => void this.runSquareStep("clip")}>
+            <span class="material-symbols-rounded" style="font-size:17px;">${anim?.clip ? "replay" : "animation"}</span>${anim?.clip ? "Redo clip" : "Animate"}</button>
+          <button class="btn ${next === "cut" ? "primary" : ""}" ?disabled=${lock || !canMake("cut", sq) || !matte}
+            title=${!matte ? this.status?.matteProblem || "Background removal isn't available here" : !canMake("cut", sq) ? "Its clip comes first" : "Remove the background: cut her out of the clip, frame by frame, on the server"}
+            @click=${() => void this.runSquareStep("cut")}>
+            <span class="material-symbols-rounded" style="font-size:17px;">background_replace</span>${anim?.cut ? "Redo cut" : "Cut out"}</button>
+          ${anim?.clip ? html`<button class="icon-btn" ?disabled=${lock} title=${anim.cut ? "Delete the cut (the clip stays)" : "Delete the clip"}
+            aria-label=${anim.cut ? "Delete the cut" : "Delete the clip"} @click=${() => void this.deleteSquareMotion(slot, anim.cut ? "cut" : "clip")}>
+            <span class="material-symbols-rounded">delete</span></button>` : nothing}
+        </div>`}
+      ${others.length > 1 ? html`<div class="ms-takes" role="listbox" aria-label="Takes of this square's clip">
+        ${others.map((c, i) => html`<button class="ms-take ${anim?.clip?.seed === c.seed ? "on" : ""}" role="option"
+          aria-selected=${anim?.clip?.seed === c.seed ? "true" : "false"} ?disabled=${lock}
+          title=${`Take ${i + 1} · seed ${c.seed} — use it as the square's clip`} @click=${() => void this.useTake(slot, c)}>
+          <video src=${`${api.genPreviewURL(c.id)}#t=0.1`} muted playsinline preload="metadata"></video><b>${i + 1}</b></button>`)}
+      </div>` : nothing}
+    </div>`;
   }
 
   /** The selected expression at every heat, Calm to Peak: how it climbs. */
@@ -5626,7 +6024,10 @@ export class OppaiImageGen extends LitElement {
     const total = EXPRESSION_SQUARES + (this.outfitMiscBatch ? MISC_SQUARES : 0);
     const have = expressions + (this.outfitMiscBatch ? misc : 0);
     const missing = Math.max(0, total - have);
-    const canRun = !this.generating && this.outfitOn && !!this.assemblePrompts().prompt.trim();
+    const canRun = !this.generating && !this.motionRunning && this.outfitOn && !!this.assemblePrompts().prompt.trim();
+    const motionSquares = this.motionSlots().map((slot) => this.squareMotion(slot));
+    const moved = stepCounts(motionSquares);
+    const toAnimate = motionSquares.filter((sq) => nextStep(sq) !== "done").length;
     const c = 2 * Math.PI * 17;
     const made = total ? Math.min(1, have / total) : 0;
     const done = total ? Math.min(1, reviewed / total) : 0;
@@ -5639,14 +6040,32 @@ export class OppaiImageGen extends LitElement {
       </div>
       <div class="batch-progress">
         <span class="batch-head">${have === total && total ? "The set is complete" : `${missing} square${missing === 1 ? "" : "s"} to go`}</span>
-        <span class="batch-count">${expressions}/${EXPRESSION_SQUARES} expressions · ${misc}/${MISC_SQUARES} misc · ${reviewed} reviewed${stale ? html` · <em>${stale} on an older recipe</em>` : nothing}</span>
+        <span class="batch-count">${expressions}/${EXPRESSION_SQUARES} expressions · ${misc}/${MISC_SQUARES} misc · ${reviewed} reviewed${stale ? html` · <em>${stale} on an older recipe</em>` : nothing}${moved.clip ? ` · ${moved.clip} animated · ${moved.cut} cut out` : nothing}</span>
       </div>
       <label class="switch compact" title="Whether Generate missing also renders the Misc states">
         <input type="checkbox" .checked=${this.outfitMiscBatch} ?disabled=${this.outfitBatchRunning}
           @change=${(e: Event) => { this.outfitMiscBatch = (e.target as HTMLInputElement).checked; this.persistDraft(); }} />
         Include Misc
       </label>
-      ${this.outfitBatchRunning
+      ${this.outfitBatchRunning || this.motionRunning ? nothing : html`<span class="motion-run">
+        <select aria-label="Which squares to animate" .value=${this.motionScope}
+          @change=${(e: Event) => (this.motionScope = (e.target as HTMLSelectElement).value as "set" | "row")}>
+          <option value="set" ?selected=${this.motionScope === "set"}>Whole set</option>
+          <option value="row" ?selected=${this.motionScope === "row"}>${this.sheetTab === "misc" ? "The misc block" : `The ${OUTFIT_TIERS[this.outfitTier].label} row`}</option>
+        </select>
+        <button class="btn" ?disabled=${!canRun || !toAnimate || !this.status?.clips?.image}
+          title=${!this.status?.clips?.image ? "No picture-to-video model is set up — Settings → Image generation → Video"
+            : "Missing pictures first, then a clip of every picture, then every clip's background — each step for the whole set before the next"}
+          @click=${() => void this.runMotion()}>
+          <span class="material-symbols-rounded" style="font-size:17px;">animation</span>
+          Animate ${toAnimate}
+        </button></span>`}
+      ${this.motionRunning
+        ? html`<button class="btn" @click=${() => this.cancelMotion()}>
+            <span class="material-symbols-rounded" style="font-size:17px;">stop_circle</span>
+            Stop after this square
+          </button>`
+        : this.outfitBatchRunning
         ? html`<button class="btn" @click=${() => this.cancelOutfitBatch()}>
             <span class="material-symbols-rounded" style="font-size:17px;">stop_circle</span>
             Stop after this one
@@ -5665,7 +6084,8 @@ export class OppaiImageGen extends LitElement {
         <span class="material-symbols-rounded" style="font-size:17px;">folder_zip</span>
         ${this.outfitExporting ? "Building ZIP…" : "Export ZIP"}
       </button>
-      ${this.outfitProgress ? html`<span class="batch-note">${this.outfitProgress}</span>` : nothing}
+      ${this.outfitProgress && !this.motionProgress ? html`<span class="batch-note">${this.outfitProgress}</span>` : nothing}
+      ${this.motionProgress ? html`<span class="batch-note">${this.motionProgress}</span>` : nothing}
     </div>`;
   }
 
@@ -5688,7 +6108,7 @@ export class OppaiImageGen extends LitElement {
         reader.readAsDataURL(file);
       });
       const wardrobeId = await this.ensureWardrobe();
-      await api.putLibbyOutfitWip(wardrobeId, slot.emotion, slot.tier, {
+      const stored = await api.putLibbyOutfitWip(wardrobeId, slot.emotion, slot.tier, {
         imageData: dataURL, filename, seed: -1, reviewed: false, config: this.outfitConfigKey(),
       });
       const previous = this.shotAt(slot);
@@ -5697,7 +6117,9 @@ export class OppaiImageGen extends LitElement {
       const shot: Shot = {
         id: `wip-${wardrobeId}-${slot.emotion}-${slot.tier}`, seed: -1, saved: false,
         outfitFilename: filename, outfitSlot: slot, outfitConfig: this.outfitConfigKey(),
-        cutoutReviewed: false, previewVersion: Date.now(), wipOutfitId: wardrobeId,
+        // The server's time, which the board reads back after a reload: a picture of
+        // one's own is told from the next by it (sprite-motion.ts's pictureTake).
+        cutoutReviewed: false, previewVersion: stored.updatedAt || Date.now(), wipOutfitId: wardrobeId,
       };
       this.shots = [...this.shots.filter((s) => !s.outfitSlot || slotKeyOf(s.outfitSlot) !== key), shot];
       this.persistDraft();
@@ -7507,7 +7929,7 @@ export class OppaiImageGen extends LitElement {
       // The kept copy is corrected first. If only one of the two writes can happen it
       // must be this one — the preview is a cache, and this is the wardrobe.
       const wardrobeId = reviewing.wipOutfitId || await this.ensureWardrobe();
-      await api.putLibbyOutfitWip(
+      const stored = await api.putLibbyOutfitWip(
         wardrobeId, reviewing.outfitSlot!.emotion, reviewing.outfitSlot!.tier,
         {
           imageData: png,
@@ -7525,7 +7947,7 @@ export class OppaiImageGen extends LitElement {
           await api.replaceGenPreview(shotId, png);
         } catch { /* the wardrobe copy is the one that is read back */ }
       }
-      const version = Date.now();
+      const version = stored.updatedAt || Date.now();
       this.shots = this.shots.map((shot) => shot.id === shotId
         ? { ...shot, cutoutReviewed: true, previewVersion: version, wipOutfitId: wardrobeId }
         : shot);

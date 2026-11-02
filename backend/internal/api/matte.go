@@ -85,8 +85,10 @@ type clipMatteReq struct {
 	// The clip, by its name in the studio's gallery or by its preview's id.
 	Gallery string `json:"gallery"`
 	ID      string `json:"id"`
-	Board   string `json:"board"`
-	Detach  bool   `json:"detach"`
+	// Outfit is a wardrobe square's stored clip, in place of the two above.
+	Outfit *outfitClipRef `json:"outfit,omitempty"`
+	Board  string         `json:"board"`
+	Detach bool           `json:"detach"`
 }
 
 // handleClipMatte cuts the background off a finished clip. The cut clip is a new one
@@ -102,7 +104,7 @@ func (s *Server) handleClipMatte(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	set := s.settings.Get()
-	src, ok := s.clipToUpscale(w, r, set, clipUpscaleReq{Gallery: req.Gallery, ID: req.ID})
+	src, ok := s.clipToUpscale(w, r, set, clipUpscaleReq{Gallery: req.Gallery, ID: req.ID, Outfit: req.Outfit})
 	if !ok {
 		return
 	}

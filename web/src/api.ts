@@ -1687,6 +1687,8 @@ export interface ClipUpscaleParams {
   gallery?: string;
   id?: string;
   /** An upscale model ComfyUI lists; blank resizes alone. */
+  /** A wardrobe square's stored clip, in place of gallery or id. */
+  outfit?: OutfitClipRef;
   upscaler: string;
   scale: number;
   board?: string;
@@ -2632,6 +2634,33 @@ export interface LibbyWipSquare {
   updatedAt: number;
 }
 
+/** A wardrobe square's stored clip, named where a clip to cut or enlarge is. */
+export interface OutfitClipRef {
+  outfit: string;
+  emotion: string;
+  level: number;
+  stage?: "clip" | "cut";
+}
+
+/**
+ * One step of a square's animated sprite, held beside its picture until the outfit
+ * goes: the clip made from the picture, or that clip with its background cut away.
+ * `from` is the take of the step before it that it was made from (sprite-motion.ts).
+ */
+export interface LibbyAnim {
+  emotion: string;
+  level: number;
+  stage: "clip" | "cut";
+  mime: string;
+  seed: number;
+  recipe?: string;
+  width?: number;
+  height?: number;
+  from?: string;
+  bytes: number;
+  updatedAt: number;
+}
+
 /**
  * A saved equipment recipe: what the outfit studio's board was set to.
  *
@@ -3390,7 +3419,7 @@ export const api = {
     request<GenerateResult>("/api/imagegen/clip/upscale", { method: "POST", body: JSON.stringify(params) }, params.detach ? 2 * 60_000 : 16 * 60_000),
 
   /** A finished clip with its background cut away on the server: a new clip beside it. */
-  matteClip: (params: { jobId?: string; gallery?: string; id?: string; board?: string; detach?: boolean }) =>
+  matteClip: (params: { jobId?: string; gallery?: string; id?: string; outfit?: OutfitClipRef; board?: string; detach?: boolean }) =>
     request<GenerateResult>("/api/imagegen/clip/matte", { method: "POST", body: JSON.stringify(params) }, params.detach ? 2 * 60_000 : 16 * 60_000),
   /** A picture's matte from the server's background-removal model: a greyscale PNG at
       its size, white where she is. */
@@ -4143,6 +4172,27 @@ export const api = {
   libbyOutfitWipImageURL: (id: string, emotion: string, level = 0, v?: number) => {
     const query = [level ? `level=${level}` : "", v ? `v=${v}` : ""].filter(Boolean).join("&");
     return `/api/libby/outfits/${encodeURIComponent(id)}/wip/${encodeURIComponent(emotion)}${query ? `?${query}` : ""}`;
+  },
+
+  /** Every square's stored clips, without their bytes. */
+  libbyOutfitAnims: (id: string) =>
+    request<{ anims: LibbyAnim[] }>(`/api/libby/outfits/${encodeURIComponent(id)}/anim`),
+  /** Files a finished clip, which the server still has, as one step of a square. */
+  putLibbyOutfitAnim: (id: string, emotion: string, level: number, stage: LibbyAnim["stage"],
+    body: { id?: string; gallery?: string; from: string; recipe?: string }) =>
+    request<LibbyAnim>(
+      `/api/libby/outfits/${encodeURIComponent(id)}/anim/${encodeURIComponent(emotion)}?stage=${stage}${level ? `&level=${level}` : ""}`,
+      { method: "PUT", body: JSON.stringify(body) },
+    ),
+  /** Throws a square's clip away, and its cut with it; or only the cut. */
+  deleteLibbyOutfitAnim: (id: string, emotion: string, level: number, stage?: LibbyAnim["stage"]) =>
+    request<{ status: string }>(
+      `/api/libby/outfits/${encodeURIComponent(id)}/anim/${encodeURIComponent(emotion)}?${[stage ? `stage=${stage}` : "", level ? `level=${level}` : ""].filter(Boolean).join("&")}`,
+      { method: "DELETE" },
+    ),
+  libbyOutfitAnimURL: (id: string, emotion: string, level: number, stage: LibbyAnim["stage"], v?: number) => {
+    const query = [`stage=${stage}`, level ? `level=${level}` : "", v ? `v=${v}` : ""].filter(Boolean).join("&");
+    return `/api/libby/outfits/${encodeURIComponent(id)}/anim/${encodeURIComponent(emotion)}?${query}`;
   },
 
   libbyLoadouts: () => request<{ loadouts: LibbyLoadout[] }>("/api/libby/loadouts"),

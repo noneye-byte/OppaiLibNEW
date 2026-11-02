@@ -731,6 +731,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/libby/outfits/{id}/wip/{emotion}", s.requireAuth(s.handleGetLibbyOutfitWIPImage))
 	mux.HandleFunc("PUT /api/libby/outfits/{id}/wip/{emotion}", s.requireAuth(s.handlePutLibbyOutfitWIP))
 	mux.HandleFunc("DELETE /api/libby/outfits/{id}/wip/{emotion}", s.requireAuth(s.handleDeleteLibbyOutfitWIP))
+	// A square's clip and its cut-out clip, the animated sprite made from its picture.
+	mux.HandleFunc("GET /api/libby/outfits/{id}/anim", s.requireAuth(s.handleListLibbyOutfitAnims))
+	mux.HandleFunc("GET /api/libby/outfits/{id}/anim/{emotion}", s.requireAuth(s.handleGetLibbyOutfitAnim))
+	mux.HandleFunc("PUT /api/libby/outfits/{id}/anim/{emotion}", s.requireAuth(s.handlePutLibbyOutfitAnim))
+	mux.HandleFunc("DELETE /api/libby/outfits/{id}/anim/{emotion}", s.requireAuth(s.handleDeleteLibbyOutfitAnim))
 
 	// Outfit loadouts: the *recipe* an outfit is built from — which garment and colour
 	// sits in each equipment slot. Separate from the wardrobes above because one recipe

@@ -118,8 +118,77 @@ const session = {
   speed: 1,
 };
 
+/**
+ * The choices a clip is made with, as the inspector edits them. The Video studio's are
+ * `session`'s own; the Sprites studio animates its squares with a set of its own,
+ * `spriteForm`, so a wardrobe's motion is not whatever the last clip on the stage was
+ * made with, and the one inspector draws either.
+ */
+export interface ClipForm {
+  from: "image" | "text";
+  prompt: string;
+  negative: string;
+  aspect: ClipAspect;
+  long: number;
+  seconds: number;
+  fps: number;
+  steps: number;
+  variations: number;
+  keepSeed: boolean;
+  makeLoop: boolean;
+  recipes: Partial<Record<"image" | "text", StudioClipRecipe>>;
+  loraQuery: string;
+  upscaler: string;
+  upscaleBy: number;
+}
+
+/** How the Sprites studio animates a square: always from its picture, and by default
+    the showcase — she stays put and comes alive — looping, short enough to sit behind
+    the interface. `enlarge` runs the clip through an upscale before its cut. */
+export interface SpriteClipForm extends ClipForm {
+  enlarge: boolean;
+}
+
+const SPRITE_FORM_KEY = "oppai.sprite.motion.v1";
+
+function defaultSpriteForm(): SpriteClipForm {
+  return {
+    from: "image", prompt: toggleShowcase(""), negative: "", aspect: "portrait", long: 832, seconds: 3, fps: 16, steps: 20,
+    variations: 1, keepSeed: false, makeLoop: true, recipes: {}, loraQuery: "", upscaler: "", upscaleBy: 2, enlarge: false,
+  };
+}
+
+/** The sprite form is kept per device, as the studio's layout is: a set of sixty clips
+    is made over several sittings, and its motion has to be the same in each. */
+function loadSpriteForm(): SpriteClipForm {
+  const form = defaultSpriteForm();
+  try {
+    const saved = JSON.parse(localStorage.getItem(SPRITE_FORM_KEY) ?? "null") as Partial<SpriteClipForm> | null;
+    if (saved && typeof saved === "object") Object.assign(form, saved, { from: "image", loraQuery: "" });
+  } catch {
+    // A private window or a mangled entry starts from the defaults.
+  }
+  return form;
+}
+
+export const spriteForm: SpriteClipForm = loadSpriteForm();
+
+let savedSpriteForm = "";
+function saveSpriteForm() {
+  const { loraQuery: _query, ...kept } = spriteForm;
+  const next = JSON.stringify(kept);
+  if (next === savedSpriteForm) return;
+  savedSpriteForm = next;
+  try {
+    localStorage.setItem(SPRITE_FORM_KEY, next);
+  } catch {
+    // Quota or a private window: the form still works for this page.
+  }
+}
+
 const listeners = new Set<() => void>();
 function changed() {
+  saveSpriteForm();
   for (const fn of listeners) fn();
 }
 
@@ -269,6 +338,85 @@ async function restartComfy(): Promise<string> {
   return "ComfyUI hasn't answered in four minutes since it was asked to restart — look at it where it runs.";
 }
 
+/** Asks ComfyUI for its lists if nothing has yet: a set animated before the Motion tab
+    was ever opened still runs on the files picked there last time. */
+export async function comfyListsReady(): Promise<void> {
+  if (!comfy.lists && !comfy.error) await loadComfyLists();
+}
+
+type ClipWorkflows = { image?: ClipWorkflow; text?: ClipWorkflow };
+
+function workflowOf(form: ClipForm, clips: ClipWorkflows): ClipWorkflow | undefined {
+  return form.from === "image" ? clips.image : clips.text;
+}
+
+/** The files a form's next clip runs: its own once changed, Settings' until then —
+    null while ComfyUI's lists are not in, when Settings' run as they are. */
+function recipeOf(form: ClipForm, clips: ClipWorkflows): StudioClipRecipe | null {
+  const own = form.recipes[form.from];
+  if (own) return own;
+  return comfy.loras ? studioClipRecipe(workflowOf(form, clips)?.models, comfy.loras) : null;
+}
+
+/** Whether the next clip has a knob for this: a built clip takes what the server
+    builds, a pasted workflow what it has placeholders for. */
+function takesOf(form: ClipForm, clips: ClipWorkflows, name: string): boolean {
+  const w = workflowOf(form, clips);
+  return !!(recipeOf(form, clips)?.models.model ? w?.built ?? w?.takes : w?.takes)?.includes(name);
+}
+
+/** Whether the next clip can loop: from a picture, on files the server builds, and
+    not on the 5B model, which cannot be given a last frame. */
+function loopableOf(form: ClipForm, clips: ClipWorkflows): boolean {
+  return form.from === "image" && takesOf(form, clips, "loop") && canLoop(recipeOf(form, clips)?.models ?? workflowOf(form, clips)?.models);
+}
+
+function fpsOf(form: ClipForm, clips: ClipWorkflows): number {
+  return takesOf(form, clips, "fps") ? form.fps : ASSUMED_FPS;
+}
+
+/** The size a clip is drawn at: the picture's shape, or the shape picked. */
+function sizeOf(form: ClipForm, pic: { width: number; height: number } | null): { width: number; height: number } {
+  if (form.from === "image" && pic) return clipSize(pic.width, pic.height, form.long);
+  const a = CLIP_ASPECTS.find((x) => x.id === form.aspect) ?? CLIP_ASPECTS[0];
+  return clipSize(a.w, a.h, form.long);
+}
+
+/** Why a form's clip can't be made as it is, "" when it can. */
+export function clipFormProblem(form: ClipForm, clips: ClipWorkflows): string {
+  const w = workflowOf(form, clips);
+  if (!w) return form.from === "image" ? "Clips from a picture aren't set up — Settings → Image generation → Video." : "Clips from words aren't set up.";
+  if (w.needsModel && !recipeOf(form, clips)?.models.model) {
+    return comfy.error ? `ComfyUI didn't list its models, so there is nothing to pick from: ${comfy.error}` : "Pick a model under Model first.";
+  }
+  return "";
+}
+
+/** One clip's request as a form says it, but for where it starts from, which the
+    caller adds: the knobs the workflow takes, the files, the loop. */
+export function clipParamsFor(form: ClipForm, clips: ClipWorkflows, pic: { width: number; height: number } | null, board: string, seed?: number): ClipParams {
+  const params: ClipParams = {
+    jobId: newJobId(),
+    from: form.from,
+    prompt: form.prompt.trim(),
+    negativePrompt: form.negative.trim(),
+    board,
+    detach: true,
+  };
+  const takes = (name: string) => takesOf(form, clips, name);
+  if (takes("width") || takes("height")) Object.assign(params, sizeOf(form, pic));
+  if (takes("frames")) params.frames = clipFrames(form.seconds, fpsOf(form, clips));
+  if (takes("fps")) params.fps = form.fps;
+  if (takes("steps")) params.steps = form.steps;
+  const recipe = recipeOf(form, clips);
+  if (recipe?.models.model && comfy.loras) params.models = studioClipModels(recipe, comfy.loras);
+  if (seed) params.seed = seed;
+  if (form.makeLoop && loopableOf(form, clips)) params.loop = true;
+  return params;
+}
+
+export { newJobId as newClipJobId };
+
 /** How many choices the list shows before the search has to narrow it. */
 const LORA_LIST = 40;
 
@@ -296,6 +444,13 @@ export class OppaiVideoStudio extends LitElement {
       says why not when it can't. */
   @property({ type: Boolean }) matte = false;
   @property() matteProblem = "";
+  /** "sprites" draws the inspector alone, over `spriteForm`, for the Sprites studio's
+      Motion tab: what every square of a wardrobe is animated with. */
+  @property({ reflect: true }) variant: "studio" | "sprites" = "studio";
+  /** The selected square's picture, whose shape a sprite's clip is drawn in. */
+  @property({ attribute: false }) square: { width: number; height: number } | null = null;
+  /** The selected square's clip's seed, which "keep the seed" keeps for the set. */
+  @property({ type: Number }) keptSeed = 0;
   /** The LoRA or model whose cover and trigger words are being edited: its files, the
       first being the one a new note is kept under. */
   @state() private noting: { files: string[]; label: string; words: boolean } | null = null;
@@ -626,6 +781,13 @@ export class OppaiVideoStudio extends LitElement {
       .take .mini-bar span { display: block; height: 100%; background: var(--oppai-primary); transition: width 0.6s ease; }
       .take-n { position: absolute; top: 5px; left: 7px; font-size: 10.5px; font-weight: 700; text-shadow: 0 1px 3px rgba(0,0,0,.7); }
 
+      /* In the Sprites recipe the inspector is a tab's body: it scrolls with the tab,
+         and its foot stays at the bottom of the tab as it does here. */
+      :host([variant="sprites"]) { display: block; height: auto; }
+      :host([variant="sprites"]) .inspector { background: none; border-right: 0; }
+      :host([variant="sprites"]) .ins-scroll { overflow: visible; padding: 0 0 12px; }
+      :host([variant="sprites"]) .ins-foot { position: sticky; bottom: -1px; z-index: 2; padding: 12px 0; }
+
       @media (max-width: 900px) {
         :host { display: flex; flex-direction: column; height: auto; }
         .main { order: -1; }
@@ -662,16 +824,17 @@ export class OppaiVideoStudio extends LitElement {
     }
   }
 
-  private get workflow(): ClipWorkflow | undefined {
-    return session.from === "image" ? this.clips.image : this.clips.text;
+  /** The choices the inspector edits: the studio's, or the set's of sprites. */
+  private get form(): ClipForm {
+    return this.variant === "sprites" ? spriteForm : session;
   }
 
-  /** The files this direction's next clip runs: the studio's once changed, Settings'
-      until then — null while ComfyUI's lists are not in, when Settings' run as they are. */
+  private get workflow(): ClipWorkflow | undefined {
+    return workflowOf(this.form, this.clips);
+  }
+
   private recipe(): StudioClipRecipe | null {
-    const own = session.recipes[session.from];
-    if (own) return own;
-    return comfy.loras ? studioClipRecipe(this.workflow?.models, comfy.loras) : null;
+    return recipeOf(this.form, this.clips);
   }
 
   /** Whether the next clip is built from picked files rather than a pasted workflow. */
@@ -680,21 +843,19 @@ export class OppaiVideoStudio extends LitElement {
   }
 
   private takes(name: string): boolean {
-    const w = this.workflow;
-    return !!(this.built ? w?.built ?? w?.takes : w?.takes)?.includes(name);
+    return takesOf(this.form, this.clips, name);
   }
 
-  /** Whether the next clip can loop: from a picture, on files the server builds, and
-      not on the 5B model, which cannot be given a last frame. */
   private get loopable(): boolean {
-    return session.from === "image" && this.takes("loop") && canLoop(this.recipe()?.models ?? this.workflow?.models);
+    return loopableOf(this.form, this.clips);
   }
 
   /** Showcase on, or off: its sentences in the prompt, and on, the loop with them. */
   private toggleShowcase() {
-    const on = !isShowcase(session.prompt);
-    session.prompt = toggleShowcase(session.prompt);
-    if (on && this.loopable) session.makeLoop = true;
+    const f = this.form;
+    const on = !isShowcase(f.prompt);
+    f.prompt = toggleShowcase(f.prompt);
+    if (on && this.loopable) f.makeLoop = true;
     changed();
   }
 
@@ -705,7 +866,8 @@ export class OppaiVideoStudio extends LitElement {
     if (!r || !comfy.loras) return;
     const next = fn(r);
     const settled = settleSpeed(studioClipModels(r, comfy.loras), studioClipModels(next, comfy.loras));
-    session.recipes = { ...session.recipes, [session.from]: { ...next, models: { ...next.models, steps: settled.steps, cfg: settled.cfg } } };
+    const f = this.form;
+    f.recipes = { ...f.recipes, [f.from]: { ...next, models: { ...next.models, steps: settled.steps, cfg: settled.cfg } } };
     changed();
   }
 
@@ -728,9 +890,10 @@ export class OppaiVideoStudio extends LitElement {
 
   /** Back to Settings' files for this direction. */
   private resetRecipe() {
-    const next = { ...session.recipes };
-    delete next[session.from];
-    session.recipes = next;
+    const f = this.form;
+    const next = { ...f.recipes };
+    delete next[f.from];
+    f.recipes = next;
     changed();
   }
 
@@ -739,20 +902,27 @@ export class OppaiVideoStudio extends LitElement {
     changed();
   }
 
+  private setForm<K extends keyof SpriteClipForm>(key: K, value: SpriteClipForm[K]) {
+    (this.form as SpriteClipForm)[key] = value;
+    changed();
+  }
+
+  /** Ctrl+Enter, and the foot's button: a clip, or in Sprites the selected square's. */
+  private go() {
+    if (this.variant === "sprites") this.dispatchEvent(new CustomEvent("animate-square", { bubbles: true, composed: true }));
+    else void this.make();
+  }
+
   private get selectedRun(): ClipRun | undefined {
     return session.runs.find((r) => r.jobId === session.selected) ?? session.runs[0];
   }
 
-  /** The size the clip is drawn at: the picture's shape, or the shape picked. */
   private size(): { width: number; height: number } {
-    const pic = session.picture;
-    if (session.from === "image" && pic) return clipSize(pic.width, pic.height, session.long);
-    const a = CLIP_ASPECTS.find((x) => x.id === session.aspect) ?? CLIP_ASPECTS[0];
-    return clipSize(a.w, a.h, session.long);
+    return sizeOf(this.form, this.variant === "sprites" ? this.square : session.picture);
   }
 
   private fps(): number {
-    return this.takes("fps") ? session.fps : ASSUMED_FPS;
+    return fpsOf(this.form, this.clips);
   }
 
   private pickFile(file: File | undefined) {
@@ -817,11 +987,9 @@ export class OppaiVideoStudio extends LitElement {
       this.error = "Say what the clip should show.";
       return;
     }
-    const recipe = this.recipe();
-    if (this.workflow?.needsModel && !recipe?.models.model) {
-      this.error = comfy.error
-        ? `ComfyUI didn't list its models, so there is nothing to pick from: ${comfy.error}`
-        : "Pick a model under Model first.";
+    const problem = clipFormProblem(session, this.clips);
+    if (problem) {
+      this.error = problem;
       return;
     }
     let initImage: string | undefined;
@@ -834,26 +1002,12 @@ export class OppaiVideoStudio extends LitElement {
     const kept = session.keepSeed ? this.selectedRun?.clip?.seed : undefined;
     const made: ClipRun[] = [];
     for (let i = 0; i < Math.max(1, session.variations); i++) {
-      const params: ClipParams = {
-        jobId: newJobId(),
-        from,
-        prompt: session.prompt.trim(),
-        negativePrompt: session.negative.trim(),
-        board: this.board,
-        detach: true,
-      };
-      if (this.takes("width") || this.takes("height")) Object.assign(params, this.size());
-      if (this.takes("frames")) params.frames = clipFrames(session.seconds, this.fps());
-      if (this.takes("fps")) params.fps = session.fps;
-      if (this.takes("steps")) params.steps = session.steps;
-      if (recipe?.models.model && comfy.loras) params.models = studioClipModels(recipe, comfy.loras);
       // Variations of a kept seed walk along from it, so they are still variations.
-      if (kept) params.seed = kept + i;
+      const params = clipParamsFor(session, this.clips, from === "image" ? pic : null, this.board, kept ? kept + i : undefined);
       if (from === "image" && pic) {
         if (pic.gallery) params.initGallery = pic.gallery;
         else params.initImage = initImage;
       }
-      if (session.makeLoop && this.loopable) params.loop = true;
       const run: ClipRun = {
         jobId: params.jobId!, from, prompt: params.prompt, thumb: from === "image" ? pic?.url : undefined,
         fps: this.fps(), percent: 0, done: false, startedAt: Date.now(),
@@ -982,6 +1136,7 @@ export class OppaiVideoStudio extends LitElement {
 
   render() {
     const { image, text } = this.clips;
+    if (this.variant === "sprites") return image ? this.renderInspector() : this.renderSpriteSetup();
     if (!image && !text) return this.renderSetup();
     return html`${this.renderInspector()}
       <section class="main">
@@ -1012,15 +1167,30 @@ export class OppaiVideoStudio extends LitElement {
     </div>`;
   }
 
+  /** Sprites without a picture-to-video workflow: where to set one up. */
+  private renderSpriteSetup() {
+    return html`<div class="note">Squares are animated by ComfyUI, from their pictures, and no picture-to-video model is set up yet.</div>
+      <div class="row" style="margin-top:10px">
+        <button class="chip primary" @click=${() => this.dispatchEvent(new CustomEvent("open-settings", { bubbles: true, composed: true }))}>
+          <span class="material-symbols-rounded">settings</span>Open Settings</button>
+        <button class="chip" @click=${() => this.dispatchEvent(new CustomEvent("find-video-models", { bubbles: true, composed: true }))}>
+          <span class="material-symbols-rounded">travel_explore</span>Find Wan models</button>
+      </div>`;
+  }
+
   private renderInspector() {
     const { image, text } = this.clips;
-    const from = session.from;
+    const f = this.form;
+    const from = f.from;
+    const sprites = this.variant === "sprites";
     const size = this.size();
-    const frames = clipFrames(session.seconds, this.fps());
+    const frames = clipFrames(f.seconds, this.fps());
     const running = clipsRunning();
-    const keptSeed = this.selectedRun?.clip?.seed;
+    const keptSeed = sprites ? this.keptSeed || undefined : this.selectedRun?.clip?.seed;
     return html`<aside class="inspector">
       <div class="ins-scroll">
+        ${sprites ? html`<div class="note">Each square is animated from its own picture, on the flat backdrop it was drawn on —
+          which is what lets its background be cut off cleanly afterwards.</div>` : html`
         <div class="modes" role="tablist" aria-label="What the clip starts from">
           <button role="tab" class=${from === "image" ? "on" : ""} aria-selected=${from === "image" ? "true" : "false"} ?disabled=${!image}
             title=${image ? "Bring a picture to life" : "No picture-to-video workflow is set up"} @click=${() => this.set("from", "image")}>
@@ -1030,18 +1200,18 @@ export class OppaiVideoStudio extends LitElement {
             <span class="material-symbols-rounded">text_fields</span>From words</button>
         </div>
 
-        ${from === "image" ? this.renderFrame() : nothing}
+        ${from === "image" ? this.renderFrame() : nothing}`}
 
         ${this.takes("prompt") ? html`
           <div class="k">${from === "image" ? "What happens" : "What it shows"}</div>
-          <textarea class="motion" .value=${session.prompt}
-            @input=${(e: Event) => this.set("prompt", (e.target as HTMLTextAreaElement).value)}
-            @keydown=${(e: KeyboardEvent) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void this.make(); } }}
+          <textarea class="motion" .value=${f.prompt}
+            @input=${(e: Event) => this.setForm("prompt", (e.target as HTMLTextAreaElement).value)}
+            @keydown=${(e: KeyboardEvent) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); this.go(); } }}
             placeholder=${from === "image"
               ? "She turns to the camera, smiles and waves; her hair moves in the breeze"
               : "A woman with silver hair in a red dress turns to the camera and waves, soft evening light"}></textarea>
-          ${from === "image" ? html`<button class="showcase ${isShowcase(session.prompt) ? "on" : ""}"
-            aria-pressed=${isShowcase(session.prompt) ? "true" : "false"} @click=${() => this.toggleShowcase()}>
+          ${from === "image" ? html`<button class="showcase ${isShowcase(f.prompt) ? "on" : ""}"
+            aria-pressed=${isShowcase(f.prompt) ? "true" : "false"} @click=${() => this.toggleShowcase()}>
             <span class="material-symbols-rounded">auto_awesome</span>
             <span class="sc-copy"><b>Showcase</b><small>She stays put and comes alive: blinks, breathes, her hair flows and her clothes move,
               the camera holds still${this.loopable ? " — and it loops" : ""}.</small></span>
@@ -1049,14 +1219,14 @@ export class OppaiVideoStudio extends LitElement {
           <div class="presets">
             ${(["camera", "her", "scene"] as const).map((group) => html`<div class="row">
               <span class="preset-group">${group === "her" ? "Her" : group === "camera" ? "Camera" : "Scene"}</span>
-              ${MOTION_PRESETS.filter((p) => p.group === group).map((p) => html`<button class="chip ${hasPhrase(session.prompt, p.phrase) ? "on" : ""}"
-                title=${p.phrase} @click=${() => this.set("prompt", togglePhrase(session.prompt, p.phrase))}>${p.label}</button>`)}
+              ${MOTION_PRESETS.filter((p) => p.group === group).map((p) => html`<button class="chip ${hasPhrase(f.prompt, p.phrase) ? "on" : ""}"
+                title=${p.phrase} @click=${() => this.setForm("prompt", togglePhrase(f.prompt, p.phrase))}>${p.label}</button>`)}
             </div>`)}
           </div>
-          ${this.takes("negative") ? (this.negOpen || session.negative ? html`
+          ${this.takes("negative") ? (this.negOpen || f.negative ? html`
             <div class="k">What it should avoid</div>
-            <textarea style="min-height:56px" .value=${session.negative} placeholder="blurry, distorted hands, flicker, static"
-              @input=${(e: Event) => this.set("negative", (e.target as HTMLTextAreaElement).value)}></textarea>`
+            <textarea style="min-height:56px" .value=${f.negative} placeholder="blurry, distorted hands, flicker, static"
+              @input=${(e: Event) => this.setForm("negative", (e.target as HTMLTextAreaElement).value)}></textarea>`
             : html`<button class="link" @click=${() => (this.negOpen = true)}>+ What it should avoid</button>`) : nothing}
         ` : nothing}
 
@@ -1066,65 +1236,93 @@ export class OppaiVideoStudio extends LitElement {
         ${this.takes("width") || this.takes("height") ? html`
           <div class="k">Shape<small>${size.width}×${size.height}</small></div>
           <div class="row">
-            ${from === "text" ? CLIP_ASPECTS.map((a) => html`<button class="chip ${session.aspect === a.id ? "on" : ""}"
-              @click=${() => this.set("aspect", a.id)}>${a.label}</button>`) : nothing}
-            <select aria-label="Longer side" @change=${(e: Event) => this.set("long", Number((e.target as HTMLSelectElement).value))}>
-              ${CLIP_SIDES.map((s) => html`<option value=${s} ?selected=${s === session.long}>${s}px long side</option>`)}
+            ${from === "text" ? CLIP_ASPECTS.map((a) => html`<button class="chip ${f.aspect === a.id ? "on" : ""}"
+              @click=${() => this.setForm("aspect", a.id)}>${a.label}</button>`) : nothing}
+            <select aria-label="Longer side" @change=${(e: Event) => this.setForm("long", Number((e.target as HTMLSelectElement).value))}>
+              ${CLIP_SIDES.map((s) => html`<option value=${s} ?selected=${s === f.long}>${s}px long side</option>`)}
             </select>
           </div>
-          ${from === "image" ? html`<div class="note" style="margin-top:6px">In the picture's shape. Bigger is slower, by a lot.</div>` : nothing}
+          ${from === "image" ? html`<div class="note" style="margin-top:6px">In the ${sprites ? "square's" : "picture's"} shape. Bigger is slower, by a lot.</div>` : nothing}
         ` : nothing}
 
         ${this.takes("frames") ? html`
           <div class="k">Length<small>${frames} frames${this.takes("fps") ? "" : ` at ${ASSUMED_FPS} fps`}</small></div>
           <label class="slider">
-            <input type="range" min="1" max="10" step="0.5" .value=${String(session.seconds)} aria-label="Length in seconds"
-              @input=${(e: Event) => this.set("seconds", Number((e.target as HTMLInputElement).value))} />
-            <b>${session.seconds}s</b>
+            <input type="range" min="1" max="10" step="0.5" .value=${String(f.seconds)} aria-label="Length in seconds"
+              @input=${(e: Event) => this.setForm("seconds", Number((e.target as HTMLInputElement).value))} />
+            <b>${f.seconds}s</b>
           </label>
         ` : nothing}
 
         ${from === "image" && this.takes("loop") ? html`
           <label class="switch" title=${this.loopable ? "The clip ends on the picture it starts from, so it plays round without a jump"
             : "Wan 2.2's 5B model can't be given a last frame — pick the 14B pair or Wan 2.1 to loop"}>
-            <input type="checkbox" .checked=${session.makeLoop && this.loopable} ?disabled=${!this.loopable}
-              @change=${(e: Event) => this.set("makeLoop", (e.target as HTMLInputElement).checked)} />
+            <input type="checkbox" .checked=${f.makeLoop && this.loopable} ?disabled=${!this.loopable}
+              @change=${(e: Event) => this.setForm("makeLoop", (e.target as HTMLInputElement).checked)} />
             <span class="material-symbols-rounded" style="font-size:17px">loop</span>Seamless loop
             <span style="opacity:.7">${this.loopable ? "· ends where it starts" : "· not on the 5B model"}</span>
           </label>` : nothing}
 
         ${this.takes("fps") ? html`
           <div class="k">Frame rate</div>
-          <div class="seg" role="group" aria-label="Frame rate">${[8, 12, 16, 24].map((f) => html`<button class=${session.fps === f ? "on" : ""}
-            aria-pressed=${session.fps === f ? "true" : "false"} @click=${() => this.set("fps", f)}>${f}</button>`)}</div>
+          <div class="seg" role="group" aria-label="Frame rate">${[8, 12, 16, 24].map((n) => html`<button class=${f.fps === n ? "on" : ""}
+            aria-pressed=${f.fps === n ? "true" : "false"} @click=${() => this.setForm("fps", n)}>${n}</button>`)}</div>
         ` : nothing}
 
         ${this.takes("steps") ? html`
           <div class="k">Steps</div>
           <label class="slider">
-            <input type="range" min="2" max="50" step="1" .value=${String(session.steps)} aria-label="Steps"
-              @input=${(e: Event) => this.set("steps", Number((e.target as HTMLInputElement).value))} />
-            <b>${session.steps}</b>
+            <input type="range" min="2" max="50" step="1" .value=${String(f.steps)} aria-label="Steps"
+              @input=${(e: Event) => this.setForm("steps", Number((e.target as HTMLInputElement).value))} />
+            <b>${f.steps}</b>
           </label>
         ` : nothing}
 
-        <div class="k">Takes</div>
-        <div class="seg" role="group" aria-label="Clips per press">${[1, 2, 3].map((n) => html`<button class=${session.variations === n ? "on" : ""}
-          aria-pressed=${session.variations === n ? "true" : "false"} @click=${() => this.set("variations", n)}>${n}</button>`)}</div>
-        ${this.takes("seed") ? html`<label class="switch" title=${keptSeed ? `Seed ${keptSeed}` : "Make a clip first — the selected clip's seed is the one kept"}>
-          <input type="checkbox" .checked=${session.keepSeed && !!keptSeed} ?disabled=${!keptSeed}
-            @change=${(e: Event) => this.set("keepSeed", (e.target as HTMLInputElement).checked)} />
-          Keep the selected clip's seed${keptSeed ? html` <span style="opacity:.7;font-variant-numeric:tabular-nums">· ${keptSeed}</span>` : nothing}
+        <div class="k">${sprites ? "Takes per square" : "Takes"}</div>
+        <div class="seg" role="group" aria-label="Clips per press">${[1, 2, 3].map((n) => html`<button class=${f.variations === n ? "on" : ""}
+          aria-pressed=${f.variations === n ? "true" : "false"} @click=${() => this.setForm("variations", n)}>${n}</button>`)}</div>
+        ${sprites && f.variations > 1 ? html`<div class="note" style="margin-top:6px">The first take is filed; the others wait beside the square to be picked instead.</div>` : nothing}
+        ${this.takes("seed") ? html`<label class="switch" title=${keptSeed ? `Seed ${keptSeed}` : sprites ? "Animate a square first — the selected square's seed is the one kept" : "Make a clip first — the selected clip's seed is the one kept"}>
+          <input type="checkbox" .checked=${f.keepSeed && !!keptSeed} ?disabled=${!keptSeed}
+            @change=${(e: Event) => this.setForm("keepSeed", (e.target as HTMLInputElement).checked)} />
+          ${sprites ? "Every square on the selected square's seed" : "Keep the selected clip's seed"}${keptSeed ? html` <span style="opacity:.7;font-variant-numeric:tabular-nums">· ${keptSeed}</span>` : nothing}
         </label>` : nothing}
+        ${sprites ? this.renderEnlarge() : nothing}
         ${this.error ? html`<div class="err">${this.error}</div>` : nothing}
       </div>
       <div class="ins-foot">
-        <button class="make" ?disabled=${(from === "image" && !session.picture) || (!!this.workflow?.needsModel && !this.built)}
-          title="Make the clip (Ctrl+Enter)" @click=${() => void this.make()}>
-          <span class="material-symbols-rounded">movie</span>${session.variations > 1 ? `Make ${session.variations} clips` : "Make the clip"}</button>
-        <div class="make-sub">${running ? `${running} clip${running === 1 ? "" : "s"} in the works · ` : ""}${session.seconds}s at ${size.width}×${size.height} · takes minutes</div>
+        ${sprites ? html`
+          <button class="make" ?disabled=${!this.square || (!!this.workflow?.needsModel && !this.built)}
+            title=${this.square ? "Animate the selected square (Ctrl+Enter)" : "The selected square has no picture yet — its picture comes first"}
+            @click=${() => this.go()}>
+            <span class="material-symbols-rounded">animation</span>Animate this square</button>
+          <div class="make-sub">${f.seconds}s at ${size.width}×${size.height} · minutes a square</div>`
+        : html`
+          <button class="make" ?disabled=${(from === "image" && !session.picture) || (!!this.workflow?.needsModel && !this.built)}
+            title="Make the clip (Ctrl+Enter)" @click=${() => void this.make()}>
+            <span class="material-symbols-rounded">movie</span>${session.variations > 1 ? `Make ${session.variations} clips` : "Make the clip"}</button>
+          <div class="make-sub">${running ? `${running} clip${running === 1 ? "" : "s"} in the works · ` : ""}${session.seconds}s at ${size.width}×${size.height} · takes minutes</div>`}
       </div>
     </aside>`;
+  }
+
+  /** A sprite's clip enlarged before its cut: what the stage's Upscale does to one
+      clip, done to each square's on its way from the clip to the cut. */
+  private renderEnlarge() {
+    const f = spriteForm;
+    const upscalers = comfy.lists?.upscalers ?? [];
+    return html`<label class="switch" title="Enlarge each clip through ComfyUI before its background is cut — sharper, and slower to cut">
+        <input type="checkbox" .checked=${f.enlarge} @change=${(e: Event) => this.setForm("enlarge", (e.target as HTMLInputElement).checked)} />
+        <span class="material-symbols-rounded" style="font-size:17px">open_in_full</span>Upscale each clip
+      </label>
+      ${f.enlarge ? html`<div class="row" style="margin-top:8px">
+        <select aria-label="Upscaler" @change=${(e: Event) => this.setForm("upscaler", (e.target as HTMLSelectElement).value)}>
+          <option value="" ?selected=${!f.upscaler}>Lanczos — quick, softer</option>
+          ${upscalers.map((u) => html`<option value=${u} ?selected=${u === f.upscaler}>${u}</option>`)}
+        </select>
+        <div class="seg" role="group" aria-label="How much larger">${UPSCALES.map((s) => html`<button class=${f.upscaleBy === s ? "on" : ""}
+          aria-pressed=${f.upscaleBy === s ? "true" : "false"} @click=${() => this.setForm("upscaleBy", s)}>${s}×</button>`)}</div>
+      </div>` : nothing}`;
   }
 
   /**
@@ -1137,7 +1335,7 @@ export class OppaiVideoStudio extends LitElement {
     if (!w) return nothing;
     const r = this.recipe();
     const pasted = !w.needsModel && !w.models;
-    const own = !!session.recipes[session.from];
+    const own = !!this.form.recipes[this.form.from];
     const head = html`<div class="k">Model
       <span class="k-btns">
         ${own ? html`<button class="link" title="Back to the files in Settings → Image generation → Video" @click=${() => this.resetRecipe()}>Settings'</button>` : nothing}
@@ -1240,7 +1438,8 @@ export class OppaiVideoStudio extends LitElement {
     if (!r) return nothing;
     const all = comfy.loras ?? [];
     const on = all.filter((c) => r.loras[c.key] !== undefined);
-    const q = session.loraQuery.trim().toLowerCase();
+    const f = this.form;
+    const q = f.loraQuery.trim().toLowerCase();
     const rest = all.filter((c) => r.loras[c.key] === undefined
       && (!q || c.label.toLowerCase().includes(q) || c.key.toLowerCase().includes(q)));
     const count = on.length;
@@ -1248,11 +1447,11 @@ export class OppaiVideoStudio extends LitElement {
     const words = (c: ClipLoraChoice) => noteFor(c.files, comfy.notes)?.note.triggers ?? [];
     // A LoRA going on brings its words into the prompt, and coming off takes them out.
     const turnOn = (c: ClipLoraChoice) => {
-      if (words(c).length) session.prompt = withTriggers(session.prompt, words(c));
+      if (words(c).length) f.prompt = withTriggers(f.prompt, words(c));
       put(c.key, 1);
     };
     const takeOff = (c: ClipLoraChoice) => {
-      if (words(c).length) session.prompt = withoutTriggers(session.prompt, words(c));
+      if (words(c).length) f.prompt = withoutTriggers(f.prompt, words(c));
       if (this.noting?.files[0] === c.files[0].name) this.noting = null;
       this.edit((x) => {
         const loras = { ...x.loras };
@@ -1290,8 +1489,8 @@ export class OppaiVideoStudio extends LitElement {
             <button class="link" @click=${() => this.dispatchEvent(new CustomEvent("find-video-models", { bubbles: true, composed: true }))}>Find Wan LoRAs on Civitai</button></div>`
         : html`
           ${all.length > 6 ? html`<label class="lora-search"><span class="material-symbols-rounded">search</span>
-            <input type="search" placeholder="Search ${all.length} LoRAs" .value=${session.loraQuery} aria-label="Search LoRAs"
-              @input=${(e: Event) => this.set("loraQuery", (e.target as HTMLInputElement).value)} /></label>` : nothing}
+            <input type="search" placeholder="Search ${all.length} LoRAs" .value=${f.loraQuery} aria-label="Search LoRAs"
+              @input=${(e: Event) => this.setForm("loraQuery", (e.target as HTMLInputElement).value)} /></label>` : nothing}
           ${rest.length ? html`<div class="lora-list">
             ${rest.slice(0, LORA_LIST).map((c) => {
               const cover = this.coverOf(c.files.map((f) => f.name));
@@ -1367,8 +1566,9 @@ export class OppaiVideoStudio extends LitElement {
     try {
       await api.setComfyTriggers(name, next);
       // A LoRA already on swaps its old words in the prompt for the new ones.
-      if (before.length) session.prompt = withoutTriggers(session.prompt, before);
-      if (next.length) session.prompt = withTriggers(session.prompt, next);
+      const f = this.form;
+      if (before.length) f.prompt = withoutTriggers(f.prompt, before);
+      if (next.length) f.prompt = withTriggers(f.prompt, next);
       await loadComfyNotes();
       this.noting = null;
     } catch (e) {
@@ -1631,15 +1831,9 @@ async function runClip(run: ClipRun, call: () => Promise<GenerateResult>) {
       changed();
     }
   };
-  let res: GenerateResult | undefined;
+  let clip: GenClip | undefined;
   try {
-    let answer: GenerateResult;
-    try {
-      answer = await call();
-    } catch (e) {
-      answer = await collect(run.jobId, progress, e as Error);
-    }
-    res = answer.clip || !answer.accepted ? answer : await collect(run.jobId, progress);
+    clip = await followClip(run.jobId, call, progress);
   } catch (failure) {
     const msg = (failure as Error).message;
     run.error = /cancelled/i.test(msg) ? "Stopped." : msg;
@@ -1647,10 +1841,27 @@ async function runClip(run: ClipRun, call: () => Promise<GenerateResult>) {
   run.done = true;
   run.percent = 1;
   run.endedAt = Date.now();
-  if (res?.clip) run.clip = res.clip;
-  else if (!run.error) run.error = "ComfyUI finished without a clip.";
+  if (clip) run.clip = clip;
   changed();
-  if (res?.clip?.gallery) for (const fn of keptListeners) fn();
+  if (clip?.gallery) for (const fn of keptListeners) fn();
+}
+
+/**
+ * Makes a clip, an enlargement or a cut under jobId and answers with it once it is
+ * done, however the call went: answered at once and followed, answered with the clip
+ * by a server from before detaching, or cut off and followed anyway. Throws what went
+ * wrong. The Sprites studio runs its squares through this.
+ */
+export async function followClip(jobId: string, call: () => Promise<GenerateResult>, progress: (percent: number) => void): Promise<GenClip> {
+  let answer: GenerateResult;
+  try {
+    answer = await call();
+  } catch (e) {
+    answer = await collect(jobId, progress, e as Error);
+  }
+  const res = answer.clip || !answer.accepted ? answer : await collect(jobId, progress);
+  if (!res.clip) throw new Error("ComfyUI finished without a clip.");
+  return res.clip;
 }
 
 /** The low-noise file's name without its folder or extension, to say what it does. */
