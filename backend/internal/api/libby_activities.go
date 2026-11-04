@@ -78,6 +78,10 @@ type libbyActivity struct {
 	// with a speech bubble of dots beside it, and never chosen by a tag. The editor
 	// says so beside the slot, and the directive leaves it out.
 	Auto bool `json:"auto,omitempty"`
+	// Shown is when the app puts an Auto state up, as the wardrobe editor says it beside
+	// the slot. There is more than one of them now, so the editor cannot assume it is
+	// the typing indicator.
+	Shown string `json:"shown,omitempty"`
 }
 
 // libbyActivities is the MISC vocabulary.
@@ -88,7 +92,7 @@ var libbyActivities = []libbyActivity{
 	// ── idle ─────────────────────────────────────────────────────────────────
 	// Shown by the client while she is composing a reply — the art behind the "…"
 	// speech bubble — and never declared by her. See Auto.
-	{ID: "typing", Label: "Typing", Group: activityIdle, Says: "typing a reply to them", Auto: true, Gen: "holding phone, typing"},
+	{ID: "typing", Label: "Typing", Group: activityIdle, Says: "typing a reply to them", Auto: true, Shown: "while a reply is on its way, with a speech bubble of dots", Gen: "holding phone, typing"},
 	{ID: "reading", Label: "Reading", Group: activityIdle, Says: "reading something, half paying attention", Gen: "reading, holding book"},
 	{ID: "gaming", Label: "Gaming", Group: activityIdle, Says: "playing something, controller or keyboard in hand", Gen: "playing games, holding controller"},
 	{ID: "lounging", Label: "Lounging", Group: activityIdle, Says: "sprawled out comfortably, doing nothing in particular", Gen: "lying on couch, relaxed, lounging"},
@@ -117,6 +121,16 @@ var libbyActivities = []libbyActivity{
 	{ID: "grinding", Label: "Grinding", Group: activityIntimate, Says: "grinding against something, chasing it", MinIntensity: 4, Gen: "grinding, pillow humping, straddling, blush"},
 	{ID: "climax", Label: "Climax", Group: activityIntimate, Says: "coming, and not quiet about it", MinIntensity: 5, Gen: "orgasm, female ejaculation, trembling, ahegao, rolling eyes"},
 	{ID: "afterglow", Label: "Afterglow", Group: activityIntimate, Says: "wrecked and boneless afterwards", MinIntensity: 3, Gen: "after sex, lying down, exhausted, messy hair, satisfied smile, sweat"},
+
+	// ── the app's ────────────────────────────────────────────────────────────
+	// More of what typing is: moments the interface already has, which used to be
+	// carried only by nudging her expression art about (libby-motion.ts). Each is a
+	// picture — and, once the Sprites studio has animated it, a clip of the length that
+	// moment lasts — that the client shows at that moment. Idle, so no limit rules
+	// them out; Auto, so she never declares one.
+	{ID: "talking", Label: "Talking", Group: activityIdle, Says: "talking to them out loud", Auto: true, Shown: "while her reply is being read aloud", Gen: "talking, open mouth, looking at viewer"},
+	{ID: "greeting", Label: "Greeting", Group: activityIdle, Says: "saying hello as they arrive", Auto: true, Shown: "for a moment as a video call connects", Gen: "waving, smile, looking at viewer, greeting"},
+	{ID: "startled", Label: "Startled", Group: activityIdle, Says: "caught off guard by something going wrong", Auto: true, Shown: "when she tells you something went wrong", Gen: "surprised, flinching, wide eyes, hands up"},
 }
 
 // libbyActivityByID indexes the vocabulary for lookup.

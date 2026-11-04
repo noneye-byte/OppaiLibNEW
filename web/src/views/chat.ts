@@ -25,7 +25,8 @@ import {
 import { iconStyles, motionStyles } from "../theme.js";
 import { formatBytes } from "../media-meta.js";
 import { markArrival } from "../motion.js";
-import { loadSpeakPref, saveSpeakPref, speak, stopSpeaking } from "../speech.js";
+import { isSpeaking, loadSpeakPref, saveSpeakPref, speak, stopSpeaking } from "../speech.js";
+import { MISC_MOTION } from "../misc-motion.js";
 import {
   activityLabel, AMBIENT_MAX_INTENSITY, DEFAULT_LIBBY_PFP, applyImageFallback, libbyAssetCandidates, libbyHidden, loadLibbyOutfit, saveLibbyOutfit,
   EMOTION_LABELS, LIBBY_EMOTIONS, normalizeEmotion, normalizeIntensity, portraitPose, type LibbyEmotion,
@@ -549,6 +550,11 @@ export class OppaiChat extends LitElement {
    * user gets to see it.
    */
   @state() private typingPhase: "idle" | "typing" | "thinking" = "idle";
+  /** A call has just connected, and for as long as her greeting runs she says hello. */
+  @state() private callGreeting = false;
+  private greetTimer = 0;
+  /** Her voice is reading something out, so the portrait shows her talking. */
+  @state() private talking = isSpeaking();
   /**
    * Pictures she is making right now — one she is taking of herself, a place she is
    * going — drawn at the foot of their conversation with the picture so far, instead
@@ -1469,20 +1475,24 @@ export class OppaiChat extends LitElement {
     window.addEventListener("keydown", this.onGlobalKey);
     window.addEventListener(SHARE_EVENT, this.onShared);
     window.addEventListener(LIBBY_MESSAGE_EVENT, this.onLibbyMessage);
+    window.addEventListener("oppai-libby-speaking", this.onSpeaking);
   }
 
   disconnectedCallback() {
-    window.clearTimeout(this.ringTimer);
+    window.clearTimeout(this.ringTimer); window.clearTimeout(this.greetTimer);
     super.disconnectedCallback();
     window.clearTimeout(this.saveTimer); window.clearTimeout(this.idleTimer); window.clearTimeout(this.noticeTimer);
     window.clearTimeout(this.autoTimer); window.clearInterval(this.callTimer); window.clearTimeout(this.readTimer);
     window.removeEventListener("keydown", this.onGlobalKey);
     window.removeEventListener(SHARE_EVENT, this.onShared);
     window.removeEventListener(LIBBY_MESSAGE_EVENT, this.onLibbyMessage);
+    window.removeEventListener("oppai-libby-speaking", this.onSpeaking);
     this.resize?.disconnect();
   }
 
   private onShared = () => { void this.claimShare(); };
+
+  private onSpeaking = (event: Event) => { this.talking = !!(event as CustomEvent<{ on: boolean }>).detail?.on; };
 
   /** Something she said somewhere other than this screen — watching a video with you —
       that the server has already written into her conversation. It joins the copy here
@@ -3246,12 +3256,16 @@ export class OppaiChat extends LitElement {
     this.callOpen = true; this.callSeconds = 0; this.settingsOpen = false; this.scenePickerOpen = false;
     window.clearInterval(this.callTimer);
     this.callTimer = window.setInterval(() => (this.callSeconds += 1), 1000);
+    this.callGreeting = true;
+    window.clearTimeout(this.greetTimer);
+    this.greetTimer = window.setTimeout(() => (this.callGreeting = false), MISC_MOTION.greeting.seconds * 1000);
     void this.loadBackgrounds();
     this.focusComposer();
   }
 
   private endCall() {
     stopSpeaking();
+    window.clearTimeout(this.greetTimer); this.callGreeting = false;
     this.callOpen = false; this.scenePickerOpen = false;
     window.clearInterval(this.callTimer);
     this.focusComposer();
@@ -3378,7 +3392,7 @@ export class OppaiChat extends LitElement {
     // The dots follow the typing rhythm — they stop for a reading pause or a second
     // thought — but the portrait holds the typing art for the whole turn. See portraitPose.
     const typing = this.busy && this.typingPhase === "typing";
-    const { activity, key } = portraitPose(this.busy, conversation.activity || "", emotion, intensity, this.spoken);
+    const { activity, key } = portraitPose(this.busy, this.callGreeting ? "greeting" : conversation.activity || "", emotion, intensity, this.spoken, this.talking);
     const assets = this.spriteFor(character, emotion, intensity, activity);
     // Nothing to stand on the stage: a character with no art gets no column at all
     // rather than an empty one. Their picture is set from the character card.

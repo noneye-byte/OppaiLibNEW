@@ -190,81 +190,102 @@ export function gearColorNegatives(
     .map(({ name }) => `${name} ${noun}`);
 }
 
-export type ClothesState = "on" | "displaced" | "off";
+export type OuterState = "on" | "loosened" | "open" | "off";
 export type UnderwearState = "hidden" | "showing" | "off";
 
 export interface OutfitExposure {
-  clothes: ClothesState;
+  outer: OuterState;
   bra: UnderwearState;
   panties: UnderwearState;
 }
 
-type Weighted<T extends string> = readonly (readonly [T, number])[];
-
-export interface ExposureTier {
-  description: string;
-  clothes: Weighted<ClothesState>;
-  bra: Weighted<UnderwearState>;
-  panties: Weighted<UnderwearState>;
-}
-
-/** Higher tiers widen the possible outcomes rather than locking every image to one
- * undress state. The values are percentages and deliberately retain some modest rolls
- * at Peak (and rare bold rolls below it) so a generated emotion set feels varied. */
-export const OUTFIT_EXPOSURE_TIERS: readonly ExposureTier[] = [
-  {
-    description: "Clothes on; bra and panties hidden.",
-    clothes: [["on", 100]],
-    bra: [["hidden", 100]],
-    panties: [["hidden", 100]],
-  },
-  {
-    description: "Usually covered, with an occasional underwear glimpse.",
-    clothes: [["on", 88], ["displaced", 12]],
-    bra: [["hidden", 88], ["showing", 12]],
-    panties: [["hidden", 94], ["showing", 6]],
-  },
-  {
-    description: "Mixed neat, slipped, and rare clothes-off results.",
-    clothes: [["on", 58], ["displaced", 34], ["off", 8]],
-    bra: [["hidden", 52], ["showing", 38], ["off", 10]],
-    panties: [["hidden", 60], ["showing", 33], ["off", 7]],
-  },
-  {
-    description: "Strong variation: clothes and underwear may be on, showing, or off.",
-    clothes: [["on", 28], ["displaced", 44], ["off", 28]],
-    bra: [["hidden", 22], ["showing", 46], ["off", 32]],
-    panties: [["hidden", 30], ["showing", 45], ["off", 25]],
-  },
-  {
-    description: "Maximum variation, weighted toward displaced or removed clothing.",
-    clothes: [["on", 14], ["displaced", 28], ["off", 58]],
-    bra: [["hidden", 10], ["showing", 27], ["off", 63]],
-    panties: [["hidden", 14], ["showing", 31], ["off", 55]],
-  },
+/**
+ * How undressed she is at each heat tier: one fixed level per tier, each a step further
+ * than the last.
+ *
+ * These used to be dice — weighted tables that let a Calm square roll an underwear
+ * glimpse and a Peak one roll fully dressed, so a set would not be five rows of the same
+ * nude pose. What it actually produced was underwear in the prompt of nearly every
+ * square, because a bra that was "completely covered, not showing" was still a bra the
+ * prompt named, and a generator draws what it is told about. A level is something the
+ * board can promise: a Calm square is dressed, and nothing in its prompt says otherwise.
+ */
+export const OUTFIT_UNDRESS_LEVELS: readonly { description: string; exposure: OutfitExposure }[] = [
+  { description: "Dressed. Her underwear is not mentioned at all.", exposure: { outer: "on", bra: "hidden", panties: "hidden" } },
+  { description: "Still dressed, a little loosened — a button undone, a collar slipping.", exposure: { outer: "loosened", bra: "hidden", panties: "hidden" } },
+  { description: "Top open over her bra; bottoms still on.", exposure: { outer: "open", bra: "showing", panties: "hidden" } },
+  { description: "Down to her underwear.", exposure: { outer: "off", bra: "showing", panties: "showing" } },
+  { description: "Nude.", exposure: { outer: "off", bra: "off", panties: "off" } },
 ];
 
-function weightedPick<T extends string>(choices: Weighted<T>, rng: () => number): T {
-  const roll = Math.max(0, Math.min(0.999999, rng())) * 100;
-  let cursor = 0;
-  for (const [value, weight] of choices) {
-    cursor += weight;
-    if (roll < cursor) return value;
-  }
-  return choices[choices.length - 1][0];
+export function undressLevel(tier: number): OutfitExposure {
+  const at = Math.max(0, Math.min(OUTFIT_UNDRESS_LEVELS.length - 1, Math.round(tier)));
+  return OUTFIT_UNDRESS_LEVELS[at].exposure;
 }
 
-export function rollOutfitExposure(tier: number, rng: () => number = Math.random): OutfitExposure {
-  const table = OUTFIT_EXPOSURE_TIERS[Math.max(0, Math.min(OUTFIT_EXPOSURE_TIERS.length - 1, Math.round(tier)))];
-  const clothes = weightedPick(table.clothes, rng);
-  let bra = weightedPick(table.bra, rng);
-  let panties = weightedPick(table.panties, rng);
-  // Hidden underwear cannot stay hidden after the garment covering it has come off.
-  if (clothes === "off") {
-    if (bra === "hidden") bra = "showing";
-    if (panties === "hidden") panties = "showing";
+/**
+ * What a level does to the prompt, given what she is wearing.
+ *
+ * `hidden` is the garments the prompt must leave out entirely — the clothes she has taken
+ * off and the underwear nobody can see — because naming one, even as "not showing", is
+ * how it ends up in the picture. They go into the negative instead. `prompt` is the
+ * state in words, and is empty at a level where there is nothing to say: a dressed square
+ * needs no clause about being dressed.
+ *
+ * `gear` is as the prompt will name it — a piece switched off reads as empty.
+ */
+export function undressPrompt(gear: OutfitGear, exposure: OutfitExposure): {
+  hidden: OutfitGearKey[];
+  prompt: string[];
+  negative: string[];
+} {
+  const worn = (key: OutfitGearKey) => gearWorn(gear[key]);
+  const outer = worn("top") || worn("bottoms");
+  const outerOff = exposure.outer === "off";
+  const hidden: OutfitGearKey[] = [];
+  const prompt: string[] = [];
+  const negative: string[] = [];
+
+  if (outer) {
+    if (outerOff) {
+      for (const key of ["top", "bottoms"] as const) {
+        if (worn(key)) { hidden.push(key); negative.push(gear[key].item.trim()); }
+      }
+    } else if (exposure.outer === "loosened") {
+      prompt.push("clothes slightly loosened, partially unbuttoned");
+    } else if (exposure.outer === "open") {
+      prompt.push(worn("top") ? "open clothes, top pulled open" : "clothes pulled aside");
+    }
   }
-  return { clothes, bra, panties };
+
+  // Underwear with nothing over it is what she is wearing there, so it is named however
+  // hidden the level would keep it.
+  const covered = (over: OutfitGearKey) => worn(over) && !outerOff;
+  const layer = (key: "bra" | "panties", over: OutfitGearKey, bare: string) => {
+    const state = exposure[key];
+    if (worn(key)) {
+      if (state === "off") {
+        hidden.push(key);
+        negative.push(key);
+        prompt.push(bare);
+      } else if (state === "hidden" && covered(over)) {
+        hidden.push(key);
+        negative.push(key);
+      } else if (state === "showing" && covered(over)) {
+        prompt.push(`${key} visible`);
+      }
+    } else if (state !== "hidden" || !covered(over)) {
+      // Nothing worn underneath: whatever would have shown the underwear shows her.
+      prompt.push(bare);
+    }
+  };
+  layer("bra", "top", "bare breasts, nipples");
+  layer("panties", "bottoms", "pussy, vulva visible");
+
+  if (exposure.bra === "off" && exposure.panties === "off" && outerOff) prompt.unshift("completely nude, naked");
+  else if (outerOff && outer && (worn("bra") || worn("panties"))) prompt.unshift("underwear only");
+  if (hidden.includes("bra") && hidden.includes("panties")) negative.push("underwear, lingerie");
+  return { hidden, prompt, negative };
 }
 
 export function isGearPiece(value: unknown): value is GearPiece {

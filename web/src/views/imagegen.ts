@@ -63,11 +63,12 @@ import {
 import { libbyReact } from "../libby-voice.js";
 import { canvasToBlob, CutoutSession, DEFAULT_COMPOSE, loadImage } from "../cutout.js";
 import { outfitArchiveFilename, outfitImageFilename } from "../outfit-name.js";
+import { miscClipForm, miscMotionLabel } from "../misc-motion.js";
 import { manageModelsNote } from "../model-manage.js";
 import { importSuggestion, loraNegatives, swapPromptDefault } from "../model-defaults.js";
 import {
   DEFAULT_OUTFIT_GEAR,
-  OUTFIT_EXPOSURE_TIERS,
+  OUTFIT_UNDRESS_LEVELS,
   EMPTY_OUTFIT_GEAR,
   OUTFIT_GEAR_SLOTS,
   gearColorNegatives,
@@ -77,8 +78,8 @@ import {
   gearPromptNoun,
   gearWorn,
   normalizeOutfitGear,
-  rollOutfitExposure,
-  type OutfitExposure,
+  undressLevel,
+  undressPrompt,
   type GearPiece,
   type OutfitGear,
   type OutfitGearKey,
@@ -362,8 +363,8 @@ const OUTFIT_FACES: { id: LibbyEmotion; label: string; face: string; pose: strin
  * carries a `face` of its own rather than borrowing the expression picker's — a pose
  * this specific reads wrong with an unrelated expression stapled to it.
  */
-const OUTFIT_ACTIVITIES: { id: string; label: string; face: string; pose: string; heat: number; intimate?: boolean }[] = [
-  { id: "typing", label: "Typing", heat: 0, face: "focused expression, eyes on a screen, faint smile", pose: "sitting at a desk, both hands on a keyboard, leaning slightly toward the monitor" },
+const OUTFIT_ACTIVITIES: { id: string; label: string; face: string; pose: string; heat: number; intimate?: boolean; app?: boolean }[] = [
+  { id: "typing", label: "Typing", heat: 0, app: true, face: "focused expression, eyes on a screen, faint smile", pose: "sitting at a desk, both hands on a keyboard, leaning slightly toward the monitor" },
   { id: "reading", label: "Reading", heat: 0, face: "absorbed expression, eyes lowered to the page", pose: "curled up holding an open book, one leg tucked under her" },
   { id: "gaming", label: "Gaming", heat: 0, face: "intent expression, eyes wide on the screen, tongue at the corner of her mouth", pose: "sitting cross-legged holding a game controller in both hands" },
   { id: "lounging", label: "Lounging", heat: 0, face: "relaxed expression, eyes half closed, easy smile", pose: "sprawled back across a sofa, arms loose, one knee raised" },
@@ -382,14 +383,20 @@ const OUTFIT_ACTIVITIES: { id: string; label: string; face: string; pose: string
   { id: "teasing", label: "Teasing", heat: 2, intimate: true, face: "smirking, heavy-lidded eyes locked on the viewer", pose: "posing for the viewer, back arched, hands framing her hips" },
   { id: "touching", label: "Touching herself", heat: 2, intimate: true, face: "flushed, lips parted, eyes on the viewer", pose: "one hand pressed between her thighs over her clothes, other hand at her chest" },
   { id: "rubbing", label: "Rubbing", heat: 3, intimate: true, face: "deep blush, mouth open, eyes unfocused", pose: "reclining with one hand rubbing between her spread thighs" },
-  { id: "fingering", label: "Fingering", heat: 4, intimate: true, face: "flushed, head tipped back, brow drawn, panting", pose: "lying back with her fingers inside herself, knees fallen open" },
+  { id: "fingering", label: "Fingering", heat: 4, intimate: true, face: "blushing, head tipped back, brow drawn, mouth open", pose: "lying back with her fingers inside herself, knees fallen open" },
   { id: "spread", label: "Spread", heat: 4, intimate: true, face: "flushed, watching the viewer, mouth open", pose: "lying back holding herself open with both hands, legs spread wide" },
   { id: "vibrator", label: "Vibrator", heat: 3, intimate: true, face: "eyes squeezed shut, mouth open, deep blush", pose: "holding a vibrator against herself, thighs tensed together" },
   { id: "dildo", label: "Dildo", heat: 4, intimate: true, face: "flushed, half-lidded, biting her lip", pose: "using a dildo on herself, one hand braced behind her" },
   { id: "riding", label: "Riding", heat: 4, intimate: true, face: "flushed, head thrown back, mouth open", pose: "straddling and riding a toy, hands braced on her thighs, back arched" },
   { id: "grinding", label: "Grinding", heat: 3, intimate: true, face: "flushed, eyes shut, teeth in her lip", pose: "straddling a pillow, hips rolling forward, hands gripping it" },
   { id: "climax", label: "Climax", heat: 4, intimate: true, face: "eyes rolled up, mouth wide open, whole face flushed", pose: "body arched taut mid-orgasm, toes curled, hands fisted" },
-  { id: "afterglow", label: "Afterglow", heat: 3, intimate: true, face: "dazed exhausted smile, heavy-lidded eyes, deep blush", pose: "collapsed limp on her back, limbs loose, chest heaving" },
+  { id: "afterglow", label: "Afterglow", heat: 3, intimate: true, face: "dazed exhausted smile, heavy-lidded eyes, deep blush", pose: "collapsed limp on her back, limbs loose" },
+
+  // The app's: shown at moments of its own rather than chosen by her, typing among
+  // them. Their clip lengths, and the rest's, are in misc-motion.ts.
+  { id: "talking", label: "Talking", heat: 0, app: true, face: "talking, mouth open mid-word, friendly expression, eyes on the viewer", pose: "facing the viewer, one hand raised a little as she speaks" },
+  { id: "greeting", label: "Greeting", heat: 0, app: true, face: "bright welcoming smile, eyes on the viewer", pose: "one hand raised in a small wave hello, leaning slightly toward the viewer" },
+  { id: "startled", label: "Startled", heat: 0, app: true, face: "startled expression, wide eyes, mouth open in a small gasp", pose: "flinching back, both hands raised in front of her chest" },
 ];
 
 /** Heat still owns the emotional performance. Clothing exposure is rolled separately
@@ -398,9 +405,13 @@ const OUTFIT_TIERS: { label: string; mood: string }[] = [
   { label: "Calm", mood: "composed posture" },
   { label: "Warm", mood: "soft light blush, inviting posture, slight lean forward" },
   { label: "Flirty", mood: "flirty confident stance, visible blush" },
-  { label: "Heated", mood: "heavy blush, sultry posture, parted lips, heavy-lidded eyes" },
-  { label: "Peak", mood: "deep blush, flushed skin, breathless needy expression" },
+  { label: "Heated", mood: "blush, sultry posture, parted lips, heavy-lidded eyes" },
+  // Not "flushed skin" or "breathless": to a booru-trained model both mean sweat.
+  { label: "Peak", mood: "deep blush, needy expression, parted lips" },
 ];
+
+/** Kept out of every square. See outfitFragment. */
+const SPRITE_SWEAT_NEGATIVE = "sweat, sweating, sweatdrop, wet skin, shiny skin, oily skin, glistening skin, heavy breathing";
 
 /**
  * One index space for every square the studio can aim at.
@@ -408,8 +419,8 @@ const OUTFIT_TIERS: { label: string; mood: string }[] = [
  * The sixty expression squares come first — face-major within a tier, which is the
  * order the wardrobe editor lays them out in — and the MISC squares follow as a second
  * block, one per state. A MISC state is a single picture whatever the heat (what she is
- * doing does not change with the meter the way her face does), so the block is
- * twenty-four squares, not a hundred and twenty. Keeping both in one integer is what
+ * doing does not change with the meter the way her face does), so the block is one
+ * square per state, not five. Keeping both in one integer is what
  * lets the batch runner, the sheet, the draft and "aim the generator here" share a
  * single selectOutfitSlot without any of them knowing which kind of square they hold.
  */
@@ -2597,9 +2608,11 @@ export class OppaiImageGen extends LitElement {
   /** The outfit helper keeps the variable visual ideas small, then adds explicit solo
    * guidance. An outfit square has no useful interpretation with a second subject: it
    * makes both character consistency and a clean sprite cutout much less reliable. */
-  private equippedOutfitTerms(): string[] {
+  /** The worn pieces as prompt phrases, leaving out the garments a level hides. */
+  private equippedOutfitTerms(hidden: readonly OutfitGearKey[] = []): string[] {
     const dialect = this.status?.backend ?? "";
     return OUTFIT_GEAR_SLOTS.flatMap((slot) => {
+      if (hidden.includes(slot.key)) return [];
       const phrase = gearPhrase(slot, this.pieceFor(slot.key), dialect, this.outfitLockColors);
       return phrase ? [phrase] : [];
     });
@@ -2624,64 +2637,22 @@ export class OppaiImageGen extends LitElement {
   /** Every colour the equipped pieces must not come back as. This is the half of the
    * colour fix that acts on the generator rather than on the prompt: naming the wrong
    * answers is what stops a crimson top arriving blue. */
-  private outfitColorNegatives(): string[] {
+  private outfitColorNegatives(hidden: readonly OutfitGearKey[] = []): string[] {
     if (!this.outfitLockColors) return [];
     const seen = new Set<string>();
     for (const slot of OUTFIT_GEAR_SLOTS) {
+      // A garment the prompt leaves out is already in the negative whole; "red bra"
+      // beside it would only put the word back in front of the generator.
+      if (hidden.includes(slot.key)) continue;
       for (const term of gearColorNegatives(slot, this.pieceFor(slot.key))) seen.add(term);
     }
     return [...seen];
   }
 
-  private outfitExposurePrompt(exposure: OutfitExposure): string {
-    // Each garment is described in its own colour, so a bra and panties that were
-    // given different colours stay different in the exposure clauses too.
-    const braColor = this.pieceFor("bra").color;
-    const pantyColor = this.pieceFor("panties").color;
-    const hasTop = gearWorn(this.outfitGear.top);
-    const hasBottoms = gearWorn(this.outfitGear.bottoms);
-    const hasBra = gearWorn(this.outfitGear.bra);
-    const hasPanties = gearWorn(this.outfitGear.panties);
-    const parts: string[] = [];
-
-    if (!hasTop && !hasBottoms) {
-      parts.push("no outer top or bottoms equipped");
-    } else if (exposure.clothes === "on") {
-      parts.push("equipped outer clothes fully on and properly worn");
-    } else if (exposure.clothes === "displaced") {
-      parts.push("equipped outer clothes loosened and partly displaced, clothing slipping or pulled aside");
-    } else {
-      parts.push("equipped outer clothes removed or mostly off her body");
-    }
-
-    if (!hasBra) {
-      parts.push(hasTop && exposure.clothes === "on"
-        ? "no bra equipped, breasts covered by the top"
-        : "no bra equipped, bare breasts and nipples visible");
-    } else if (exposure.bra === "hidden" && hasTop && exposure.clothes === "on") {
-      parts.push(`${braColor} bra completely covered, bra not showing`);
-    } else if (exposure.bra === "off") {
-      parts.push(hasTop && exposure.clothes === "on"
-        ? "bra removed but breasts covered by the top"
-        : "bra removed, bare breasts and nipples visible");
-    } else {
-      parts.push(`${braColor} bra clearly showing, top shifted enough to reveal it`);
-    }
-
-    if (!hasPanties) {
-      parts.push(hasBottoms && exposure.clothes === "on"
-        ? "no panties equipped, vulva covered by the bottoms"
-        : "no panties equipped, vulva visible");
-    } else if (exposure.panties === "hidden" && hasBottoms && exposure.clothes === "on") {
-      parts.push(`${pantyColor} panties completely covered, panties not showing`);
-    } else if (exposure.panties === "off") {
-      parts.push(hasBottoms && exposure.clothes === "on"
-        ? "panties removed but vulva covered by the bottoms"
-        : "panties removed, vulva visible");
-    } else {
-      parts.push(`${pantyColor} panties clearly showing, bottoms shifted enough to reveal them`);
-    }
-    return parts.join(", ");
+  /** The loadout as the prompt sees it: switched-off pieces empty, the underwear
+   * colour filled in. What undressPrompt reads. */
+  private resolvedGear(): OutfitGear {
+    return Object.fromEntries(OUTFIT_GEAR_SLOTS.map(({ key }) => [key, this.pieceFor(key)])) as OutfitGear;
   }
 
   private outfitFragment(): { prompt: string; negative: string } {
@@ -2693,16 +2664,14 @@ export class OppaiImageGen extends LitElement {
     const misc = OUTFIT_ACTIVITIES.find((item) => item.id === this.outfitMisc);
     const heat = misc ? misc.heat : this.outfitTier;
     const tier = OUTFIT_TIERS[heat];
-    const exposure = rollOutfitExposure(heat);
+    const undress = undressPrompt(this.resolvedGear(), undressLevel(heat));
     const background = this.outfitBackground === "black"
       ? "perfectly solid pure black studio background, seamless black backdrop, background evenly lit with no texture"
       : "perfectly solid pure white studio background, seamless white backdrop, background evenly lit with no texture";
-    const lowerBodyCovered = gearWorn(this.outfitGear.bottoms) && exposure.clothes === "on";
+    // Peak is the nude level, so there is nothing for the hair to be beneath.
     const pubic = heat === OUTFIT_TIERS.length - 1
       ? this.outfitPubicHair
-        ? lowerBodyCovered
-          ? `${this.outfitPubicHairColor.trim() || "dark brown"} pubic hair present beneath the bottoms`
-          : `${this.outfitPubicHairColor.trim() || "dark brown"} pubic hair visible`
+        ? `${this.outfitPubicHairColor.trim() || "dark brown"} pubic hair visible`
         : "clean-shaven pubic area, no pubic hair"
       : "";
     const parts = [
@@ -2711,8 +2680,8 @@ export class OppaiImageGen extends LitElement {
       misc ? misc.face : face.face,
       misc ? misc.pose : face.pose,
       tier.mood,
-      ...this.equippedOutfitTerms(),
-      this.outfitExposurePrompt(exposure),
+      ...this.equippedOutfitTerms(undress.hidden),
+      ...undress.prompt,
       pubic,
       this.outfitText.trim(),
       background,
@@ -2726,9 +2695,15 @@ export class OppaiImageGen extends LitElement {
         misc ? "" : "arms raised, hands above head, arms behind head, hands in hair, both hands near face",
         "detailed background, scenery, gradient background, patterned background, background shadows",
         this.outfitBackground === "black" ? "white background" : "black background",
+        // Booru-trained checkpoints pair a blush or an open mouth with beads of sweat so
+        // often that every heated square came back glistening. Nothing on the board
+        // asks for it, so it is kept out of all of them.
+        SPRITE_SWEAT_NEGATIVE,
         !this.outfitPubicHair ? "pubic hair" : "",
+        // What this level takes off or keeps out of sight. See undressPrompt.
+        ...undress.negative,
         // Every colour the equipped clothes are not. See outfitColorNegatives.
-        ...this.outfitColorNegatives(),
+        ...this.outfitColorNegatives(undress.hidden),
         this.outfitLockColors ? "recolored clothing, wrong clothing color, color bleed" : "",
       ].filter(Boolean).join(", "),
     };
@@ -3167,7 +3142,8 @@ export class OppaiImageGen extends LitElement {
       const made: GenClip[] = [];
       const takes = Math.max(1, spriteForm.variations);
       for (let i = 0; i < takes; i++) {
-        const params = clipParamsFor(spriteForm, clips, start, this.board, kept ? kept + i : undefined);
+        // A MISC square is cut to how the app holds it: see misc-motion.ts.
+        const params = clipParamsFor(miscClipForm(spriteForm, slot.emotion), clips, start, this.board, kept ? kept + i : undefined);
         params.initImage = start.dataURL;
         const jobId = params.jobId!;
         const follow = (step: "clip" | "upscale", id: string) => (percent: number) =>
@@ -5930,10 +5906,12 @@ export class OppaiImageGen extends LitElement {
         </div>
       </section>`;
     return html`<div class="outfit-sheet" style=${style}>
-      ${group("Around the place", "One picture per state, whatever the heat — a state with no square falls back to her expression. Typing is shown while she writes to you.",
-        OUTFIT_ACTIVITIES.filter((item) => !item.intimate))}
+      ${group("Around the place", "One picture per state, whatever the heat — a state with no square falls back to her expression.",
+        OUTFIT_ACTIVITIES.filter((item) => !item.intimate && !item.app))}
       ${group("With them", "Drawn at their own heat. She can only put herself into these once a conversation has got there.",
         OUTFIT_ACTIVITIES.filter((item) => item.intimate))}
+      ${group("For the app", "Shown at the app's moments, never chosen by her: typing while she writes, talking while a reply is read aloud, greeting you as a call connects, startled when something goes wrong. Each clip is cut to its moment — the first two loop, the last two play once.",
+        OUTFIT_ACTIVITIES.filter((item) => item.app))}
     </div>`;
   }
 
@@ -6172,6 +6150,7 @@ export class OppaiImageGen extends LitElement {
     return html`<div class="motion-steps" role="group" aria-label="Animation">
       <div class="ms-head">
         <span class="material-symbols-rounded">animation</span>Motion
+        ${miscMotionLabel(slot.emotion) ? html`<span class="ms-length" title="A misc square's clip is cut to how the app shows it, whatever the Motion tab's length">${miscMotionLabel(slot.emotion)}</span>` : nothing}
         <button class="link-btn" title="The Motion tab: the model, its LoRAs and how long the clip runs" @click=${() => this.openSpriteTab("motion")}>Choices</button>
       </div>
       ${busy ? html`<div class="ms-busy">
@@ -6464,8 +6443,8 @@ export class OppaiImageGen extends LitElement {
       </div>` : nothing}
       ${this.renderCameraControls()}
       <div>
-        <label class="field">Exposure by tier</label>
-        <div class="sec-note">${OUTFIT_TIERS.map((tier, index) => html`<div><strong>${tier.label}:</strong> ${OUTFIT_EXPOSURE_TIERS[index].description}</div>`)}</div>
+        <label class="field">Undressed by tier</label>
+        <div class="sec-note">${OUTFIT_TIERS.map((tier, index) => html`<div><strong>${tier.label}:</strong> ${OUTFIT_UNDRESS_LEVELS[index].description}</div>`)}</div>
       </div>
     `;
     return this.section("look", "Look & framing", this.outfitBackground, body);

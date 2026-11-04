@@ -32,6 +32,8 @@ export class OppaiApp extends LitElement {
   // it; errors that arrive without one still infer their mood from the message text.
   @state() private mascotEmotion = "";
   @state() private mascotIntensity = 0;
+  /** What she is doing in the pop-up, when the event names it. */
+  @state() private mascotActivity = "";
 
   /**
    * How much of the current line has been revealed.
@@ -219,7 +221,7 @@ export class OppaiApp extends LitElement {
     if (this.typeTimer) cancelAnimationFrame(this.typeTimer);
   }
 
-  private onMascot = (event: CustomEvent<{ message: string; tone: "success" | "error"; emotion?: string; intensity?: number }>) => {
+  private onMascot = (event: CustomEvent<{ message: string; tone: "success" | "error"; emotion?: string; intensity?: number; activity?: string }>) => {
     // Libby reacts in character to things happening around the app — errors and
     // successes alike. An event that names her pose (a happy library-add, say) is
     // shown as-is; a bare error still infers its mood from the message text at render.
@@ -230,6 +232,7 @@ export class OppaiApp extends LitElement {
     this.mascotTone = d.tone;
     this.mascotEmotion = d.emotion ?? "";
     this.mascotIntensity = d.intensity ?? 0;
+    this.mascotActivity = d.activity ?? "";
     this.beat++;
     this.typeLine(d.message);
     if (this.mascotTimer) clearTimeout(this.mascotTimer);
@@ -372,7 +375,10 @@ export class OppaiApp extends LitElement {
       : inferErrorEmotion(this.mascotMessage);
     // Capped like the sign-in screen: this pop-up appears over whatever the user was
     // doing, on any screen, unasked. See AMBIENT_MAX_INTENSITY.
-    const assets = libbyAssetCandidates(cue.emotion, ambientIntensity(cue.intensity));
+    // An error is a start, whatever face it was given; a state she has no art for falls
+    // through to that face. See the app's states in libby_activities.go.
+    const activity = this.mascotActivity || (this.mascotTone === "error" ? "startled" : "");
+    const assets = libbyAssetCandidates(cue.emotion, ambientIntensity(cue.intensity), undefined, activity);
     const done = this.typed.length >= this.mascotMessage.length;
     // She rocks into a line she is pleased with and jolts on an error. Keyed on the
     // beat so the animation replays per line rather than only on the first one, and
@@ -395,7 +401,7 @@ export class OppaiApp extends LitElement {
           </div>
           ${hideLibby
             ? null
-            : html`<span class="pixel-sprite libby-breathe">${keyed(`${this.beat}-${cue.emotion}-${cue.intensity}`,
+            : html`<span class="pixel-sprite libby-breathe">${keyed(`${this.beat}-${cue.emotion}-${cue.intensity}-${activity}`,
                 html`<img class=${reaction} src=${assets[0]} data-fallback-index="0"
                   alt=${`Libby feeling ${cue.emotion}`}
                   @error=${(e: Event) => applyImageFallback(e.target as HTMLImageElement, assets)} />`)}</span>`}

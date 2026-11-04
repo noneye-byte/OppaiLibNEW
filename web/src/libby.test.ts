@@ -69,3 +69,9 @@ test("she stays in the typing pose until the last bubble has landed", () => {
   assert.deepEqual(portraitPose(false, "reading", "smug", 4, 6), { activity: "reading", key: "smug-4-reading-6" });
   assert.deepEqual(portraitPose(false, "", "smug", 4, 6), { activity: "", key: "smug-4--6" });
 });
+
+test("she is talking for as long as a finished reply is being read aloud", () => {
+  assert.deepEqual(portraitPose(false, "reading", "smug", 4, 6, true), { activity: "talking", key: "smug-4-talking-6" });
+  // Still writing outranks reading aloud: the voice can start before the last bubble lands.
+  assert.deepEqual(portraitPose(true, "reading", "smug", 4, 6, true), { activity: "typing", key: "typing" });
+});

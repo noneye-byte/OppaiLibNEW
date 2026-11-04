@@ -2590,9 +2590,11 @@ export interface LibbyActivityDef {
   /** What she is doing, in her own terms. Doubles as the hint under a slot. */
   says: string;
   minIntensity: number;
-  /** Set by the app rather than declared by her: the typing slot, shown while a
-      reply is being written. Absent from older servers. */
+  /** Set by the app rather than declared by her: typing while a reply is written,
+      talking while one is read aloud, and the like. Absent from older servers. */
   auto?: boolean;
+  /** When the app shows an `auto` state, as a phrase ("while a reply is on its way"). */
+  shown?: string;
 }
 
 /** A place she can be, behind her on the call screen. The user's own picture, tagged
@@ -2752,7 +2754,7 @@ export function setToken(t: string | null) {
 export function mascotSay(
   message: string,
   tone: "success" | "error" = "error",
-  detail: { emotion?: string; intensity?: number; outfit?: string } = {},
+  detail: { emotion?: string; intensity?: number; outfit?: string; activity?: string } = {},
 ) {
   window.dispatchEvent(new CustomEvent("oppai-mascot", { detail: { message, tone, ...detail } }));
 }

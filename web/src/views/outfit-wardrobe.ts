@@ -986,12 +986,12 @@ export class OppaiOutfitWardrobe extends LitElement {
               picture each, whatever the heat tier above says. She chooses one to fit the
               scene, and a state you have not drawn simply falls back to her expression,
               so there is no wrong number to leave empty. The intimate ones only become
-              available to her as the heat climbs. Typing is the exception: the app shows
-              it while she is writing you a reply.
+              available to her as the heat climbs. A few are the app's rather than hers: it shows them at its own moments — typing while she writes to you,
+              talking while she reads a reply aloud.
             </p>
             <div class="slots">
-              ${this.activities.map((activity) => this.renderSlot(d, activity.id, activity.auto ? `${activity.label} — while she writes` : activity.label,
-                activity.auto ? "Shown with a speech bubble while a reply is on its way; she never picks it herself"
+              ${this.activities.map((activity) => this.renderSlot(d, activity.id, activity.auto ? `${activity.label} — the app's` : activity.label,
+                activity.auto ? `Shown ${activity.shown || "by the app"}; she never picks it herself`
                   : activity.minIntensity > 1 ? `${activity.says} · from tier ${LIBBY_TIERS[activity.minIntensity - 1]}` : activity.says))}
             </div>
           ` : nothing}

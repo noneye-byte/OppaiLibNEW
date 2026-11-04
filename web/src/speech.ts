@@ -110,8 +110,27 @@ export function speak(text: string, heat = 0): Promise<void> {
   return Promise.all(said).then(() => undefined);
 }
 
+/** Whether she is saying something right now — a line playing, not one being fetched. */
+let speakingNow = false;
+
+/**
+ * Tells the portraits she has started or stopped talking, so they can show her talking
+ * pose. Only at the ends of a run of lines: between two bubbles of one reply she is
+ * still talking, and dropping the pose for the gap would flicker it.
+ */
+function setSpeaking(on: boolean) {
+  if (speakingNow === on) return;
+  speakingNow = on;
+  window.dispatchEvent(new CustomEvent("oppai-libby-speaking", { detail: { on } }));
+}
+
+export function isSpeaking(): boolean {
+  return speakingNow;
+}
+
 /** Stops the current line and forgets the rest. */
 export function stopSpeaking(): void {
+  setSpeaking(false);
   generation++;
   // What is still being read for the old queue is not worth waiting behind.
   lastFetch = Promise.resolve();
@@ -141,12 +160,14 @@ async function drain(): Promise<void> {
     }
   } finally {
     draining = false;
+    setSpeaking(false);
   }
 }
 
 async function sayOne(line: Line, gen: number): Promise<void> {
   const served = await line.audio.catch(() => null);
   if (gen !== generation) return;
+  setSpeaking(true);
   if (served) {
     await playBlob(served, gen);
     return;

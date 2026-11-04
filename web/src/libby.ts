@@ -113,9 +113,14 @@ export function defaultLibbyActivityArt(activity: LibbyActivity): string {
  * one three-bubble reply swapped her between typing and her mood art half a dozen times,
  * and each bubble that landed remounted the sprite again. Held on the typing pose under
  * one key for the whole turn, she settles into her mood once, when she has finished.
+ *
+ * Once the reply is in, a voice may still be reading it out, and for that long she is
+ * talking — over whatever she was doing, since it is what she is doing right then. Her
+ * mood stays in the key, so a talking slot she has no art for still shows the right face.
  */
-export function portraitPose(replying: boolean, activity: string, emotion: string, intensity: number, spoken: number) {
+export function portraitPose(replying: boolean, activity: string, emotion: string, intensity: number, spoken: number, talking = false) {
   if (replying) return { activity: "typing", key: "typing" };
+  if (talking) return { activity: "talking", key: `${emotion}-${intensity}-talking-${spoken}` };
   return { activity, key: `${emotion}-${intensity}-${activity}-${spoken}` };
 }
 

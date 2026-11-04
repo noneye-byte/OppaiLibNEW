@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
   DEFAULT_OUTFIT_GEAR,
   EMPTY_OUTFIT_GEAR,
-  OUTFIT_EXPOSURE_TIERS,
+  OUTFIT_UNDRESS_LEVELS,
   OUTFIT_GEAR_SLOTS,
   colorFamilies,
   emphasize,
@@ -13,7 +13,8 @@ import {
   gearWorn,
   isOutfitGear,
   normalizeOutfitGear,
-  rollOutfitExposure,
+  undressLevel,
+  undressPrompt,
   type GearPiece,
 } from "./outfit-loadout.ts";
 
@@ -26,30 +27,57 @@ test("the RPG loadout exposes exactly the requested ten slots", () => {
   );
 });
 
-test("every exposure table is a complete percentage distribution", () => {
-  for (const tier of OUTFIT_EXPOSURE_TIERS) {
-    assert.equal(tier.clothes.reduce((sum, [, weight]) => sum + weight, 0), 100);
-    assert.equal(tier.bra.reduce((sum, [, weight]) => sum + weight, 0), 100);
-    assert.equal(tier.panties.reduce((sum, [, weight]) => sum + weight, 0), 100);
-  }
+test("each tier is one step further undressed than the last", () => {
+  assert.deepEqual(OUTFIT_UNDRESS_LEVELS.map(({ exposure }) => exposure), [
+    { outer: "on", bra: "hidden", panties: "hidden" },
+    { outer: "loosened", bra: "hidden", panties: "hidden" },
+    { outer: "open", bra: "showing", panties: "hidden" },
+    { outer: "off", bra: "showing", panties: "showing" },
+    { outer: "off", bra: "off", panties: "off" },
+  ]);
+  assert.deepEqual(undressLevel(9), undressLevel(4));
+  assert.deepEqual(undressLevel(-1), undressLevel(0));
 });
 
-test("calm is stable while peak can roll fully dressed or fully undressed", () => {
-  assert.deepEqual(rollOutfitExposure(0, () => 0.999), {
-    clothes: "on", bra: "hidden", panties: "hidden",
-  });
-  assert.deepEqual(rollOutfitExposure(4, () => 0), {
-    clothes: "on", bra: "hidden", panties: "hidden",
-  });
-  assert.deepEqual(rollOutfitExposure(4, () => 0.999), {
-    clothes: "off", bra: "off", panties: "off",
-  });
+test("a dressed square names no underwear and keeps it out in the negative", () => {
+  const calm = undressPrompt(DEFAULT_OUTFIT_GEAR, undressLevel(0));
+  assert.deepEqual(calm.hidden, ["bra", "panties"]);
+  assert.deepEqual(calm.prompt, []);
+  assert.deepEqual(calm.negative, ["bra", "panties", "underwear, lingerie"]);
+  assert.deepEqual(undressPrompt(DEFAULT_OUTFIT_GEAR, undressLevel(1)).hidden, ["bra", "panties"]);
 });
 
-test("underwear cannot be described as hidden after outer clothes roll off", () => {
-  const rolls = [0.99, 0, 0];
-  const result = rollOutfitExposure(4, () => rolls.shift() ?? 0);
-  assert.deepEqual(result, { clothes: "off", bra: "showing", panties: "showing" });
+test("an open top shows the bra and still hides the panties", () => {
+  const flirty = undressPrompt(DEFAULT_OUTFIT_GEAR, undressLevel(2));
+  assert.deepEqual(flirty.hidden, ["panties"]);
+  assert.deepEqual(flirty.prompt, ["open clothes, top pulled open", "bra visible"]);
+  assert.deepEqual(flirty.negative, ["panties"]);
+});
+
+test("down to her underwear, the outer clothes are left out and negated by name", () => {
+  const heated = undressPrompt(DEFAULT_OUTFIT_GEAR, undressLevel(3));
+  assert.deepEqual(heated.hidden, ["top", "bottoms"]);
+  assert.deepEqual(heated.prompt, ["underwear only"]);
+  assert.deepEqual(heated.negative, ["fitted top", "pleated skirt"]);
+});
+
+test("nude leaves every garment out", () => {
+  const peak = undressPrompt(DEFAULT_OUTFIT_GEAR, undressLevel(4));
+  assert.deepEqual(peak.hidden, ["top", "bottoms", "bra", "panties"]);
+  assert.deepEqual(peak.prompt, ["completely nude, naked", "bare breasts, nipples", "pussy, vulva visible"]);
+});
+
+test("with no bra on, an open top shows her rather than a bra", () => {
+  const gear = { ...DEFAULT_OUTFIT_GEAR, bra: { color: "", item: "" } };
+  assert.deepEqual(undressPrompt(gear, undressLevel(0)).prompt, []);
+  assert.deepEqual(undressPrompt(gear, undressLevel(2)).prompt, ["open clothes, top pulled open", "bare breasts, nipples"]);
+});
+
+test("underwear with nothing over it is what she is wearing, at any level", () => {
+  const gear = { ...DEFAULT_OUTFIT_GEAR, top: { color: "", item: "" } };
+  const calm = undressPrompt(gear, undressLevel(0));
+  assert.deepEqual(calm.hidden, ["panties"]);
+  assert.deepEqual(calm.prompt, []);
 });
 
 test("draft gear validation requires a colour and an item in every slot", () => {
