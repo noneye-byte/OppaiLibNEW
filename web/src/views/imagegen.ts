@@ -142,7 +142,7 @@ import {
 } from "../regions.js";
 import { renameKeys, renameLorasInPrompt, renamedMap } from "../model-rename.js";
 import { hiresScale, hiresUpscalers, scaledSize, upscaleFactor } from "../upscale.js";
-import { filterTriggerGroups, inlineTriggers, triggerGroups, type TriggerGroup } from "../trigger-groups.js";
+import { filterTriggerGroups, inlineTriggers, triggerGroups, wordlessLoras, type TriggerGroup } from "../trigger-groups.js";
 import { explainGenError } from "../gen-errors.js";
 import {
   LORA_CATEGORIES, filedByCategory, moveToCategory, type LoraCategoryKey,
@@ -227,14 +227,19 @@ const CREATE_TABS: { id: CreateTab; label: string; icon: string }[] = [
   { id: "settings", label: "Settings", icon: "tune" },
 ];
 
-/** The Sprites inspector's tabs. The recipe was one accordion of eleven sections, read
-    top to bottom; these are the four things it is actually about. */
-type SpriteTab = "outfit" | "look" | "prompt" | "generator" | "motion";
+/** The Sprites rail, the same rail the Image studio has: what she wears and how she is
+    shot first, then what draws her. "Generator" was one tab holding the model, the
+    LoRAs, the VAE, the sampler and ADetailer, scrolled through to find any of them;
+    they are the Image studio's tabs here too, so a LoRA is in the same place in both. */
+type SpriteTab = "outfit" | "look" | "prompt" | "models" | "loras" | "detailer" | "settings" | "motion";
 const SPRITE_TABS: { id: SpriteTab; label: string; icon: string }[] = [
   { id: "outfit", label: "Outfit", icon: "checkroom" },
   { id: "look", label: "Look", icon: "photo_camera" },
   { id: "prompt", label: "Prompt", icon: "edit_note" },
-  { id: "generator", label: "Generator", icon: "deployed_code" },
+  { id: "models", label: "Models", icon: "deployed_code" },
+  { id: "loras", label: "LoRAs", icon: "style" },
+  { id: "detailer", label: "ADetailer", icon: "face_retouching_natural" },
+  { id: "settings", label: "Settings", icon: "tune" },
   // How the squares move: the Video studio's inspector, over a set of choices of its own.
   { id: "motion", label: "Motion", icon: "animation" },
 ];
@@ -550,8 +555,9 @@ export class OppaiImageGen extends LitElement {
   /** Which block of the sheet is open. Follows the selection: aiming at a MISC square
       opens the MISC tab, and the other way round. */
   @state() private sheetTab: "faces" | "misc" = "faces";
-  /** How big the sheet's squares are drawn, as an index into SHEET_ZOOMS. */
-  @state() private sheetZoom = 1;
+  /** How big the sheet's squares are drawn, as an index into SHEET_ZOOMS. Fit to begin
+      with, so a whole row of expressions is in view beside the selected square. */
+  @state() private sheetZoom = 0;
   /** Whether the assembled prompt is unfolded in the focus panel. */
   @state() private showSquarePrompt = false;
   /** Camera and shot composition. Compiled into terms, negatives and a frame size rather
@@ -688,8 +694,9 @@ export class OppaiImageGen extends LitElement {
   /** A gallery picture or a file is being dragged over the stage. */
   @state() private stageDrop = false;
   @state() private spriteTab: SpriteTab = "outfit";
-  /** Whether the Sprites recipe is out beside the board. */
-  @state() private spriteInspector = true;
+  /** Whether a Sprites drawer is out beside the board. Shut to begin with: the twelve
+      expressions of a row are what the screen is for, and the rail is one click away. */
+  @state() private spriteInspector = false;
   @state() private boardFilter: BoardFilter = "all";
   /** The selected square drawn cut out on a checkerboard, or as she appears in chat —
       animated there once it has a cut — or its clip, or its cut clip, playing. */
@@ -4977,7 +4984,7 @@ export class OppaiImageGen extends LitElement {
             <span class="gen-text"><span class="gen-kicker"><span class="status-dot ${st.clips?.image || st.clips?.text ? "" : "off"}"></span>ComfyUI</span>
             <span class="gen-name">${st.clips?.image || st.clips?.text ? "Wan video" : "Not set up"}</span></span></span>`
         : html`<button class="gen-pill" title=${model?.title ?? "Choose a model"}
-            @click=${() => { if (this.studio) { this.spriteTab = "generator"; this.spriteInspector = true; } else this.openCreateTab("models"); }}>
+            @click=${() => { if (this.studio) this.openSpriteTab("models"); else this.openCreateTab("models"); }}>
             ${thumb && !this.failedThumbs.has(thumb)
               ? html`<img src=${thumb} alt="" @error=${() => (this.failedThumbs = new Set(this.failedThumbs).add(thumb))} />`
               : html`<span class="gen-icon"><span class="material-symbols-rounded">deployed_code</span></span>`}
@@ -5516,11 +5523,15 @@ export class OppaiImageGen extends LitElement {
 
   // ── the Sprites studio ──────────────────────────────────────────────────────
   //
-  // Two views. The board is the recipe on the left — in four tabs rather than one
-  // accordion of eleven sections — the sheet of squares in the middle, and the square
-  // that is selected on the right with everything that can be done to it. "Wardrobe &
-  // rooms" is what she actually wears and where she stands, full width, because it is
-  // a gallery and was never a sidebar section.
+  // Two views. The board is laid out as the Image studio is: a rail down the left whose
+  // tabs open one drawer at a time, the recipe strip over the work — the LoRAs that are
+  // on, their trigger words, the sampler, the seed, each a button to where it changes —
+  // the sheet of squares, and under it a dock with the whole set's progress and the runs
+  // over it. The square that is selected is on the right with everything that can be
+  // done to it. The recipe was a 360px column of five tabs once, open beside the sheet
+  // all the time, and cut the matrix off at its seventh expression. "Wardrobe & rooms"
+  // is what she actually wears and where she stands, full width, because it is a
+  // gallery and was never a sidebar section.
 
   private renderSprites(st: ImageGenStatus, invoke: boolean) {
     if (this.studioView === "wardrobe") {
@@ -5537,56 +5548,241 @@ export class OppaiImageGen extends LitElement {
         ></oppai-outfit-wardrobe>
       </div></div>`;
     }
+    const tab = this.spriteInspector ? this.spriteTab : "";
     return html`<div class="workspace">
-      <div class="sprite-shell ${this.spriteInspector ? "with-inspector" : ""} ${this.sidePanel ? "with-focus" : ""}">
-        ${this.spriteInspector ? html`<aside class="sprite-inspector">
-          <div class="ins-tabs" role="tablist" aria-label="The recipe">
-            ${SPRITE_TABS.map((t) => html`<button role="tab" class=${this.spriteTab === t.id ? "on" : ""}
-              aria-selected=${this.spriteTab === t.id ? "true" : "false"} @click=${() => (this.spriteTab = t.id)}>
-              <span class="material-symbols-rounded">${t.icon}</span>${t.label}
-            </button>`)}
-          </div>
-          <div class="panel-scroll ins-body">${this.renderSpriteTab(st, invoke)}</div>
-        </aside>` : nothing}
+      <div class="sprite-shell ${tab ? "drawer-open" : ""} ${this.sidePanel ? "with-focus" : ""} ${this.loraDrag ? "lora-dragging" : ""}">
+        ${this.renderSpriteRail()}
+        ${tab
+          ? html`<div class="drawer-scrim" @click=${() => (this.spriteInspector = false)}></div>
+              <aside class="create-drawer sprite-drawer" aria-label=${SPRITE_TABS.find((t) => t.id === tab)?.label ?? ""}>
+                ${this.renderSpriteDrawer(st, invoke)}
+              </aside>`
+          : nothing}
         <section class="workbench">
+          ${this.renderSpriteRecipe(st)}
           ${this.renderStudioToolbar()}
-          <div class="canvas-stage sheet">
-            ${this.renderStudioSheet()}
-            ${this.error ? html`<div class="banner">${this.error}</div>` : nothing}
+          <div class="canvas-wrap">
+            <div class="canvas-stage sheet">
+              ${this.renderStudioSheet()}
+              ${this.error ? html`<div class="banner">${this.error}</div>` : nothing}
+            </div>
+            ${this.generating ? this.renderSheetProgress() : nothing}
           </div>
-          ${this.generating ? this.renderSheetProgress() : nothing}
-          ${this.renderBatchBar()}
+          <div class="sprite-dock">${this.renderBatchBar()}</div>
         </section>
         ${this.sidePanel ? html`<aside class="right studio-focus">${this.renderFocusPanel()}</aside>` : nothing}
       </div>
     </div>`;
   }
 
-  /** One tab of the recipe. The sections are the same ones the old accordion had,
-      drawn under titles of their own. */
-  private renderSpriteTab(st: ImageGenStatus, invoke: boolean) {
-    this.flatTitles = true;
+  /** Opens a tab of the rail, or with toggle shuts it when it is the one open. */
+  private openSpriteTab(id: SpriteTab, toggle = false) {
+    if (toggle && this.spriteInspector && this.spriteTab === id) {
+      this.spriteInspector = false;
+      return;
+    }
+    if (id !== this.spriteTab) this.pickerFilter = "";
+    this.spriteTab = id;
+    this.spriteInspector = true;
+  }
+
+  private renderSpriteRail() {
+    const st = this.status;
+    const worn = OUTFIT_GEAR_SLOTS.filter(({ key }) => gearWorn(this.outfitGear[key])).length;
+    const badges: Partial<Record<SpriteTab, number>> = {
+      outfit: this.outfitOn ? worn : 0,
+      prompt: this.selectedChars.length + inlineTriggers(this.selectedTriggers, this.triggerGroups(), Infinity).shown.length,
+      loras: Object.keys(this.selectedLoras).length,
+      detailer: st?.detailerAvailable && this.detailerEnabled && this.detailerHasPasses
+        ? detailerModels(this.detailerPasses).length + (st?.detectors?.length ? customPassParams(this.detailerCustom).length : 0)
+        : 0,
+    };
+    const open = this.spriteInspector ? this.spriteTab : "";
+    return html`<nav class="create-rail" aria-label="The sprite recipe">
+      ${SPRITE_TABS.map((t) => html`<button class="rail-tab ${open === t.id ? "on" : ""}"
+          aria-pressed=${open === t.id ? "true" : "false"} title=${t.label} data-sprite-tab=${t.id}
+          @click=${() => this.openSpriteTab(t.id, true)}>
+          <span class="material-symbols-rounded rail-icon">${t.icon}</span>
+          <span class="rail-label">${t.label}</span>
+          ${badges[t.id] ? html`<span class="rail-badge">${badges[t.id]}</span>` : nothing}
+        </button>`)}
+    </nav>`;
+  }
+
+  /** One drawer of the rail. A drawer of several parts titles each one; a drawer that
+      is one thing has the drawer's own title and no other. */
+  private renderSpriteDrawer(st: ImageGenStatus, invoke: boolean) {
+    const tab = this.spriteTab;
+    const meta = SPRITE_TABS.find((t) => t.id === tab)!;
+    let body: unknown = nothing;
+    this.flatTitles = tab === "outfit" || tab === "look" || tab === "prompt" || tab === "settings";
     try {
-      switch (this.spriteTab) {
+      switch (tab) {
         case "outfit":
-          return html`${this.renderDressSection()}${this.renderLoadoutSection()}`;
+          body = html`${this.renderDressSection()}${this.renderLoadoutSection()}`;
+          break;
         case "look":
-          return this.renderLookSection();
+          body = this.renderLookSection();
+          break;
         case "prompt":
-          return html`${this.renderPromptExtrasSection()}${this.renderCharacterSection()}${this.renderTemplateSection(st.templates ?? [])}`;
-        case "generator":
-          return html`${this.renderModelSection(st.models ?? [])}
-            ${this.renderLoraSection(st.loras ?? [], st.loraError)}
+          body = html`${this.renderSpriteTriggers()}${this.renderPromptExtrasSection()}
+            ${this.renderCharacterSection()}${this.renderTemplateSection(st.templates ?? [])}`;
+          break;
+        case "models":
+          body = html`${this.renderPickerSearch("Search models")}
+            ${this.renderModelSection(st.models ?? [])}
+            ${this.renderManageNote(st, invoke)}`;
+          break;
+        case "loras":
+          body = this.renderLoraSection(st.loras ?? [], st.loraError);
+          break;
+        case "detailer":
+          body = this.renderDetailerSection(invoke);
+          break;
+        case "settings":
+          body = html`${this.renderSettingsSection(invoke, st.boards ?? [])}
             ${this.renderVaeSection(st.vaes ?? [])}
-            ${this.renderSettingsSection(invoke, st.boards ?? [])}
-            ${this.renderDetailerSection(invoke)}
             ${this.renderGeneratorPane(st, invoke)}`;
+          break;
         case "motion":
-          return this.renderMotionTab(st);
+          body = this.renderMotionTab(st);
+          break;
       }
     } finally {
       this.flatTitles = false;
     }
+    return html`
+      <div class="drawer-head">
+        <span class="material-symbols-rounded">${meta.icon}</span>
+        ${meta.label}
+        <span class="toolbar-spacer"></span>
+        ${tab === "loras"
+          ? html`<button class="drawer-action" title="Train a LoRA on your own pictures" @click=${() => (this.trainOpen = true)}>
+              <span class="material-symbols-rounded">model_training</span>
+            </button>`
+          : nothing}
+        ${tab === "models" || tab === "loras" || tab === "motion"
+          ? html`<button class="drawer-action" title="Find more on Civitai"
+              @click=${() => { this.civitaiMode = tab === "motion" ? "video" : "pictures"; this.civitaiOpen = true; }}>
+              <span class="material-symbols-rounded">travel_explore</span>
+            </button>`
+          : nothing}
+        <button class="drawer-action" title="Close" aria-label="Close" @click=${() => (this.spriteInspector = false)}>
+          <span class="material-symbols-rounded">close</span>
+        </button>
+      </div>
+      <div class="drawer-scroll">${body}</div>
+    `;
+  }
+
+  /**
+   * The recipe over the board: the LoRAs that are on, their trigger words, and how the
+   * squares are drawn, each a button to where it is changed. The trigger words are here
+   * rather than in a drawer because they are what decides whether a character LoRA
+   * shows up at all, and the Sprite studio had no way to pick them — they were only
+   * under the Image studio's prompt, which Sprites does not have.
+   */
+  private renderSpriteRecipe(st: ImageGenStatus) {
+    const loras = (st.loras ?? []).filter((l) => l.name in this.selectedLoras);
+    const detailer = st.detailerAvailable && this.detailerEnabled && this.detailerHasPasses;
+    const words = this.activeTriggerPhrases().length;
+    const wordless = wordlessLoras(st.loras ?? [], this.selectedLoras);
+    return html`<div class="recipe sprite-recipe">
+      <div class="recipe-chips">
+        ${loras.map((l) => html`<span class="recipe-chip lora">
+          <button class="recipe-chip-main" title="Change the weight in the LoRAs tab" @click=${() => this.openSpriteTab("loras")}>
+            <span class="material-symbols-rounded">style</span>${l.alias || l.name}<b>${this.selectedLoras[l.name]}</b>
+          </button>
+          <button class="recipe-chip-x" title="Take this LoRA off" aria-label=${`Remove ${l.alias || l.name}`} @click=${() => this.toggleLora(l.name)}>
+            <span class="material-symbols-rounded">close</span>
+          </button>
+        </span>`)}
+        <button class="recipe-chip add" title="Put a LoRA on" @click=${() => this.openSpriteTab("loras")}>
+          <span class="material-symbols-rounded">add</span>${loras.length ? nothing : "LoRA"}
+        </button>
+        <span class="recipe-sep"></span>
+        <button class="recipe-chip" title="Sampling settings" @click=${() => this.openSpriteTab("settings")}>
+          <span class="material-symbols-rounded">tune</span>${this.steps} steps · CFG ${this.cfg}
+        </button>
+        ${detailer ? html`<button class="recipe-chip on" title="ADetailer runs after each square" @click=${() => this.openSpriteTab("detailer")}>
+          <span class="material-symbols-rounded">face_retouching_natural</span>${fixLabel(this.detailerPasses)}
+        </button>` : nothing}
+        <button class="recipe-chip ${this.seed >= 0 ? "on" : ""}"
+          title=${this.seed < 0 ? "A new seed for every square — click to keep the selected square's for the rest of the set" : "Every square is drawn from this seed — click to go back to random"}
+          @click=${() => this.toggleSpriteSeed()}>
+          <span class="material-symbols-rounded">${this.seed < 0 ? "casino" : "lock"}</span>${this.seed < 0 ? "Random seed" : this.seed}
+        </button>
+      </div>
+      ${words ? html`<span class="recipe-sep"></span>${this.renderTriggerRow()}`
+        : wordless.length ? html`<span class="recipe-sep"></span>
+          <button class="trig-open" title="The LoRAs that are on have no trigger words — give them some"
+            @click=${() => this.openSpriteTab("prompt")}>
+            <span class="material-symbols-rounded">sell</span>Set trigger words
+          </button>`
+        : nothing}
+      ${this.triggersOpen && words ? this.renderTriggerPicker() : nothing}
+    </div>`;
+  }
+
+  /** Keeps the selected square's seed for every square after it, or lets it go. One
+      seed across a set is the cheapest way to keep her one face from square to square. */
+  private toggleSpriteSeed() {
+    if (this.seed >= 0) {
+      this.seed = -1;
+      return;
+    }
+    const seed = this.shotAt(this.outfitSlot().slot)?.seed;
+    if (seed === undefined || seed < 0) {
+      this.showToast("Select a square that was generated — its seed is the one kept");
+      return;
+    }
+    this.seed = seed;
+  }
+
+  /**
+   * The Prompt drawer's trigger words: every word of every LoRA that is on, picked or
+   * not with a click, and for each LoRA a way to change the words it has — or, for one
+   * with none, to give it some. They are the LoRA's own, saved beside its file, so the
+   * Image studio offers the same ones.
+   */
+  private renderSpriteTriggers() {
+    const st = this.status;
+    const groups = this.triggerGroups();
+    const wordless = wordlessLoras(st?.loras ?? [], this.selectedLoras);
+    const canEdit = !!st?.manageModels;
+    const setGroup = (g: TriggerGroup, on: boolean) => {
+      const phrases = new Set(g.phrases);
+      const rest = this.selectedTriggers.filter((p) => !phrases.has(p));
+      this.selectedTriggers = on ? [...rest, ...g.phrases] : rest;
+    };
+    const edit = (lora: string, label: string) => canEdit
+      ? html`<button class="link" title=${`Change ${label}'s trigger words`} ?disabled=${this.metaBusy}
+          @click=${() => void this.openMetaEditor(lora)}>Edit</button>`
+      : nothing;
+    const picked = inlineTriggers(this.selectedTriggers, groups, Infinity).shown.length;
+    const body = !groups.length && !wordless.length
+      ? html`<div class="sec-note">Put a LoRA on and its trigger words are picked here — they go into every square, after the extras.</div>
+          <button class="chip" @click=${() => this.openSpriteTab("loras")}><span class="material-symbols-rounded" style="font-size:16px;">style</span>Choose LoRAs</button>`
+      : html`
+          ${groups.map((g) => {
+            const on = g.phrases.filter((ph) => this.selectedTriggers.includes(ph)).length;
+            return html`<section class="trig-group">
+              <div class="trig-group-head">
+                <b title=${g.lora}>${g.label}</b><small>${on}/${g.phrases.length}</small>
+                <button class="link" @click=${() => setGroup(g, on < g.phrases.length)}>${on < g.phrases.length ? "All" : "None"}</button>
+                ${edit(g.lora, g.label)}
+              </div>
+              <div class="trig-chips">${g.phrases.map((phrase) => html`<button class="chip small ${this.selectedTriggers.includes(phrase) ? "on" : ""}"
+                aria-pressed=${this.selectedTriggers.includes(phrase) ? "true" : "false"}
+                @click=${() => this.toggleTrigger(phrase)}>${phrase}</button>`)}</div>
+            </section>`;
+          })}
+          ${wordless.map((w) => html`<section class="trig-group wordless">
+            <div class="trig-group-head"><b title=${w.lora}>${w.label}</b><small>no trigger words</small>
+              ${canEdit ? html`<button class="link" ?disabled=${this.metaBusy} @click=${() => void this.openMetaEditor(w.lora)}>Add some</button>` : nothing}</div>
+            ${canEdit ? nothing : html`<div class="sec-note">${manageModelsNote(st) || "This generator keeps no trigger words for its LoRAs"} — type the words into Extra positive instead.</div>`}
+          </section>`)}`;
+    return this.section("triggers", "Trigger words", groups.length ? `${picked} picked` : "none", html`<div class="sprite-triggers">${body}</div>`);
   }
 
   /** How the squares move: the Video studio's inspector over the set's own choices.
@@ -5830,11 +6026,13 @@ export class OppaiImageGen extends LitElement {
   /**
    * The selected square, large, with everything that can be done to it.
    *
-   * The picture can be shown as it will be seen — beside her speech box, saying a line
-   * in that mood — because an expression is right or wrong next to its words, not on a
-   * checkerboard. Under it, the same expression up the heat tiers, the one comparison
-   * a set most often needs. Generating sits first; the square's other tools are a row
-   * of icons rather than six full-width buttons.
+   * One switch under the picture says what is shown: the still on a checkerboard, the
+   * still as she is seen in chat — beside her speech box, saying a line in that mood,
+   * because an expression is right or wrong next to its words — and the square's clip
+   * and its cut, each with a dot for whether it is there and current. They were two
+   * switches once, one over the picture and one in the animation box, that both changed
+   * the same picture. Under it, the same expression up the heat tiers, the comparison a
+   * set most often needs; then making the square, then making it move, then the rest.
    */
   private renderFocusPanel() {
     const { slot } = this.outfitSlot();
@@ -5857,18 +6055,17 @@ export class OppaiImageGen extends LitElement {
       : this.focusView === "cut" || this.focusView === "scene" && steps.cut === "ready" ? anim?.cut : undefined;
     const playURL = playing && this.outfitWardrobeId
       ? api.libbyOutfitAnimURL(this.outfitWardrobeId, slot.emotion, slot.tier, playing.stage, playing.updatedAt) : "";
+    const view = (v: typeof this.focusView, label: string, title: string, enabled: boolean, state?: string) =>
+      html`<button class="fv ${this.focusView === v ? "on" : ""} ${state ?? ""}" role="tab" aria-selected=${this.focusView === v ? "true" : "false"}
+        ?disabled=${!enabled} title=${title} @click=${() => { this.stopFlip(); this.focusView = v; }}>
+        ${label}${state ? html`<i></i>` : nothing}</button>`;
     return html`
       <div class="focus-head">
         <div class="focus-title">
-          <strong>${isMisc ? slot.emotionLabel : `${slot.tierLabel} · ${slot.emotionLabel}`}</strong>
-          <span class="focus-status ${status.tone}"><i></i>${status.label}</span>
+          <span class="focus-kicker">${isMisc ? "Misc" : slot.tierLabel}</span>
+          <strong>${slot.emotionLabel}</strong>
         </div>
-        <div class="seg small" role="group" aria-label="Show the square">
-          <button class=${this.focusView === "cutout" ? "on" : ""} aria-pressed=${this.focusView === "cutout" ? "true" : "false"}
-            title="The cutout, on a checkerboard" @click=${() => (this.focusView = "cutout")}>Cutout</button>
-          <button class=${this.focusView === "scene" ? "on" : ""} aria-pressed=${this.focusView === "scene" ? "true" : "false"}
-            title="As she appears in chat, saying something in that mood" @click=${() => (this.focusView = "scene")}>In chat</button>
-        </div>
+        <span class="focus-status ${status.tone}" title=${status.label}><i></i>${status.tone === "none" ? "Empty" : status.tone === "ready" ? "Filed" : status.tone === "stale" ? "Stale" : "To review"}</span>
       </div>
       <div class="panel-scroll focus-scroll">
         <div class="focus-art ${this.focusView}">
@@ -5877,12 +6074,21 @@ export class OppaiImageGen extends LitElement {
             : shown
             ? html`<img src=${this.previewURL(shown)} alt=${shownSlot.emotionLabel} style="cursor:zoom-in" title="Expand"
                 @click=${() => (this.expandedShot = shown)} @contextmenu=${(e: MouseEvent) => this.openShotMenu(shown, e)} />`
-            : html`<span class="focus-empty"><span class="material-symbols-rounded">add_photo_alternate</span>Nothing here yet</span>`}
+            : html`<span class="focus-empty"><span class="material-symbols-rounded">add_photo_alternate</span>Nothing here yet
+                <small>Enter draws it · double-click a square to draw it and move on</small></span>`}
           ${this.focusView === "scene" ? html`<div class="scene-speech">${sampleLine(shownSlot.emotion, shownSlot.emotionLabel)}</div>` : nothing}
           ${!isMisc && !playURL ? html`<button class="flip-btn ${this.flipping ? "on" : ""}" title="Play this tier's expressions one after another, to check they are one face"
             @click=${() => this.toggleFlip()}>
             <span class="material-symbols-rounded">${this.flipping ? "stop" : "play_arrow"}</span>${this.flipping ? shownSlot.emotionLabel : "Flip through"}
           </button>` : nothing}
+        </div>
+        <div class="focus-views" role="tablist" aria-label="Show the square">
+          ${view("cutout", "Still", "The picture, cut out, on a checkerboard", true)}
+          ${view("scene", "In chat", "As she appears in chat, saying something in that mood", true)}
+          ${view("clip", "Clip", steps.clip === "stale" ? "Its clip is of an older picture" : anim?.clip ? `Seed ${anim.clip.seed}${anim.clip.recipe ? ` · ${anim.clip.recipe}` : ""}` : "Not animated yet",
+            !!anim?.clip, steps.clip)}
+          ${view("cut", "Cut", steps.cut === "stale" ? "Its cut is of an older clip" : anim?.cut ? "The clip without its background — the animated sprite" : "Background not cut yet",
+            !!anim?.cut, steps.cut)}
         </div>
         ${!isMisc ? this.renderHeatLadder() : nothing}
         <div class="focus-primary">
@@ -5896,6 +6102,7 @@ export class OppaiImageGen extends LitElement {
             ${shot ? "Redo" : "Just this"}
           </button>
         </div>
+        ${this.renderSquareMotion(slot)}
         <div class="focus-tools">
           <button class="tool" ?disabled=${!shot || busy} title=${shot?.cutoutReviewed ? "Adjust the cutout (R)" : "Review the cutout (R)"}
             @click=${() => { if (shot) void this.openCutout(this.previewURL(shot), `seed-${shot.seed}`, shot.outfitFilename, shot.id); }}>
@@ -5923,59 +6130,49 @@ export class OppaiImageGen extends LitElement {
             <span class="material-symbols-rounded">delete</span><span>Delete</span>
           </button>
         </div>
-        ${this.renderSquareMotion(slot)}
-        <div class="sec-note focus-desc">${activity ? `${activity.face}; ${activity.pose}.` : face ? `${face.face}; ${face.pose}.` : nothing}</div>
-        ${shot ? html`<div class="focus-meta">
-          <span title="Seed"><span class="material-symbols-rounded" style="font-size:14px;">casino</span>${shot.seed}</span>
-          ${shot.info?.model ? html`<span title="Model"><span class="material-symbols-rounded" style="font-size:14px;">deployed_code</span>${shot.info.model}</span>` : nothing}
-        </div>` : nothing}
-        <button class="adv-toggle" @click=${() => (this.showSquarePrompt = !this.showSquarePrompt)}>
-          <span class="material-symbols-rounded" style="font-size:17px;">${this.showSquarePrompt ? "expand_less" : "code"}</span>
-          ${this.showSquarePrompt ? "Hide the prompt" : "The prompt this square gets"}
-        </button>
-        ${this.showSquarePrompt ? html`<div class="focus-prompt">
-          <span class="focus-tag">Positive</span>
-          <pre>${prompt}</pre>
-          <span class="focus-tag negative">Negative</span>
-          <pre>${negative}</pre>
-          <div class="sec-note">Exposure is rolled fresh for every generation, so the undress clauses change between takes.</div>
-        </div>` : nothing}
+        <div class="focus-about">
+          <div class="focus-desc">${activity ? `${activity.face}; ${activity.pose}.` : face ? `${face.face}; ${face.pose}.` : nothing}</div>
+          ${shot ? html`<div class="focus-meta">
+            <span title="Seed"><span class="material-symbols-rounded" style="font-size:14px;">casino</span>${shot.seed}</span>
+            ${shot.info?.model ? html`<span title="Model"><span class="material-symbols-rounded" style="font-size:14px;">deployed_code</span>${shot.info.model}</span>` : nothing}
+          </div>` : nothing}
+          <button class="adv-toggle" aria-expanded=${this.showSquarePrompt ? "true" : "false"} @click=${() => (this.showSquarePrompt = !this.showSquarePrompt)}>
+            <span class="material-symbols-rounded" style="font-size:17px;">${this.showSquarePrompt ? "expand_less" : "code"}</span>
+            ${this.showSquarePrompt ? "Hide the prompt" : "The prompt this square gets"}
+          </button>
+          ${this.showSquarePrompt ? html`<div class="focus-prompt">
+            <span class="focus-tag">Positive</span>
+            <pre>${prompt}</pre>
+            <span class="focus-tag negative">Negative</span>
+            <pre>${negative}</pre>
+            <div class="sec-note">Exposure is rolled fresh for every generation, so the undress clauses change between takes.</div>
+          </div>` : nothing}
+        </div>
       </div>
     `;
   }
 
   /**
-   * The square's way to being an animated sprite: picture, clip, cut, each a button
-   * that shows it, with the step that is next made by the one button under them. A
-   * step is offered only once the one it is made of is there and current.
+   * Making the square move: its clip, then its clip cut out of the background, each
+   * button offered once the step it is made of is there and current, the next one due
+   * lit. Which of them is shown is the switch under the picture.
    */
   private renderSquareMotion(slot: DraftOutfitSlot) {
     const key = slotKeyOf(slot);
     const shot = this.shotAt(slot);
     const sq = this.squareMotion(slot);
-    const steps = squareSteps(sq);
     const anim = this.anims[key];
     const busy = this.motionBusy[key];
     const clips = this.status?.clips;
     const matte = !!this.status?.matte;
     const next = nextStep(sq);
-    const view = (v: typeof this.focusView) => () => { this.stopFlip(); this.focusView = v; };
-    const stepButton = (step: MotionStep, icon: string, label: string, state: string, on: boolean, enabled: boolean, title: string) =>
-      html`<button class="ms-step ${state} ${on ? "on" : ""}" ?disabled=${!enabled} title=${title} aria-pressed=${on ? "true" : "false"}
-        @click=${view(step === "picture" ? "cutout" : step)}>
-        <span class="material-symbols-rounded">${icon}</span>${label}<i></i></button>`;
     const pct = busy ? Math.round(busy.percent * 100) : 0;
     const others = (spriteTakes.get(`${this.outfitWardrobeId}|${key}`) ?? []).filter((c) => c.id);
     const lock = !!busy || this.motionRunning || this.generating;
     return html`<div class="motion-steps" role="group" aria-label="Animation">
-      <div class="ms-row">
-        ${stepButton("picture", "image", "Picture", shot ? "ready" : "none", this.focusView === "cutout", !!shot, "The still")}
-        <span class="ms-arrow material-symbols-rounded">chevron_right</span>
-        ${stepButton("clip", "movie", "Clip", steps.clip, this.focusView === "clip", !!anim?.clip,
-          steps.clip === "stale" ? "Its clip is of an older picture" : anim?.clip ? `Seed ${anim.clip.seed}${anim.clip.recipe ? ` · ${anim.clip.recipe}` : ""}` : "Not animated yet")}
-        <span class="ms-arrow material-symbols-rounded">chevron_right</span>
-        ${stepButton("cut", "background_replace", "Cut", steps.cut, this.focusView === "cut", !!anim?.cut,
-          steps.cut === "stale" ? "Its cut is of an older clip" : anim?.cut ? "The clip without its background — the animated sprite" : "Background not cut yet")}
+      <div class="ms-head">
+        <span class="material-symbols-rounded">animation</span>Motion
+        <button class="link-btn" title="The Motion tab: the model, its LoRAs and how long the clip runs" @click=${() => this.openSpriteTab("motion")}>Choices</button>
       </div>
       ${busy ? html`<div class="ms-busy">
           <span>${busy.step === "clip" ? "Animating" : busy.step === "upscale" ? "Enlarging" : "Cutting the background"}… <b>${pct}%</b></span>
@@ -6021,7 +6218,13 @@ export class OppaiImageGen extends LitElement {
     </div>`;
   }
 
-  /** The bar under the sheet: the whole set's progress, and the batch controls. */
+  /**
+   * The dock under the sheet: how far the set has got, and the runs over all of it.
+   * Making pictures and making them move are the two things done to a whole set, so
+   * they are two groups, each with what it applies to beside its button — Include
+   * Misc beside Generate missing, which squares beside Animate — rather than one row
+   * where the switch for one sat beside the button of the other.
+   */
   private renderBatchBar() {
     const shots = this.currentOutfitShots();
     const expressions = shots.filter((shot) => (shot.outfitSlot?.index ?? 0) < EXPRESSION_SQUARES).length;
@@ -6038,6 +6241,8 @@ export class OppaiImageGen extends LitElement {
     const c = 2 * Math.PI * 17;
     const made = total ? Math.min(1, have / total) : 0;
     const done = total ? Math.min(1, reviewed / total) : 0;
+    const running = this.outfitBatchRunning || this.motionRunning;
+    const note = this.motionProgress || this.outfitProgress;
     return html`<div class="batch-bar">
       <div class="batch-ring" title=${`${have} of ${total} made, ${reviewed} reviewed`}>
         <svg viewBox="0 0 40 40"><circle class="r-track" cx="20" cy="20" r="17" />
@@ -6047,52 +6252,53 @@ export class OppaiImageGen extends LitElement {
       </div>
       <div class="batch-progress">
         <span class="batch-head">${have === total && total ? "The set is complete" : `${missing} square${missing === 1 ? "" : "s"} to go`}</span>
-        <span class="batch-count">${expressions}/${EXPRESSION_SQUARES} expressions · ${misc}/${MISC_SQUARES} misc · ${reviewed} reviewed${stale ? html` · <em>${stale} on an older recipe</em>` : nothing}${moved.clip ? ` · ${moved.clip} animated · ${moved.cut} cut out` : nothing}</span>
+        <span class="batch-count">${note
+          ? html`<span class="batch-note">${note}</span>`
+          : html`${expressions}/${EXPRESSION_SQUARES} expressions · ${misc}/${MISC_SQUARES} misc · ${reviewed} reviewed${stale ? html` · <em>${stale} on an older recipe</em>` : nothing}${moved.clip ? ` · ${moved.clip} animated · ${moved.cut} cut out` : nothing}`}</span>
       </div>
-      <label class="switch compact" title="Whether Generate missing also renders the Misc states">
-        <input type="checkbox" .checked=${this.outfitMiscBatch} ?disabled=${this.outfitBatchRunning}
-          @change=${(e: Event) => { this.outfitMiscBatch = (e.target as HTMLInputElement).checked; this.persistDraft(); }} />
-        Include Misc
-      </label>
-      ${this.outfitBatchRunning || this.motionRunning ? nothing : html`<span class="motion-run">
-        <select aria-label="Which squares to animate" .value=${this.motionScope}
-          @change=${(e: Event) => (this.motionScope = (e.target as HTMLSelectElement).value as "set" | "row")}>
-          <option value="set" ?selected=${this.motionScope === "set"}>Whole set</option>
-          <option value="row" ?selected=${this.motionScope === "row"}>${this.sheetTab === "misc" ? "The misc block" : `The ${OUTFIT_TIERS[this.outfitTier].label} row`}</option>
-        </select>
-        <button class="btn" ?disabled=${!canRun || !toAnimate || !this.status?.clips?.image}
-          title=${!this.status?.clips?.image ? "No picture-to-video model is set up — Settings → Image generation → Video"
-            : "Missing pictures first, then a clip of every picture, then every clip's background — each step for the whole set before the next"}
-          @click=${() => void this.runMotion()}>
-          <span class="material-symbols-rounded" style="font-size:17px;">animation</span>
-          Animate ${toAnimate}
-        </button></span>`}
-      ${this.motionRunning
-        ? html`<button class="btn" @click=${() => this.cancelMotion()}>
-            <span class="material-symbols-rounded" style="font-size:17px;">stop_circle</span>
-            Stop after this square
-          </button>`
-        : this.outfitBatchRunning
-        ? html`<button class="btn" @click=${() => this.cancelOutfitBatch()}>
-            <span class="material-symbols-rounded" style="font-size:17px;">stop_circle</span>
-            Stop after this one
-          </button>`
-        : html`<button class="btn primary" ?disabled=${!canRun || !missing} @click=${() => void this.generateAllOutfit()}>
-            <span class="material-symbols-rounded" style="font-size:17px;">auto_awesome</span>
-            Generate ${missing} missing
-          </button>
-          ${stale ? html`<button class="btn" ?disabled=${!canRun} @click=${() => void this.regenerateStale()}>
-            <span class="material-symbols-rounded" style="font-size:17px;">history</span>
-            Redo ${stale} stale
-          </button>` : nothing}`}
-      <button class="btn" ?disabled=${this.generating || this.outfitExporting || !shots.length || reviewed !== shots.length}
-        title=${reviewed !== shots.length ? "Review every cutout first" : "Every square, correctly named, in one ZIP"}
-        @click=${() => void this.exportOutfitZip()}>
-        <span class="material-symbols-rounded" style="font-size:17px;">folder_zip</span>
-        ${this.outfitExporting ? "Building ZIP…" : "Export ZIP"}
+      <div class="batch-actions">
+      ${running
+        ? html`<div class="batch-group">
+            <button class="btn" @click=${() => (this.motionRunning ? this.cancelMotion() : this.cancelOutfitBatch())}>
+              <span class="material-symbols-rounded" style="font-size:17px;">stop_circle</span>
+              ${this.motionRunning ? "Stop after this square" : "Stop after this one"}
+            </button>
+          </div>`
+        : html`<div class="batch-group" role="group" aria-label="Pictures">
+            <label class="switch compact" title="Whether Generate missing also renders the Misc states">
+              <input type="checkbox" .checked=${this.outfitMiscBatch}
+                @change=${(e: Event) => { this.outfitMiscBatch = (e.target as HTMLInputElement).checked; this.persistDraft(); }} />
+              Misc too
+            </label>
+            ${stale ? html`<button class="btn" ?disabled=${!canRun} title="Draw again every square made with an older recipe" @click=${() => void this.regenerateStale()}>
+              <span class="material-symbols-rounded" style="font-size:17px;">history</span>
+              Redo ${stale} stale
+            </button>` : nothing}
+            <button class="btn primary" ?disabled=${!canRun || !missing} @click=${() => void this.generateAllOutfit()}>
+              <span class="material-symbols-rounded" style="font-size:17px;">auto_awesome</span>
+              Generate ${missing} missing
+            </button>
+          </div>
+          <div class="batch-group motion-run" role="group" aria-label="Motion">
+            <select aria-label="Which squares to animate" .value=${this.motionScope}
+              @change=${(e: Event) => (this.motionScope = (e.target as HTMLSelectElement).value as "set" | "row")}>
+              <option value="set" ?selected=${this.motionScope === "set"}>Whole set</option>
+              <option value="row" ?selected=${this.motionScope === "row"}>${this.sheetTab === "misc" ? "The misc block" : `The ${OUTFIT_TIERS[this.outfitTier].label} row`}</option>
+            </select>
+            <button class="btn" ?disabled=${!canRun || !toAnimate || !this.status?.clips?.image}
+              title=${!this.status?.clips?.image ? "No picture-to-video model is set up — Settings → Image generation → Video"
+                : "Missing pictures first, then a clip of every picture, then every clip's background — each step for the whole set before the next"}
+              @click=${() => void this.runMotion()}>
+              <span class="material-symbols-rounded" style="font-size:17px;">animation</span>
+              Animate ${toAnimate}
+            </button>
+          </div>`}
+      <button class="icon-btn batch-zip" ?disabled=${this.generating || this.outfitExporting || !shots.length || reviewed !== shots.length}
+        title=${this.outfitExporting ? "Building the ZIP…" : reviewed !== shots.length ? "Export ZIP — review every cutout first" : "Export ZIP: every square, correctly named"}
+        aria-label="Export ZIP" @click=${() => void this.exportOutfitZip()}>
+        <span class="material-symbols-rounded">${this.outfitExporting ? "hourglass_top" : "folder_zip"}</span>
       </button>
-      ${this.outfitProgress && !this.motionProgress ? html`<span class="batch-note">${this.outfitProgress}</span>` : nothing}
-      ${this.motionProgress ? html`<span class="batch-note">${this.motionProgress}</span>` : nothing}
+      </div>
     </div>`;
   }
 

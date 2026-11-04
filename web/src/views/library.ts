@@ -155,12 +155,11 @@ const NAV_SECTIONS: NavSection[] = [
   { id: "browse", label: "Browse", icon: "explore" },
   // Image generation. Like Browse, nothing is in the library until saved; it's another
   // way things get *into* it, so it sits alongside.
+  //
+  // The Sprite studio ("studio") is a section with no item of its own: it is Create's
+  // third mode, reached from the switch in Create's header, and an item for it beside
+  // Create was a second door to the same room. Create stays lit while it is open.
   { id: "imagegen", label: "Create", icon: "auto_awesome" },
-  // The Sprite studio: the same generator pointed at one job, dressing Libby and
-  // rendering her sixty expressions. It owns every outfit surface in the app — the
-  // Create screen and Settings deliberately have none. Create's header switches
-  // between the two, so they read as one studio with three modes.
-  { id: "studio", label: "Sprites", icon: "face_retouching_natural" },
   { id: "chat", label: "Chat", icon: "chat_bubble" },
 ];
 
@@ -2291,7 +2290,7 @@ export class OppaiLibrary extends LitElement {
     else if (isSettings) headerTitle = "Settings";
     else if (isBrowse) headerTitle = "Browse sources";
     else if (isImageGen) headerTitle = "Create";
-    else if (isStudio) headerTitle = "Sprite studio";
+    else if (isStudio) headerTitle = "Create";
     // Named after her because she is who you are usually talking to.
     else if (isChat) headerTitle = "Chat with Libby";
     else if (isFavorites) headerTitle = "Favorites";
@@ -2475,7 +2474,8 @@ export class OppaiLibrary extends LitElement {
 
         <div class="nav-list">
           ${NAV_SECTIONS.map((n) => {
-            const active = this.section === n.id && this.selectedId == null;
+            const section = this.section === "studio" ? "imagegen" : this.section;
+            const active = section === n.id && this.selectedId == null;
             return html`
               <button
                 class="nav-item"

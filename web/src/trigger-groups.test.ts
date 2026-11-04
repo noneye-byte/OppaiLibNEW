@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-const { filterTriggerGroups, inlineTriggers, triggerGroups } = await import("./trigger-groups.ts");
+const { filterTriggerGroups, inlineTriggers, triggerGroups, wordlessLoras } = await import("./trigger-groups.ts");
 
 const loras = [
   { name: "masturbation_h", triggerPhrases: ["1girl", "lying", "spread legs"] },
@@ -30,4 +30,13 @@ test("the composer shows as many picked phrases as it has room for and counts th
   const groups = triggerGroups(loras, on);
   assert.deepEqual(inlineTriggers(["1girl", "never", "lying", "fox girl"], groups, 2), { shown: ["1girl", "lying"], folded: 1 });
   assert.deepEqual(inlineTriggers([], groups, 6), { shown: [], folded: 0 });
+});
+
+test("a LoRA that is on with no words, or only blank ones, is one to give words to; one that is off is not", () => {
+  const blank = [...loras, { name: "dir/blank_words", alias: " ", triggerPhrases: ["  "] }];
+  assert.deepEqual(wordlessLoras(blank, { ...on, "dir/blank_words": 1 }), [
+    { lora: "no_words", label: "no_words" },
+    { lora: "dir/blank_words", label: "blank_words" },
+  ]);
+  assert.deepEqual(wordlessLoras(blank, { masturbation_h: 1 }), []);
 });

@@ -230,22 +230,16 @@ export const studioStyles = css`
   .picker-search .material-symbols-rounded { position: absolute; left: 11px; top: 9px; font-size: 20px; color: var(--oppai-text-muted); pointer-events: none; }
   /* Cover cards, two up: a checkpoint or a LoRA is recognised by its picture long
      before its file name. */
-  .create-drawer .cards, .sprite-inspector .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-  .create-drawer .card, .sprite-inspector .card {
+  .create-drawer .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .create-drawer .card {
     display: block; border: 2px solid transparent; border-radius: 14px; background: var(--oppai-bg); box-shadow: 0 2px 10px rgba(0,0,0,.16);
   }
-  .create-drawer .card:hover, .sprite-inspector .card:hover { transform: translateY(-2px); border-color: var(--oppai-border-strong); }
-  .create-drawer .card.on, .sprite-inspector .card.on {
+  .create-drawer .card:hover { transform: translateY(-2px); border-color: var(--oppai-border-strong); }
+  .create-drawer .card.on {
     border-color: var(--oppai-primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--oppai-primary) 22%, transparent);
   }
-  .create-drawer .card-art, .create-drawer .card-blank, .sprite-inspector .card-art, .sprite-inspector .card-blank { width: 100%; height: auto; aspect-ratio: 3 / 4; }
-  .create-drawer .card-name, .sprite-inspector .card-name { padding: 7px 9px 8px; font-size: 12px; font-weight: 600; }
-  .sprite-inspector .sec-models .cards { grid-template-columns: 1fr; gap: 6px; }
-  .sprite-inspector .sec-models .card { display: grid; grid-template-columns: 46px minmax(0, 1fr); align-items: center; border-width: 1px; border-color: var(--oppai-border); border-radius: 10px; }
-  .sprite-inspector .sec-models .card-art, .sprite-inspector .sec-models .card-blank { width: 46px; height: 46px; aspect-ratio: 1; }
-  .sprite-inspector .sec-models .card-blank .material-symbols-rounded { font-size: 22px !important; }
-  .sprite-inspector .sec-models .card:hover { transform: none; }
-  .sprite-inspector .sec-models .card.on { border-color: var(--oppai-primary); background: color-mix(in srgb, var(--oppai-primary-container) 45%, var(--oppai-bg)); box-shadow: none; }
+  .create-drawer .card-art, .create-drawer .card-blank { width: 100%; height: auto; aspect-ratio: 3 / 4; }
+  .create-drawer .card-name { padding: 7px 9px 8px; font-size: 12px; font-weight: 600; }
   .manage-note {
     display: flex; gap: 9px; margin-top: 14px; padding: 11px 12px; border-radius: 12px; font-size: 12px; line-height: 1.5; color: var(--oppai-text-dim);
     background: color-mix(in srgb, var(--oppai-primary) 10%, var(--oppai-surface)); border: 1px solid color-mix(in srgb, var(--oppai-primary) 30%, transparent);
@@ -579,7 +573,7 @@ export const studioStyles = css`
   .trig-more { flex: none; height: 26px; padding: 0 9px; border-radius: 13px; border: 1px dashed var(--oppai-border-strong); background: none; color: var(--oppai-text-dim); font: inherit; font-size: 12px; cursor: pointer; }
   .trig-none { font-size: 12px; color: var(--oppai-text-muted); white-space: nowrap; }
   .triggers-pop { left: 0; bottom: calc(100% + 8px); transform-origin: bottom left; width: min(620px, 100%); max-height: min(520px, 62vh); }
-  .triggers-pop .link { border: none; background: none; color: var(--oppai-primary-bright, var(--oppai-primary)); font: inherit; font-size: 12px; font-weight: 650; cursor: pointer; padding: 2px 4px; }
+  .triggers-pop .link, .sprite-triggers .link { border: none; background: none; color: var(--oppai-primary-bright, var(--oppai-primary)); font: inherit; font-size: 12px; font-weight: 650; cursor: pointer; padding: 2px 4px; }
   .trig-search { display: flex; align-items: center; gap: 6px; margin: 8px 10px 4px; padding: 0 10px; height: 34px; border-radius: 10px; background: var(--oppai-bg); border: 1px solid var(--oppai-border); }
   .trig-search input { flex: 1; min-width: 0; border: none; background: none; color: var(--oppai-text); font: inherit; font-size: 13px; outline: none; }
   .trig-search .material-symbols-rounded { font-size: 18px; color: var(--oppai-text-muted); }
@@ -725,48 +719,55 @@ export const studioStyles = css`
   }
 
   /* ── the Sprites studio ────────────────────────────────────────────────── */
-  .sprite-shell { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr); }
-  .sprite-shell.with-inspector { grid-template-columns: 360px minmax(0, 1fr); }
-  .sprite-shell.with-focus { grid-template-columns: minmax(0, 1fr) 340px; }
-  .sprite-shell.with-inspector.with-focus { grid-template-columns: 360px minmax(0, 1fr) 340px; }
-  .sprite-inspector {
-    min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--oppai-surface); border-right: 1px solid var(--oppai-border-strong);
-  }
-  .ins-tabs { flex: none; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 2px; padding: 8px; border-bottom: 1px solid var(--oppai-border); }
-  .ins-tabs button {
-    display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 7px 2px 6px; border: none; border-radius: 10px;
-    background: transparent; color: var(--oppai-text-muted); font: inherit; font-size: 11px; font-weight: 650; cursor: pointer;
-  }
-  .ins-tabs button .material-symbols-rounded { font-size: 20px; }
-  .ins-tabs button:hover { color: var(--oppai-text); background: var(--oppai-surface-2); }
-  .ins-tabs button.on { color: var(--oppai-text); background: var(--oppai-primary-container); }
+  .sprite-shell { position: relative; flex: 1; min-height: 0; display: grid; grid-template-columns: 72px minmax(0, 1fr); background: var(--oppai-bg); }
+  .sprite-shell.drawer-open { grid-template-columns: 72px 340px minmax(0, 1fr); }
+  .sprite-shell.with-focus { grid-template-columns: 72px minmax(0, 1fr) 340px; }
+  .sprite-shell.drawer-open.with-focus { grid-template-columns: 72px 340px minmax(0, 1fr) 340px; }
   .panel-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
-  .ins-body { padding: 14px 14px 26px; }
+  /* The recipe strip: its chips scroll sideways, the trigger words take what is left,
+     and their picker drops under the strip rather than over the composer it has not got. */
+  .sprite-recipe { position: relative; gap: 8px; }
+  .sprite-recipe .recipe-chips { flex: 0 1 auto; }
+  .sprite-recipe .trigger-row { flex: 1 1 0; }
+  .sprite-recipe > .trig-open { flex: none; border-style: dashed; }
+  .sprite-recipe .triggers-pop { top: calc(100% + 6px); bottom: auto; left: auto; right: 12px; transform-origin: top right; width: min(560px, calc(100% - 24px)); }
+  .sprite-triggers { display: flex; flex-direction: column; gap: 14px; }
+  .sprite-triggers .link:disabled { opacity: 0.5; cursor: default; }
+  .sprite-triggers .trig-group-head .link + .link { margin-left: 0; }
+  .trig-group.wordless b { color: var(--oppai-text-dim); }
+  .trig-group.wordless small { font-style: italic; }
   .gear-slot .gear-slot-icon { border: 0; cursor: pointer; font: inherit; font-family: "Material Symbols Rounded"; }
   .gear-slot .gear-slot-icon.inert { cursor: default; }
   .gear-slot.off { opacity: 0.55; }
   .gear-slot.off input { text-decoration: line-through; }
   textarea.num.extras { resize: vertical; min-height: 54px; font-size: 12px; line-height: 1.4; }
   .studio-wardrobe { flex: 1; min-height: 0; overflow: auto; padding: 20px 24px 40px; }
+  .sprite-shell.lora-dragging .create-drawer { filter: opacity(0.35); pointer-events: none; transition: filter 0.15s ease; }
 
   .workbench { position: relative; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: color-mix(in srgb, var(--oppai-bg) 84%, #000); }
   .canvas-toolbar {
-    flex: 0 0 auto; min-height: 48px; display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; padding: 7px 12px; box-sizing: border-box;
-    border-bottom: 1px solid var(--oppai-border); background: var(--oppai-surface); color: var(--oppai-text-muted); font-size: 11px; font-variant-numeric: tabular-nums;
+    flex: 0 0 auto; min-height: 50px; display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; padding: 9px 14px 4px; box-sizing: border-box;
+    color: var(--oppai-text-muted); font-size: 11px; font-variant-numeric: tabular-nums;
   }
   .toolbar-clear {
     border: 0; background: transparent; color: var(--oppai-text-muted); font: inherit; display: inline-flex; align-items: center; gap: 4px; cursor: pointer;
     padding: 6px; border-radius: 8px;
   }
   .toolbar-clear:hover { background: var(--oppai-surface-2); color: var(--oppai-text); }
-  .wardrobe-pick { display: inline-flex; align-items: center; gap: 6px; min-width: 0; color: var(--oppai-text-dim); }
-  .wardrobe-pick select {
-    max-width: 210px; min-width: 0; height: 32px; border: 1px solid var(--oppai-border-strong); border-radius: 10px; padding: 0 8px;
-    background: var(--oppai-bg); color: var(--oppai-text); font: inherit; font-size: 12.5px; font-weight: 600;
+  .wardrobe-pick {
+    display: inline-flex; align-items: center; gap: 4px; min-width: 0; height: 34px; padding: 0 4px 0 11px; border-radius: 17px;
+    border: 1px solid var(--oppai-border-strong); background: var(--oppai-surface); color: var(--oppai-primary-bright, var(--oppai-primary));
   }
+  .wardrobe-pick:focus-within { border-color: var(--oppai-primary); }
+  .wardrobe-pick select {
+    max-width: 220px; min-width: 0; height: 30px; border: 0; padding: 0 4px; outline: none;
+    background: transparent; color: var(--oppai-text); font: inherit; font-size: 13px; font-weight: 700; cursor: pointer;
+  }
+  .wardrobe-pick select option { background: var(--oppai-surface); }
+  .studio-toolbar .toolbar-clear { width: 34px; height: 34px; padding: 0; justify-content: center; border-radius: 17px; border: 1px dashed var(--oppai-border-strong); }
   .sheet-tabs { display: inline-flex; gap: 2px; padding: 3px; border-radius: 12px; background: var(--oppai-bg); border: 1px solid var(--oppai-border); }
   .sheet-tab { border: 0; border-radius: 9px; padding: 5px 11px; background: transparent; color: var(--oppai-text-muted); font: inherit; font-size: 12px; font-weight: 650; cursor: pointer; }
-  .sheet-tab.on { background: var(--oppai-primary); color: var(--oppai-on-primary); }
+  .sheet-tab.on { background: var(--oppai-primary-container); color: var(--oppai-on-primary-container, var(--oppai-text)); }
   .sheet-tab-count { font-weight: 500; opacity: 0.8; font-variant-numeric: tabular-nums; }
   .board-filters { display: inline-flex; gap: 4px; flex-wrap: wrap; }
   .bf {
@@ -787,7 +788,7 @@ export const studioStyles = css`
 
   /* place-items back to normal too: block layout honours justify-items now, and a
      centred matrix wider than the stage overflows off its left edge, out of reach. */
-  .canvas-stage.sheet { display: block; place-items: normal; padding: 14px; background-image: none; }
+  .canvas-stage.sheet { display: block; place-items: normal; padding: 8px 14px 14px; background-image: none; }
   /* The expression matrix: rows are heat tiers, columns are expressions, both headers
      sticky so a wide sheet scrolled to the edge still says where you are. */
   .face-matrix { display: grid; grid-template-columns: 96px repeat(12, var(--cell, 88px)); gap: 6px; align-items: stretch; width: max-content; min-width: 100%; }
@@ -864,7 +865,7 @@ export const studioStyles = css`
   @keyframes ms-pulse { 50% { outline-color: transparent; } }
   @media (prefers-reduced-motion: reduce) { .sheet-cell.animating { animation: none; } }
   .sheet-progress {
-    position: absolute; top: 58px; left: 50%; z-index: 6; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; padding: 6px 6px 6px 6px;
+    position: absolute; top: 10px; left: 50%; z-index: 6; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; padding: 6px 6px 6px 6px;
     border-radius: 16px; border: 1px solid var(--oppai-border-strong); background: color-mix(in srgb, var(--oppai-surface-2) 94%, transparent);
     backdrop-filter: blur(8px); box-shadow: 0 12px 34px rgba(0,0,0,.45); animation: oppai-fade-in-up 0.2s ease both; max-width: calc(100% - 24px);
   }
@@ -875,11 +876,19 @@ export const studioStyles = css`
   .sp-bar { height: 3px; border-radius: 2px; background: var(--oppai-border); overflow: hidden; }
   .sp-bar span { display: block; height: 100%; background: var(--oppai-primary); transition: width .4s ease; }
 
-  /* The batch bar. */
+  /* The dock: the set's progress and the runs over it, a card under the sheet as the
+     composer is under the Image studio's picture. */
+  .sprite-dock { flex: none; padding: 0 12px 12px; }
   .batch-bar {
-    flex: 0 0 auto; display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; padding: 10px 14px;
-    background: var(--oppai-surface); border-top: 1px solid var(--oppai-border-strong);
+    display: flex; align-items: center; flex-wrap: wrap; gap: 10px 12px; padding: 10px 12px 10px 10px;
+    border-radius: 22px; border: 1px solid var(--oppai-border-strong); background: var(--oppai-surface); box-shadow: 0 10px 30px rgba(0,0,0,.22);
   }
+  /* The actions wrap as one, under the progress, when the dock is too narrow for both. */
+  .batch-actions { flex: 0 1 auto; margin-left: auto; display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px 12px; }
+  .batch-group { display: flex; align-items: center; gap: 8px; padding-left: 12px; border-left: 1px solid var(--oppai-border); }
+  .batch-group:first-child { padding-left: 0; border-left: 0; }
+  .batch-group .btn { white-space: nowrap; }
+  .batch-zip { flex: none; width: 38px; height: 38px; border-radius: 19px; }
   .batch-ring { position: relative; flex: none; width: 44px; height: 44px; display: grid; place-items: center; }
   .batch-ring svg { position: absolute; inset: 0; transform: rotate(-90deg); }
   .batch-ring circle { fill: none; stroke-width: 4; }
@@ -888,19 +897,23 @@ export const studioStyles = css`
   .r-done { stroke: var(--oppai-primary); stroke-linecap: round; transition: stroke-dashoffset .4s ease; }
   .batch-ring b { position: relative; font-size: 12px; font-variant-numeric: tabular-nums; }
   .batch-ring b small { font-size: 8px; opacity: 0.7; }
-  .batch-progress { flex: 1 1 220px; min-width: 180px; display: grid; gap: 2px; }
+  .batch-progress { flex: 1 1 200px; min-width: 160px; display: grid; gap: 2px; }
   .batch-head { font-size: 13px; font-weight: 700; color: var(--oppai-text); }
   .batch-count { color: var(--oppai-text-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
   .batch-count em { font-style: normal; color: #d9a441; }
-  .batch-note { flex-basis: 100%; color: var(--oppai-text-muted); font-size: 11px; }
+  .batch-note { color: var(--oppai-primary-bright, var(--oppai-primary)); }
   .switch.compact { margin: 0; font-size: 12px; white-space: nowrap; }
 
   /* The selected square. */
   .studio-focus { display: flex; flex-direction: column; }
-  .focus-head { flex: none; display: flex; align-items: flex-start; gap: 10px; padding: 12px 12px 10px 14px; border-bottom: 1px solid var(--oppai-border); }
-  .focus-title { flex: 1; min-width: 0; display: grid; gap: 4px; }
-  .focus-title strong { font-size: 15px; }
-  .focus-status { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--oppai-text-muted); }
+  .focus-head { flex: none; display: flex; align-items: center; gap: 10px; padding: 11px 12px 11px 16px; border-bottom: 1px solid var(--oppai-border); }
+  .focus-title { flex: 1; min-width: 0; display: grid; gap: 1px; }
+  .focus-kicker { font-size: 10.5px; font-weight: 700; letter-spacing: 0.7px; text-transform: uppercase; color: var(--oppai-text-muted); }
+  .focus-title strong { font-size: 16px; }
+  .focus-status {
+    flex: none; display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 13px;
+    border: 1px solid var(--oppai-border); font-size: 11.5px; font-weight: 650; color: var(--oppai-text-muted);
+  }
   .focus-status i { width: 7px; height: 7px; border-radius: 50%; background: var(--oppai-text-muted); flex: none; }
   .focus-status.ready { color: #6fcf8a; }
   .focus-status.ready i { background: #6ef7a5; }
@@ -911,7 +924,20 @@ export const studioStyles = css`
   .seg button { height: 28px; padding: 0 10px; border: none; background: none; color: var(--oppai-text-dim); font: inherit; font-size: 11.5px; font-weight: 650; cursor: pointer; }
   .seg button + button { border-left: 1px solid var(--oppai-border); }
   .seg button.on { background: var(--oppai-primary-container); color: var(--oppai-on-primary-container, var(--oppai-text)); }
-  .focus-scroll { padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+  .focus-scroll { padding: 12px; display: flex; flex-direction: column; gap: 12px; }
+  /* What the picture shows: a four-way switch under it, the motion steps with a dot for
+     whether they are there (green) or of an older picture (a ring). */
+  .focus-views { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 2px; padding: 3px; margin-top: -4px; border-radius: 12px; background: var(--oppai-bg); border: 1px solid var(--oppai-border); }
+  .fv {
+    display: inline-flex; align-items: center; justify-content: center; gap: 5px; height: 28px; padding: 0 4px; border: 0; border-radius: 9px;
+    background: transparent; color: var(--oppai-text-muted); font: inherit; font-size: 12px; font-weight: 650; cursor: pointer; white-space: nowrap;
+  }
+  .fv:hover:not(:disabled) { color: var(--oppai-text); background: var(--oppai-surface-2); }
+  .fv.on { background: var(--oppai-primary-container); color: var(--oppai-on-primary-container, var(--oppai-text)); }
+  .fv:disabled { opacity: 0.4; cursor: default; }
+  .fv i { width: 6px; height: 6px; border-radius: 50%; flex: none; background: var(--oppai-border-strong); box-sizing: border-box; }
+  .fv.ready i { background: #6ef7a5; }
+  .fv.stale i { background: transparent; border: 1.5px solid #d9a441; }
   .focus-art {
     position: relative; flex: 0 0 auto; width: 100%; aspect-ratio: 3 / 4; box-sizing: border-box; border-radius: 14px; overflow: hidden;
     display: grid; place-items: center; border: 1px solid var(--oppai-border); background-color: #6b6b6b;
@@ -936,7 +962,8 @@ export const studioStyles = css`
     font: 500 12px/1.45 ui-monospace, "Cascadia Mono", Consolas, monospace; letter-spacing: .02em;
     animation: oppai-fade-in-up 0.25s ease both;
   }
-  .focus-empty { display: grid; place-items: center; gap: 6px; color: rgba(255,255,255,.75); font-size: 12px; text-align: center; }
+  .focus-empty { display: grid; place-items: center; gap: 6px; padding: 0 18px; color: rgba(255,255,255,.8); font-size: 12.5px; font-weight: 600; text-align: center; }
+  .focus-empty small { font-size: 11px; font-weight: 500; color: rgba(255,255,255,.6); line-height: 1.45; }
   .focus-empty .material-symbols-rounded { font-size: 30px; }
   .flip-btn {
     position: absolute; right: 8px; bottom: 8px; display: inline-flex; align-items: center; gap: 4px; height: 30px; padding: 0 11px 0 8px;
@@ -967,22 +994,13 @@ export const studioStyles = css`
   .tool:hover:not(:disabled):not(.disabled) { background: var(--oppai-surface-2); color: var(--oppai-text); border-color: var(--oppai-border-strong); }
   .tool:disabled, .tool.disabled { opacity: 0.4; cursor: default; pointer-events: none; }
   .tool.danger:hover:not(:disabled) { color: var(--oppai-error, #f2b8b5); }
-  .focus-desc { line-height: 1.5; }
-  /* The square's animation: picture, clip and cut, each showing itself when pressed. */
-  .motion-steps { display: grid; gap: 8px; padding: 10px; border-radius: 12px; border: 1px solid var(--oppai-border); background: var(--oppai-bg); }
-  .ms-row { display: flex; align-items: center; gap: 2px; }
-  .ms-arrow { font-size: 16px; color: var(--oppai-text-muted); flex: none; }
-  .ms-step {
-    flex: 1; min-width: 0; display: inline-flex; align-items: center; justify-content: center; gap: 4px; height: 30px; padding: 0 6px;
-    border: 1px solid var(--oppai-border); border-radius: 10px; background: transparent; color: var(--oppai-text-dim);
-    font: inherit; font-size: 11.5px; font-weight: 650; cursor: pointer; white-space: nowrap;
-  }
-  .ms-step .material-symbols-rounded { font-size: 16px; }
-  .ms-step i { width: 6px; height: 6px; border-radius: 50%; flex: none; background: var(--oppai-border-strong); box-sizing: border-box; }
-  .ms-step.ready i { background: #6ef7a5; }
-  .ms-step.stale i { background: transparent; border: 1.5px solid #d9a441; }
-  .ms-step.on { border-color: var(--oppai-primary); color: var(--oppai-text); background: color-mix(in srgb, var(--oppai-primary) 12%, transparent); }
-  .ms-step:disabled { opacity: 0.45; cursor: default; }
+  .focus-about { display: grid; gap: 8px; padding-top: 10px; border-top: 1px solid var(--oppai-border); }
+  .focus-desc { font-size: 12px; line-height: 1.5; color: var(--oppai-text-dim); }
+  /* Making the square move: a card of its own, its title a way to the Motion tab. */
+  .motion-steps { display: grid; gap: 8px; padding: 10px; border-radius: 14px; border: 1px solid var(--oppai-border); background: var(--oppai-bg); }
+  .ms-head { display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 700; letter-spacing: 0.7px; text-transform: uppercase; color: var(--oppai-text-muted); }
+  .ms-head .material-symbols-rounded { font-size: 16px; color: var(--oppai-primary-bright, var(--oppai-primary)); }
+  .ms-head .link-btn { margin-left: auto; letter-spacing: 0; text-transform: none; font-weight: 650; }
   .ms-actions { display: flex; align-items: center; gap: 6px; }
   .ms-actions .btn { flex: 1; justify-content: center; min-width: 0; white-space: nowrap; padding-inline: 8px; }
   .ms-busy { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px 8px; font-size: 11.5px; color: var(--oppai-text-muted); font-variant-numeric: tabular-nums; }
@@ -994,9 +1012,8 @@ export const studioStyles = css`
   .ms-take.on { border-color: var(--oppai-primary); }
   .ms-take video { width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none; }
   .ms-take b { position: absolute; left: 4px; top: 3px; font-size: 10px; color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,.8); }
-  .motion-run { display: inline-flex; align-items: center; gap: 6px; }
   .motion-run select {
-    height: 34px; padding: 0 8px; border-radius: 12px; border: 1px solid var(--oppai-border-strong);
+    height: 36px; padding: 0 8px; border-radius: 18px; border: 1px solid var(--oppai-border-strong);
     background: var(--oppai-bg); color: var(--oppai-text); font: inherit; font-size: 12px;
   }
   .focus-meta { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; color: var(--oppai-text-muted); font-size: 11px; }
@@ -1011,9 +1028,9 @@ export const studioStyles = css`
   /* ── narrower screens ──────────────────────────────────────────────────── */
   @media (max-width: 1360px) {
     .create-shell.drawer-open.with-gallery { grid-template-columns: 72px 320px minmax(0, 1fr) 290px; }
-    .sprite-shell.with-inspector { grid-template-columns: 330px minmax(0, 1fr); }
-    .sprite-shell.with-inspector.with-focus { grid-template-columns: 330px minmax(0, 1fr) 300px; }
-    .sprite-shell.with-focus { grid-template-columns: minmax(0, 1fr) 300px; }
+    .sprite-shell.drawer-open { grid-template-columns: 72px 320px minmax(0, 1fr); }
+    .sprite-shell.with-focus { grid-template-columns: 72px minmax(0, 1fr) 300px; }
+    .sprite-shell.drawer-open.with-focus { grid-template-columns: 72px 320px minmax(0, 1fr) 300px; }
     .head-label { display: none; }
     .head-btn { padding: 0 9px; }
   }
@@ -1027,16 +1044,11 @@ export const studioStyles = css`
     /* filter, not opacity: the drawer's entrance animation fills forwards and would
        hold its opacity at 1. */
     .create-shell.lora-dragging .create-drawer { filter: opacity(0.35); pointer-events: none; transition: filter 0.15s ease; }
-    .sprite-shell.with-inspector.with-focus { grid-template-columns: 290px minmax(0, 1fr) 270px; }
+    /* The Sprites drawer floats too: the board is the one thing that needs the width. */
+    .sprite-shell.drawer-open { grid-template-columns: 72px minmax(0, 1fr); }
+    .sprite-shell.with-focus, .sprite-shell.drawer-open.with-focus { grid-template-columns: 72px minmax(0, 1fr) 280px; }
     .gen-pill { max-width: 220px; }
     .sub-note { display: none; }
-  }
-  /* Below this the square panel is what goes when the recipe is out: the recipe can be
-     put away with [ and the panel comes back, but three columns would leave the board
-     no room to show a row. */
-  @media (max-width: 1000px) and (min-width: 901px) {
-    .sprite-shell.with-inspector.with-focus { grid-template-columns: 290px minmax(0, 1fr); }
-    .sprite-shell.with-inspector.with-focus .studio-focus { display: none; }
   }
   /* A short window: the session row thinner, so the picture keeps the height. */
   @media (max-height: 880px) and (min-width: 901px) {
@@ -1116,13 +1128,17 @@ export const studioStyles = css`
     .strip-label { display: none; }
     .queue-pop { position: fixed; top: auto; bottom: 12px; left: 12px; right: 12px; width: auto; }
 
-    .sprite-shell, .sprite-shell.with-inspector, .sprite-shell.with-focus, .sprite-shell.with-inspector.with-focus { display: flex; flex-direction: column; }
-    .sprite-shell .workbench { order: -2; }
-    .sprite-shell .studio-focus, .sprite-shell.with-inspector.with-focus .studio-focus { display: flex; order: -1; border-left: 0; border-top: 1px solid var(--oppai-border-strong); }
-    .sprite-inspector { border-right: 0; border-top: 1px solid var(--oppai-border-strong); }
-    .ins-tabs { background: var(--oppai-surface); }
+    .sprite-shell, .sprite-shell.drawer-open, .sprite-shell.with-focus, .sprite-shell.drawer-open.with-focus { display: flex; flex-direction: column; }
+    .sprite-shell .studio-focus { display: flex; border-left: 0; border-top: 1px solid var(--oppai-border-strong); }
     .panel-scroll { overflow: visible; }
     .canvas-stage.sheet { max-height: 62vh; overflow: auto; }
+    /* Twelve expressions fitted to a phone are slivers; fit keeps a square you can see
+       and the row scrolls, its tier still pinned at the left. */
+    .face-matrix.fit { grid-template-columns: 84px repeat(12, 64px); width: max-content; min-width: 0; }
+    .sprite-dock { padding: 0 8px 10px; }
+    .batch-group { padding-left: 0; border-left: 0; }
+    .batch-group .btn.primary { flex: 1; justify-content: center; }
+    .focus-art { max-height: 62vh; }
     .studio-wardrobe { padding: 14px 12px 40px; }
   }
 `;

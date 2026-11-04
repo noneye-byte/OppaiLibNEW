@@ -59,3 +59,12 @@ export function inlineTriggers(picked: readonly string[], groups: readonly Trigg
   const live = picked.filter((p) => offered.has(p));
   return { shown: live.slice(0, Math.max(0, room)), folded: Math.max(0, live.length - room) };
 }
+
+/** The LoRAs switched on that have no trigger words at all, by name and label: the
+    ones the Sprite studio offers to give some, since a character LoRA that nothing
+    names often does not show up across sixty squares. */
+export function wordlessLoras(loras: readonly TriggerLora[], on: Readonly<Record<string, number>>): { lora: string; label: string }[] {
+  return loras
+    .filter((l) => l.name in on && !(l.triggerPhrases ?? []).some((p) => p.trim()))
+    .map((l) => ({ lora: l.name, label: l.alias?.trim() || l.name.split(/[\/]/).pop()! }));
+}
