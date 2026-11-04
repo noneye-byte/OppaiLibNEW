@@ -128,6 +128,10 @@ export interface GenDraft {
   outfitLoadoutId?: string;
   /** The wardrobe reviewed sprites are filed into as they are approved. */
   outfitWardrobeId?: string;
+  /** The square every other is drawn to look like (a slot key, "" for none), and how
+      hard. See sprite-reference.ts. */
+  spriteReference?: string;
+  spriteReferenceStrength?: number;
   /** Camera and shot composition. Stored as a partial and merged over the defaults on
       restore, because a draft written before an axis existed must not leave that axis
       undefined and index a lookup table with it. */
@@ -224,11 +228,11 @@ export function loadDraft(): GenDraft | null {
 
   (["prompt", "negative", "checkpoint", "vae", "templateId", "scheduler", "board",
     "outfitText", "outfitMisc", "outfitUnderwearColor", "outfitPubicHairColor",
-    "outfitLoadoutId", "outfitWardrobeId",
+    "outfitLoadoutId", "outfitWardrobeId", "spriteReference",
     "detailerModel", "detailerPrompt", "detailerNegative", "hiresUpscaler", "upscaleUpscaler"] as const).forEach(str);
   (["width", "height", "steps", "cfg", "cfgRescale", "clipSkip", "count", "seed",
     "outfitFace", "outfitTier", "detailerConfidence", "detailerDenoise",
-    "detailerMaskBlur", "hiresScale", "hiresDenoise", "hiresSteps", "upscaleBy", "scrollTop"] as const).forEach(num);
+    "detailerMaskBlur", "hiresScale", "hiresDenoise", "hiresSteps", "upscaleBy", "scrollTop", "spriteReferenceStrength"] as const).forEach(num);
   (["seamlessX", "seamlessY", "cpuNoise", "outfitOn", "outfitCutout", "outfitPubicHair",
     "outfitLockColors", "outfitMiscBatch", "detailerEnabled", "detailerFaces", "detailerHands",
     "hiresEnabled", "showOptions"] as const).forEach(bool);

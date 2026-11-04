@@ -21,6 +21,7 @@ import (
 	"github.com/youruser/oppailib/internal/db"
 	"github.com/youruser/oppailib/internal/imagegen"
 	"github.com/youruser/oppailib/internal/recognize"
+	"github.com/youruser/oppailib/internal/settings"
 )
 
 // decodeDataImage decodes a base64 image, tolerating a leading "data:...;base64,"
@@ -318,6 +319,11 @@ type generateReq struct {
 	// Regions draws each person in a part of the picture of their own, from their
 	// own words and LoRAs; Prompt is then what the whole picture shares.
 	Regions regionsReq `json:"regions"`
+	// Reference is a picture the run is drawn to look like (a data URL or bare base64):
+	// the Sprites studio's reference square, which every other square of a set is
+	// matched to. ReferenceWeight is how hard, 0–1. See referenceControls.
+	Reference       string  `json:"reference"`
+	ReferenceWeight float64 `json:"referenceWeight"`
 }
 
 type regionsReq struct {
@@ -405,6 +411,10 @@ func (s *Server) handleImageGenGenerate(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if err := referenceControls(&req, &gen, set); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	ctx := r.Context()
 	var job *genJob
 	if genJobIDPattern.MatchString(req.JobID) {
@@ -438,7 +448,11 @@ func (s *Server) handleImageGenGenerate(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		status := http.StatusBadGateway
-		if errors.Is(err, imagegen.ErrInpaintUnsupported) || errors.Is(err, imagegen.ErrUpscaleUnsupported) ||
+		if errors.Is(err, imagegen.ErrControlUnsupported) && req.Reference != "" {
+			// Said as what to do about it: the studio shows this under the square.
+			err = errReferenceUnsupported
+			status = http.StatusConflict
+		} else if errors.Is(err, imagegen.ErrInpaintUnsupported) || errors.Is(err, imagegen.ErrUpscaleUnsupported) ||
 			errors.Is(err, imagegen.ErrRegionsUnsupported) {
 			status = http.StatusConflict
 		} else {
@@ -512,6 +526,38 @@ type genResult struct {
 	Rolled   bool             `json:"rolled"`
 	// Clip is the one result of a clip run (gen_clips.go), which has no pictures.
 	Clip *genClip `json:"clip,omitempty"`
+}
+
+// errReferenceUnsupported is a reference square sent to a generator that cannot read one.
+var errReferenceUnsupported = errors.New("drawing to match the reference square needs the ControlNet extension in Automatic1111 or Forge — install it, or clear the reference")
+
+// referenceModule is ControlNet's reference preprocessor. It needs no model of its own
+// — it reads the picture into the run's own attention — so unlike the pose and face
+// units it works on any install that has the extension, SD 1.5 or SDXL alike.
+const referenceModule = "reference_only"
+
+// referenceControls turns a request's reference picture into the ControlNet units that
+// draw the run to match it: the reference preprocessor at the weight asked for, and,
+// where a face model is set up for her camera, that model too. The face unit is not
+// eased with the weight — it holds a face and nothing else, so the reasons for easing
+// the reference (it drags the clothes along) do not apply to it.
+func referenceControls(req *generateReq, gen *imagegen.GenerateRequest, set settings.Settings) error {
+	if req.Reference == "" {
+		return nil
+	}
+	raw, err := decodeDataImage(req.Reference)
+	if err != nil || !strings.HasPrefix(http.DetectContentType(raw), "image/") {
+		return errors.New("the reference isn't an image")
+	}
+	weight := req.ReferenceWeight
+	if weight <= 0 || weight > 1 {
+		weight = 0.6
+	}
+	gen.Controls = append(gen.Controls, imagegen.ControlUnit{Image: raw, Module: referenceModule, Model: "None", Weight: weight})
+	if set.LibbyFaceModel != "" {
+		gen.Controls = append(gen.Controls, imagegen.ControlUnit{Image: raw, Module: set.LibbyFaceModule, Model: set.LibbyFaceModel, Weight: 0.6})
+	}
+	return nil
 }
 
 // decodeGenerateImages reads a request's picture to start from and its mask. A mask

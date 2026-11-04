@@ -15,6 +15,7 @@ import {
   normalizeOutfitGear,
   undressLevel,
   undressPrompt,
+  unaskedLayers,
   type GearPiece,
 } from "./outfit-loadout.ts";
 
@@ -50,7 +51,7 @@ test("a dressed square names no underwear and keeps it out in the negative", () 
 test("an open top shows the bra and still hides the panties", () => {
   const flirty = undressPrompt(DEFAULT_OUTFIT_GEAR, undressLevel(2));
   assert.deepEqual(flirty.hidden, ["panties"]);
-  assert.deepEqual(flirty.prompt, ["open clothes, top pulled open", "bra visible"]);
+  assert.deepEqual(flirty.prompt, ["fitted top pulled aside", "bra visible"]);
   assert.deepEqual(flirty.negative, ["panties"]);
 });
 
@@ -70,7 +71,7 @@ test("nude leaves every garment out", () => {
 test("with no bra on, an open top shows her rather than a bra", () => {
   const gear = { ...DEFAULT_OUTFIT_GEAR, bra: { color: "", item: "" } };
   assert.deepEqual(undressPrompt(gear, undressLevel(0)).prompt, []);
-  assert.deepEqual(undressPrompt(gear, undressLevel(2)).prompt, ["open clothes, top pulled open", "bare breasts, nipples"]);
+  assert.deepEqual(undressPrompt(gear, undressLevel(2)).prompt, ["fitted top pulled aside", "bare breasts, nipples"]);
 });
 
 test("underwear with nothing over it is what she is wearing, at any level", () => {
@@ -219,4 +220,23 @@ test("renaming a slot changes the loadout's key, so old squares stop matching", 
   const base = { ...EMPTY_OUTFIT_GEAR, top: { color: "red", item: "tee" } };
   const renamed = { ...EMPTY_OUTFIT_GEAR, top: { color: "red", item: "tee", prompt: "armour" } };
   assert.notEqual(gearKey(base), gearKey(renamed));
+});
+
+test("warm and flirty speak of the top she has on, not a garment she does not", () => {
+  assert.deepEqual(undressPrompt(DEFAULT_OUTFIT_GEAR, undressLevel(1)).prompt, ["fitted top slipping off one shoulder"]);
+  const tee = { ...DEFAULT_OUTFIT_GEAR, top: { color: "white", item: "t-shirt" } };
+  const said = [1, 2].flatMap((t) => undressPrompt(tee, undressLevel(t)).prompt).join(", ");
+  assert.doesNotMatch(said, /unbutton|open clothes|jacket|shirt open/);
+  // With no top there is nothing to loosen, and nothing is said.
+  const none = { ...DEFAULT_OUTFIT_GEAR, top: { color: "", item: "" } };
+  assert.deepEqual(undressPrompt(none, undressLevel(1)).prompt, []);
+});
+
+test("layers the loadout lacks are kept out, and ones it has are not", () => {
+  assert.ok(unaskedLayers(DEFAULT_OUTFIT_GEAR).includes("jacket"));
+  const jacket = { ...DEFAULT_OUTFIT_GEAR, extra1: { color: "black", item: "leather jacket" } };
+  assert.ok(!unaskedLayers(jacket).includes("jacket"));
+  assert.ok(!unaskedLayers(DEFAULT_OUTFIT_GEAR, "red scarf").includes("scarf"));
+  // Switched off is not worn, so its layer is unasked again.
+  assert.ok(unaskedLayers({ ...jacket, extra1: { ...jacket.extra1, off: true } }).includes("jacket"));
 });

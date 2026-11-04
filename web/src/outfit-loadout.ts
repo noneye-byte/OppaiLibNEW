@@ -212,8 +212,8 @@ export interface OutfitExposure {
  */
 export const OUTFIT_UNDRESS_LEVELS: readonly { description: string; exposure: OutfitExposure }[] = [
   { description: "Dressed. Her underwear is not mentioned at all.", exposure: { outer: "on", bra: "hidden", panties: "hidden" } },
-  { description: "Still dressed, a little loosened — a button undone, a collar slipping.", exposure: { outer: "loosened", bra: "hidden", panties: "hidden" } },
-  { description: "Top open over her bra; bottoms still on.", exposure: { outer: "open", bra: "showing", panties: "hidden" } },
+  { description: "Still dressed, her top slipping off one shoulder.", exposure: { outer: "loosened", bra: "hidden", panties: "hidden" } },
+  { description: "Her top pulled aside over her bra; bottoms still on.", exposure: { outer: "open", bra: "showing", panties: "hidden" } },
   { description: "Down to her underwear.", exposure: { outer: "off", bra: "showing", panties: "showing" } },
   { description: "Nude.", exposure: { outer: "off", bra: "off", panties: "off" } },
 ];
@@ -251,10 +251,12 @@ export function undressPrompt(gear: OutfitGear, exposure: OutfitExposure): {
       for (const key of ["top", "bottoms"] as const) {
         if (worn(key)) { hidden.push(key); negative.push(gear[key].item.trim()); }
       }
-    } else if (exposure.outer === "loosened") {
-      prompt.push("clothes slightly loosened, partially unbuttoned");
-    } else if (exposure.outer === "open") {
-      prompt.push(worn("top") ? "open clothes, top pulled open" : "clothes pulled aside");
+    } else if (worn("top") && exposure.outer !== "on") {
+      // Said of the top she has on, by name, and in words any top can do. "Partially
+      // unbuttoned" and "open clothes" each describe a particular garment — a shirt, a
+      // jacket — and a generator given either over a plain top drew one on top of it.
+      const top = gear.top.item.trim();
+      prompt.push(exposure.outer === "loosened" ? `${top} slipping off one shoulder` : `${top} pulled aside`);
     }
   }
 
@@ -346,4 +348,22 @@ export function gearKey(gear: OutfitGear): string {
         : "|",
     ];
   })));
+}
+
+/**
+ * Layers a generator likes to add that the loadout does not have.
+ *
+ * Booru-trained checkpoints dress a character in what the tags around her usually come
+ * with — a jacket over a top, a cardigan, a tie — so the same loadout came back in
+ * different clothes from square to square. Each word here goes into the negative unless
+ * something she wears, or the outfit's own words, mentions it: a loadout with a jacket
+ * keeps its jacket.
+ */
+export const UNASKED_LAYERS: readonly string[] = [
+  "jacket", "cardigan", "coat", "hoodie", "blazer", "vest", "shawl", "scarf", "necktie", "bowtie", "apron", "cape", "gloves",
+];
+
+export function unaskedLayers(gear: OutfitGear, extra = ""): string[] {
+  const worn = [extra, ...OUTFIT_GEAR_SLOTS.map(({ key }) => (gearWorn(gear[key]) ? gear[key].item : ""))].join(" ").toLowerCase();
+  return UNASKED_LAYERS.filter((word) => !new RegExp(`\\b${word}`).test(worn));
 }

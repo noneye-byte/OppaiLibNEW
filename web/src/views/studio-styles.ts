@@ -314,6 +314,7 @@ export const studioStyles = css`
   .recipe-chip:hover { background: var(--oppai-surface-2); color: var(--oppai-text); }
   .recipe-chip.on { border-color: color-mix(in srgb, var(--oppai-primary) 70%, transparent); color: var(--oppai-text); }
   .recipe-chip.add { border-style: dashed; }
+  .recipe-chip.ref img { width: 22px; height: 22px; margin-left: -7px; border-radius: 50%; object-fit: cover; object-position: top; background: var(--oppai-surface-2); }
   .recipe-chip.lora { padding: 0; gap: 0; border-color: color-mix(in srgb, var(--oppai-primary) 50%, transparent); background: color-mix(in srgb, var(--oppai-primary) 14%, transparent); color: var(--oppai-text); }
   .recipe-chip-main, .recipe-chip-x { height: 100%; display: inline-flex; align-items: center; gap: 6px; border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; }
   .recipe-chip-main { padding: 0 4px 0 10px; }
@@ -994,6 +995,24 @@ export const studioStyles = css`
   .tool:hover:not(:disabled):not(.disabled) { background: var(--oppai-surface-2); color: var(--oppai-text); border-color: var(--oppai-border-strong); }
   .tool:disabled, .tool.disabled { opacity: 0.4; cursor: default; pointer-events: none; }
   .tool.danger:hover:not(:disabled) { color: var(--oppai-error, #f2b8b5); }
+  .tool.on { color: var(--oppai-text); border-color: color-mix(in srgb, var(--oppai-primary) 70%, transparent); background: color-mix(in srgb, var(--oppai-primary) 14%, transparent); }
+  .tool.on .material-symbols-rounded { color: var(--oppai-primary-bright, var(--oppai-primary)); }
+
+  /* The reference square: a pin on its cell, and its pane at the top of the Look tab. */
+  .cell-ref {
+    position: absolute; top: 5px; left: 5px; width: 22px; height: 22px; display: grid; place-items: center; border-radius: 50%;
+    background: var(--oppai-primary); color: var(--oppai-on-primary, #1b1205); box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+  }
+  .cell-ref .material-symbols-rounded { font-size: 14px; }
+  .ref-pane { display: grid; gap: 10px; padding-bottom: 14px; border-bottom: 1px solid var(--oppai-border); }
+  .ref-row { display: flex; gap: 12px; align-items: flex-start; }
+  .ref-art { flex: none; width: 72px; aspect-ratio: 2 / 3; border-radius: 10px; overflow: hidden; border: 1px solid var(--oppai-border-strong); background: var(--oppai-surface-2); display: grid; place-items: center; }
+  .ref-art img { width: 100%; height: 100%; object-fit: cover; object-position: top; }
+  .ref-art.empty { border-style: dashed; color: var(--oppai-text-muted); }
+  .ref-text { display: grid; gap: 4px; min-width: 0; font-size: 12px; line-height: 1.45; color: var(--oppai-text-dim); }
+  .ref-text strong { font-size: 13px; color: var(--oppai-text); }
+  .ref-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .ref-pane input[type="range"] { width: 100%; }
   .focus-about { display: grid; gap: 8px; padding-top: 10px; border-top: 1px solid var(--oppai-border); }
   .focus-desc { font-size: 12px; line-height: 1.5; color: var(--oppai-text-dim); }
   /* Making the square move: a card of its own, its title a way to the Motion tab. */
