@@ -64,7 +64,9 @@ import { libbyReact } from "../libby-voice.js";
 import { canvasToBlob, CutoutSession, DEFAULT_COMPOSE, loadImage } from "../cutout.js";
 import { outfitArchiveFilename, outfitImageFilename } from "../outfit-name.js";
 import { miscClipForm, miscMotionLabel } from "../misc-motion.js";
-import { DEFAULT_REFERENCE_STRENGTH, referenceWeight } from "../sprite-reference.js";
+import {
+  DEFAULT_REFERENCE_DENOISE, DEFAULT_REFERENCE_STRENGTH, referenceKindFor, referencePlan, type ReferenceKind,
+} from "../sprite-reference.js";
 import { manageModelsNote } from "../model-manage.js";
 import { importSuggestion, loraNegatives, swapPromptDefault } from "../model-defaults.js";
 import {
@@ -542,9 +544,16 @@ export class OppaiImageGen extends LitElement {
   /** The square every other is drawn to match, as its slot key; "" for none. See
       sprite-reference.ts. */
   @state() private spriteReference = "";
+  /** The undressed reference, for Heated and Peak; "" for none. */
+  @state() private spriteReferenceBare = "";
   @state() private spriteReferenceStrength = DEFAULT_REFERENCE_STRENGTH;
-  /** The reference as it was last sent, so a set of sixty does not read it sixty times. */
-  private referenceCache: { url: string; dataURL: string } | null = null;
+  /** Whether each square starts from its reference's picture, and how far it may move. */
+  @state() private spriteReferenceStart = true;
+  @state() private spriteReferenceDenoise = DEFAULT_REFERENCE_DENOISE;
+  /** Whether each square is drawn from the dressed reference's seed while the seed is random. */
+  @state() private spriteReferenceSeed = true;
+  /** The references as last read, so a set of sixty does not read them sixty times. */
+  private referenceCache = new Map<string, { dataURL: string; width: number; height: number }>();
   /** Weights each equipped colour and names every colour it is not in the negative
       prompt. On by default: a wardrobe whose colours drift is the whole set wasted. */
   @state() private outfitLockColors = true;
@@ -2063,6 +2072,7 @@ export class OppaiImageGen extends LitElement {
     "outfitOn", "outfitText", "outfitGear", "outfitFace", "outfitMisc", "outfitMiscBatch", "outfitTier", "outfitBackground",
     "outfitLockColors", "outfitLoadoutId", "outfitWardrobeId", "sheetZoom",
     "outfitUnderwearColor", "outfitPubicHair", "outfitPubicHairColor", "camera", "spriteReference", "spriteReferenceStrength",
+    "spriteReferenceBare", "spriteReferenceStart", "spriteReferenceDenoise", "spriteReferenceSeed",
     "detailerEnabled", "detailerModel", "detailerPrompt", "detailerNegative",
     "detailerConfidence", "detailerDenoise", "detailerMaskBlur", "detailerFaces", "detailerHands", "detailerCustom",
     "regionsOn", "regionsRows", "regionPeople",
@@ -2292,6 +2302,10 @@ export class OppaiImageGen extends LitElement {
       outfitPubicHairColor: this.outfitPubicHairColor,
       spriteReference: this.spriteReference,
       spriteReferenceStrength: this.spriteReferenceStrength,
+      spriteReferenceBare: this.spriteReferenceBare,
+      spriteReferenceStart: this.spriteReferenceStart,
+      spriteReferenceDenoise: this.spriteReferenceDenoise,
+      spriteReferenceSeed: this.spriteReferenceSeed,
       outfitLockColors: this.outfitLockColors,
       outfitLoadoutId: this.outfitLoadoutId,
       outfitWardrobeId: this.outfitWardrobeId,
@@ -2377,6 +2391,10 @@ export class OppaiImageGen extends LitElement {
     if (d.outfitUnderwearColor !== undefined) this.outfitUnderwearColor = d.outfitUnderwearColor;
     if (d.outfitPubicHair !== undefined) this.outfitPubicHair = d.outfitPubicHair;
     if (d.spriteReference !== undefined) this.spriteReference = d.spriteReference;
+    if (d.spriteReferenceBare !== undefined) this.spriteReferenceBare = d.spriteReferenceBare;
+    if (d.spriteReferenceStart !== undefined) this.spriteReferenceStart = d.spriteReferenceStart;
+    if (d.spriteReferenceSeed !== undefined) this.spriteReferenceSeed = d.spriteReferenceSeed;
+    if (d.spriteReferenceDenoise !== undefined) this.spriteReferenceDenoise = Math.max(0.3, Math.min(0.95, d.spriteReferenceDenoise));
     if (d.spriteReferenceStrength !== undefined) this.spriteReferenceStrength = Math.max(0.1, Math.min(1, d.spriteReferenceStrength));
     if (d.outfitPubicHairColor !== undefined) this.outfitPubicHairColor = d.outfitPubicHairColor;
     if (d.outfitLockColors !== undefined) this.outfitLockColors = d.outfitLockColors;
@@ -3095,60 +3113,94 @@ export class OppaiImageGen extends LitElement {
     this.motionBusy = next;
   }
 
-  /** The reference square's picture, when there is one on the board. */
-  private referenceShot(): Shot | undefined {
-    const [emotion, tier] = this.spriteReference.split(":");
+  /** The square a reference key names, when it has a picture on the board. */
+  private shotOfKey(key: string): Shot | undefined {
+    const [emotion, tier] = key.split(":");
     return emotion ? this.shotAt({ emotion, tier: Number(tier) || 0 }) : undefined;
   }
 
-  /**
-   * The reference to send with one square's run, and how hard: nothing for the reference
-   * itself, or when there is none. Flattened onto its backdrop as a clip's start frame
-   * is, since a reviewed square is transparent and ControlNet reads that as black.
-   */
-  private async referenceFor(slot: DraftOutfitSlot): Promise<{ dataURL: string; weight: number } | null> {
-    if (!this.studio || !this.spriteReference || slotKeyOf(slot) === this.spriteReference) return null;
-    const shot = this.referenceShot();
-    if (!shot) return null;
-    const url = this.liveURL(shot);
-    if (this.referenceCache?.url !== url) {
-      try {
-        this.referenceCache = { url, dataURL: (await this.squareStartFrame(shot)).dataURL };
-      } catch (e) {
-        throw new Error(`Couldn't read the reference square: ${(e as Error).message}`);
-      }
-    }
-    const misc = OUTFIT_ACTIVITIES.find((item) => item.id === slot.emotion);
-    return { dataURL: this.referenceCache.dataURL, weight: referenceWeight(this.spriteReferenceStrength, misc ? misc.heat : slot.tier) };
+  /** The dressed reference's picture: the one the strip shows, and whose seed the set uses. */
+  private referenceShot(): Shot | undefined {
+    return this.shotOfKey(this.spriteReference);
   }
 
-  /** Makes a square the reference, or clears it when it already is. */
-  private toggleSpriteReference(slot: DraftOutfitSlot) {
+  private referenceKey(kind: ReferenceKind): string {
+    return kind === "bare" ? this.spriteReferenceBare : this.spriteReference;
+  }
+
+  /** A reference flattened onto its backdrop, as a clip's start frame is — a reviewed
+      square is transparent, and both ControlNet and image to image read that as black. */
+  private async referenceFrame(shot: Shot): Promise<{ dataURL: string; width: number; height: number }> {
+    const url = this.liveURL(shot);
+    const hit = this.referenceCache.get(url);
+    if (hit) return hit;
+    try {
+      const frame = await this.squareStartFrame(shot);
+      this.referenceCache.set(url, frame);
+      return frame;
+    } catch (e) {
+      throw new Error(`Couldn't read the reference square: ${(e as Error).message}`);
+    }
+  }
+
+  /**
+   * What one square is drawn with to match the references: the picture for ControlNet
+   * and how hard, whether it starts from that picture, and the seed. See
+   * sprite-reference.ts for which reference a square gets and why.
+   */
+  private async referenceFor(slot: DraftOutfitSlot): Promise<{
+    dataURL: string; weight: number; width: number; height: number; start: boolean; seed?: number;
+  } | null> {
+    if (!this.studio) return null;
     const key = slotKeyOf(slot);
-    this.spriteReference = this.spriteReference === key ? "" : key;
+    const self: ReferenceKind | undefined = key === this.spriteReference ? "dressed" : key === this.spriteReferenceBare ? "bare" : undefined;
+    const has = { dressed: !!this.referenceShot(), bare: !!this.shotOfKey(this.spriteReferenceBare) };
+    const misc = OUTFIT_ACTIVITIES.find((item) => item.id === slot.emotion);
+    const plan = referencePlan(misc ? misc.heat : slot.tier, has, this.spriteReferenceStrength, this.spriteReferenceStart, self);
+    if (!plan) return null;
+    const frame = await this.referenceFrame(this.shotOfKey(this.referenceKey(plan.kind))!);
+    // The dressed reference's seed under every square, the undressed reference included.
+    const seed = this.spriteReferenceSeed && this.seed < 0 ? this.referenceShot()?.seed : undefined;
+    return { ...frame, weight: plan.weight, start: plan.start, seed: seed && seed > 0 ? seed : undefined };
+  }
+
+  /** Makes a square one of the references, or clears it when it already is. */
+  private toggleSpriteReference(slot: DraftOutfitSlot, kind: ReferenceKind = this.kindForSlot(slot)) {
+    const key = slotKeyOf(slot);
+    if (kind === "bare") this.spriteReferenceBare = this.spriteReferenceBare === key ? "" : key;
+    else this.spriteReference = this.spriteReference === key ? "" : key;
     this.persistDraft();
   }
 
+  private kindForSlot(slot: Pick<DraftOutfitSlot, "emotion" | "tier">): ReferenceKind {
+    const misc = OUTFIT_ACTIVITIES.find((item) => item.id === slot.emotion);
+    return referenceKindFor(misc ? misc.heat : slot.tier);
+  }
+
   /**
-   * Draws the reference: Calm · Neutral, the plainest square on the board, with the
-   * loadout, model and LoRAs as they are now, and makes it the reference before it is
-   * drawn so the run is not matched to the picture it is replacing.
+   * Draws a reference with the loadout, model and LoRAs as they are now: Calm · Neutral
+   * for the dressed one, Peak · Neutral — drawn from the dressed one — for the
+   * undressed. It is made the reference before it is drawn, so the run is not matched to
+   * the picture it is replacing.
    */
-  private async drawReference() {
+  private async drawReference(kind: ReferenceKind) {
     if (this.generating || this.outfitBatchRunning || this.motionRunning) return;
-    this.selectOutfitSlot(squareIndex(0, 0, ""));
-    this.spriteReference = slotKeyOf(this.outfitSlot().slot);
+    this.selectOutfitSlot(squareIndex(kind === "bare" ? OUTFIT_TIERS.length - 1 : 0, 0, ""));
+    const key = slotKeyOf(this.outfitSlot().slot);
+    if (kind === "bare") this.spriteReferenceBare = key;
+    else this.spriteReference = key;
     this.persistDraft();
     await this.generate();
   }
 
-  private referenceLabel(): string {
-    const [emotion, tier] = this.spriteReference.split(":");
+  private referenceLabel(key = this.spriteReference): string {
+    const [emotion, tier] = key.split(":");
     const misc = OUTFIT_ACTIVITIES.find((item) => item.id === emotion);
     if (misc) return misc.label;
     const face = OUTFIT_FACES.find((item) => item.id === emotion);
     return face ? `${OUTFIT_TIERS[Number(tier) || 0]?.label ?? "Calm"} · ${face.label}` : "";
   }
+
 
   /**
    * The picture a square's clip starts from. A reviewed square is cut out already, and
@@ -3539,11 +3591,21 @@ export class OppaiImageGen extends LitElement {
       regions: src || !this.regionsActive ? undefined
         : regionParams(true, this.regionsRows, this.regionPeople, this.characters, this.status?.loras ?? []),
     };
-    // Drawn to match the reference square, when there is one and this is not it.
+    // Drawn to match its reference square, when there is one and this is not it.
     const reference = outfit && !src ? await this.referenceFor(outfit.slot) : null;
     if (reference) {
       params.reference = reference.dataURL;
       params.referenceWeight = reference.weight;
+      if (reference.seed) params.seed = reference.seed;
+      if (reference.start) {
+        // Started from the reference, at its size: a hires reference is already the
+        // size the board's squares come out at, and a hires pass has no place in a run
+        // that does not start from noise.
+        params.initImage = reference.dataURL;
+        params.denoise = this.spriteReferenceDenoise;
+        params.upscale = undefined;
+        Object.assign(params, sourceSize(reference.width, reference.height));
+      }
     }
     if (src) {
       // A run from a picture comes out the picture's shape, not the size controls'.
@@ -4029,8 +4091,11 @@ export class OppaiImageGen extends LitElement {
     if (this.generating || !this.outfitOn || !this.assemblePrompts().prompt.trim()) return;
     // The reference first: every square after it is drawn to match it, and one redone
     // ahead of it would match the picture it is about to stop being.
-    const stale = this.staleShots().sort((a, b) =>
-      Number(slotKeyOf(b.outfitSlot!) === this.spriteReference) - Number(slotKeyOf(a.outfitSlot!) === this.spriteReference));
+    const rank = (shot: Shot) => {
+      const key = slotKeyOf(shot.outfitSlot!);
+      return key === this.spriteReference ? 0 : key === this.spriteReferenceBare ? 1 : 2;
+    };
+    const stale = this.staleShots().sort((a, b) => rank(a) - rank(b));
     if (!stale.length) return;
     this.generating = true;
     this.outfitBatchRunning = true;
@@ -6016,7 +6081,7 @@ export class OppaiImageGen extends LitElement {
       ${shot
         ? html`<img class="art" src=${this.previewURL(shot)} alt=${label} loading="lazy" />`
         : html`<span class="art-empty"><span class="material-symbols-rounded">add</span></span>`}
-      ${slotKeyOf(slot) === this.spriteReference ? html`<span class="cell-ref" title="The reference: every other square is drawn to match it">
+      ${slotKeyOf(slot) === this.spriteReference || slotKeyOf(slot) === this.spriteReferenceBare ? html`<span class="cell-ref" title="A reference: the squares of its levels are drawn to match it">
         <span class="material-symbols-rounded">push_pin</span></span>` : nothing}
       <span class="cell-foot">
         <span class="cell-name">${slot.emotionLabel}</span>
@@ -6176,8 +6241,10 @@ export class OppaiImageGen extends LitElement {
             @click=${() => { if (shot) void this.exportOutfitSquare(shot); }}>
             <span class="material-symbols-rounded">download</span><span>Export</span>
           </button>
-          <button class="tool ${slotKeyOf(slot) === this.spriteReference ? "on" : ""}" ?disabled=${!shot || busy}
-            title=${slotKeyOf(slot) === this.spriteReference ? "This is the reference — click to stop matching the set to it" : "Make this the reference: every other square is drawn to look like it"}
+          <button class="tool ${slotKeyOf(slot) === this.referenceKey(this.kindForSlot(slot)) ? "on" : ""}" ?disabled=${!shot || busy}
+            title=${slotKeyOf(slot) === this.referenceKey(this.kindForSlot(slot)) ? "This is a reference — click to stop matching its levels to it"
+              : this.kindForSlot(slot) === "bare" ? "Make this the undressed reference: Heated and Peak are drawn to look like it"
+              : "Make this the dressed reference: Calm to Flirty are drawn to look like it"}
             @click=${() => this.toggleSpriteReference(slot)}>
             <span class="material-symbols-rounded">push_pin</span><span>Reference</span>
           </button>
@@ -6489,61 +6556,96 @@ export class OppaiImageGen extends LitElement {
 
   /** How the squares are shot: backdrop, underwear default, colour lock, body hair,
    * framing. Everything that is not a garment and not the generator. */
-  /** The reference on the recipe strip: which square it is, or a way to make one. */
+  /** The references on the recipe strip: which squares they are, or a way to make one. */
   private renderReferenceChip() {
-    const shot = this.referenceShot();
-    return html`<button class="recipe-chip ref ${shot ? "on" : ""}"
-      title=${shot ? `Every square is drawn to match ${this.referenceLabel()} — the Look tab sets how closely` : "No reference: each square is drawn from the words alone — the Look tab makes one"}
+    const dressed = this.referenceShot();
+    const bare = this.shotOfKey(this.spriteReferenceBare);
+    const names = [dressed ? this.referenceLabel() : "", bare ? this.referenceLabel(this.spriteReferenceBare) : ""].filter(Boolean);
+    return html`<button class="recipe-chip ref ${dressed ? "on" : ""}"
+      title=${dressed ? `Every square is drawn to match ${names.join(" and ")} — the Look tab sets how closely` : "No reference: each square is drawn from the words alone — the Look tab makes one"}
       @click=${() => this.openSpriteTab("look")}>
-      ${shot ? html`<img src=${this.previewURL(shot)} alt="" />` : html`<span class="material-symbols-rounded">push_pin</span>`}
-      ${shot ? `Matching ${this.referenceLabel()}` : "No reference"}
+      ${dressed ? html`<img src=${this.previewURL(dressed)} alt="" />` : html`<span class="material-symbols-rounded">push_pin</span>`}
+      ${bare ? html`<img src=${this.previewURL(bare)} alt="" />` : nothing}
+      ${dressed ? `Matching ${names.join(" + ")}` : "No reference"}
     </button>`;
   }
 
+  /** One reference in the Look tab: its picture, what it is for, and how to make it. */
+  private renderReferenceRow(kind: ReferenceKind) {
+    const key = this.referenceKey(kind);
+    const shot = this.shotOfKey(key);
+    const selected = this.outfitSlot().slot;
+    const busy = this.generating || this.outfitBatchRunning || this.motionRunning;
+    const fits = this.kindForSlot(selected) === kind && !!this.shotAt(selected) && slotKeyOf(selected) !== key;
+    const dressed = kind === "dressed";
+    const blocked = !dressed && !this.referenceShot();
+    return html`<div class="ref-row">
+      <div class="ref-art ${shot ? "" : "empty"}">
+        ${shot ? html`<img src=${this.previewURL(shot)} alt=${dressed ? "The dressed reference" : "The undressed reference"} />` : html`<span class="material-symbols-rounded">push_pin</span>`}
+      </div>
+      <div class="ref-text">
+        <strong>${dressed ? "Dressed" : "Undressed"} <small>${dressed ? "Calm to Flirty" : "Heated and Peak"}</small></strong>
+        <span>${shot
+          ? this.referenceLabel(key)
+          : key
+            ? `${this.referenceLabel(key)} has no picture on this board.`
+            : dressed
+              ? "Without one, each square is a fresh reading of the prompt, and her face and build drift across the set."
+              : "Drawn from the dressed one, so the undressed levels keep her body without pulling her clothes back on."}</span>
+        <div class="ref-actions">
+          <button class="btn ${shot || blocked ? "" : "primary"}" ?disabled=${busy || !this.outfitOn || blocked}
+            title=${blocked ? "The dressed reference comes first — this one is drawn from it" : dressed
+              ? "Draw Calm · Neutral with the loadout, model and LoRAs as they are"
+              : "Draw Peak · Neutral from the dressed reference"}
+            @click=${() => void this.drawReference(kind)}>
+            <span class="material-symbols-rounded" style="font-size:17px;">${shot ? "replay" : "push_pin"}</span>${shot ? "Draw again" : "Draw"}
+          </button>
+          ${fits ? html`<button class="btn" ?disabled=${busy} title="Use the selected square instead"
+            @click=${() => this.toggleSpriteReference(selected, kind)}>Use ${selected.tierLabel === "Misc" ? selected.emotionLabel : `${selected.tierLabel} · ${selected.emotionLabel}`}</button>` : nothing}
+          ${key ? html`<button class="link-btn" ?disabled=${busy}
+            @click=${() => { if (dressed) this.spriteReference = ""; else this.spriteReferenceBare = ""; this.persistDraft(); }}>Clear</button>` : nothing}
+        </div>
+      </div>
+    </div>`;
+  }
+
   /**
-   * The reference square, at the top of the Look tab: what it is, how closely every
-   * other square is matched to it, and the ways to make one — draw it now, with the
-   * loadout, model and LoRAs as they are, or take the square that is selected.
+   * The references, at the top of the Look tab, and how hard the set holds to them.
+   * See sprite-reference.ts for the three holds and why each is there.
    */
   private renderReferencePane() {
-    const shot = this.referenceShot();
-    const selected = this.outfitSlot().slot;
-    const selectedShot = this.shotAt(selected);
     const busy = this.generating || this.outfitBatchRunning || this.motionRunning;
-    const isSelected = slotKeyOf(selected) === this.spriteReference;
+    const any = !!this.spriteReference || !!this.spriteReferenceBare;
     return html`<div class="ref-pane">
-      <label class="field">Reference square</label>
-      <div class="ref-row">
-        <div class="ref-art ${shot ? "" : "empty"}">
-          ${shot ? html`<img src=${this.previewURL(shot)} alt="The reference square" />` : html`<span class="material-symbols-rounded">push_pin</span>`}
+      <label class="field">Reference squares</label>
+      ${this.renderReferenceRow("dressed")}
+      ${this.renderReferenceRow("bare")}
+      ${any ? html`
+        <div>
+          <label class="field">ControlNet strength <b>${Math.round(this.spriteReferenceStrength * 100)}%</b></label>
+          <input type="range" min="0.2" max="1" step="0.05" .value=${String(this.spriteReferenceStrength)} ?disabled=${busy}
+            @input=${(e: Event) => { this.spriteReferenceStrength = Number((e.target as HTMLInputElement).value); }}
+            @change=${() => this.persistDraft()} />
         </div>
-        <div class="ref-text">
-          ${shot
-            ? html`<strong>${this.referenceLabel()}</strong><span>Every other square is drawn to look like this one — her face, her build and her clothes.</span>`
-            : this.spriteReference
-              ? html`<strong>Its picture is gone</strong><span>${this.referenceLabel()} has no picture on this board. Draw it again, or pick another.</span>`
-              : html`<strong>None yet</strong><span>Without one, each square is a fresh reading of the prompt, so faces, builds and clothes drift across the set.</span>`}
-        </div>
-      </div>
-      <div class="ref-actions">
-        <button class="btn ${shot ? "" : "primary"}" ?disabled=${busy || !this.outfitOn}
-          title="Draw Calm · Neutral with the loadout, model and LoRAs as they are, and match the set to it"
-          @click=${() => void this.drawReference()}>
-          <span class="material-symbols-rounded" style="font-size:17px;">${shot ? "replay" : "push_pin"}</span>${shot ? "Draw it again" : "Draw a reference"}
-        </button>
-        ${selectedShot && !isSelected ? html`<button class="btn" ?disabled=${busy}
-          title="Match the set to the square that is selected instead" @click=${() => this.toggleSpriteReference(selected)}>
-          Use ${selected.tierLabel === "Misc" ? selected.emotionLabel : `${selected.tierLabel} · ${selected.emotionLabel}`}
-        </button>` : nothing}
-        ${this.spriteReference ? html`<button class="link-btn" ?disabled=${busy} @click=${() => { this.spriteReference = ""; this.persistDraft(); }}>Clear</button>` : nothing}
-      </div>
-      ${this.spriteReference ? html`<div>
-        <label class="field">How closely to match it <b>${Math.round(this.spriteReferenceStrength * 100)}%</b></label>
-        <input type="range" min="0.2" max="1" step="0.05" .value=${String(this.spriteReferenceStrength)} ?disabled=${busy}
-          @input=${(e: Event) => { this.spriteReferenceStrength = Number((e.target as HTMLInputElement).value); }}
-          @change=${() => this.persistDraft()} />
-        <div class="sec-note">Eased off as she undresses — at Peak it keeps half of this, enough to hold her face and build without pulling the reference's clothes back on. Needs the ControlNet extension in Automatic1111 or Forge.</div>
-      </div>` : nothing}
+        <label class="check">
+          <input type="checkbox" .checked=${this.spriteReferenceStart} ?disabled=${busy}
+            @change=${(e: Event) => { this.spriteReferenceStart = (e.target as HTMLInputElement).checked; this.persistDraft(); }} />
+          Start each square from its reference
+        </label>
+        ${this.spriteReferenceStart ? html`<div>
+          <label class="field">How far a square may move from it <b>${Math.round(this.spriteReferenceDenoise * 100)}%</b></label>
+          <input type="range" min="0.35" max="0.9" step="0.05" .value=${String(this.spriteReferenceDenoise)} ?disabled=${busy}
+            @input=${(e: Event) => { this.spriteReferenceDenoise = Number((e.target as HTMLInputElement).value); }}
+            @change=${() => this.persistDraft()} />
+          <div class="sec-note">Lower holds her face and build tighter; higher lets poses and expressions move further. Around 55–65% suits most sets.</div>
+        </div>` : nothing}
+        <label class="check">
+          <input type="checkbox" .checked=${this.spriteReferenceSeed} ?disabled=${busy}
+            @change=${(e: Event) => { this.spriteReferenceSeed = (e.target as HTMLInputElement).checked; this.persistDraft(); }} />
+          Use the dressed reference's seed for every square
+        </label>
+        <div class="sec-note">Needs the ControlNet extension in Automatic1111 or Forge. A locked seed on the strip wins over the reference's.</div>
+      ` : nothing}
     </div>`;
   }
 
