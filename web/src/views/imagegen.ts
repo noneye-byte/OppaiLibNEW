@@ -104,7 +104,7 @@ import {
 } from "./imagegen-video.js";
 import { startFrameSize } from "../clip-shape.js";
 import {
-  MOTION_STEPS, canMake, clipTake, nextStep, pictureTake, squareSteps, stepCounts, stepWork,
+  MOTION_STEPS, canMake, clipTake, nextStep, pictureTake, squareSteps, stepCounts, stepWork, stepsFor,
   type MotionStep, type SquareMotion,
 } from "../sprite-motion.js";
 import { GALLERY_DRAG_TYPE } from "./imagegen-gallery.js";
@@ -3370,12 +3370,26 @@ export class OppaiImageGen extends LitElement {
     return this.anims[slotKeyOf(this.outfitSlot().slot)]?.clip?.seed ?? 0;
   }
 
-  /** One step on the selected square, from its panel: the error is said there. */
+  /** One step on the selected square, from its panel, with whatever it needs made
+      first (stepsFor). The error is said there, and leaves the rest undone. */
   private async runSquareStep(step: "clip" | "cut") {
     const { slot } = this.outfitSlot();
-    const problem = step === "clip" ? await this.animateSquare(slot) : await this.cutSquare(slot);
-    if (problem) this.showToast(problem);
-    else if (slotKeyOf(this.outfitSlot().slot) === slotKeyOf(slot)) this.focusView = step;
+    for (const part of stepsFor(step, this.squareMotion(slot))) {
+      const problem = part === "clip" ? await this.animateSquare(slot) : await this.cutSquare(slot);
+      if (problem) {
+        this.showToast(problem);
+        return;
+      }
+      if (slotKeyOf(this.outfitSlot().slot) === slotKeyOf(slot)) this.focusView = part;
+    }
+  }
+
+  /** Puts the stage back on a square's picture when it has a new one. Left on Clip or
+      Cut it would go on playing the take just replaced, as if the redo had not happened.
+      That clip is still on its tab, marked out of date. */
+  private showNewPicture(slot: Pick<DraftOutfitSlot, "emotion" | "tier">) {
+    if (this.focusView !== "clip" && this.focusView !== "cut") return;
+    if (slotKeyOf(this.outfitSlot().slot) === slotKeyOf(slot)) this.focusView = "cutout";
   }
 
   /** Puts another take in as the square's clip. Its cut, of the old take, goes stale. */
@@ -3761,6 +3775,7 @@ export class OppaiImageGen extends LitElement {
         ...this.shots.filter((shot) => !shot.outfitSlot || slotKeyOf(shot.outfitSlot) !== key),
         ...made,
       ];
+      if (made.length) this.showNewPicture(outfit.slot);
     } else {
       // The draft keeps the newest run; the strip keeps the session. Outfit squares
       // stay off the strip: they are one deliverable, and the board is where they live.
@@ -6347,6 +6362,14 @@ export class OppaiImageGen extends LitElement {
     const clips = this.status?.clips;
     const matte = !!this.status?.matte;
     const next = nextStep(sq);
+    const cutMakes = stepsFor("cut", sq);
+    const cutNeedsClip = cutMakes.includes("clip");
+    const cutTitle = !matte ? this.status?.matteProblem || "Background removal isn't available here"
+      : !shot ? "Its picture comes first"
+      : !cutNeedsClip ? "Remove the background: cut her out of the clip, frame by frame, on the server"
+      : !clips?.image ? "No picture-to-video model is set up — Settings → Image generation → Video"
+      : anim?.clip ? "Its clip is of an older picture: this makes a new clip of this one, then cuts it"
+      : "This makes its clip, then cuts it";
     const pct = busy ? Math.round(busy.percent * 100) : 0;
     const others = (spriteTakes.get(`${this.outfitWardrobeId}|${key}`) ?? []).filter((c) => c.id);
     const lock = !!busy || this.motionRunning || this.generating;
@@ -6367,8 +6390,8 @@ export class OppaiImageGen extends LitElement {
             title=${!clips?.image ? "No picture-to-video model is set up — Settings → Image generation → Video" : !shot ? "Its picture comes first" : "Make a clip of the picture with the Motion tab's choices"}
             @click=${() => void this.runSquareStep("clip")}>
             <span class="material-symbols-rounded" style="font-size:17px;">${anim?.clip ? "replay" : "animation"}</span>${anim?.clip ? "Redo clip" : "Animate"}</button>
-          <button class="btn ${next === "cut" ? "primary" : ""}" ?disabled=${lock || !canMake("cut", sq) || !matte}
-            title=${!matte ? this.status?.matteProblem || "Background removal isn't available here" : !canMake("cut", sq) ? "Its clip comes first" : "Remove the background: cut her out of the clip, frame by frame, on the server"}
+          <button class="btn ${next === "cut" ? "primary" : ""}" ?disabled=${lock || !cutMakes.length || !matte || cutNeedsClip && !clips?.image}
+            title=${cutTitle}
             @click=${() => void this.runSquareStep("cut")}>
             <span class="material-symbols-rounded" style="font-size:17px;">background_replace</span>${anim?.cut ? "Redo cut" : "Cut out"}</button>
           ${anim?.clip ? html`<button class="icon-btn" ?disabled=${lock} title=${anim.cut ? "Delete the cut (the clip stays)" : "Delete the clip"}
@@ -6517,6 +6540,7 @@ export class OppaiImageGen extends LitElement {
         cutoutReviewed: false, previewVersion: stored.updatedAt || Date.now(), wipOutfitId: wardrobeId,
       };
       this.shots = [...this.shots.filter((s) => !s.outfitSlot || slotKeyOf(s.outfitSlot) !== key), shot];
+      this.showNewPicture(slot);
       this.persistDraft();
       void this.openCutout(this.previewURL(shot), file.name, filename, shot.id);
     } catch (e) {

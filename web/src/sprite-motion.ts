@@ -75,6 +75,18 @@ export function canMake(step: MotionStep, sq: SquareMotion): boolean {
 }
 
 /**
+ * What a square's button for a step has to make, in order; nothing when it has no
+ * picture to work from. A cut has to be of a clip of the picture as it is now, so
+ * pressing Cut on a square whose picture was redone, or that never had a clip, makes
+ * the clip first. Cutting the old clip would only file a cut of a picture the square no
+ * longer has, and refusing left a grey button under a clip that looked perfectly good.
+ */
+export function stepsFor(step: "clip" | "cut", sq: SquareMotion): ("clip" | "cut")[] {
+  if (!sq.picture) return [];
+  return step === "cut" && squareSteps(sq).clip !== "ready" ? ["clip", "cut"] : [step];
+}
+
+/**
  * The squares one step of a run works through, in board order: those that lack the
  * step, or hold it out of date, and have what it is made of. A run asks again before
  * each step rather than planning all three at the start, so a picture that failed is

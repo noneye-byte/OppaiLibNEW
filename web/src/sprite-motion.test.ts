@@ -1,9 +1,30 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-const { canMake, clipTake, nextStep, pictureTake, squareSteps, stepCounts, stepWork } = await import("./sprite-motion.ts");
+const { canMake, clipTake, nextStep, pictureTake, squareSteps, stepCounts, stepWork, stepsFor } = await import("./sprite-motion.ts");
 
 const clipOf = (picture: string, seed = 5, updatedAt = 100) => ({ seed, updatedAt, from: picture });
+
+test("cutting a redone square makes a clip of the new picture first", () => {
+  assert.deepEqual(stepsFor("cut", { picture: "seed-2", clip: clipOf("seed-1") }), ["clip", "cut"]);
+});
+
+test("cutting a square that never had a clip makes one first", () => {
+  assert.deepEqual(stepsFor("cut", { picture: "seed-1" }), ["clip", "cut"]);
+});
+
+test("a current clip is cut as it is, and not made again", () => {
+  assert.deepEqual(stepsFor("cut", { picture: "seed-1", clip: clipOf("seed-1") }), ["cut"]);
+});
+
+test("redoing a clip makes just the clip, even when its cut needs doing too", () => {
+  assert.deepEqual(stepsFor("clip", { picture: "seed-2", clip: clipOf("seed-1") }), ["clip"]);
+});
+
+test("nothing can be made of a square with no picture", () => {
+  assert.deepEqual(stepsFor("clip", { picture: "" }), []);
+  assert.deepEqual(stepsFor("cut", { picture: "", clip: clipOf("seed-1") }), []);
+});
 
 test("a square with nothing needs its picture first", () => {
   assert.equal(nextStep({ picture: "" }), "picture");
