@@ -326,15 +326,25 @@ func a1111ControlArgs(units []ControlUnit) []map[string]any {
 		if weight <= 0 {
 			weight = 1
 		}
+		end := u.End
+		if end <= 0 {
+			end = 1
+		}
+		mode := "Balanced"
+		if u.PromptFirst {
+			mode = "My prompt is more important"
+		}
 		out = append(out, map[string]any{
-			"enabled":       true,
-			"image":         base64.StdEncoding.EncodeToString(u.Image),
-			"module":        u.Module,
-			"model":         u.Model,
-			"weight":        weight,
-			"resize_mode":   "Crop and Resize",
-			"pixel_perfect": true,
-			"control_mode":  "Balanced",
+			"enabled":        true,
+			"image":          base64.StdEncoding.EncodeToString(u.Image),
+			"module":         u.Module,
+			"model":          u.Model,
+			"weight":         weight,
+			"resize_mode":    "Crop and Resize",
+			"pixel_perfect":  true,
+			"control_mode":   mode,
+			"guidance_start": u.Start,
+			"guidance_end":   end,
 		})
 	}
 	return out

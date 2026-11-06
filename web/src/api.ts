@@ -1819,10 +1819,14 @@ export interface GenerateParams {
   /** Each person in a part of the picture of their own, from their own words and
       LoRAs; `prompt` is then what the whole picture shares (A1111 + Regional Prompter). */
   regions?: RegionsParams;
-  /** A picture the run is drawn to look like, as a data URL — the Sprites studio's
-      reference square, through ControlNet's reference preprocessor — and how hard, 0–1. */
+  /** A picture of who the run is drawing, as a data URL — the Sprites studio's
+      reference square, through ControlNet's reference preprocessor, which holds her
+      build — and how hard, 0–1. */
   reference?: string;
   referenceWeight?: number;
+  /** A crop of the head from a reference, which holds her face, and how hard. */
+  referenceFace?: string;
+  referenceFaceWeight?: number;
   /** A picture to start from instead of noise, as a data URL: image to image. */
   initImage?: string;
   /** How far the run may move from initImage, 0–1. */

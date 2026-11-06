@@ -374,6 +374,13 @@ type ControlUnit struct {
 	Module string
 	Model  string
 	Weight float64
+	// Start and End are the part of the run the unit acts in, 0–1 of its steps; an End
+	// of 0 means to the end. Most of a picture's composition is settled in its first
+	// steps and most of its surface in its last, so a unit can be kept out of either.
+	Start, End float64
+	// PromptFirst has the prompt win where the two disagree, for a unit that is there
+	// to inform a picture rather than to decide it.
+	PromptFirst bool
 }
 
 // ErrControlUnsupported is a generator that cannot apply control units at all —

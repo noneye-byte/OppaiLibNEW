@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 import {
   DEFAULT_OUTFIT_GEAR,
   EMPTY_OUTFIT_GEAR,
+  OUTFIT_LEVEL_STANCES,
   OUTFIT_UNDRESS_LEVELS,
+  levelStance,
   OUTFIT_GEAR_SLOTS,
   colorFamilies,
   emphasize,
@@ -239,4 +241,11 @@ test("layers the loadout lacks are kept out, and ones it has are not", () => {
   assert.ok(!unaskedLayers(DEFAULT_OUTFIT_GEAR, "red scarf").includes("scarf"));
   // Switched off is not worn, so its layer is unasked again.
   assert.ok(unaskedLayers({ ...jacket, extra1: { ...jacket.extra1, off: true } }).includes("jacket"));
+});
+
+test("no two levels stand alike, so a column is not one pose with less on", () => {
+  assert.equal(new Set(OUTFIT_LEVEL_STANCES).size, OUTFIT_LEVEL_STANCES.length);
+  assert.equal(OUTFIT_LEVEL_STANCES.length, OUTFIT_UNDRESS_LEVELS.length);
+  assert.equal(levelStance(99), OUTFIT_LEVEL_STANCES[OUTFIT_LEVEL_STANCES.length - 1]);
+  assert.equal(levelStance(-1), OUTFIT_LEVEL_STANCES[0]);
 });

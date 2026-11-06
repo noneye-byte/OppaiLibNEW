@@ -224,6 +224,26 @@ export function undressLevel(tier: number): OutfitExposure {
 }
 
 /**
+ * How she stands at each heat tier. A square's arms come from its expression, so without
+ * this every level of a column asked for the same picture with less on: Calm · Neutral
+ * and Flirty · Neutral were the same words for her body, and came back in the same
+ * stance. Said in what a body does rather than how it feels, because "inviting posture"
+ * and "sultry posture" are moods, and a generator gives a mood the pose it already had.
+ */
+export const OUTFIT_LEVEL_STANCES: readonly string[] = [
+  "standing straight, weight even on both feet",
+  "body turned slightly to one side, weight on one leg",
+  "contrapposto, hip cocked to one side, head tilted",
+  "body angled, one shoulder forward, leaning toward the viewer",
+  "arched back, hips pushed forward, one knee bent",
+];
+
+export function levelStance(tier: number): string {
+  const at = Math.max(0, Math.min(OUTFIT_LEVEL_STANCES.length - 1, Math.round(tier)));
+  return OUTFIT_LEVEL_STANCES[at];
+}
+
+/**
  * What a level does to the prompt, given what she is wearing.
  *
  * `hidden` is the garments the prompt must leave out entirely — the clothes she has taken

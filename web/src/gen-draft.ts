@@ -128,17 +128,14 @@ export interface GenDraft {
   outfitLoadoutId?: string;
   /** The wardrobe reviewed sprites are filed into as they are approved. */
   outfitWardrobeId?: string;
-  /** The square every other is drawn to look like (a slot key, "" for none), and how
-      hard. See sprite-reference.ts. */
+  /** The square that holds who she is across the set (a slot key, "" for none), and how
+      hard it holds her face. See sprite-reference.ts. */
   spriteReference?: string;
   spriteReferenceStrength?: number;
   /** The undressed reference, for Heated and Peak. */
   spriteReferenceBare?: string;
-  /** Whether squares start from their reference, how far they may move, and whether
-      they are drawn from the dressed reference's seed. */
-  spriteReferenceStart?: boolean;
-  spriteReferenceDenoise?: number;
-  spriteReferenceSeed?: boolean;
+  /** How hard the references hold her build. */
+  spriteReferenceBuild?: number;
   /** Camera and shot composition. Stored as a partial and merged over the defaults on
       restore, because a draft written before an axis existed must not leave that axis
       undefined and index a lookup table with it. */
@@ -240,10 +237,10 @@ export function loadDraft(): GenDraft | null {
   (["width", "height", "steps", "cfg", "cfgRescale", "clipSkip", "count", "seed",
     "outfitFace", "outfitTier", "detailerConfidence", "detailerDenoise",
     "detailerMaskBlur", "hiresScale", "hiresDenoise", "hiresSteps", "upscaleBy", "scrollTop", "spriteReferenceStrength",
-    "spriteReferenceDenoise"] as const).forEach(num);
+    "spriteReferenceBuild"] as const).forEach(num);
   (["seamlessX", "seamlessY", "cpuNoise", "outfitOn", "outfitCutout", "outfitPubicHair",
     "outfitLockColors", "outfitMiscBatch", "detailerEnabled", "detailerFaces", "detailerHands",
-    "hiresEnabled", "showOptions", "spriteReferenceStart", "spriteReferenceSeed"] as const).forEach(bool);
+    "hiresEnabled", "showOptions"] as const).forEach(bool);
 
   if (d.vaePrecision === "fp16" || d.vaePrecision === "fp32") out.vaePrecision = d.vaePrecision;
   if (d.outfitBackground === "black" || d.outfitBackground === "white") {

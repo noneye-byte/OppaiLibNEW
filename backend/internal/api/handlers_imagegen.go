@@ -319,11 +319,14 @@ type generateReq struct {
 	// Regions draws each person in a part of the picture of their own, from their
 	// own words and LoRAs; Prompt is then what the whole picture shares.
 	Regions regionsReq `json:"regions"`
-	// Reference is a picture the run is drawn to look like (a data URL or bare base64):
-	// the Sprites studio's reference square, which every other square of a set is
-	// matched to. ReferenceWeight is how hard, 0–1. See referenceControls.
-	Reference       string  `json:"reference"`
-	ReferenceWeight float64 `json:"referenceWeight"`
+	// Reference is a picture of who the run is drawing (a data URL or bare base64): the
+	// Sprites studio's reference square, which holds her build across a set.
+	// ReferenceFace is a crop of the head from one, which holds her face. Each Weight
+	// is how hard, 0–1. See referenceControls.
+	Reference           string  `json:"reference"`
+	ReferenceWeight     float64 `json:"referenceWeight"`
+	ReferenceFace       string  `json:"referenceFace"`
+	ReferenceFaceWeight float64 `json:"referenceFaceWeight"`
 }
 
 type regionsReq struct {
@@ -536,26 +539,67 @@ var errReferenceUnsupported = errors.New("drawing to match the reference square 
 // units it works on any install that has the extension, SD 1.5 or SDXL alike.
 const referenceModule = "reference_only"
 
-// referenceControls turns a request's reference picture into the ControlNet units that
-// draw the run to match it: the reference preprocessor at the weight asked for, and,
-// where a face model is set up for her camera, that model too. The face unit is not
-// eased with the weight — it holds a face and nothing else, so the reasons for easing
-// the reference (it drags the clothes along) do not apply to it.
-func referenceControls(req *generateReq, gen *imagegen.GenerateRequest, set settings.Settings) error {
-	if req.Reference == "" {
-		return nil
-	}
-	raw, err := decodeDataImage(req.Reference)
+// The parts of a run the reference units act in, as shares of its steps. A reference
+// holds who she is, not what she is doing or wearing, and a run settles those two at
+// its ends: the pose in the first steps, the surface of her clothes in the last. So the
+// build is read only between them, and the face stays out of the opening, where a
+// picture that is nothing but a head would pull the framing in close.
+const (
+	referenceBuildStart = 0.15
+	referenceBuildEnd   = 0.6
+	referenceFaceStart  = 0.2
+)
+
+// referencePicture reads one of a request's reference pictures.
+func referencePicture(data string) ([]byte, error) {
+	raw, err := decodeDataImage(data)
 	if err != nil || !strings.HasPrefix(http.DetectContentType(raw), "image/") {
-		return errors.New("the reference isn't an image")
+		return nil, errors.New("the reference isn't an image")
 	}
-	weight := req.ReferenceWeight
+	return raw, nil
+}
+
+// referenceWeight is a weight off the wire, with a missing or nonsense one read as a
+// moderate hold.
+func referenceWeight(weight float64) float64 {
 	if weight <= 0 || weight > 1 {
-		weight = 0.6
+		return 0.6
 	}
-	gen.Controls = append(gen.Controls, imagegen.ControlUnit{Image: raw, Module: referenceModule, Model: "None", Weight: weight})
-	if set.LibbyFaceModel != "" {
-		gen.Controls = append(gen.Controls, imagegen.ControlUnit{Image: raw, Module: set.LibbyFaceModule, Model: set.LibbyFaceModel, Weight: 0.6})
+	return weight
+}
+
+// referenceControls turns a request's reference pictures into the ControlNet units
+// that hold who the run is drawing: the whole picture for her build, lightly and with
+// the prompt winning any argument, since the whole picture also has her clothes in it;
+// the crop of her head for her face, at full run from there on, since it has nothing
+// else in it; and, where a face model is set up for her camera, that model reading the
+// same crop. The model is not eased with the weights: it holds a face and nothing else.
+func referenceControls(req *generateReq, gen *imagegen.GenerateRequest, set settings.Settings) error {
+	var whole, face []byte
+	var err error
+	if req.Reference != "" {
+		if whole, err = referencePicture(req.Reference); err != nil {
+			return err
+		}
+		gen.Controls = append(gen.Controls, imagegen.ControlUnit{
+			Image: whole, Module: referenceModule, Model: "None", Weight: referenceWeight(req.ReferenceWeight),
+			Start: referenceBuildStart, End: referenceBuildEnd, PromptFirst: true,
+		})
+	}
+	if req.ReferenceFace != "" {
+		if face, err = referencePicture(req.ReferenceFace); err != nil {
+			return err
+		}
+		gen.Controls = append(gen.Controls, imagegen.ControlUnit{
+			Image: face, Module: referenceModule, Model: "None", Weight: referenceWeight(req.ReferenceFaceWeight),
+			Start: referenceFaceStart,
+		})
+	}
+	if face == nil {
+		face = whole
+	}
+	if face != nil && set.LibbyFaceModel != "" {
+		gen.Controls = append(gen.Controls, imagegen.ControlUnit{Image: face, Module: set.LibbyFaceModule, Model: set.LibbyFaceModel, Weight: 0.6})
 	}
 	return nil
 }

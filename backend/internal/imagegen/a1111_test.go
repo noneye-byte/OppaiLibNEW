@@ -289,3 +289,17 @@ func TestInvokeAIRefusesAnUpscaleRatherThanIgnoringIt(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestAControlUnitActsOnlyInItsPartOfTheRunAndCanLetThePromptWin(t *testing.T) {
+	args := a1111ControlArgs([]ControlUnit{
+		{Image: []byte("a"), Module: "reference_only", Model: "None", Weight: 0.4, Start: 0.15, End: 0.6, PromptFirst: true},
+		{Image: []byte("b"), Module: "openpose_full", Model: "pose"},
+	})
+	if a := args[0]; a["guidance_start"] != 0.15 || a["guidance_end"] != 0.6 || a["control_mode"] != "My prompt is more important" {
+		t.Fatalf("held unit = %v", a)
+	}
+	// A unit that says nothing about either runs as one always did: start to finish.
+	if b := args[1]; b["guidance_start"] != 0.0 || b["guidance_end"] != 1.0 || b["control_mode"] != "Balanced" {
+		t.Fatalf("plain unit = %v", b)
+	}
+}
