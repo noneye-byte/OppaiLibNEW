@@ -946,9 +946,12 @@ def run_command(args: list[str], job: dict, say, root: str) -> int:
     say("$ " + " ".join(cmd))
     env = dict(os.environ, PYTHONUNBUFFERED="1")
     script_dir = os.path.dirname(args[0])
-    proc = subprocess.Popen(cmd, cwd=script_dir if os.path.isdir(script_dir) else root,
-                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, start_new_session=True)
+    # Under the lock cancel() takes, so a cancel is either seen here or finds the process.
     with LOCK:
+        if job["id"] in CANCELLING:
+            return -1
+        proc = subprocess.Popen(cmd, cwd=script_dir if os.path.isdir(script_dir) else root,
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, start_new_session=True)
         RUNNING[job["id"]] = proc
     last_save = 0.0
     buf = b""
@@ -1083,6 +1086,12 @@ def run_job(job: dict) -> None:
             converted = output + ".converted"
             code = run_command([os.path.join(MUSUBI, "convert_lora.py"), f"--input={output}",
                                 f"--output={converted}", "--target=other"], job, say, root)
+            with LOCK:
+                cancelled = job["id"] in CANCELLING
+                CANCELLING.discard(job["id"])
+            if cancelled:
+                finish("cancelled")
+                return
             if code != 0 or not os.path.isfile(converted):
                 finish("error", f"the LoRA trained, but converting it for the generator failed (exit {code})")
                 return
@@ -1157,11 +1166,15 @@ def cancel(job_id: str) -> dict | None:
         save_job(job)
         shutil.rmtree(job_path(job_id, "dataset"), ignore_errors=True)
         return job
+    # A running job has no process between its commands, or during a download before
+    # the first, so the cancel is noted whether or not there is one to stop: run_command
+    # will not start the next. Noted only when there was a process, a cancel in one of
+    # those gaps answered 200 and the job trained on to its end.
     with LOCK:
         proc = RUNNING.get(job_id)
-    if job["state"] == "running" and proc:
-        with LOCK:
+        if job["state"] == "running":
             CANCELLING.add(job_id)
+    if job["state"] == "running" and proc:
         try:
             os.killpg(proc.pid, signal.SIGTERM)
         except (OSError, AttributeError):

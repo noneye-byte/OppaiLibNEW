@@ -331,6 +331,22 @@ class ApiTest(unittest.TestCase):
             del os.environ["FAKE_TRAIN_STEP"]
         self.assertEqual(done["state"], "cancelled")
 
+    def test_a_cancel_between_a_jobs_commands_stops_the_next_one(self):
+        # A running job has no process in that gap, and this used to answer 200 and do
+        # nothing, so a run cancelled while it started trained on to its end.
+        job = server.create_job({"name": "gap", "base": {"key": "k"}})
+        job["state"] = "running"
+        server.save_job(job)
+        try:
+            self.assertIsNotNone(server.cancel(job["id"]))
+            self.assertIn(job["id"], server.CANCELLING)
+            code = server.run_command(["never-started.py"], job, lambda _: None, TMP)
+            self.assertNotEqual(code, 0)
+            self.assertNotIn(job["id"], server.RUNNING)
+        finally:
+            server.CANCELLING.discard(job["id"])
+            server.shutil.rmtree(server.job_path(job["id"]), ignore_errors=True)
+
     def test_a_file_that_is_not_a_picture_or_caption_is_refused(self):
         code, body = self.call("POST", "/jobs", json.dumps({"name": "x", "base": {"key": "k"}}).encode())
         job_id = json.loads(body)["id"]
