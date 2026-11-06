@@ -167,22 +167,24 @@ func (s *Server) handleImageGenStatus(w http.ResponseWriter, r *http.Request) {
 	// URL fails the status check fast rather than hanging the screen.
 	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
 	defer cancel()
-	models, err := s.imagegen.Models(ctx, set.ImageGenURL)
+	models, err := s.imagegen.Models(ctx, set.GenURL())
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"enabled": true, "reachable": false, "error": err.Error()})
 		return
 	}
-	backend, _ := s.imagegen.Backend(ctx, set.ImageGenURL)
+	backend, _ := s.imagegen.Backend(ctx, set.GenURL())
 	// Some older A1111-compatible implementations do not expose the LoRA endpoint.
 	// Checkpoints still work there, so report that limitation without declaring the
 	// whole generator unreachable.
-	loras, loraErr := s.imagegen.Loras(ctx, set.ImageGenURL)
-	if backend == imagegen.KindA1111 {
+	loras, loraErr := s.imagegen.Loras(ctx, set.GenURL())
+	if backend == imagegen.KindA1111 || backend == imagegen.KindComfy {
 		s.civitaiTriggerWords(ctx, loras)
 	}
 	s.overlayStatusDefaults(ctx, models, loras)
 	s.overlayLoraCategories(ctx, loras)
 	out := map[string]any{"enabled": true, "reachable": true, "backend": backend, "models": models, "loras": loras}
+	// Forge speaks Automatic1111's API, so it is that backend; this is for saying which.
+	out["forge"] = backend == imagegen.KindA1111 && s.imagegen.IsForge(ctx, set.GenURL())
 	// Background removal runs here rather than on a generator, so it is offered
 	// whatever the generator is; the problem says why not when it can't run.
 	out["matte"] = s.matteProblem() == ""
@@ -194,14 +196,14 @@ func (s *Server) handleImageGenStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	// VAEs and templates are conveniences, not prerequisites: a generator that lacks
 	// the endpoints (A1111, older InvokeAI) just yields empty lists.
-	if vaes, err := s.imagegen.Vaes(ctx, set.ImageGenURL); err == nil {
+	if vaes, err := s.imagegen.Vaes(ctx, set.GenURL()); err == nil {
 		out["vaes"] = vaes
 	}
-	if templates, err := s.imagegen.Templates(ctx, set.ImageGenURL); err == nil {
+	if templates, err := s.imagegen.Templates(ctx, set.GenURL()); err == nil {
 		out["templates"] = templates
 	}
 	if backend == imagegen.KindInvokeAI {
-		if boards, err := s.imagegen.Boards(ctx, set.ImageGenURL); err == nil {
+		if boards, err := s.imagegen.Boards(ctx, set.GenURL()); err == nil {
 			out["boards"] = boards
 		}
 		out["gallery"] = "invokeai"
@@ -211,21 +213,21 @@ func (s *Server) handleImageGenStatus(w http.ResponseWriter, r *http.Request) {
 		out["gallery"] = "oppailib"
 		out["gallerySorts"] = []string{"newest", "oldest", "largest"}
 	}
-	out["detailerAvailable"] = s.imagegen.SupportsADetailer(ctx, set.ImageGenURL)
+	out["detailerAvailable"] = s.imagegen.SupportsADetailer(ctx, set.GenURL())
 	// The detectors ADetailer has on A1111, including ones dropped into its folder
 	// for parts of a body its own models never look for.
 	if out["detailerAvailable"] == true && backend == imagegen.KindA1111 {
-		if names, err := s.imagegen.Detectors(ctx, set.ImageGenURL); err == nil {
+		if names, err := s.imagegen.Detectors(ctx, set.GenURL()); err == nil {
 			out["detectors"] = append([]string{}, names...)
 		}
 	}
-	out["regionsAvailable"] = s.imagegen.SupportsRegions(ctx, set.ImageGenURL)
+	out["regionsAvailable"] = s.imagegen.SupportsRegions(ctx, set.GenURL())
 	// Clips are ComfyUI's (gen_clips.go): read off the settings, not probed, because a
 	// render box that is asleep should not take the Video drawer away.
 	out["clips"] = clipsStatus(set)
 	// What a picture can be enlarged with: on A1111 its upscaler models (an upscale
 	// or a hires fix) and latent modes (a hires fix only). InvokeAI lists none.
-	if ups, latent, err := s.imagegen.Upscalers(ctx, set.ImageGenURL); err == nil && backend == imagegen.KindA1111 {
+	if ups, latent, err := s.imagegen.Upscalers(ctx, set.GenURL()); err == nil && backend != imagegen.KindInvokeAI {
 		out["upscalers"] = append([]string{}, ups...)
 		out["latentUpscalers"] = append([]string{}, latent...)
 	}
@@ -244,9 +246,13 @@ func (s *Server) handleImageGenStatus(w http.ResponseWriter, r *http.Request) {
 		// LoRAs and detectors are named by their files, which need the folder to rename.
 		out["canRename"] = dir.Dir != "" && dir.Writable
 		// Restarting needs A1111 started with --api-server-stop (a1111_restart.go).
-		out["canRestart"] = s.imagegen.CanRestart(ctx, set.ImageGenURL)
+		out["canRestart"] = s.imagegen.CanRestart(ctx, set.GenURL())
+	} else if backend == imagegen.KindComfy {
+		out["manageModels"] = s.imagegen.ManagesModels(ctx, set.GenURL())
+		out["modelsDirSet"] = true
+		out["canRestart"] = s.imagegen.CanRestart(ctx, set.GenURL())
 	} else {
-		out["manageModels"] = s.imagegen.ManagesModels(ctx, set.ImageGenURL)
+		out["manageModels"] = s.imagegen.ManagesModels(ctx, set.GenURL())
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -401,14 +407,14 @@ func (s *Server) handleImageGenGenerate(w http.ResponseWriter, r *http.Request) 
 	// The record of the picture an upscale enlarges, for the copy to keep.
 	var source json.RawMessage
 	if req.InitGallery != "" && req.InitImage == "" {
-		data, err := s.galleryPicture(r.Context(), set.ImageGenURL, req.InitGallery)
+		data, err := s.galleryPicture(r.Context(), set.GenURL(), req.InitGallery)
 		if err != nil {
 			writeErr(w, http.StatusNotFound, err.Error())
 			return
 		}
 		req.InitImage = base64.StdEncoding.EncodeToString(data)
 		if req.UpscaleOnly {
-			source = s.galleryRecord(r.Context(), set.ImageGenURL, req.InitGallery)
+			source = s.galleryRecord(r.Context(), set.GenURL(), req.InitGallery)
 		}
 	}
 	if err := decodeGenerateImages(&req, &gen); err != nil {
@@ -436,13 +442,13 @@ func (s *Server) handleImageGenGenerate(w http.ResponseWriter, r *http.Request) 
 	// See gpu_share.go.
 	release := s.lendCardToImages(r.Context())
 	defer release()
-	res, err := s.imagegen.Generate(ctx, set.ImageGenURL, gen)
+	res, err := s.imagegen.Generate(ctx, set.GenURL(), gen)
 	if err != nil && splitAcrossDevices(err) && ctx.Err() == nil {
 		// Automatic1111 brought its checkpoint back from the CPU only partly (see
 		// recoverSplitModel); once more after putting it back on the card.
 		s.log.Warn("image generate: the model is split between CPU and GPU; reloading it and trying once more", "err", err)
-		s.recoverSplitModel(ctx, set.ImageGenURL)
-		res, err = s.imagegen.Generate(ctx, set.ImageGenURL, gen)
+		s.recoverSplitModel(ctx, set.GenURL())
+		res, err = s.imagegen.Generate(ctx, set.GenURL(), gen)
 	}
 	if err != nil {
 		if job != nil && ctx.Err() != nil {
@@ -456,7 +462,7 @@ func (s *Server) handleImageGenGenerate(w http.ResponseWriter, r *http.Request) 
 			// Said as what to do about it: the studio shows this under the square.
 			err = errReferenceUnsupported
 			status = http.StatusConflict
-		} else if errors.Is(err, imagegen.ErrInpaintUnsupported) || errors.Is(err, imagegen.ErrUpscaleUnsupported) ||
+		} else if errors.Is(err, imagegen.ErrComfyPictureUnsupported) || errors.Is(err, imagegen.ErrInpaintUnsupported) || errors.Is(err, imagegen.ErrUpscaleUnsupported) ||
 			errors.Is(err, imagegen.ErrRegionsUnsupported) {
 			status = http.StatusConflict
 		} else {
@@ -472,7 +478,7 @@ func (s *Server) handleImageGenGenerate(w http.ResponseWriter, r *http.Request) 
 	// The studio's runs on A1111 are kept in its gallery as they come back, whatever
 	// becomes of this response. Libby's camera never comes through here.
 	var kept []int64
-	if !req.NoGallery && s.ownGallery(ctx, set.ImageGenURL) {
+	if !req.NoGallery && s.ownGallery(ctx, set.GenURL()) {
 		kept = s.keepGenerated(ctx, gen, res, source, req.InitGallery)
 	}
 	out := make([]genResultImage, 0, len(res.Images))
@@ -533,7 +539,7 @@ type genResult struct {
 }
 
 // errReferenceUnsupported is a reference square sent to a generator that cannot read one.
-var errReferenceUnsupported = errors.New("drawing to match the reference square needs the ControlNet extension in Automatic1111 or Forge — install it, or clear the reference")
+var errReferenceUnsupported = errors.New("drawing to match the reference square needs the ControlNet extension in Automatic1111 or Forge, and ComfyUI mode has nothing to read it with — clear the reference, or draw this set on one of those")
 
 // referenceModule is ControlNet's reference preprocessor. It needs no model of its own
 // — it reads the picture into the run's own attention — so unlike the pose and face
@@ -1120,7 +1126,7 @@ func (s *Server) handleGetModelMeta(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
-	detail, err := s.imagegen.ModelDetail(ctx, set.ImageGenURL, name)
+	detail, err := s.imagegen.ModelDetail(ctx, set.GenURL(), name)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
@@ -1170,7 +1176,7 @@ func (s *Server) handlePatchModelMeta(w http.ResponseWriter, r *http.Request) {
 		native := nativeDefaults(*defaults)
 		changes.Defaults = &native
 	}
-	detail, err := s.imagegen.UpdateModel(ctx, set.ImageGenURL, req.Key, changes)
+	detail, err := s.imagegen.UpdateModel(ctx, set.GenURL(), req.Key, changes)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
@@ -1198,7 +1204,7 @@ func (s *Server) galleryBase(w http.ResponseWriter) (string, bool) {
 		writeErr(w, http.StatusServiceUnavailable, "image generation is not configured")
 		return "", false
 	}
-	return set.ImageGenURL, true
+	return set.GenURL(), true
 }
 
 func (s *Server) handleGalleryBoards(w http.ResponseWriter, r *http.Request) {
@@ -1603,10 +1609,10 @@ func (s *Server) servePickerThumb(w http.ResponseWriter, r *http.Request, name s
 	if set.ImageGenEnabled {
 		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 		defer cancel()
-		data, ct, err := s.imagegen.Cover(ctx, set.ImageGenURL, name)
+		data, ct, err := s.imagegen.Cover(ctx, set.GenURL(), name)
 		if err != nil || len(data) == 0 {
 			var ok bool
-			if data, ct, ok = s.civitaiCoverFor(ctx, set.ImageGenURL, name); !ok {
+			if data, ct, ok = s.civitaiCoverFor(ctx, set.GenURL(), name); !ok {
 				data = nil
 			}
 		}
@@ -1680,7 +1686,7 @@ func (s *Server) setPickerThumb(w http.ResponseWriter, r *http.Request, req setM
 	switch {
 	case req.GalleryName != "":
 		var err error
-		if data, err = s.galleryPicture(ctx, set.ImageGenURL, req.GalleryName); err != nil {
+		if data, err = s.galleryPicture(ctx, set.GenURL(), req.GalleryName); err != nil {
 			writeErr(w, http.StatusNotFound, err.Error())
 			return
 		}
@@ -1699,7 +1705,7 @@ func (s *Server) setPickerThumb(w http.ResponseWriter, r *http.Request, req setM
 		writeErr(w, http.StatusBadRequest, "image is empty or too large")
 		return
 	}
-	if err := s.imagegen.UpdateCover(ctx, set.ImageGenURL, req.Model, data, http.DetectContentType(data)); err != nil {
+	if err := s.imagegen.UpdateCover(ctx, set.GenURL(), req.Model, data, http.DetectContentType(data)); err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
 	}

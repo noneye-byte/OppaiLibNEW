@@ -20,6 +20,8 @@ import { setIncognito } from "../incognito.js";
 import { LIBBY_PROGRESSION_MULTIPLIERS, getProgressionMultiplier, setProgressionMultiplier } from "../libby-meter.js";
 // Registers <oppai-launchy-panel>, the Launchy panel.
 import "./launchy-panel.js";
+import "./model-transfer.js";
+import { generatorName } from "../model-manage.js";
 
 
 /** Libby's sections, drawn by the chat's settings panel through `only`. */
@@ -2347,6 +2349,10 @@ export class OppaiSettings extends LitElement {
         ${!s
           ? html`<div class="field-help">Loading…</div>`
           : html`
+              ${this.switchField("Draw pictures with ComfyUI",
+                "Sends the Create tab, sprites and Libby's pictures to the ComfyUI set under Video below, instead of the generator here, which is kept for turning this off again. There are no nodes to set up: OppaiLib builds what each picture needs from what comes with ComfyUI, so a checkpoint and a prompt are all it takes, with LoRAs, a VAE, image to image, paint to fix and upscaling working as they do now. Fix faces, people in parts of the picture and reference squares need custom nodes in ComfyUI, so they aren't offered in this mode.",
+                !!s.imageGenComfy, (v) => this.edit({ imageGenComfy: v }))}
+
               <div class="field stack">
                 <div class="field-text">
                   <div class="field-label">Generator</div>
@@ -2384,6 +2390,38 @@ export class OppaiSettings extends LitElement {
                   <input type="text" autocomplete="off" placeholder="/a1111-models"
                     .value=${s.imageGenModelsDir ?? ""} ?disabled=${!this.canEdit}
                     @change=${(e: Event) => this.edit({ imageGenModelsDir: (e.target as HTMLInputElement).value })} />
+                </div>
+              </div>
+
+              <div class="field stack">
+                <div class="field-text">
+                  <div class="field-label">Forge Neo models folder</div>
+                  <div class="field-help">
+                    Only for moving models to Forge Neo while Automatic1111 is still the generator above.
+                    Map its <code>models</code> folder into this container at <code>/forge-models</code> and
+                    it is found by itself. Once Forge Neo is the generator, give its address above and this
+                    folder as the models folder: it speaks Automatic1111's language, and everything else
+                    follows.
+                  </div>
+                </div>
+                <div class="field-control">
+                  <input type="text" autocomplete="off" placeholder="/forge-models"
+                    .value=${s.forgeModelsDir ?? ""} ?disabled=${!this.canEdit}
+                    @change=${(e: Event) => this.edit({ forgeModelsDir: (e.target as HTMLInputElement).value })} />
+                </div>
+              </div>
+
+              <div class="field stack">
+                <div class="field-text">
+                  <div class="field-label">Transfer models</div>
+                  <div class="field-help">
+                    Brings checkpoints, LoRAs and VAEs across from one generator's folders to another's,
+                    with their descriptions and covers, so what is linked and set for each file comes with
+                    it. Nothing is moved: the originals stay until you remove them. Files on one disk are
+                    linked and take no room; anything already there is skipped, so a transfer can be stopped
+                    and run again. It goes on if you leave this screen. Save a changed folder first.
+                  </div>
+                  <oppai-model-transfer .canEdit=${this.canEdit}></oppai-model-transfer>
                 </div>
               </div>
 
@@ -2832,7 +2870,7 @@ export class OppaiSettings extends LitElement {
     const busy = this.genRestart === "Restarting…";
     return html`<div class="field">
       <div class="field-text">
-        <div class="field-label">Restart Automatic1111</div>
+        <div class="field-label">Restart ${generatorName(st)}</div>
         <div class="field-help">
           ${st.canRestart
             ? "It reads ADetailer's detectors and its extensions only when it starts. Back in a minute or two; a picture it is drawing is lost."
@@ -2881,7 +2919,7 @@ export class OppaiSettings extends LitElement {
   /** What the generator URL reached, as of the last save. */
   private genStatusLine(s: Settings) {
     const st = this.genStatus;
-    if (!s.imageGenUrl.trim()) return nothing;
+    if (!s.imageGenUrl.trim() && !s.imageGenComfy) return nothing;
     let text: string;
     let bad = false;
     if (this.dirty) {
@@ -2894,7 +2932,7 @@ export class OppaiSettings extends LitElement {
       text = `Not reachable${st.error ? `: ${st.error}` : "."}`;
       bad = true;
     } else {
-      const name = st.backend === "invokeai" ? "InvokeAI" : "Automatic1111";
+      const name = generatorName(st);
       const n = (st.models ?? []).length;
       const l = (st.loras ?? []).length;
       text = `Connected to ${name} — ${n} ${n === 1 ? "model" : "models"}, ${l} ${l === 1 ? "LoRA" : "LoRAs"}.`;
@@ -2909,6 +2947,9 @@ export class OppaiSettings extends LitElement {
     if (!st?.reachable) return nothing;
     if (st.backend === "invokeai") {
       return html`<div class="field-status">Not needed: InvokeAI installs and edits models itself.</div>`;
+    }
+    if (st.backend === "comfyui") {
+      return html`<div class="field-status">Not used in ComfyUI mode: its folders are the ones set under Video.</div>`;
     }
     if (st.manageModels) {
       const found = !(s.imageGenModelsDir ?? "").trim();

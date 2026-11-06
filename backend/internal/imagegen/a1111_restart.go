@@ -36,6 +36,9 @@ const restartRoute = "/sdapi/v1/server-restart"
 // listing is a few hundred kilobytes and the flag changes only with a restart.
 func (c *Client) CanRestart(ctx context.Context, base string) bool {
 	kind, err := c.Backend(ctx, base)
+	if err == nil && kind == KindComfy {
+		return c.ComfyCanRestart(ctx, base)
+	}
 	if err != nil || kind != KindA1111 {
 		return false
 	}
@@ -75,6 +78,9 @@ func (c *Client) Restart(ctx context.Context, base string) error {
 	kind, err := c.Backend(ctx, base)
 	if err != nil {
 		return err
+	}
+	if kind == KindComfy {
+		return c.ComfyRestart(ctx, base)
 	}
 	if kind != KindA1111 {
 		return restartError{"InvokeAI can't be restarted from here — restart it where it runs"}

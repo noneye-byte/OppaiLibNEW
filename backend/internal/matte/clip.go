@@ -25,15 +25,12 @@ import (
 // written to disk but the source, which ffprobe and ffmpeg both need as a file.
 //
 // Each frame is masked on its own. A mask that drifts a pixel between frames shows as
-// a shimmer at the edge, so each one is blended a little with the one before; enough
-// to steady the rim, not so much that a hand moving fast leaves a ghost.
+// a shimmer at the edge, so where it flickers it is eased towards the frame before; and
+// nothing of the backdrop it was drawn on is left in the frame. See edge.go for both.
 
 // ClipFrames bounds a clip: Wan's longest is 161 frames at 16 fps, and every frame is
 // a second or two of CPU.
 const ClipFrames = 400
-
-// steady is how much of the previous frame's mask each frame keeps.
-const steady = 0.25
 
 // ClipInfo is what ffprobe says of a clip.
 type ClipInfo struct {
@@ -130,6 +127,7 @@ func (m *Matter) cutFrames(ctx context.Context, r io.Reader, w io.Writer, info C
 	frame := image.NewRGBA(image.Rect(0, 0, info.Width, info.Height))
 	rgba := make([]byte, info.Width*info.Height*4)
 	var prev []uint8
+	var edge edgeWork
 	for n := 0; ; n++ {
 		if _, err := io.ReadFull(r, rgb); err != nil {
 			// A short last frame is a decoder that stopped mid-frame; what came before
@@ -153,16 +151,12 @@ func (m *Matter) cutFrames(ctx context.Context, r io.Reader, w io.Writer, info C
 			return err
 		}
 		if prev != nil {
-			for i, v := range mask.Pix {
-				mask.Pix[i] = uint8(float64(v)*(1-steady) + float64(prev[i])*steady + 0.5)
-			}
+			steadied(mask.Pix, prev)
 		} else {
 			prev = make([]uint8, len(mask.Pix))
 		}
 		copy(prev, mask.Pix)
-		for i, j := 0, 0; i < len(rgb); i, j = i+3, j+4 {
-			rgba[j], rgba[j+1], rgba[j+2], rgba[j+3] = rgb[i], rgb[i+1], rgb[i+2], mask.Pix[j/4]
-		}
+		edge.composeEdge(rgba, rgb, mask.Pix, info.Width, info.Height)
 		if _, err := w.Write(rgba); err != nil {
 			return fmt.Errorf("ffmpeg stopped taking frames: %w", err)
 		}

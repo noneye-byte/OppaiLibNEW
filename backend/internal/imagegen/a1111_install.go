@@ -48,6 +48,9 @@ type InstallSpec struct {
 	// Done, when set, is called with the file's name once a ComfyUI install has it in
 	// place, for what OppaiLib keeps about it that ComfyUI does not.
 	Done func(name string)
+	// Pictures is a ComfyUI install for the picture studio rather than the Video one: a
+	// checkpoint there is a checkpoint, where to a clip it is a bare Wan model.
+	Pictures bool
 }
 
 // downloadHTTP has no overall timeout — a checkpoint is gigabytes — but gives up on a

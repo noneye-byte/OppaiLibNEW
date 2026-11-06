@@ -241,8 +241,8 @@ func (s *Server) gatherServerState(ctx context.Context, cur settings.Settings, m
 		st.Describe.Running = s.describe.backfilling
 		s.describe.mu.Unlock()
 	}
-	if cur.ImageGenURL != "" {
-		if kind, err := s.imagegen.Backend(ctx, cur.ImageGenURL); err == nil {
+	if cur.GenURL() != "" {
+		if kind, err := s.imagegen.Backend(ctx, cur.GenURL()); err == nil {
 			st.ImageGen = string(kind)
 		} else {
 			st.ImageGen, st.ImageGenDown = "configured", true
@@ -397,11 +397,11 @@ func (s *Server) actServer(w http.ResponseWriter, r *http.Request, cur settings.
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"message": fmt.Sprintf("Describing %d items in the background.", pending)})
 	case "free":
-		if cur.ImageGenURL == "" {
+		if cur.GenURL() == "" {
 			writeErr(w, http.StatusServiceUnavailable, "image generation is not configured")
 			return
 		}
-		if err := s.imagegen.FreeMemory(ctx, cur.ImageGenURL); err != nil {
+		if err := s.imagegen.FreeMemory(ctx, cur.GenURL()); err != nil {
 			writeErr(w, http.StatusBadGateway, err.Error())
 			return
 		}

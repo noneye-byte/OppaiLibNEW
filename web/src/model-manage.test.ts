@@ -1,6 +1,18 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { manageModelsNote } from "./model-manage.ts";
+import { generatorName, manageModelsNote } from "./model-manage.ts";
+
+test("a generator is called what it is", () => {
+  assert.equal(generatorName({ backend: "invokeai" }), "InvokeAI");
+  assert.equal(generatorName({ backend: "comfyui" }), "ComfyUI");
+  assert.equal(generatorName({ backend: "a1111" }), "Automatic1111");
+  assert.equal(generatorName({ backend: "a1111", forge: true }), "Forge");
+});
+
+test("ComfyUI without its folders says where to set them", () => {
+  assert.match(manageModelsNote({ backend: "comfyui", manageModels: false }), /Settings → Image generation → Video/);
+  assert.equal(manageModelsNote({ backend: "comfyui", manageModels: true }), "");
+});
 
 test("a generator that manages its models has nothing to explain", () => {
   assert.equal(manageModelsNote({ backend: "invokeai", manageModels: true }), "");

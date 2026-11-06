@@ -521,14 +521,16 @@ type a1111VaeRaw struct {
 // the LoRA's trainer wrote down — the ten-character AutoV2 for a checkpoint, kohya's
 // weights hash for a LoRA. Civitai's lookup by hash takes all of them.
 func (c *Client) a1111Files(ctx context.Context, base string) ([]a1111File, error) {
+	if kind, err := c.Backend(ctx, base); err == nil && kind == KindComfy {
+		return c.comfyPictureFiles(ctx, base)
+	}
 	var models []a1111ModelRaw
 	if err := c.getJSON(ctx, base+"/sdapi/v1/sd-models", &models); err != nil {
 		return nil, err
 	}
 	var loras []a1111LoraRaw
 	_ = c.getJSON(ctx, base+"/sdapi/v1/loras", &loras) // an older build lists checkpoints only
-	var vaes []a1111VaeRaw
-	_ = c.getJSON(ctx, base+"/sdapi/v1/sd-vae", &vaes)
+	vaes := c.a1111VaeList(ctx, base)
 
 	dir := c.modelsDir()
 	out := make([]a1111File, 0, len(models)+len(loras)+len(vaes))
@@ -719,10 +721,10 @@ func (c *Client) a1111Records(ctx context.Context, base string) ([]ModelRecord, 
 	if err != nil {
 		return nil, err
 	}
-	dir := c.modelsDir()
+	dir := c.home(ctx, base)
 	out := make([]ModelRecord, 0, len(files))
 	for _, f := range files {
-		local := localPath(dir, f.Key)
+		local := dir.path(f.Key)
 		sc := readSidecar(local)
 		out = append(out, ModelRecord{
 			Key: f.Key, Name: f.Name, Type: f.Type, Hash: f.Hash,
@@ -743,7 +745,7 @@ func (c *Client) a1111Detail(ctx context.Context, base, name string) (*ModelDeta
 	if !ok {
 		return nil, fmt.Errorf("no such model")
 	}
-	sc := readSidecar(localPath(c.modelsDir(), f.Key))
+	sc := readSidecar(c.home(ctx, base).path(f.Key))
 	d := &ModelDetail{
 		Key: f.Key, Name: f.Display, Type: f.Type, Base: sc.str(sidecarVersion),
 		Description: sc.str(sidecarDescription), TriggerPhrases: activationPhrases(sc.str(sidecarActivation)),
@@ -762,7 +764,7 @@ func (c *Client) a1111Detail(ctx context.Context, base, name string) (*ModelDeta
 // names a model by its file, and renaming files under a running generator is how a
 // prompt's <lora:…> stops resolving.
 func (c *Client) a1111Update(ctx context.Context, base, key string, ch ModelChanges) (*ModelDetail, error) {
-	dir, err := c.requireModelsDir()
+	dir, err := c.requireHome(ctx, base)
 	if err != nil {
 		return nil, err
 	}
@@ -773,7 +775,7 @@ func (c *Client) a1111Update(ctx context.Context, base, key string, ch ModelChan
 	if ch.Name != nil && strings.TrimSpace(*ch.Name) != "" && strings.TrimSpace(*ch.Name) != cur.Name {
 		return nil, errors.New("Automatic1111 names a model by its file; rename the file itself")
 	}
-	local := localPath(dir, cur.Key)
+	local := dir.path(cur.Key)
 	if _, err := os.Stat(local); err != nil {
 		return nil, fmt.Errorf("the models folder has no %s — is it the folder Automatic1111 reads?", cur.Key)
 	}
@@ -842,7 +844,7 @@ func (c *Client) a1111Cover(ctx context.Context, base, name string) ([]byte, str
 	if !ok {
 		return nil, "", fmt.Errorf("no such model")
 	}
-	if local := localPath(c.modelsDir(), f.Key); local != "" {
+	if local := c.home(ctx, base).path(f.Key); local != "" {
 		if p := previewOf(local); p != "" {
 			data, err := os.ReadFile(p)
 			if err == nil {
@@ -900,7 +902,7 @@ const coverMissTTL = 5 * time.Minute
 // a1111SetCover writes a model's preview file, removing any other preview beside it
 // so A1111's cards do not keep showing the one it finds first.
 func (c *Client) a1111SetCover(ctx context.Context, base, name string, data []byte, contentType string) error {
-	dir, err := c.requireModelsDir()
+	dir, err := c.requireHome(ctx, base)
 	if err != nil {
 		return err
 	}
@@ -912,7 +914,7 @@ func (c *Client) a1111SetCover(ctx context.Context, base, name string, data []by
 	if !ok {
 		return fmt.Errorf("no such model")
 	}
-	local := localPath(dir, f.Key)
+	local := dir.path(f.Key)
 	ext := ".preview.png"
 	switch {
 	case strings.Contains(contentType, "jpeg"):
@@ -938,7 +940,7 @@ func (c *Client) a1111SetCover(ctx context.Context, base, name string, data []by
 // a1111Delete removes a model's file and the sidecars that describe it, then has
 // A1111 look at its folders again.
 func (c *Client) a1111Delete(ctx context.Context, base, key string) error {
-	dir, err := c.requireModelsDir()
+	dir, err := c.requireHome(ctx, base)
 	if err != nil {
 		return err
 	}
@@ -950,7 +952,7 @@ func (c *Client) a1111Delete(ctx context.Context, base, key string) error {
 	if !ok {
 		return fmt.Errorf("no such model")
 	}
-	local := localPath(dir, f.Key)
+	local := dir.path(f.Key)
 	if err := removeSoon(local); err != nil {
 		if os.IsNotExist(err) {
 			return fmt.Errorf("the models folder has no %s — is it the folder Automatic1111 reads?", f.Key)
@@ -983,6 +985,10 @@ func removeSoon(p string) error {
 // a1111Refresh asks A1111 to rescan the folder a kind of model lives in. Best-effort:
 // a build without the route picks the change up on its next restart instead.
 func (c *Client) a1111Refresh(ctx context.Context, base, typ string) {
+	if kind, err := c.Backend(ctx, base); err == nil && kind == KindComfy {
+		ComfyPlacesFor(c.comfyDirs()).TouchComfyFolders()
+		return
+	}
 	route := ""
 	switch typ {
 	case a1111Checkpoints.Type:
@@ -1050,12 +1056,48 @@ func (c *Client) A1111Rescan(ctx context.Context, base string) error {
 	return c.postJSON(ctx, base+"/sdapi/v1/refresh-loras", map[string]any{}, nil)
 }
 
+// a1111VaeList reads the standalone VAEs. Forge has no /sd-vae: its /sd-modules lists
+// VAEs and text encoders together, by the same fields, and only a file's folder tells
+// which is which. An older A1111 with neither lists none.
+func (c *Client) a1111VaeList(ctx context.Context, base string) []a1111VaeRaw {
+	var vaes []a1111VaeRaw
+	if c.getJSON(ctx, base+"/sdapi/v1/sd-vae", &vaes) == nil {
+		return vaes
+	}
+	var modules []a1111VaeRaw
+	if c.getJSON(ctx, base+"/sdapi/v1/sd-modules", &modules) != nil {
+		return nil
+	}
+	for _, m := range modules {
+		if strings.Contains(strings.ToLower(strings.ReplaceAll(m.Filename, "\\", "/")), "/vae/") {
+			vaes = append(vaes, m)
+		}
+	}
+	return vaes
+}
+
+// IsForge says whether an A1111-dialect generator is Forge or a fork of it, such as
+// Forge Neo. It speaks the same API with a few routes changed, and /sd-modules is the
+// route that says which it is. Remembered as a detection is.
+func (c *Client) IsForge(ctx context.Context, base string) bool {
+	key := "forge|" + base
+	c.mu.Lock()
+	if e, ok := c.detailers[key]; ok && time.Since(e.at) < kindTTL {
+		c.mu.Unlock()
+		return e.value
+	}
+	c.mu.Unlock()
+	var modules []a1111VaeRaw
+	forge := c.getJSON(ctx, base+"/sdapi/v1/sd-modules", &modules) == nil
+	c.mu.Lock()
+	c.detailers[key] = boolEntry{value: forge, at: time.Now()}
+	c.mu.Unlock()
+	return forge
+}
+
 // a1111Vaes lists A1111's standalone VAEs for the picker.
 func (c *Client) a1111Vaes(ctx context.Context, base string) ([]Vae, error) {
-	var raw []a1111VaeRaw
-	if err := c.getJSON(ctx, base+"/sdapi/v1/sd-vae", &raw); err != nil {
-		return []Vae{}, nil // older builds have no listing; the model's own VAE still works
-	}
+	raw := c.a1111VaeList(ctx, base)
 	out := make([]Vae, 0, len(raw))
 	for _, v := range raw {
 		if v.ModelName != "" {
@@ -1074,15 +1116,15 @@ func (c *Client) a1111Dress(ctx context.Context, base string, models []Model, lo
 	if err != nil {
 		return
 	}
-	dir := c.modelsDir()
+	dir := c.home(ctx, base)
 	for i := range models {
 		f, ok := a1111Find(files, models[i].Title)
 		if !ok {
 			continue
 		}
 		models[i].Key = f.Key
-		if dir != "" {
-			sc := readSidecar(localPath(dir, f.Key))
+		if dir.set() {
+			sc := readSidecar(dir.path(f.Key))
 			models[i].Defaults = sc.defaults()
 			models[i].Base = sc.str(sidecarVersion)
 		}
@@ -1093,8 +1135,8 @@ func (c *Client) a1111Dress(ctx context.Context, base string, models []Model, lo
 			continue
 		}
 		loras[i].Key = f.Key
-		if dir != "" {
-			sc := readSidecar(localPath(dir, f.Key))
+		if dir.set() {
+			sc := readSidecar(dir.path(f.Key))
 			if phrases := activationPhrases(sc.str(sidecarActivation)); len(phrases) > 0 {
 				loras[i].TriggerPhrases = phrases
 			}

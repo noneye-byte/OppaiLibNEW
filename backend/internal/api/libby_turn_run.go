@@ -428,7 +428,7 @@ func (s *Server) makeRoom(ctx context.Context, place string, progress func(camer
 	gen, _, _ := s.prepareGenerate(&gr)
 	gen.Progress = cameraProgressAdapter(progress, 1, "making the room")
 	release := s.lendCardToImages(ctx)
-	out, err := s.imagegen.Generate(ctx, cur.ImageGenURL, gen)
+	out, err := s.imagegen.Generate(ctx, cur.GenURL(), gen)
 	release()
 	if err != nil {
 		return libbyBackgroundView{}, err

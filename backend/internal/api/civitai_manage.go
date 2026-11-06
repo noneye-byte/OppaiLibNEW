@@ -194,7 +194,7 @@ func (s *Server) civitaiForgetModel(ctx context.Context, key string) {
 	if err := s.db.DeleteModelDefaults(ctx, key); err != nil && !errors.Is(err, context.Canceled) {
 		s.log.Warn("civitai: forget defaults", "model", key, "err", err)
 	}
-	s.installedHashCache.forget(s.settings.Get().ImageGenURL)
+	s.installedHashCache.forget(s.settings.Get().GenURL())
 }
 
 // civitaiRetireReplaced deletes the record an update superseded, once the new one

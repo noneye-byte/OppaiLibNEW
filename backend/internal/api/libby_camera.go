@@ -257,11 +257,11 @@ func (s *Server) takePictures(ctx context.Context, req cameraRequest) (cameraRes
 		emit(cameraProgress{Phase: phase, Of: 1})
 		release := s.lendCardToImages(ctx)
 		defer release()
-		out, err := s.imagegen.Generate(runCtx, cur.ImageGenURL, g)
+		out, err := s.imagegen.Generate(runCtx, cur.GenURL(), g)
 		if errors.Is(err, imagegen.ErrControlUnsupported) && len(g.Controls) > 0 {
 			res.notes = append(res.notes, "the pose and face references could not be used on this generator, so it was taken without them")
 			g.Controls = nil
-			out, err = s.imagegen.Generate(runCtx, cur.ImageGenURL, g)
+			out, err = s.imagegen.Generate(runCtx, cur.GenURL(), g)
 		}
 		return out, err
 	}

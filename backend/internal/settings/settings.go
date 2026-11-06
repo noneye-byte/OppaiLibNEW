@@ -62,6 +62,13 @@ type Settings struct {
 	// mount when one is there and looks right, and otherwise lists and links models
 	// but changes none. InvokeAI ignores it. See imagegen/a1111_models.go.
 	ImageGenModelsDir string `json:"imageGenModelsDir"`
+	// ImageGenComfy has pictures drawn by the ComfyUI at LibbyClipURL instead of the
+	// generator at ImageGenURL, which is kept so turning this off goes straight back to
+	// it. Everything that talks to the picture generator asks GenURL for its address.
+	ImageGenComfy bool `json:"imageGenComfy"`
+	// ForgeModelsDir is a second Automatic1111-style models folder, for moving models
+	// to or from: Forge Neo's, while ImageGenModelsDir is still Automatic1111's.
+	ForgeModelsDir string `json:"forgeModelsDir"`
 	// TrainerURL is the OppaiLib trainer (trainer/ in the repo, its own container on
 	// a box with a GPU) that LoRAs are trained on; empty hides training. The token
 	// is the trainer's TRAINER_TOKEN, write-only like the other secrets.
@@ -293,6 +300,8 @@ const (
 	keyItchNSFW            = "itch.nsfw"
 	keyImageGenURL         = "imagegen.url"
 	keyImageGenModelsDir   = "imagegen.models_dir"
+	keyImageGenComfy       = "imagegen.comfy"
+	keyForgeModelsDir      = "imagegen.forge_models_dir"
 	keyTrainerURL          = "trainer.url"
 	keyTrainerToken        = "trainer.token"
 	keyCivitaiAPIURL       = "civitai.api_url"
@@ -418,6 +427,16 @@ type CameraLora struct {
 // tool, which every turn pays for in context.
 const maxCameraLoras = 12
 
+// GenURL is the picture generator's address: the ComfyUI, in ComfyUI mode, and otherwise
+// the one set for pictures. Everything that talks to the generator goes through this,
+// so turning the mode on is all it takes.
+func (s Settings) GenURL() string {
+	if s.ImageGenComfy {
+		return s.LibbyClipURL
+	}
+	return s.ImageGenURL
+}
+
 // ClipModels is a Wan clip workflow as files: names exactly as ComfyUI lists them,
 // relative to its models folders. See imagegen.WanClip for what each one is.
 type ClipModels struct {
@@ -505,6 +524,8 @@ func Merge(base Settings, stored map[string]string) Settings {
 	if v, ok := stored[keyImageGenModelsDir]; ok {
 		s.ImageGenModelsDir = v
 	}
+	s.ImageGenComfy = stored[keyImageGenComfy] == "true"
+	s.ForgeModelsDir = stored[keyForgeModelsDir]
 	if v, ok := stored[keyTrainerURL]; ok {
 		s.TrainerURL = v
 	}
@@ -683,6 +704,8 @@ func (s Settings) Map() map[string]string {
 		keyItchNSFW:            strconv.FormatBool(s.ItchNSFW),
 		keyImageGenURL:         s.ImageGenURL,
 		keyImageGenModelsDir:   s.ImageGenModelsDir,
+		keyImageGenComfy:       strconv.FormatBool(s.ImageGenComfy),
+		keyForgeModelsDir:      s.ForgeModelsDir,
 		keyTrainerURL:          s.TrainerURL,
 		keyTrainerToken:        s.TrainerToken,
 		keyCivitaiAPIURL:       s.CivitaiAPIURL,
@@ -795,9 +818,8 @@ func (s *Settings) Clamp() {
 	}
 	// Normalize the image-gen base URL to "scheme://host[:port]" without a trailing
 	// slash, so handlers can append "/sdapi/..." without doubling slashes. The derived
-	// enabled flag simply tracks whether a URL is configured.
+	// enabled flag tracks whether there is an address, once the ComfyUI's is known too.
 	s.ImageGenURL = strings.TrimRight(strings.TrimSpace(s.ImageGenURL), "/")
-	s.ImageGenEnabled = s.ImageGenURL != ""
 	s.CivitaiAPIURL = strings.TrimRight(strings.TrimSpace(s.CivitaiAPIURL), "/")
 	if s.CivitaiAPIURL == "" {
 		s.CivitaiAPIURL = "https://civitai.red/api/v1"
@@ -813,6 +835,7 @@ func (s *Settings) Clamp() {
 	s.ChatModel = strings.TrimSpace(s.ChatModel)
 	s.ChatModelDir = strings.TrimRight(strings.TrimSpace(s.ChatModelDir), "/")
 	s.ImageGenModelsDir = strings.TrimRight(strings.TrimSpace(s.ImageGenModelsDir), "/")
+	s.ForgeModelsDir = strings.TrimRight(strings.TrimSpace(s.ForgeModelsDir), "/")
 	s.ChatAPIKey = strings.TrimSpace(s.ChatAPIKey)
 	// A pinned window is bounded rather than rejected: a typo of 80 or 8000000 is
 	// still a statement that the operator wants something other than auto, and
@@ -907,6 +930,7 @@ func (s *Settings) Clamp() {
 	if s.LibbyClipURL != "" && !strings.Contains(s.LibbyClipURL, "://") {
 		s.LibbyClipURL = "http://" + s.LibbyClipURL
 	}
+	s.ImageGenEnabled = s.GenURL() != ""
 	s.LibbyClipWorkflow = strings.TrimSpace(s.LibbyClipWorkflow)
 	// A workflow is a big blob of JSON; past a quarter of a megabyte it is not a workflow.
 	if len(s.LibbyClipWorkflow) > 256<<10 {

@@ -1,6 +1,7 @@
 // Typed client for the OppaiLib API. The session token is stored in
 // localStorage and sent as a Bearer header (the backend also accepts a cookie).
 
+import type { TransferJob, TransferKind, TransferPlace, TransferPlan } from "./model-transfer.ts";
 import { EventStreamParser, type TurnEvent } from "./libby-turn";
 
 export interface MediaTag {
@@ -498,6 +499,10 @@ export interface Settings {
   imageGenUrl: string;
   /** Automatic1111's models folder as the server sees it; blank manages nothing. */
   imageGenModelsDir: string;
+  /** Pictures are drawn by the ComfyUI set under Video instead of imageGenUrl. */
+  imageGenComfy: boolean;
+  /** Forge Neo's models folder as the server sees it, for transferring models. */
+  forgeModelsDir: string;
   imageGenEnabled: boolean;
   /** The OppaiLib trainer LoRAs are trained on; blank hides training. The token is
    *  write-only like the other secrets. */
@@ -1498,8 +1503,11 @@ export interface MediaGeneration {
 export interface ImageGenStatus {
   enabled: boolean;
   reachable?: boolean;
-  /** Which API the generator speaks — "a1111" or "invokeai" — detected server-side. */
+  /** Which API the generator speaks — "a1111", "invokeai" or "comfyui" — detected
+      server-side. */
   backend?: string;
+  /** On "a1111": it is Forge or a fork of it, such as Forge Neo. */
+  forge?: boolean;
   error?: string;
   models?: GenModel[];
   loras?: GenLora[];
@@ -3870,6 +3878,16 @@ export const api = {
   renameModels: (kind: NamedKind, renames: { name: string; to: string }[]) =>
     request<{ renamed: ModelRename[]; failed: { name: string; error: string }[] }>("/api/imagegen/names/rename",
       { method: "POST", body: JSON.stringify({ kind, renames }) }, 5 * 60_000),
+  // ── transferring models between generators ─────────────────────────────────
+  // Sides are named by id, never a path: see backend/internal/api/model_transfer.go.
+
+  modelTransfer: () => request<{ places: TransferPlace[]; job: TransferJob | null }>("/api/imagegen/transfer"),
+  planModelTransfer: (body: { from: string; to: string; kinds: TransferKind[] }) =>
+    request<TransferPlan>("/api/imagegen/transfer/plan", { method: "POST", body: JSON.stringify(body) }, 5 * 60_000),
+  startModelTransfer: (body: { from: string; to: string; kinds: TransferKind[] }) =>
+    request<TransferJob>("/api/imagegen/transfer", { method: "POST", body: JSON.stringify(body) }, 5 * 60_000),
+  stopModelTransfer: () => request<{ status: string }>("/api/imagegen/transfer", { method: "DELETE" }),
+
   /** Asks Automatic1111 to restart itself; it answers at once and comes back later. */
   restartGenerator: () =>
     request<{ status: string }>("/api/imagegen/restart", { method: "POST" }, 35_000),

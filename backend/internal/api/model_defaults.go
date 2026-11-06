@@ -206,11 +206,11 @@ func (s *Server) civitaiLinkNow(ctx context.Context, key string) (db.CivitaiLink
 	if !set.ImageGenEnabled {
 		return db.CivitaiLink{}, errors.New("image generation is not configured")
 	}
-	detail, err := s.imagegen.ModelDetail(ctx, set.ImageGenURL, key)
+	detail, err := s.imagegen.ModelDetail(ctx, set.GenURL(), key)
 	if err != nil {
 		return db.CivitaiLink{}, err
 	}
-	records, err := s.imagegen.ModelRecords(ctx, set.ImageGenURL)
+	records, err := s.imagegen.ModelRecords(ctx, set.GenURL())
 	if err != nil {
 		return db.CivitaiLink{}, err
 	}

@@ -1,8 +1,8 @@
-// Package imagegen drives a local image-generation server. Two API dialects are
-// spoken: the Automatic1111 / SD.Next one (/sdapi/v1, see a1111.go) and InvokeAI's
-// queue-and-graph one (/api/v1 + /api/v2, see invokeai.go). Which dialect a given
-// base URL speaks is detected automatically, so the Settings screen stays a single
-// URL field.
+// Package imagegen drives a local image-generation server. Three API dialects are
+// spoken: the Automatic1111 / Forge / SD.Next one (/sdapi/v1, see a1111.go), InvokeAI's
+// queue-and-graph one (/api/v1 + /api/v2, see invokeai.go) and ComfyUI's, for which the
+// graphs are built here (comfy_images.go). Which dialect a given base URL speaks is
+// detected automatically, so the Settings screen stays a single URL field.
 //
 // The package is deliberately thin: it talks to the generator, decodes the images it
 // returns, and knows nothing about the library. Storage, encryption and the "don't
@@ -35,6 +35,7 @@ type Kind string
 const (
 	KindA1111    Kind = "a1111"
 	KindInvokeAI Kind = "invokeai"
+	KindComfy    Kind = "comfyui"
 )
 
 // How long a positive detection is trusted before the URL is probed again. Short
@@ -68,12 +69,16 @@ type Client struct {
 	// ModelsDir reports Automatic1111's models folder as this process sees it, ""
 	// when none is mounted. A func because it is a live setting. See a1111_models.go.
 	ModelsDir func() string
+	// ComfyDirs reports ComfyUI's folders, for when it is the picture generator too.
+	// A func for the same reason. See model_home.go.
+	ComfyDirs func() ComfyFolders
 	// HashCachePath is where the hashes of that folder's files are remembered.
 	HashCachePath string
 
 	fileHashes    *fileHashes
 	installs      *a1111Jobs
 	comfyInstalls *a1111Jobs
+	transfers     modelTransfers
 }
 
 // New returns a Client. Generation is slow (tens of seconds on CPU), so the timeout
@@ -504,9 +509,10 @@ func (c *Client) Backend(ctx context.Context, base string) (Kind, error) {
 	return kind, nil
 }
 
-// detect probes InvokeAI's version endpoint, which an A1111-style server does not
-// serve. A definite "not found" answer means A1111; a network failure is reported
-// rather than cached, so a generator that is merely down isn't mislabelled.
+// detect probes InvokeAI's version endpoint and ComfyUI's stats, neither of which an
+// A1111-style server serves. A definite "not found" from both means A1111; a network
+// failure is reported rather than cached, so a generator that is merely down isn't
+// mislabelled.
 func (c *Client) detect(ctx context.Context, base string) (Kind, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/v1/app/version", nil)
 	if err != nil {
@@ -525,7 +531,27 @@ func (c *Client) detect(ctx context.Context, base string) (Kind, error) {
 			return KindInvokeAI, nil
 		}
 	}
+	if c.answersAsComfy(ctx, base) {
+		return KindComfy, nil
+	}
 	return KindA1111, nil
+}
+
+func (c *Client) answersAsComfy(ctx context.Context, base string) bool {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/system_stats", nil)
+	if err != nil {
+		return false
+	}
+	resp, err := c.hc.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return false
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	return err == nil && isComfy(body)
 }
 
 // Models lists the checkpoints the generator has available.
@@ -537,7 +563,12 @@ func (c *Client) Models(ctx context.Context, base string) ([]Model, error) {
 	if kind == KindInvokeAI {
 		return c.invokeModels(ctx, base)
 	}
-	models, err := c.a1111Models(ctx, base)
+	var models []Model
+	if kind == KindComfy {
+		models, err = c.comfyPictureModels(ctx, base)
+	} else {
+		models, err = c.a1111Models(ctx, base)
+	}
 	if err == nil {
 		c.a1111Dress(ctx, base, models, nil)
 	}
@@ -553,7 +584,12 @@ func (c *Client) Loras(ctx context.Context, base string) ([]Lora, error) {
 	if kind == KindInvokeAI {
 		return c.invokeLoras(ctx, base)
 	}
-	loras, err := c.a1111Loras(ctx, base)
+	var loras []Lora
+	if kind == KindComfy {
+		loras, err = c.comfyPictureLoras(ctx, base)
+	} else {
+		loras, err = c.a1111Loras(ctx, base)
+	}
 	if err == nil {
 		c.a1111Dress(ctx, base, nil, loras)
 	}
@@ -570,6 +606,9 @@ func (c *Client) Vaes(ctx context.Context, base string) ([]Vae, error) {
 	if kind == KindInvokeAI {
 		return c.invokeVaes(ctx, base)
 	}
+	if kind == KindComfy {
+		return c.comfyPictureVaes(ctx, base)
+	}
 	return c.a1111Vaes(ctx, base)
 }
 
@@ -582,6 +621,9 @@ func (c *Client) Templates(ctx context.Context, base string) ([]Template, error)
 	}
 	if kind == KindInvokeAI {
 		return c.invokeTemplates(ctx, base)
+	}
+	if kind == KindComfy {
+		return []Template{}, nil // ComfyUI keeps no saved prompts
 	}
 	return c.a1111Templates(ctx, base)
 }
@@ -607,6 +649,9 @@ func (c *Client) ManagesModels(ctx context.Context, base string) bool {
 	kind, err := c.Backend(ctx, base)
 	if err != nil {
 		return false
+	}
+	if kind == KindComfy {
+		return ComfyPlacesFor(c.comfyDirs()).pictures()
 	}
 	return kind == KindInvokeAI || c.A1111ModelsDirReady()
 }
@@ -786,6 +831,10 @@ func (c *Client) InstallModel(ctx context.Context, base string, spec InstallSpec
 	if err != nil {
 		return nil, err
 	}
+	if kind == KindComfy {
+		spec.Pictures = true
+		return c.ComfyInstall(ComfyPlacesFor(c.comfyDirs()), spec)
+	}
 	if kind != KindInvokeAI {
 		return c.a1111Install(ctx, base, spec)
 	}
@@ -837,6 +886,9 @@ func (c *Client) InstallJobs(ctx context.Context, base string) ([]InstallJob, er
 	if err != nil {
 		return nil, err
 	}
+	if kind == KindComfy {
+		return c.comfyJobList().list(), nil
+	}
 	if kind != KindInvokeAI {
 		return c.a1111JobList().list(), nil
 	}
@@ -867,14 +919,18 @@ func (c *Client) FreeMemory(ctx context.Context, base string) error {
 	if kind == KindInvokeAI {
 		return c.postJSON(ctx, base+"/api/v2/models/empty_model_cache", map[string]any{}, nil)
 	}
+	if kind == KindComfy {
+		return c.FreeComfyMemory(ctx, base)
+	}
 	return c.postJSON(ctx, base+"/sdapi/v1/unload-checkpoint", map[string]any{}, nil)
 }
 
 // ReclaimMemory undoes FreeMemory before a generation, where the backend needs telling.
-// A no-op for InvokeAI, which loads what a graph asks for.
+// A no-op for InvokeAI and ComfyUI, which load what a graph asks for, and for Forge,
+// which loads what a run asks for and has no reload route to call.
 func (c *Client) ReclaimMemory(ctx context.Context, base string) error {
 	kind, err := c.Backend(ctx, base)
-	if err != nil || kind == KindInvokeAI {
+	if err != nil || kind != KindA1111 || c.IsForge(ctx, base) {
 		return err
 	}
 	return c.postJSON(ctx, base+"/sdapi/v1/reload-checkpoint", map[string]any{}, nil)
@@ -899,6 +955,9 @@ func (c *Client) Generate(ctx context.Context, base string, req GenerateRequest)
 		}
 		res, err := c.invokeGenerate(ctx, base, req)
 		return rejectBlackGeneration(res, err)
+	}
+	if kind == KindComfy {
+		return rejectBlackGeneration(c.comfyGenerate(ctx, base, req))
 	}
 	if req.UpscaleOnly {
 		return c.a1111Upscale(ctx, base, req)
@@ -967,6 +1026,9 @@ func (c *Client) Upscalers(ctx context.Context, base string) (models, latent []s
 	if err != nil || kind == KindInvokeAI {
 		return nil, nil, err
 	}
+	if kind == KindComfy {
+		return c.comfyUpscalers(ctx, base)
+	}
 	return c.a1111Upscalers(ctx, base)
 }
 
@@ -974,7 +1036,7 @@ func (c *Client) Upscalers(ctx context.Context, base string) (models, latent []s
 // detailer request. Current InvokeAI exposes it as an adetailer graph node.
 func (c *Client) SupportsADetailer(ctx context.Context, base string) bool {
 	kind, err := c.Backend(ctx, base)
-	if err != nil {
+	if err != nil || kind == KindComfy {
 		return false
 	}
 	if kind == KindInvokeAI {
@@ -997,7 +1059,7 @@ func (c *Client) SupportsADetailer(ctx context.Context, base string) bool {
 // any added to its folder. InvokeAI's node picks its detector itself, so none.
 func (c *Client) Detectors(ctx context.Context, base string) ([]string, error) {
 	kind, err := c.Backend(ctx, base)
-	if err != nil || kind == KindInvokeAI {
+	if err != nil || kind != KindA1111 {
 		return nil, err
 	}
 	return c.a1111Detectors(ctx, base)
@@ -1007,7 +1069,7 @@ func (c *Client) Detectors(ctx context.Context, base string) ([]string, error) {
 // of their own: Automatic1111 with the Regional Prompter extension.
 func (c *Client) SupportsRegions(ctx context.Context, base string) bool {
 	kind, err := c.Backend(ctx, base)
-	if err != nil || kind == KindInvokeAI {
+	if err != nil || kind != KindA1111 {
 		return false
 	}
 	return c.a1111HasScript(ctx, base, "Regional Prompter")

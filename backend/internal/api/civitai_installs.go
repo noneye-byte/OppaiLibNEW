@@ -89,7 +89,7 @@ func (s *Server) civitaiApplyFinishedInstalls(ctx context.Context) int {
 	if !set.ImageGenEnabled {
 		return len(pending)
 	}
-	jobs, err := s.imagegen.InstallJobs(ctx, set.ImageGenURL)
+	jobs, err := s.imagegen.InstallJobs(ctx, set.GenURL())
 	if err != nil {
 		s.log.Warn("civitai: install jobs", "err", err)
 		return len(pending)
@@ -123,14 +123,14 @@ func (s *Server) civitaiApplyFinishedInstalls(ctx context.Context) int {
 				_ = s.db.DeleteCivitaiInstall(ctx, p.Source)
 				continue
 			}
-			if _, err := s.civitaiApplyToModel(ctx, set.ImageGenURL, job.ModelKey, p.ModelID, p.VersionID, true); err != nil {
+			if _, err := s.civitaiApplyToModel(ctx, set.GenURL(), job.ModelKey, p.ModelID, p.VersionID, true); err != nil {
 				s.log.Warn("civitai: apply metadata after install", "model", job.ModelKey, "err", err)
 			}
 			// An update: the version this one supersedes goes now that the new file
 			// is registered and dressed.
-			s.civitaiRetireReplaced(ctx, set.ImageGenURL, p.ReplaceKey, job.ModelKey)
+			s.civitaiRetireReplaced(ctx, set.GenURL(), p.ReplaceKey, job.ModelKey)
 			_ = s.db.DeleteCivitaiInstall(ctx, p.Source)
-			s.installedHashCache.forget(set.ImageGenURL) // the model list changed
+			s.installedHashCache.forget(set.GenURL()) // the model list changed
 		case job.Status == "error" || job.Status == "cancelled":
 			_ = s.db.DeleteCivitaiInstall(ctx, p.Source)
 		default:

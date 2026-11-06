@@ -1,3 +1,4 @@
+import { generatorName } from "../model-manage.js";
 import "@material/web/progress/circular-progress.js";
 import { LitElement, html, css, nothing, type PropertyValues } from "lit";
 import { customElement, property, query, state } from "lit/decorators.js";
@@ -3328,6 +3329,9 @@ export class OppaiImageGen extends LitElement {
           }), follow("upscale", upId));
         }
         made.push(clip);
+        // Redone while this was rendering: its clip was thrown out with its picture, and
+        // filing this one would put an animation of the old picture back.
+        if (this.motionOfPicture(slot) !== from) return "The picture changed while its clip was being made, so that clip was dropped.";
         if (i === 0) await this.fileMotion(wardrobeId, slot, "clip", clip, from);
       }
       spriteTakes.set(`${wardrobeId}|${key}`, made);
@@ -3355,6 +3359,8 @@ export class OppaiImageGen extends LitElement {
       const clip = await followClip(jobId, () => api.matteClip({
         jobId, outfit: { outfit: wardrobeId, emotion: slot.emotion, level: slot.tier }, noGallery: true, detach: true,
       }), (percent) => this.setMotionBusy(key, { step: "cut", percent, jobId }));
+      const now = this.squareMotion(slot).clip;
+      if (!now || clipTake(now) !== clipTake(sq.clip!)) return "The clip changed while it was being cut, so that cut was dropped.";
       await this.fileMotion(wardrobeId, slot, "cut", clip, clipTake(sq.clip!));
       return "";
     } catch (e) {
@@ -3384,12 +3390,38 @@ export class OppaiImageGen extends LitElement {
     }
   }
 
-  /** Puts the stage back on a square's picture when it has a new one. Left on Clip or
-      Cut it would go on playing the take just replaced, as if the redo had not happened.
-      That clip is still on its tab, marked out of date. */
-  private showNewPicture(slot: Pick<DraftOutfitSlot, "emotion" | "tier">) {
-    if (this.focusView !== "clip" && this.focusView !== "cut") return;
-    if (slotKeyOf(this.outfitSlot().slot) === slotKeyOf(slot)) this.focusView = "cutout";
+  /** The take a square's picture is now, "" with none: what a finished clip is checked
+      against before it is filed. */
+  private motionOfPicture(slot: Pick<DraftOutfitSlot, "emotion" | "tier">): string {
+    const shot = this.shotAt(slot);
+    return shot ? this.pictureTakeOf(shot) : "";
+  }
+
+  /**
+   * A square's picture is gone or has a new one: its clip, its cut and any takes waiting
+   * beside it go too, on the server and on the board. They were left in place marked out
+   * of date once, on the thinking that a redo might be undone, but a redo cannot be, and
+   * what they did was go on playing as a picture she no longer has. A failure is said and
+   * goes no further: the new picture is what matters by now, and the leftover reads as
+   * out of date.
+   */
+  private async discardMotion(wardrobeId: string, slot: Pick<DraftOutfitSlot, "emotion" | "tier">) {
+    const key = slotKeyOf(slot);
+    spriteTakes.delete(`${wardrobeId}|${key}`);
+    try {
+      await api.deleteLibbyOutfitAnim(wardrobeId, slot.emotion, slot.tier);
+    } catch (e) {
+      this.showToast(`Couldn't clear the old animation: ${(e as Error).message}`);
+      return;
+    }
+    if (wardrobeId === this.outfitWardrobeId && this.anims[key]) {
+      const left = { ...this.anims };
+      delete left[key];
+      this.anims = left;
+    }
+    if ((this.focusView === "clip" || this.focusView === "cut") && slotKeyOf(this.outfitSlot().slot) === key) {
+      this.focusView = "cutout";
+    }
   }
 
   /** Puts another take in as the square's clip. Its cut, of the old take, goes stale. */
@@ -3762,6 +3794,7 @@ export class OppaiImageGen extends LitElement {
           if (stored) {
             made[0].wipOutfitId = stored;
             made[0].previewVersion = Date.now();
+            await this.discardMotion(stored, outfit.slot);
           }
         } catch (e) {
           this.showToast(`Couldn't keep this square: ${(e as Error).message}`);
@@ -3775,7 +3808,6 @@ export class OppaiImageGen extends LitElement {
         ...this.shots.filter((shot) => !shot.outfitSlot || slotKeyOf(shot.outfitSlot) !== key),
         ...made,
       ];
-      if (made.length) this.showNewPicture(outfit.slot);
     } else {
       // The draft keeps the newest run; the strip keeps the session. Outfit squares
       // stay off the strip: they are one deliverable, and the board is where they live.
@@ -4927,12 +4959,12 @@ export class OppaiImageGen extends LitElement {
     return html`
       <div class="overlay" @click=${(e: Event) => { if (e.target === e.currentTarget) this.metaDraft = null; }}>
         <div class="dialog">
-          <h3>Edit ${isLora ? "LoRA" : "model"} — saved on ${this.status?.backend === "invokeai" ? "InvokeAI" : "Automatic1111"}</h3>
+          <h3>Edit ${isLora ? "LoRA" : "model"} — saved on ${generatorName(this.status)}</h3>
           <div>
             <label class="field">Name</label>
             <!-- Automatic1111 names a model by its file, so the name is not edited there. -->
             <input type="text" .value=${d.name} ?readonly=${this.status?.backend !== "invokeai"}
-              title=${this.status?.backend !== "invokeai" ? "Automatic1111 names a model by its file" : ""}
+              title=${this.status?.backend !== "invokeai" ? `${generatorName(this.status)} names a model by its file` : ""}
               @input=${(e: Event) => (this.metaDraft = { ...d, name: (e.target as HTMLInputElement).value })} />
           </div>
           <div>
@@ -5102,7 +5134,7 @@ export class OppaiImageGen extends LitElement {
     const gallery = st.gallery ?? (invoke ? "invokeai" : "oppailib");
     return html`
       <div class="studio mode-${this.currentMode}">
-        ${this.renderStudioHeader(st, invoke)}
+        ${this.renderStudioHeader(st)}
         ${this.studio ? this.renderSprites(st, invoke) : this.renderCreate(st, invoke, gallery)}
       </div>
       ${this.paintOpen && this.source
@@ -5134,7 +5166,7 @@ export class OppaiImageGen extends LitElement {
   // queue and the panels sit on the right, the same in every mode, so nothing moves
   // when the mode does.
 
-  private renderStudioHeader(st: ImageGenStatus, invoke: boolean) {
+  private renderStudioHeader(st: ImageGenStatus) {
     const mode = this.currentMode;
     const model = (st.models ?? []).find((m) => m.title === this.checkpoint);
     const thumb = model ? `${api.modelThumbURL(model.title)}&v=${this.thumbVersion}` : "";
@@ -5173,7 +5205,7 @@ export class OppaiImageGen extends LitElement {
               ? html`<img src=${thumb} alt="" @error=${() => (this.failedThumbs = new Set(this.failedThumbs).add(thumb))} />`
               : html`<span class="gen-icon"><span class="material-symbols-rounded">deployed_code</span></span>`}
             <span class="gen-text">
-              <span class="gen-kicker"><span class="status-dot"></span>${invoke ? "InvokeAI" : "Automatic1111"}${model?.base ? html` · ${model.base}` : nothing}</span>
+              <span class="gen-kicker"><span class="status-dot"></span>${generatorName(st)}${model?.base ? html` · ${model.base}` : nothing}</span>
               <span class="gen-name">${model?.model_name || this.checkpoint || "Choose a model"}</span>
             </span>
             <span class="material-symbols-rounded gen-caret">expand_more</span>
@@ -5641,11 +5673,14 @@ export class OppaiImageGen extends LitElement {
       what it reads only when it starts. */
   private renderGeneratorPane(st: ImageGenStatus, invoke: boolean) {
     if (invoke) return nothing;
-    return html`<div class="pane-title">Automatic1111</div>
+    const name = generatorName(st);
+    return html`<div class="pane-title">${name}</div>
       <div class="pane restart-pane">
         <span>${st.canRestart
           ? "Restart it to read new detectors and extensions. It is back in a minute or two; a picture it is drawing is lost."
-          : "To restart it from here, start Automatic1111 with --api-server-stop (in COMMANDLINE_ARGS, beside --api) once by hand."}</span>
+          : st.backend === "comfyui"
+            ? "Restarting ComfyUI from here needs ComfyUI-Manager in it."
+            : `To restart it from here, start ${name} with --api-server-stop (in COMMANDLINE_ARGS, beside --api) once by hand.`}</span>
         <button class="chip" ?disabled=${this.restarting} @click=${() => void this.restartGenerator()}>
           <span class="material-symbols-rounded">restart_alt</span>${this.restarting ? "Restarting…" : "Restart"}
         </button>
@@ -5657,7 +5692,7 @@ export class OppaiImageGen extends LitElement {
       down was missed between two looks). */
   private async restartGenerator() {
     if (this.restarting) return;
-    if (!confirm("Restart Automatic1111? It takes a minute or two, and a picture it is drawing now is lost.")) return;
+    if (!confirm(`Restart ${generatorName(this.status)}? It takes a minute or two, and a picture it is drawing now is lost.`)) return;
     this.restarting = true;
     try {
       await api.restartGenerator();
@@ -5679,7 +5714,7 @@ export class OppaiImageGen extends LitElement {
         if (wentDown || Date.now() - started > 45_000) {
           this.status = st;
           this.restarting = false;
-          this.showToast("Automatic1111 is back");
+          this.showToast(`${generatorName(this.status)} is back`);
           return;
         }
       } catch {
@@ -5687,7 +5722,7 @@ export class OppaiImageGen extends LitElement {
       }
     }
     this.restarting = false;
-    this.showToast("Automatic1111 hasn't come back yet — look at it where it runs");
+    this.showToast(`${generatorName(this.status)} hasn't come back yet — look at it where it runs`);
     void this.refreshStatus();
   }
 
@@ -6540,7 +6575,7 @@ export class OppaiImageGen extends LitElement {
         cutoutReviewed: false, previewVersion: stored.updatedAt || Date.now(), wipOutfitId: wardrobeId,
       };
       this.shots = [...this.shots.filter((s) => !s.outfitSlot || slotKeyOf(s.outfitSlot) !== key), shot];
-      this.showNewPicture(slot);
+      await this.discardMotion(wardrobeId, slot);
       this.persistDraft();
       void this.openCutout(this.previewURL(shot), file.name, filename, shot.id);
     } catch (e) {
@@ -6712,7 +6747,9 @@ export class OppaiImageGen extends LitElement {
           <div class="ref-art"><img src=${this.referenceFaceShown} alt="The part of the reference held as her face" /></div>
           <div class="ref-text"><strong>Held as her face</strong><span>From the last square drawn. If her head isn't in it, check the framing in Camera matches the reference's.</span></div>
         </div>` : nothing}
-        <div class="sec-note">Each square keeps its own pose, clothes and seed. Needs the ControlNet extension in Automatic1111 or Forge.</div>
+        <div class="sec-note">${this.status?.backend === "comfyui"
+          ? "ComfyUI mode has nothing to read a reference with, so a set with one here won't draw. Clear it, or draw this set on Automatic1111 or Forge."
+          : "Each square keeps its own pose, clothes and seed. Needs the ControlNet extension in Automatic1111 or Forge."}</div>
       ` : nothing}
     </div>`;
   }
@@ -8946,6 +8983,7 @@ export class OppaiImageGen extends LitElement {
     try {
       if (shot.wipOutfitId) await api.deleteLibbyOutfitWip(shot.wipOutfitId, slot.emotion, slot.tier);
       await this.discardTake(shot);
+      if (shot.wipOutfitId) await this.discardMotion(shot.wipOutfitId, slot);
       this.shots = this.shots.filter((s) => s.id !== shot.id);
       this.persistDraft();
       this.showToast(`Deleted ${slot.tierLabel} · ${slot.emotionLabel}.`);
@@ -9071,7 +9109,7 @@ export class OppaiImageGen extends LitElement {
     if (this.restarting) {
       return html`<div class="stage-alert info" role="status">
         <span class="material-symbols-rounded">restart_alt</span>
-        <div class="sa-copy"><b>Restarting Automatic1111</b><span>It takes a minute or two.</span></div>
+        <div class="sa-copy"><b>Restarting ${generatorName(this.status)}</b><span>It takes a minute or two.</span></div>
       </div>`;
     }
     if (!this.error) return nothing;

@@ -47,7 +47,7 @@ func (c *Client) CheckpointFile(ctx context.Context, base, name string) (Checkpo
 		return CheckpointFile{}, errors.New("Automatic1111 has no such checkpoint")
 	}
 	out := CheckpointFile{Key: f.Key}
-	if local := localPath(c.modelsDir(), f.Key); local != "" {
+	if local := c.home(ctx, base).path(f.Key); local != "" {
 		if info, err := os.Stat(local); err == nil && !info.IsDir() {
 			out.Local, out.Size = local, info.Size()
 		}

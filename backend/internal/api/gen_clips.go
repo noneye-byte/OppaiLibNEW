@@ -378,7 +378,7 @@ func (s *Server) handleImageGenClip(w http.ResponseWriter, r *http.Request) {
 	if fromImage {
 		var err error
 		if req.InitGallery != "" && req.InitImage == "" {
-			init, err = s.galleryPicture(r.Context(), set.ImageGenURL, req.InitGallery)
+			init, err = s.galleryPicture(r.Context(), set.GenURL(), req.InitGallery)
 		} else {
 			init, err = decodeDataImage(req.InitImage)
 		}
@@ -499,7 +499,7 @@ func (s *Server) serveLongJob(w http.ResponseWriter, r *http.Request, jobID stri
 // from, the tile when ffmpeg cannot take one. The preview and the result are told
 // where it went.
 func (s *Server) keepClip(ctx context.Context, set settings.Settings, board string, out imagegen.ComfyOutput, rec genRecord, still []byte, preview *genPreview, clip *genClip) {
-	if !set.ImageGenEnabled || !s.ownGallery(ctx, set.ImageGenURL) {
+	if !set.ImageGenEnabled || !s.ownGallery(ctx, set.GenURL()) {
 		return
 	}
 	g, err := s.keepGenClip(ctx, out.Data, safeInlineContentType(out.MIME), s.genFolderOf(ctx, board), rec, still)
@@ -669,7 +669,7 @@ func (s *Server) clipToUpscale(w http.ResponseWriter, r *http.Request, set setti
 		return src, true
 	}
 	if req.Gallery != "" {
-		if !set.ImageGenEnabled || !s.ownGallery(r.Context(), set.ImageGenURL) {
+		if !set.ImageGenEnabled || !s.ownGallery(r.Context(), set.GenURL()) {
 			writeErr(w, http.StatusConflict, "this gallery keeps no clips")
 			return clipSource{}, false
 		}

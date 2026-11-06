@@ -112,7 +112,7 @@ func (s *Server) lendCardToImages(ctx context.Context) func() {
 func (s *Server) lendCardToVideo(ctx context.Context) func() {
 	swapped := s.lendSwap(ctx)
 	cur := s.settings.Get()
-	unload := !cur.ClipKeepImageModel && cur.ImageGenEnabled && strings.TrimSpace(cur.ImageGenURL) != ""
+	unload := !cur.ClipKeepImageModel && cur.ImageGenEnabled && strings.TrimSpace(cur.GenURL()) != ""
 	if unload {
 		s.freeGenerator(ctx)
 	}
@@ -149,7 +149,7 @@ func (s *Server) freeGenerator(ctx context.Context) {
 	}
 	opCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
 	defer cancel()
-	if err := s.imagegen.FreeMemory(opCtx, s.settings.Get().ImageGenURL); err != nil {
+	if err := s.imagegen.FreeMemory(opCtx, s.settings.Get().GenURL()); err != nil {
 		s.log.Warn("card share: the generator would not let go of its checkpoint for the clip", "err", err)
 		return
 	}
@@ -181,8 +181,8 @@ func (s *Server) readyGenerator(ctx context.Context) {
 			s.log.Warn("card share: ComfyUI did not let go of its models", "err", err)
 		}
 	}
-	if freed && cur.ImageGenURL != "" {
-		if err := s.imagegen.ReclaimMemory(opCtx, cur.ImageGenURL); err != nil {
+	if freed && cur.GenURL() != "" {
+		if err := s.imagegen.ReclaimMemory(opCtx, cur.GenURL()); err != nil {
 			s.log.Warn("card share: generator did not reload its checkpoint", "err", err)
 		}
 	}
@@ -297,8 +297,8 @@ func (s *Server) handBackCard() {
 	ctx, cancel := context.WithTimeout(context.Background(), modelLoadTimeout)
 	defer cancel()
 	cur := s.settings.Get()
-	if cur.ImageGenURL != "" {
-		if err := s.imagegen.FreeMemory(ctx, cur.ImageGenURL); err != nil {
+	if cur.GenURL() != "" {
+		if err := s.imagegen.FreeMemory(ctx, cur.GenURL()); err != nil {
 			s.log.Warn("card share: generator would not let go of its checkpoint", "err", err)
 		} else {
 			c.mu.Lock()

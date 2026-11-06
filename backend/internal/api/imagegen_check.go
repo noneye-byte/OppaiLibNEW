@@ -38,7 +38,7 @@ func (s *Server) imageGenChecks(ctx context.Context) []genCheck {
 	var out []genCheck
 	add := func(c genCheck) { out = append(out, c) }
 	set := s.settings.Get()
-	base := strings.TrimSpace(set.ImageGenURL)
+	base := strings.TrimSpace(set.GenURL())
 
 	// The generator.
 	kind := imagegen.Kind("")
@@ -61,6 +61,20 @@ func (s *Server) imageGenChecks(ctx context.Context) []genCheck {
 
 	if kind == imagegen.KindA1111 {
 		s.a1111Checks(ctx, base, add)
+	} else if kind == imagegen.KindComfy {
+		add(genCheck{ID: "folder", Label: "Models folder", OK: true, Skipped: true,
+			Detail: "ComfyUI's folders are set under Video, and Test ComfyUI there checks them."})
+		missing, err := s.imagegen.ComfyMissingNodes(ctx, base, imagegen.ComfyPictureNodes())
+		c := genCheck{ID: "nodes", Label: "Nodes for pictures", OK: err == nil && len(missing) == 0}
+		switch {
+		case err != nil:
+			c.Detail = fmt.Sprintf("Couldn't ask ComfyUI which nodes it has: %v", err)
+		case len(missing) > 0:
+			c.Detail = fmt.Sprintf("This ComfyUI lacks %s, which come with ComfyUI itself — update it.", strings.Join(missing, ", "))
+		default:
+			c.Detail = "Everything a picture needs comes with ComfyUI, and this one has it all."
+		}
+		add(c)
 	} else if kind != "" {
 		add(genCheck{ID: "folder", Label: "Models folder", OK: true, Skipped: true,
 			Detail: kindName(kind) + " installs and edits models itself; no folder is needed."})
@@ -80,6 +94,8 @@ func kindName(k imagegen.Kind) string {
 		return "InvokeAI"
 	case imagegen.KindA1111:
 		return "Automatic1111"
+	case imagegen.KindComfy:
+		return "ComfyUI"
 	}
 	return string(k)
 }

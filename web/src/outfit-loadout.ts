@@ -127,7 +127,7 @@ export type PromptDialect = "a1111" | "invokeai" | string;
 export function emphasize(text: string, weight: number, dialect: PromptDialect): string {
   if (!text.trim()) return "";
   const w = weight.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
-  if (dialect === "a1111") return `(${text}:${w})`;
+  if (dialect === "a1111" || dialect === "comfyui") return `(${text}:${w})`;
   if (dialect === "invokeai") return `(${text})${w}`;
   return text;
 }

@@ -67,7 +67,15 @@ type txt2imgPayload struct {
 	HRScale           float64 `json:"hr_scale,omitempty"`
 	HRUpscaler        string  `json:"hr_upscaler,omitempty"`
 	HRSecondPassSteps int     `json:"hr_second_pass_steps,omitempty"`
+	// Forge's hires fix only: what to load for the second pass. It has no default a
+	// call can leave out, see forgeHiresModules.
+	HRAdditionalModules []string `json:"hr_additional_modules,omitempty"`
 }
+
+// forgeHiresModules keeps a hires fix on the modules the picture was drawn with. Forge
+// compares this list against a marker to see whether to swap them, and left unset it is
+// None, which it then loops over: every hires fix through the API fails without it.
+var forgeHiresModules = []string{"Use same choices"}
 
 // txt2imgResponse is the relevant slice of the API's reply. Info is a JSON *string*
 // (A1111 double-encodes it) holding the resolved seeds among other things.
@@ -131,6 +139,9 @@ func (c *Client) a1111Generate(ctx context.Context, base string, req GenerateReq
 		payload.HRUpscaler = up.Upscaler
 		payload.HRSecondPassSteps = up.Steps
 		payload.DenoisingStrength = up.Denoise
+		if c.IsForge(ctx, base) {
+			payload.HRAdditionalModules = forgeHiresModules
+		}
 	}
 	endpoint := "/sdapi/v1/txt2img"
 	if len(req.InitImage) > 0 {

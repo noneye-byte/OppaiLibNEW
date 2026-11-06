@@ -3,8 +3,10 @@
 // A square moves in three steps, always in this order: its picture, a clip made from
 // the picture (ComfyUI), and that clip with its background cut away (the server's
 // matte). Each step is made of the one before, so each remembers which take of the one
-// before it was made from — and a picture that has been redone since makes its clip
-// out of date, and the clip's cut with it, without anything being thrown away.
+// before it was made from. A redone clip makes its cut out of date. A redone picture
+// takes its clip and cut with it, in the studio, since animations of a picture she no
+// longer has only got in the way; a wardrobe from before that can still hold a clip of
+// an older picture, and it reads as out of date here.
 //
 // The order is also how a whole set is run. Every picture is drawn before any clip is
 // made, and every clip before any cut, rather than square by square: a clip borrows
@@ -77,9 +79,8 @@ export function canMake(step: MotionStep, sq: SquareMotion): boolean {
 /**
  * What a square's button for a step has to make, in order; nothing when it has no
  * picture to work from. A cut has to be of a clip of the picture as it is now, so
- * pressing Cut on a square whose picture was redone, or that never had a clip, makes
- * the clip first. Cutting the old clip would only file a cut of a picture the square no
- * longer has, and refusing left a grey button under a clip that looked perfectly good.
+ * pressing Cut on a square with no clip, or one of an older picture, makes the clip
+ * first: pressing the last step is asking for the square to be finished.
  */
 export function stepsFor(step: "clip" | "cut", sq: SquareMotion): ("clip" | "cut")[] {
   if (!sq.picture) return [];

@@ -182,10 +182,7 @@ func (s *Server) comfyNoteHook(m *civitaiRawModel, v civitaiRawVersion) func(str
 
 // comfyPlaces is where installs into ComfyUI go, by the Video settings' folders.
 func (s *Server) comfyPlaces() imagegen.ComfyPlaces {
-	cur := s.settings.Get()
-	return imagegen.ComfyPlacesFor(imagegen.ComfyFolders{
-		Diffusion: cur.ComfyDiffusionDir, Checkpoints: cur.ComfyCheckpointDir, Loras: cur.ComfyLoraDir, VAEs: cur.ComfyVaeDir,
-	})
+	return imagegen.ComfyPlacesFor(s.comfyFolders(s.settings.Get()))
 }
 
 // civitaiComfyInstall downloads a version, and its other half, into ComfyUI's folder

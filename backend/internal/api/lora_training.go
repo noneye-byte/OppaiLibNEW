@@ -401,7 +401,7 @@ func (s *Server) handleTrainStart(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	ckpt, err := s.imagegen.CheckpointFile(ctx, set.ImageGenURL, req.Base)
+	ckpt, err := s.imagegen.CheckpointFile(ctx, set.GenURL(), req.Base)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
@@ -417,7 +417,7 @@ func (s *Server) handleTrainStart(w http.ResponseWriter, r *http.Request) {
 	}
 	settingsJSON, _ := json.Marshal(req)
 	t, err := s.db.InsertLoraTraining(ctx, db.LoraTraining{
-		Name: req.Name, Trigger: req.Trigger, BaseModel: s.trainBaseName(ctx, set.ImageGenURL, req.Base), Images: len(pics),
+		Name: req.Name, Trigger: req.Trigger, BaseModel: s.trainBaseName(ctx, set.GenURL(), req.Base), Images: len(pics),
 		Settings: string(settingsJSON), Status: "preparing",
 	})
 	if err != nil {
@@ -428,7 +428,7 @@ func (s *Server) handleTrainStart(w http.ResponseWriter, r *http.Request) {
 	st.mu.Lock()
 	st.preparing[t.ID] = true
 	st.mu.Unlock()
-	fit := s.trainFitFor(ctx, set.ImageGenURL, req)
+	fit := s.trainFitFor(ctx, set.GenURL(), req)
 	go s.trainPrepare(t, req, ckpt, pics, fit)
 	s.trainWatch()
 	writeJSON(w, http.StatusOK, trainingOutOf(t, nil))
@@ -801,13 +801,13 @@ func (s *Server) trainStep(ctx context.Context) int {
 				t.Status, t.Error = "failed", "the trainer no longer has this run"
 				break
 			}
-			s.trainFollow(ctx, &t, job, set.ImageGenURL)
+			s.trainFollow(ctx, &t, job, set.GenURL())
 		case "installing":
 			if !installsRead {
-				installs, _ = s.imagegen.InstallJobs(ctx, set.ImageGenURL)
+				installs, _ = s.imagegen.InstallJobs(ctx, set.GenURL())
 				installsRead = true
 			}
-			s.trainFollowInstall(ctx, &t, installs, set.ImageGenURL)
+			s.trainFollowInstall(ctx, &t, installs, set.GenURL())
 		}
 		if !t.Active() && before.Active() {
 			s.trainEnded(ctx, &t)
@@ -983,7 +983,7 @@ func (s *Server) trainGiveBackGPU(ctx context.Context, t *db.LoraTraining) {
 		return
 	}
 	t.FreedGPU = false
-	if genBase := s.settings.Get().ImageGenURL; genBase != "" {
+	if genBase := s.settings.Get().GenURL(); genBase != "" {
 		if err := s.imagegen.ReclaimMemory(ctx, genBase); err != nil {
 			s.log.Warn("train: generator did not reload its checkpoint", "err", err)
 		}

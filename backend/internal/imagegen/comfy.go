@@ -19,7 +19,8 @@ import (
 	"time"
 )
 
-// ComfyUI, for the one job the other two generators cannot do: moving pictures.
+// ComfyUI, for the one job the other generators cannot do: moving pictures. It can
+// draw stills as well, from graphs built here rather than pasted: see comfy_images.go.
 //
 // A short clip made from a still — Wan's image-to-video, AnimateDiff, LTX — is a
 // workflow of a dozen nodes whose names and wiring change with every model release, and
@@ -84,7 +85,7 @@ func (c *Client) runComfyGraph(ctx context.Context, base string, graph map[strin
 		Nodes    map[string]any `json:"node_errors"`
 	}
 	if err := c.postJSON(ctx, base+"/prompt", map[string]any{"prompt": graph, "client_id": clientID}, &queued); err != nil {
-		return nil, fmt.Errorf("ComfyUI refused the clip workflow: %w", err)
+		return nil, fmt.Errorf("ComfyUI refused the workflow: %w", err)
 	}
 	if queued.PromptID == "" {
 		return nil, fmt.Errorf("ComfyUI accepted the workflow but returned no prompt id")
@@ -114,11 +115,11 @@ func (c *Client) runComfyGraph(ctx context.Context, base string, graph map[strin
 			continue
 		}
 		if entry.Status.StatusStr == "error" {
-			return nil, fmt.Errorf("ComfyUI's clip workflow failed: %s", entry.errText())
+			return nil, fmt.Errorf("ComfyUI's workflow failed: %s", entry.errText())
 		}
 		files := comfyFiles(entry)
 		if len(files) == 0 {
-			return nil, fmt.Errorf("the clip workflow finished without saving anything")
+			return nil, fmt.Errorf("the workflow finished without saving anything")
 		}
 		out := make([]ComfyOutput, 0, len(files))
 		for _, f := range files {
@@ -328,7 +329,7 @@ func (c *Client) comfyView(ctx context.Context, base string, f comfyFile) ([]byt
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("ComfyUI returned %d for the finished clip", resp.StatusCode)
+		return nil, fmt.Errorf("ComfyUI returned %d for what it finished", resp.StatusCode)
 	}
 	// A clip is a few megabytes; the bound is there for a workflow that saved a
 	// lossless sequence by mistake.

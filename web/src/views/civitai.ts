@@ -1,3 +1,4 @@
+import { generatorName } from "../model-manage.js";
 import { LitElement, html, css, nothing } from "lit";
 import { property, customElement, state } from "lit/decorators.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
@@ -128,7 +129,7 @@ export class OppaiCivitai extends LitElement {
   @property() mode: CivitaiMode = "pictures";
 
   private get genName(): string {
-    return this.backend === "invokeai" ? "InvokeAI" : "Automatic1111";
+    return generatorName({ backend: this.backend });
   }
 
   @state() private tab: Tab = "browse";
@@ -1380,6 +1381,8 @@ export class OppaiCivitai extends LitElement {
                 ? this.manageNote || "Automatic1111 has no API that takes a download, so installing from here needs its models folder mapped into the OppaiLib container."
                 : this.backend === "invokeai"
                   ? "InvokeAI downloads the file itself; the cover, description and trigger words follow once it is in."
+                  : this.backend === "comfyui"
+                  ? "The server downloads the file into ComfyUI's folder for it; the cover, description and trigger words land beside it."
                   : "The server downloads the file into Automatic1111's models folder and asks it to rescan; the cover, description and trigger words follow as A1111's own sidecar files."}
             </div>
           </div>

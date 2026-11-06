@@ -293,6 +293,12 @@ func NewServer(cfg *config.Config, database *db.DB, store *storage.Store, sc *sc
 		}
 		return s.settings.Get().ImageGenModelsDir
 	}
+	s.imagegen.ComfyDirs = func() imagegen.ComfyFolders {
+		if s.settings == nil {
+			return imagegen.ComfyFolders{}
+		}
+		return s.comfyFolders(s.settings.Get())
+	}
 	s.imagegen.HashCachePath = filepath.Join(cfg.ConfigDir, "a1111-hashes.json")
 	s.games = gamesites.New(base, cfg.ScrapeUserAgent)
 	// F95zone checks every visitor for a person at a real browser, so the server reads
@@ -488,6 +494,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/imagegen/matte", s.requireAuth(s.handleMatte))
 	mux.HandleFunc("GET /api/imagegen/comfy/models", s.requireAuth(s.handleComfyModels))
 	mux.HandleFunc("POST /api/imagegen/comfy/check", s.requireAuth(s.requireAdmin(s.handleComfyCheck)))
+	mux.HandleFunc("GET /api/imagegen/transfer", s.requireAuth(s.requireAdmin(s.handleTransferStatus)))
+	mux.HandleFunc("POST /api/imagegen/transfer/plan", s.requireAuth(s.requireAdmin(s.handleTransferPlan)))
+	mux.HandleFunc("POST /api/imagegen/transfer", s.requireAuth(s.requireAdmin(s.handleTransferStart)))
+	mux.HandleFunc("DELETE /api/imagegen/transfer", s.requireAuth(s.requireAdmin(s.handleTransferStop)))
 	mux.HandleFunc("POST /api/imagegen/comfy/restart", s.requireAuth(s.handleComfyRestart))
 	mux.HandleFunc("GET /api/gpu", s.requireAuth(s.handleGPUState))
 	mux.HandleFunc("POST /api/gpu", s.requireAuth(s.handleGPUSwitch))

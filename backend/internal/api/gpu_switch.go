@@ -84,12 +84,15 @@ func (s *Server) gpuState(ctx context.Context) gpuState {
 		}
 	}
 
-	images := gpuApp{ID: "images", Name: "Pictures", Set: cur.ImageGenEnabled && strings.TrimSpace(cur.ImageGenURL) != ""}
+	images := gpuApp{ID: "images", Name: "Pictures", Set: cur.ImageGenEnabled && strings.TrimSpace(cur.GenURL()) != ""}
 	if images.Set {
 		images.Name = "Automatic1111"
-		if kind, err := s.imagegen.Backend(ctx, cur.ImageGenURL); err == nil {
-			if kind != imagegen.KindA1111 {
+		if kind, err := s.imagegen.Backend(ctx, cur.GenURL()); err == nil {
+			switch kind {
+			case imagegen.KindInvokeAI:
 				images.Name = "InvokeAI"
+			case imagegen.KindComfy:
+				images.Name = "ComfyUI"
 			}
 			images.CanTake = true
 			images.Holding = !freed
@@ -236,13 +239,13 @@ func (s *Server) cardToImages(ctx context.Context) []string {
 	s.parkForSwitch(ctx, &problems)
 	s.freeImagesAndComfy(ctx, false, true, &problems)
 	cur := s.settings.Get()
-	if !cur.ImageGenEnabled || strings.TrimSpace(cur.ImageGenURL) == "" {
+	if !cur.ImageGenEnabled || strings.TrimSpace(cur.GenURL()) == "" {
 		return append(problems, "the image generator has no address set")
 	}
 	c := s.card
 	c.swap.Lock()
 	defer c.swap.Unlock()
-	if err := s.imagegen.ReclaimMemory(ctx, cur.ImageGenURL); err != nil {
+	if err := s.imagegen.ReclaimMemory(ctx, cur.GenURL()); err != nil {
 		return append(problems, "the generator did not load its checkpoint: "+err.Error())
 	}
 	c.mu.Lock()
@@ -280,8 +283,8 @@ func (s *Server) freeImagesAndComfy(ctx context.Context, images, comfy bool, pro
 	c := s.card
 	c.swap.Lock()
 	defer c.swap.Unlock()
-	if images && cur.ImageGenEnabled && strings.TrimSpace(cur.ImageGenURL) != "" {
-		if err := s.imagegen.FreeMemory(ctx, cur.ImageGenURL); err != nil {
+	if images && cur.ImageGenEnabled && strings.TrimSpace(cur.GenURL()) != "" {
+		if err := s.imagegen.FreeMemory(ctx, cur.GenURL()); err != nil {
 			*problems = append(*problems, "the generator would not let go of its checkpoint: "+err.Error())
 		} else {
 			c.mu.Lock()

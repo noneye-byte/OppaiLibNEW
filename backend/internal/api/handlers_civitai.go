@@ -496,8 +496,8 @@ func (s *Server) installedByHash(ctx context.Context) map[string]string {
 	if !set.ImageGenEnabled {
 		return map[string]string{}
 	}
-	out, err := s.installedHashCache.get(ctx, set.ImageGenURL, func(ctx context.Context) (map[string]string, error) {
-		records, err := s.imagegen.ModelRecords(ctx, set.ImageGenURL)
+	out, err := s.installedHashCache.get(ctx, set.GenURL(), func(ctx context.Context) (map[string]string, error) {
+		records, err := s.imagegen.ModelRecords(ctx, set.GenURL())
 		if err != nil {
 			return nil, err
 		}

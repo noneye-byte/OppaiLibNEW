@@ -303,3 +303,99 @@ func TestAControlUnitActsOnlyInItsPartOfTheRunAndCanLetThePromptWin(t *testing.T
 		t.Fatalf("plain unit = %v", b)
 	}
 }
+
+// fakeForge answers as Forge Neo does: its VAEs in /sd-modules among the text encoders,
+// no /sd-vae and no /reload-checkpoint.
+func fakeForge(t *testing.T, body *map[string]any) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /sdapi/v1/sd-modules", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode([]map[string]string{
+			{"model_name": "sdxl_vae.safetensors", "filename": "/app/models/VAE/sdxl_vae.safetensors"},
+			{"model_name": "t5xxl.safetensors", "filename": "/app/models/text_encoder/t5xxl.safetensors"},
+		})
+	})
+	mux.HandleFunc("GET /sdapi/v1/sd-models", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode([]map[string]string{{"title": "pony.safetensors [abc]", "model_name": "pony", "filename": "/app/models/Stable-diffusion/pony.safetensors"}})
+	})
+	mux.HandleFunc("POST /sdapi/v1/txt2img", func(w http.ResponseWriter, r *http.Request) {
+		if body != nil {
+			_ = json.NewDecoder(r.Body).Decode(body)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"images": []string{"aGVsbG8="}, "info": `{"seed":1}`})
+	})
+	mux.HandleFunc("POST /sdapi/v1/unload-checkpoint", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("{}")) })
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestForgeIsToldIfItIsAndSpeaksTheAutomatic1111Dialect(t *testing.T) {
+	srv := fakeForge(t, nil)
+	c := New()
+	ctx := context.Background()
+	if kind, err := c.Backend(ctx, srv.URL); err != nil || kind != KindA1111 {
+		t.Fatalf("kind = %q, err = %v", kind, err)
+	}
+	if !c.IsForge(ctx, srv.URL) {
+		t.Fatal("not read as Forge")
+	}
+}
+
+func TestForgesVAEsAreFoundAmongItsModulesAndTheTextEncodersAreNot(t *testing.T) {
+	srv := fakeForge(t, nil)
+	vaes, err := New().Vaes(context.Background(), srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(vaes) != 1 || vaes[0].Key != "sdxl_vae.safetensors" {
+		t.Fatalf("vaes = %+v", vaes)
+	}
+}
+
+func TestAHiresFixOnForgeSaysToKeepTheSameModules(t *testing.T) {
+	// Without this Forge loops over None and every hires fix through its API fails.
+	var body map[string]any
+	srv := fakeForge(t, &body)
+	_, err := New().Generate(context.Background(), srv.URL, GenerateRequest{
+		Prompt: "her", Width: 512, Height: 512, Steps: 1, Seed: 1, Count: 1,
+		Upscale: Upscale{Enabled: true, Upscaler: "Latent", Scale: 1.5, Denoise: 0.4},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := body["hr_additional_modules"].([]any)
+	if len(got) != 1 || got[0] != "Use same choices" {
+		t.Fatalf("hr_additional_modules = %v", body["hr_additional_modules"])
+	}
+}
+
+func TestANonForgeHiresFixSendsNothingForgeOnly(t *testing.T) {
+	var body map[string]any
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /sdapi/v1/txt2img", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		_ = json.NewEncoder(w).Encode(map[string]any{"images": []string{"aGVsbG8="}, "info": `{"seed":1}`})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	_, err := New().Generate(context.Background(), srv.URL, GenerateRequest{
+		Prompt: "her", Width: 512, Height: 512, Steps: 1, Seed: 1, Count: 1,
+		Upscale: Upscale{Enabled: true, Upscaler: "Latent", Scale: 1.5, Denoise: 0.4},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, sent := body["hr_additional_modules"]; sent {
+		t.Fatal("Automatic1111 was sent Forge's field")
+	}
+}
+
+func TestForgeHasNoCheckpointToReloadAndThatIsNoError(t *testing.T) {
+	// It loads what a run asks for; asking for the missing route would fail the hand-off
+	// of the card back to pictures.
+	srv := fakeForge(t, nil)
+	if err := New().ReclaimMemory(context.Background(), srv.URL); err != nil {
+		t.Fatal(err)
+	}
+}

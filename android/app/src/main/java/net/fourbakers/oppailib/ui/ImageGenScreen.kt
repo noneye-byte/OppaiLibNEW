@@ -659,7 +659,11 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit, to
                         val model = st.models.find { it.title == checkpoint }
                         RecipeStrip(
                             repo = repo,
-                            backendLabel = if (invoke) "InvokeAI" else "Automatic1111",
+                            backendLabel = when (st.backend) {
+                                "invokeai" -> "InvokeAI"
+                                "comfyui" -> "ComfyUI"
+                                else -> "Automatic1111"
+                            },
                             model = model,
                             fallbackName = checkpoint,
                             loras = loraWeights.map { (name, w) ->

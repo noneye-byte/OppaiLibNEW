@@ -72,7 +72,7 @@ func (s *Server) libbySelfDirective(cur settings.Settings, character chatCharact
 	// her idea to have. Unconditional, because the call is drawn from her sprites and
 	// she always has those.
 	b.WriteString(callOfferDirective)
-	if cur.ImageGenURL != "" {
+	if cur.GenURL() != "" {
 		b.WriteString("- You have a camera: you can take a new picture of yourself or redo the last one, and you see what it shows once it is sent.\n")
 	}
 	b.WriteString("Stay Libby; never fall into generic assistant language or invent physical presence outside the app.")
@@ -169,7 +169,7 @@ func (s *Server) buildLibbyContext(ctx context.Context, withLists bool) libbyCon
 		UptimeSec: int64(time.Since(s.startedAt).Seconds()),
 		AIEnabled: s.ai.Enabled(),
 		AITagger:  s.ai.TaggerName(),
-		ImageGen:  cur.ImageGenURL != "",
+		ImageGen:  cur.GenURL() != "",
 		ChatModel: cur.ChatModel,
 		Kinds:     []db.KindStat{},
 		Recent:    []libbyRecentItem{},

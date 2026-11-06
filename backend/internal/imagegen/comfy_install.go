@@ -127,6 +127,15 @@ func (p ComfyPlaces) CanInstall(spec InstallSpec) error {
 	return err
 }
 
+// pictures is whether anything a picture is drawn with has somewhere to go: what the
+// studio needs before it can install, edit or delete in ComfyUI mode.
+func (p ComfyPlaces) pictures() bool {
+	return p["checkpoints"].Dir != "" || p["loras"].Dir != ""
+}
+
+// errComfyNoFolders is a write in ComfyUI mode with no folder to write to.
+var errComfyNoFolders = errors.New("ComfyUI has no API for this, so OppaiLib writes into its folders — set them under Settings → Image generation → Video")
+
 // Any is whether any kind has somewhere to go.
 func (p ComfyPlaces) Any() bool {
 	for _, f := range p {
@@ -146,7 +155,7 @@ var allInOne = regexp.MustCompile(`(?i)(^|[^a-z])(aio|all[\s_-]?in[\s_-]?one)([^
 func comfyFolderFor(spec InstallSpec) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(spec.Type)) {
 	case "checkpoint":
-		if allInOne.MatchString(spec.FileName) {
+		if spec.Pictures || allInOne.MatchString(spec.FileName) {
 			return "checkpoints", nil
 		}
 		return "diffusion_models", nil
@@ -154,6 +163,9 @@ func comfyFolderFor(spec InstallSpec) (string, error) {
 		return "loras", nil
 	case "vae":
 		return "vae", nil
+	}
+	if spec.Pictures {
+		return "", fmt.Errorf("ComfyUI mode installs checkpoints, LoRAs and VAEs; a %s has nowhere to go from here", spec.Type)
 	}
 	return "", fmt.Errorf("a Wan clip takes models, LoRAs and VAEs; a %s has nowhere to go in ComfyUI", spec.Type)
 }
@@ -193,6 +205,11 @@ func (c *Client) ComfyInstall(places ComfyPlaces, spec InstallSpec) (*InstallJob
 			if spec.Done != nil {
 				spec.Done(strings.TrimPrefix(key, shown+"/"))
 			}
+			if spec.Pictures {
+				// The studio's own key for the file, which is how the catalogue goes on
+				// to dress it. See model_home.go.
+				key = comfyPictureKey(shown, strings.TrimPrefix(key, shown+"/"))
+			}
 		}
 		jobs.update(job, func(j *InstallJob) {
 			if err != nil {
@@ -207,6 +224,19 @@ func (c *Client) ComfyInstall(places ComfyPlaces, spec InstallSpec) (*InstallJob
 	}()
 	out := *job
 	return &out, nil
+}
+
+// comfyPictureKey is a file's key from ComfyUI's name for its folder.
+func comfyPictureKey(folder, name string) string {
+	switch folder {
+	case "checkpoints":
+		return a1111Checkpoints.Folder + "/" + name
+	case "loras":
+		return a1111LoraFolder.Folder + "/" + name
+	case "vae":
+		return a1111VaeFolder.Folder + "/" + name
+	}
+	return folder + "/" + name
 }
 
 // ComfyInstallJobs lists the downloads into ComfyUI, newest first.

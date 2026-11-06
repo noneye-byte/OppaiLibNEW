@@ -336,7 +336,7 @@ func (s *Server) handleRename(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
 	} else if kind != imagegen.KindA1111 {
-		writeErr(w, http.StatusConflict, "InvokeAI keeps its own names for models — rename them in its model manager")
+		writeErr(w, http.StatusConflict, "This generator keeps its own names for models — rename them where it runs")
 		return
 	}
 	var keys map[string]string // detector name → key
