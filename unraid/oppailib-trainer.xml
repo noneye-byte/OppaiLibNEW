@@ -13,7 +13,7 @@
   <Category>MediaApp:Other</Category>
   <WebUI/>
   <TemplateURL>https://raw.githubusercontent.com/noneye-byte/OppaiLibNEW/main/unraid/oppailib-trainer.xml</TemplateURL>
-  <Icon>https://raw.githubusercontent.com/noneye-byte/OppaiLibNEW/main/web/public/icon.png</Icon>
+  <Icon>https://raw.githubusercontent.com/noneye-byte/OppaiLibNEW/main/trainer/icon.png</Icon>
   <ExtraParams>--runtime=nvidia --shm-size=8g</ExtraParams>
   <PostArgs/>
   <CPUset/>

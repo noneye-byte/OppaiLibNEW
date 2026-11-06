@@ -100,7 +100,7 @@ right — Extra Parameters is hidden otherwise.
 |-------|-------|
 | Name | `OppaiLib-Trainer` |
 | Repository | `ghcr.io/noneye-byte/oppailib-trainer:latest` |
-| Icon URL | `https://raw.githubusercontent.com/noneye-byte/OppaiLibNEW/main/web/public/icon.png` |
+| Icon URL | `https://raw.githubusercontent.com/noneye-byte/OppaiLibNEW/main/trainer/icon.png` |
 | Extra Parameters | `--runtime=nvidia --shm-size=8g` |
 | Network Type | `Bridge` |
 | Console shell command | `Bash` |

@@ -32,18 +32,19 @@ RUN git clone --depth 1 --branch "${SD_SCRIPTS_VERSION}" https://github.com/kohy
 RUN git clone --depth 1 --branch "${MUSUBI_TUNER_VERSION}" https://github.com/kohya-ss/musubi-tuner /opt/musubi-tuner \
     && cd /opt/musubi-tuner \
     && pip install --no-cache-dir --no-deps -e . \
-    && pip install --no-cache-dir "av==17.1.0" "easydict==1.13" \
+    && pip install --no-cache-dir "av==17.1.0" "easydict==1.13" "pillow>=11.3.0" \
     && python -c "import musubi_tuner.hv_train_network, library.train_util"
 
 # The CLIP tokenizers every SD 1.5 and SDXL run loads, saved where sd-scripts'
 # --tokenizer_cache_dir looks for them (the repo id with "/" as "_"), so a training
 # run on a box without internet does not stop at "can't download the tokenizer".
+# Transformers 5 saves a tokenizer as tokenizer.json alone, not the vocab.json it did.
 # The new families' are below; the weights of none of these are in the image.
 RUN python -c "from transformers import CLIPTokenizer as T; \
 [T.from_pretrained(r).save_pretrained('/opt/tokenizers/' + r.replace('/', '_')) \
  for r in ('openai/clip-vit-large-patch14', 'laion/CLIP-ViT-bigG-14-laion2B-39B-b160k')]" \
-    && test -f /opt/tokenizers/openai_clip-vit-large-patch14/vocab.json \
-    && test -f /opt/tokenizers/laion_CLIP-ViT-bigG-14-laion2B-39B-b160k/vocab.json
+    && test -f /opt/tokenizers/openai_clip-vit-large-patch14/tokenizer.json \
+    && test -f /opt/tokenizers/laion_CLIP-ViT-bigG-14-laion2B-39B-b160k/tokenizer.json
 
 # The tokenizers the newer families read from the Hub, saved in its cache so a run needs
 # no internet. Public repositories, and small: tokenizer files alone. One that is gone
