@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { compileCamera, outfitShotPrompt, scaleFor, DEFAULT_CAMERA, CAMERA_OPTIONS, type CameraSpec } from "./camera.ts";
+import { compileCamera, outfitShotPrompt, savedShot, scaleFor, DEFAULT_CAMERA, CAMERA_OPTIONS, type CameraSpec } from "./camera.ts";
 
 const spec = (over: Partial<CameraSpec> = {}): CameraSpec => ({ ...DEFAULT_CAMERA, ...over });
 
@@ -172,4 +172,15 @@ test("the option lists cover exactly what the compiler knows", () => {
   for (const { id, label, hint } of CAMERA_OPTIONS.shots) {
     assert.ok(label && hint, `${id} is missing a label or hint`);
   }
+});
+
+test("the default framing is a cowboy shot", () => {
+  assert.equal(DEFAULT_CAMERA.shot, "three-quarter");
+  assert.match(outfitShotPrompt(DEFAULT_CAMERA.shot), /cowboy shot/);
+});
+
+test("a saved full body is the old default unless it was picked, and other shots stand", () => {
+  assert.equal(savedShot("full-body", false), "three-quarter");
+  assert.equal(savedShot("full-body", true), "full-body");
+  assert.equal(savedShot("bust", false), "bust");
 });

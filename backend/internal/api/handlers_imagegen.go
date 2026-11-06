@@ -314,7 +314,8 @@ type generateReq struct {
 	// a reverse proxy's body limit refuses that upload with a page of its own.
 	InitGallery string `json:"initGallery"`
 	// NoGallery leaves the run out of the studio's gallery: the LoRA comparison's
-	// sheets, which are drawn to be looked at side by side and not kept.
+	// sheets, which are drawn to be looked at side by side and not kept, and a sprite's
+	// squares, which are kept in their wardrobe and would only be a second copy here.
 	NoGallery bool `json:"noGallery"`
 	// Regions draws each person in a part of the picture of their own, from their
 	// own words and LoRAs; Prompt is then what the whole picture shares.

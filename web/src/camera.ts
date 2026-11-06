@@ -65,7 +65,9 @@ export interface CameraSpec {
 }
 
 export const DEFAULT_CAMERA: CameraSpec = {
-  shot: "full-body",
+  // A sprite is shown from the thighs up, and a head that is a seventh of the picture
+  // is too small for a face to come out right, or for the reference to find one.
+  shot: "three-quarter",
   angle: "eye",
   view: "front",
   framing: "portrait",
@@ -134,6 +136,17 @@ const SHOTS: Record<ShotSize, { label: string; hint: string; prompt: string; not
  * dragging camera setup and negative conditioning into every wardrobe image. */
 export function outfitShotPrompt(shot: ShotSize): string {
   return SHOTS[shot].prompt;
+}
+
+/**
+ * The shot a saved draft or recipe is read as.
+ *
+ * Full body used to be the default, and every draft and recipe wrote it down whether
+ * anybody had picked it or not, so a saved "full-body" says nothing. It is read as the
+ * default that replaced it unless the user is known to have chosen it.
+ */
+export function savedShot(shot: ShotSize, chosen: boolean): ShotSize {
+  return shot === "full-body" && !chosen ? DEFAULT_CAMERA.shot : shot;
 }
 
 const ANGLES: Record<CameraAngle, { label: string; prompt: string; not: string[] }> = {

@@ -1682,6 +1682,8 @@ export interface ClipParams {
   models?: ClipModels;
   /** The gallery folder the clip is filed in. */
   board?: string;
+  /** Leave the clip out of the gallery: a sprite square's, filed in its wardrobe. */
+  noGallery?: boolean;
   /** Answer at once and make the clip under jobId, to be followed with genProgress. */
   detach?: boolean;
   /** End on the picture it starts from, so it plays round without a seam: a clip from
@@ -1714,6 +1716,8 @@ export interface ClipUpscaleParams {
   upscaler: string;
   scale: number;
   board?: string;
+  /** Leave it out of the gallery: a sprite square's, on its way to the wardrobe. */
+  noGallery?: boolean;
   detach?: boolean;
 }
 
@@ -1845,7 +1849,8 @@ export interface GenerateParams {
   /** Start from a gallery picture by name, in place of initImage: the server reads
       it, so the picture is not uploaded back to where it already is. */
   initGallery?: string;
-  /** Leave the run out of the studio's gallery (the LoRA comparison's sheets). */
+  /** Leave the run out of the studio's gallery (the LoRA comparison's sheets, and
+      sprite squares, which their wardrobe keeps). */
   noGallery?: boolean;
 }
 
@@ -3116,6 +3121,11 @@ export const api = {
   /** What to carry on with: items left part-way through, most recent first. */
   resumeShelf: (signal?: AbortSignal) =>
     request<{ items: Media[]; progress: MediaProgress[] }>("/api/resume", { signal }),
+  /** Home's Libby Suggested row. `seen` is what this device has opened, which only it
+      knows; `because` is the tags that did the most to pick the row. */
+  suggestedMedia: (seen: number[], signal?: AbortSignal) =>
+    request<{ items: Media[]; because: string[] }>(
+      `/api/media/suggested${seen.length ? `?seen=${seen.join(",")}` : ""}`, { signal }),
   getMedia: (id: number) => request<Media>(`/api/media/${id}`),
   // <img>/<video> can't set headers; auth rides on the HttpOnly session cookie
   // set at login (same-origin request).
@@ -3451,7 +3461,7 @@ export const api = {
     request<GenerateResult>("/api/imagegen/clip/upscale", { method: "POST", body: JSON.stringify(params) }, params.detach ? 2 * 60_000 : 16 * 60_000),
 
   /** A finished clip with its background cut away on the server: a new clip beside it. */
-  matteClip: (params: { jobId?: string; gallery?: string; id?: string; outfit?: OutfitClipRef; board?: string; detach?: boolean }) =>
+  matteClip: (params: { jobId?: string; gallery?: string; id?: string; outfit?: OutfitClipRef; board?: string; noGallery?: boolean; detach?: boolean }) =>
     request<GenerateResult>("/api/imagegen/clip/matte", { method: "POST", body: JSON.stringify(params) }, params.detach ? 2 * 60_000 : 16 * 60_000),
   /** A picture's matte from the server's background-removal model: a greyscale PNG at
       its size, white where she is. */

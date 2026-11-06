@@ -60,6 +60,9 @@ type clipReq struct {
 	Models *settings.ClipModels `json:"models"`
 	// Board is the gallery folder open beside the studio, which the clip is filed in.
 	Board string `json:"board"`
+	// NoGallery leaves the clip out of the gallery: a sprite square's, which is filed
+	// in its wardrobe instead. It stays a preview until then.
+	NoGallery bool `json:"noGallery"`
 	// Detach answers 202 at once and makes the clip under JobID; see the top.
 	Detach bool `json:"detach"`
 	// Loop ends a clip from a picture on that picture, so it plays round without a
@@ -399,7 +402,9 @@ func (s *Server) handleImageGenClip(w http.ResponseWriter, r *http.Request) {
 		rec := clipRecord(req, recipe, vars, extra, init)
 		clip := &genClip{MIME: mime, Seed: req.Seed, Recipe: rec.Clip.Recipe, Width: rec.Width, Height: rec.Height}
 		preview := &genPreview{data: out.Data, mime: mime, prompt: req.Prompt, negative: req.NegativePrompt, seed: req.Seed, model: rec.Model}
-		s.keepClip(ctx, set, req.Board, out, rec, init, preview, clip)
+		if !req.NoGallery {
+			s.keepClip(ctx, set, req.Board, out, rec, init, preview, clip)
+		}
 		clip.ID = s.genCache.put(preview)
 		return genResult{Images: []genResultImage{}, Prompt: req.Prompt, Positive: req.Prompt, Negative: req.NegativePrompt, Clip: clip}, nil
 	})
@@ -555,7 +560,10 @@ type clipUpscaleReq struct {
 	Upscaler string  `json:"upscaler"`
 	Scale    float64 `json:"scale"`
 	Board    string  `json:"board"`
-	Detach   bool    `json:"detach"`
+	// NoGallery is as on clipReq: a sprite square's clip, enlarged on its way to the
+	// wardrobe.
+	NoGallery bool `json:"noGallery"`
+	Detach    bool `json:"detach"`
 }
 
 // clipVideoExt is the extension ComfyUI's video loader knows a clip of this type by.
@@ -630,7 +638,9 @@ func (s *Server) upscaledClip(ctx context.Context, set settings.Settings, req cl
 	rec.At = time.Now().UnixMilli()
 	clip := &genClip{MIME: mime, Seed: rec.Seed, Recipe: up.Recipe(), Width: rec.Width, Height: rec.Height}
 	preview := &genPreview{data: out.Data, mime: mime, prompt: rec.Prompt, negative: rec.NegativePrompt, seed: rec.Seed, model: rec.Model}
-	s.keepClip(ctx, set, req.Board, out, rec, src.still, preview, clip)
+	if !req.NoGallery {
+		s.keepClip(ctx, set, req.Board, out, rec, src.still, preview, clip)
+	}
 	clip.ID = s.genCache.put(preview)
 	return genResult{Images: []genResultImage{}, Prompt: rec.Prompt, Positive: rec.Prompt, Negative: rec.NegativePrompt, Clip: clip}
 }

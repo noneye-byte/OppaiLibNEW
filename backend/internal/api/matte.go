@@ -88,7 +88,9 @@ type clipMatteReq struct {
 	// Outfit is a wardrobe square's stored clip, in place of the two above.
 	Outfit *outfitClipRef `json:"outfit,omitempty"`
 	Board  string         `json:"board"`
-	Detach bool           `json:"detach"`
+	// NoGallery is as on clipReq: a sprite square's clip, cut on its way to the wardrobe.
+	NoGallery bool `json:"noGallery"`
+	Detach    bool `json:"detach"`
 }
 
 // handleClipMatte cuts the background off a finished clip. The cut clip is a new one
@@ -143,7 +145,9 @@ func (s *Server) cutClip(ctx context.Context, req clipMatteReq, src clipSource, 
 	out := imagegen.ComfyOutput{Data: data, Name: "cutout.webm", MIME: mime}
 	clip := &genClip{MIME: mime, Seed: rec.Seed, Recipe: recipe, Width: rec.Width, Height: rec.Height, Cutout: true}
 	preview := &genPreview{data: data, mime: mime, prompt: rec.Prompt, negative: rec.NegativePrompt, seed: rec.Seed, model: rec.Model}
-	s.keepClip(ctx, set, req.Board, out, rec, src.still, preview, clip)
+	if !req.NoGallery {
+		s.keepClip(ctx, set, req.Board, out, rec, src.still, preview, clip)
+	}
 	clip.ID = s.genCache.put(preview)
 	return genResult{Images: []genResultImage{}, Prompt: rec.Prompt, Positive: rec.Prompt, Negative: rec.NegativePrompt, Clip: clip}
 }

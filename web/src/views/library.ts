@@ -48,6 +48,7 @@ import {
   studioEditable,
 } from "../media-meta.js";
 import { loadRecents, noteOpened, recentlyOpened } from "../recents.js";
+import { suggestionLine } from "../suggested.js";
 import "../context-menu.js";
 import { libbyWhere } from "./libby-drawer.js";
 import "./libby-drawer.js";
@@ -192,6 +193,9 @@ export class OppaiLibrary extends LitElement {
   /** Home's shelves, each a bounded query rather than a slice of everything. */
   @state() private home: {
     resume: Media[];
+    /** Libby Suggested: what she picked, and the tags that did the most to pick it. */
+    suggested: Media[];
+    because: string[];
     favorites: Media[];
     newest: Media[];
     byKind: Record<Kind, Media[]>;
@@ -216,8 +220,8 @@ export class OppaiLibrary extends LitElement {
 
   /** Which collection is open, when the section is "collections". */
   @state() private openCollection: Collection | null = null;
-  /** What has been opened on this device, newest first. Feeds Home's hero and its
-      "Jump back in" row. Per-device and client-owned; see recents.ts. */
+  /** What has been opened on this device, newest first. Feeds Home's hero, and tells
+      Libby Suggested what has been seen. Per-device and client-owned; see recents.ts. */
   @state() private recents = loadRecents();
   @state() private loading = false;
   /** A further page on its way. Separate from `loading` so appending never blanks
@@ -1603,9 +1607,11 @@ export class OppaiLibrary extends LitElement {
     const row = (q: MediaQuery) =>
       api.listMedia({ ...q, limit: 12, signal: abort.signal }).then((p) => p.items ?? []).catch(() => []);
     try {
-      const [stats, resume, favorites, newest, moments, ...kinds] = await Promise.all([
+      const [stats, resume, suggested, favorites, newest, moments, ...kinds] = await Promise.all([
         api.libraryStats(abort.signal).catch(() => null),
         api.resumeShelf(abort.signal).then((r) => r.items ?? []).catch(() => []),
+        api.suggestedMedia(this.recents.map((r) => r.id), abort.signal)
+          .catch(() => ({ items: [] as Media[], because: [] as string[] })),
         row({ favorite: true }),
         row({}),
         api.recentBookmarks(12, abort.signal).then((r) => r.bookmarks ?? []).catch(() => [] as Bookmark[]),
@@ -1615,8 +1621,11 @@ export class OppaiLibrary extends LitElement {
       const byKind = {} as Record<Kind, Media[]>;
       KIND_ORDER.forEach((k, i) => (byKind[k] = kinds[i] ?? []));
       this.stats = stats;
-      this.home = { resume, favorites, newest, byKind, moments };
-      this.noteServerFavorites([...favorites, ...newest, ...resume]);
+      this.home = {
+        resume, favorites, newest, byKind, moments,
+        suggested: suggested.items ?? [], because: suggested.because ?? [],
+      };
+      this.noteServerFavorites([...favorites, ...newest, ...resume, ...this.home.suggested]);
     } catch {
       /* Home degrades to whatever shelves did arrive. */
     }
@@ -1757,8 +1766,8 @@ export class OppaiLibrary extends LitElement {
     if (!this.viewerPushed) {
       try { history.pushState({ oppaiViewer: true }, ""); this.viewerPushed = true; } catch { /* file: URLs, sandboxed frames */ }
     }
-    // What Home's "Jump back in" row is built from. Recorded here rather than in the
-    // viewer because this is the one place an item is opened from, whichever screen
+    // What Home's hero is built from. Recorded here rather than in the viewer
+    // because this is the one place an item is opened from, whichever screen
     // asked for it. See recents.ts.
     this.recents = noteOpened(id);
     this.selectedId = id;
@@ -2798,8 +2807,8 @@ export class OppaiLibrary extends LitElement {
               <strong>${addedThisWeek.toLocaleString()}</strong><span>added this week</span></div>
           </div>` : nothing}
 
-        ${row("Jump back in", "history", continueRow, null, 120,
-          resumeRow.length ? "Where you left off, on any device" : "What you've opened on this device")}
+        ${row("Libby Suggested", "auto_awesome", this.home.suggested, null, 120,
+          suggestionLine(this.home.because, this.safe))}
         ${row("Favourites", "star", favorites, () => this.selectSection("favorites"), 170)}
         ${this.renderMoments(this.home.moments)}
         ${row("Recently added", "new_releases", newest.slice(0, 12), null, 220)}

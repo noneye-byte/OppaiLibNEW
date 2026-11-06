@@ -56,6 +56,7 @@ import {
   compileCamera,
   DEFAULT_CAMERA,
   outfitShotPrompt,
+  savedShot,
   scaleFor,
   type CameraSpec,
   type ShotSize,
@@ -594,6 +595,8 @@ export class OppaiImageGen extends LitElement {
   /** Camera and shot composition. Compiled into terms, negatives and a frame size rather
       than appended as text — see camera.ts. */
   @state() private camera: CameraSpec = { ...DEFAULT_CAMERA };
+  /** Whether the shot was picked rather than defaulted. See savedShot. */
+  @state() private spriteShotChosen = false;
 
   /** The cut-out being previewed, if any. */
   @state() private cutout: {
@@ -2074,7 +2077,7 @@ export class OppaiImageGen extends LitElement {
     "selectedLoras", "selectedTriggers", "selectedChars", "selectedPoses",
     "outfitOn", "outfitText", "outfitGear", "outfitFace", "outfitMisc", "outfitMiscBatch", "outfitTier", "outfitBackground",
     "outfitLockColors", "outfitLoadoutId", "outfitWardrobeId", "sheetZoom",
-    "outfitUnderwearColor", "outfitPubicHair", "outfitPubicHairColor", "camera", "spriteReference", "spriteReferenceStrength",
+    "outfitUnderwearColor", "outfitPubicHair", "outfitPubicHairColor", "camera", "spriteShotChosen", "spriteReference", "spriteReferenceStrength",
     "spriteReferenceBare", "spriteReferenceBuild",
     "detailerEnabled", "detailerModel", "detailerPrompt", "detailerNegative",
     "detailerConfidence", "detailerDenoise", "detailerMaskBlur", "detailerFaces", "detailerHands", "detailerCustom",
@@ -2311,6 +2314,7 @@ export class OppaiImageGen extends LitElement {
       outfitLoadoutId: this.outfitLoadoutId,
       outfitWardrobeId: this.outfitWardrobeId,
       camera: this.camera,
+      spriteShotChosen: this.spriteShotChosen,
       detailerEnabled: this.detailerEnabled,
       detailerModel: this.detailerModel,
       detailerPrompt: this.detailerPrompt,
@@ -2401,7 +2405,11 @@ export class OppaiImageGen extends LitElement {
     if (d.outfitWardrobeId !== undefined) this.outfitWardrobeId = d.outfitWardrobeId;
     // Merged over the defaults rather than assigned: a draft written before an axis
     // existed must not leave that axis undefined and index a lookup table with it.
-    if (d.camera) this.camera = { ...DEFAULT_CAMERA, ...d.camera };
+    if (d.spriteShotChosen !== undefined) this.spriteShotChosen = d.spriteShotChosen;
+    if (d.camera) {
+      const camera = { ...DEFAULT_CAMERA, ...d.camera };
+      this.camera = { ...camera, shot: savedShot(camera.shot, this.spriteShotChosen) };
+    }
     if (d.detailerEnabled !== undefined) this.detailerEnabled = d.detailerEnabled;
     if (d.detailerModel !== undefined) this.detailerModel = d.detailerModel;
     if (d.detailerPrompt !== undefined) this.detailerPrompt = d.detailerPrompt;
@@ -3306,6 +3314,7 @@ export class OppaiImageGen extends LitElement {
         // A MISC square is cut to how the app holds it: see misc-motion.ts.
         const params = clipParamsFor(miscClipForm(spriteForm, slot.emotion), clips, start, this.board, kept ? kept + i : undefined);
         params.initImage = start.dataURL;
+        params.noGallery = true;
         const jobId = params.jobId!;
         const follow = (step: "clip" | "upscale", id: string) => (percent: number) =>
           this.setMotionBusy(key, { step, percent: (i + (step === "upscale" ? 0.5 + percent / 2 : spriteForm.enlarge ? percent / 2 : percent)) / takes, jobId: id });
@@ -3315,7 +3324,7 @@ export class OppaiImageGen extends LitElement {
           const upId = newClipJobId();
           clip = await followClip(upId, () => api.upscaleClip({
             jobId: upId, id: clip.id || undefined, gallery: clip.id ? undefined : clip.gallery,
-            upscaler: spriteForm.upscaler, scale: spriteForm.upscaleBy, board: this.board, detach: true,
+            upscaler: spriteForm.upscaler, scale: spriteForm.upscaleBy, noGallery: true, detach: true,
           }), follow("upscale", upId));
         }
         made.push(clip);
@@ -3344,7 +3353,7 @@ export class OppaiImageGen extends LitElement {
     this.setMotionBusy(key, { step: "cut", percent: 0, jobId });
     try {
       const clip = await followClip(jobId, () => api.matteClip({
-        jobId, outfit: { outfit: wardrobeId, emotion: slot.emotion, level: slot.tier }, board: this.board, detach: true,
+        jobId, outfit: { outfit: wardrobeId, emotion: slot.emotion, level: slot.tier }, noGallery: true, detach: true,
       }), (percent) => this.setMotionBusy(key, { step: "cut", percent, jobId }));
       await this.fileMotion(wardrobeId, slot, "cut", clip, clipTake(sq.clip!));
       return "";
@@ -3630,6 +3639,10 @@ export class OppaiImageGen extends LitElement {
       upscale: src ? undefined : this.hiresParams(),
       regions: src || !this.regionsActive ? undefined
         : regionParams(true, this.regionsRows, this.regionPeople, this.characters, this.status?.loras ?? []),
+      // A square's home is its wardrobe (storeOutfitWip). A set is sixty-odd pictures,
+      // redrawn until they are right, and each of them landing in the gallery as well
+      // buried everything made there on purpose.
+      noGallery: outfit ? true : undefined,
     };
     // Held to its references, when there are any and this is not the only one. From
     // noise and a seed of its own all the same: see sprite-reference.ts.
@@ -3740,12 +3753,9 @@ export class OppaiImageGen extends LitElement {
           this.showToast(`Couldn't keep this square: ${(e as Error).message}`);
         }
       }
-      // A redo is replacement, not another hidden cache entry. Delete only after the
-      // new image exists so a failed generation never destroys the usable take.
-      // A restored square has no preview behind its id, so only a real one is dropped.
-      if (superseded && made.length && !superseded.id.startsWith("wip-")) {
-        await api.deleteGenPreview(superseded.id);
-      }
+      // A redo is replacement, not another hidden copy. Delete only after the new image
+      // exists so a failed generation never destroys the usable take.
+      if (superseded && made.length) await this.discardTake(superseded);
       const key = slotKeyOf(outfit.slot);
       this.shots = [
         ...this.shots.filter((shot) => !shot.outfitSlot || slotKeyOf(shot.outfitSlot) !== key),
@@ -3767,6 +3777,18 @@ export class OppaiImageGen extends LitElement {
     }
     void this.galleryPanel?.refresh();
     return made.length;
+  }
+
+  /**
+   * Throws out the take a square has moved on from. Its stored picture has already been
+   * written over; what can be left is the preview, which a square restored from its
+   * wardrobe does not have, and on a square from before sprites stayed out of the
+   * gallery, its copy there. A copy that has since gone or been moved is not an error:
+   * the new take is what matters by now.
+   */
+  private async discardTake(take: Shot) {
+    if (!take.id.startsWith("wip-")) await api.deleteGenPreview(take.id).catch(() => undefined);
+    if (take.gallery) await api.deleteGalleryImage(take.gallery).catch(() => undefined);
   }
 
   /**
@@ -6485,7 +6507,7 @@ export class OppaiImageGen extends LitElement {
         imageData: dataURL, filename, seed: -1, reviewed: false, config: this.outfitConfigKey(),
       });
       const previous = this.shotAt(slot);
-      if (previous && !previous.id.startsWith("wip-")) await api.deleteGenPreview(previous.id).catch(() => undefined);
+      if (previous) await this.discardTake(previous);
       const key = slotKeyOf(slot);
       const shot: Shot = {
         id: `wip-${wardrobeId}-${slot.emotion}-${slot.tier}`, seed: -1, saved: false,
@@ -7667,7 +7689,7 @@ export class OppaiImageGen extends LitElement {
       <div>
         <label class="field">Shot</label>
         <select class="num" .value=${this.camera.shot} ?disabled=${this.outfitBatchRunning}
-          @change=${(e: Event) => this.editCamera({ shot: (e.target as HTMLSelectElement).value as ShotSize })}>
+          @change=${(e: Event) => { this.spriteShotChosen = true; this.editCamera({ shot: (e.target as HTMLSelectElement).value as ShotSize }); }}>
           ${CAMERA_OPTIONS.shots.map((s) => html`<option value=${s.id}>${s.label}</option>`)}
         </select>
       </div>
@@ -8500,6 +8522,7 @@ export class OppaiImageGen extends LitElement {
       pubicHairColor: this.outfitPubicHairColor,
       lockColors: this.outfitLockColors,
       shot: this.camera.shot,
+      shotChosen: this.spriteShotChosen,
     };
   }
 
@@ -8518,7 +8541,8 @@ export class OppaiImageGen extends LitElement {
     this.outfitLockColors = body.lockColors !== false;
     const shot = str("shot", "");
     if (shot && CAMERA_OPTIONS.shots.some((s) => s.id === shot)) {
-      this.editCamera({ shot: shot as ShotSize });
+      this.spriteShotChosen = body.shotChosen === true;
+      this.editCamera({ shot: savedShot(shot as ShotSize, this.spriteShotChosen) });
     }
     this.outfitLoadoutId = saved.id;
     this.outfitOn = true;
@@ -8897,7 +8921,7 @@ export class OppaiImageGen extends LitElement {
     if (!confirm(`Delete the ${slot.tierLabel} · ${slot.emotionLabel} square? It will need generating again.`)) return;
     try {
       if (shot.wipOutfitId) await api.deleteLibbyOutfitWip(shot.wipOutfitId, slot.emotion, slot.tier);
-      if (!shot.id.startsWith("wip-")) await api.deleteGenPreview(shot.id).catch(() => undefined);
+      await this.discardTake(shot);
       this.shots = this.shots.filter((s) => s.id !== shot.id);
       this.persistDraft();
       this.showToast(`Deleted ${slot.tierLabel} · ${slot.emotionLabel}.`);

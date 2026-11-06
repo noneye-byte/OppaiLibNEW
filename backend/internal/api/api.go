@@ -410,6 +410,7 @@ func (s *Server) Handler() http.Handler {
 	// The library's shape without its rows, so Home can label its shelves without
 	// paging through them. See handleMediaStats.
 	mux.HandleFunc("GET /api/media/stats", s.requireAuth(s.handleMediaStats))
+	mux.HandleFunc("GET /api/media/suggested", s.requireAuth(s.handleSuggestedMedia))
 	// The filter chips' tags, most-used first. See handleTopTags.
 	mux.HandleFunc("GET /api/tags/top", s.requireAuth(s.handleTopTags))
 	mux.HandleFunc("POST /api/media", s.requireAuth(s.handleUploadMedia))

@@ -132,6 +132,8 @@ export interface GenDraft {
       hard it holds her face. See sprite-reference.ts. */
   spriteReference?: string;
   spriteReferenceStrength?: number;
+  /** Whether the camera's shot was picked rather than defaulted. See savedShot. */
+  spriteShotChosen?: boolean;
   /** The undressed reference, for Heated and Peak. */
   spriteReferenceBare?: string;
   /** How hard the references hold her build. */
@@ -240,7 +242,7 @@ export function loadDraft(): GenDraft | null {
     "spriteReferenceBuild"] as const).forEach(num);
   (["seamlessX", "seamlessY", "cpuNoise", "outfitOn", "outfitCutout", "outfitPubicHair",
     "outfitLockColors", "outfitMiscBatch", "detailerEnabled", "detailerFaces", "detailerHands",
-    "hiresEnabled", "showOptions"] as const).forEach(bool);
+    "hiresEnabled", "showOptions", "spriteShotChosen"] as const).forEach(bool);
 
   if (d.vaePrecision === "fp16" || d.vaePrecision === "fp32") out.vaePrecision = d.vaePrecision;
   if (d.outfitBackground === "black" || d.outfitBackground === "white") {

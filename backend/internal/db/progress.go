@@ -131,3 +131,36 @@ func (d *DB) ResumeIDs(ctx context.Context, userID int64, limit int) ([]int64, e
 	}
 	return out, rows.Err()
 }
+
+// engagedLimit bounds each list EngagedMedia reads: years of watching should not make
+// Home slower, and what you were into a thousand videos ago is not what you are into.
+const engagedLimit = 400
+
+// EngagedMedia is what a user has spent time with, newest first: what they have a
+// position in, finished or not, and what they have bookmarked a moment of. It is the
+// side of their taste that is per user; favourites and ratings live on the item.
+func (d *DB) EngagedMedia(ctx context.Context, userID int64) (watched, marked []int64, err error) {
+	read := func(query string) ([]int64, error) {
+		rows, err := d.sql.QueryContext(ctx, query, userID, engagedLimit)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		var ids []int64
+		for rows.Next() {
+			var id int64
+			if err := rows.Scan(&id); err != nil {
+				return nil, err
+			}
+			ids = append(ids, id)
+		}
+		return ids, rows.Err()
+	}
+	if watched, err = read(`SELECT media_id FROM progress WHERE user_id = ? ORDER BY updated_at DESC LIMIT ?`); err != nil {
+		return nil, nil, err
+	}
+	if marked, err = read(`SELECT media_id FROM bookmarks WHERE user_id = ? GROUP BY media_id ORDER BY MAX(id) DESC LIMIT ?`); err != nil {
+		return nil, nil, err
+	}
+	return watched, marked, nil
+}
