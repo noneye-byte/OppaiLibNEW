@@ -525,6 +525,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/imagegen/names/suggest", s.requireAuth(s.handleNameSuggest))
 	mux.HandleFunc("POST /api/imagegen/names/rename", s.requireAuth(s.handleRename))
 	mux.HandleFunc("POST /api/imagegen/restart", s.requireAuth(s.handleRestart))
+	mux.HandleFunc("POST /api/imagegen/modules/get", s.requireAuth(s.handleGetModules))
+	mux.HandleFunc("POST /api/imagegen/bases/civitai", s.requireAuth(s.handleBasesCivitai))
 	mux.HandleFunc("GET /api/imagegen/detectors", s.requireAuth(s.handleDetectors))
 	mux.HandleFunc("DELETE /api/imagegen/detectors", s.requireAuth(s.handleDetectorDelete))
 	mux.HandleFunc("GET /api/imagegen/detectors/civitai", s.requireAuth(s.handleDetectorCivitai))

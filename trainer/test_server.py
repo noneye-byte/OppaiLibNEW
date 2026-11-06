@@ -37,6 +37,96 @@ def safetensors(path, keys):
     return os.path.getsize(path)
 
 
+class FamilyArgsTest(unittest.TestCase):
+    """The new families' command lines. The flags themselves are checked against the
+    tools' sources by hand when their versions move; here is what OppaiLib decides."""
+
+    FILES = {r: f"/m/{r}" for r in ("clip_l", "t5xxl", "ae", "gemma2", "qwen3", "vae", "text_encoder", "t5")}
+
+    def kohya(self, family, **cfg):
+        return server.build_kohya_dit({"name": "x", **cfg}, server.RECIPES[family], "/m/base.safetensors",
+                                      self.FILES, "/d", "/o", None, "bf16")
+
+    def musubi(self, family, base="/m/base.safetensors", variant="", **cfg):
+        return server.build_musubi({"name": "x", **cfg}, family, server.RECIPES[family], base, self.FILES,
+                                   "/j/dataset.toml", "/o", None, "bf16", variant)
+
+    def test_every_family_the_trainer_claims_hands_over_each_file_it_needs(self):
+        for family, recipe in server.RECIPES.items():
+            if recipe["tool"] == "sd-scripts":
+                args = self.kohya(family)
+                self.assertIn(f"--network_module={recipe['network']}", args)
+                for role, flag in recipe["files"].items():
+                    self.assertIn(f"{flag}=/m/{role}", args, family)
+            else:
+                train = self.musubi(family)[-1][1]
+                self.assertIn(f"--network_module={recipe['network']}", train)
+                for role, flag in recipe["files"].items():
+                    self.assertIn(f"{flag}=/m/{role}", train, family)
+
+    def test_an_anima_run_is_what_its_guide_says(self):
+        args = self.kohya("anima")
+        self.assertTrue(args[0].endswith("anima_train_network.py"))
+        for flag in ("--qwen3=/m/qwen3", "--vae=/m/vae", "--network_train_unet_only", "--timestep_sampling=sigmoid",
+                     "--cache_text_encoder_outputs", "--network_dim=8", "--network_alpha=1"):
+            self.assertIn(flag, args)
+
+    def test_a_frozen_text_encoder_means_fixed_captions(self):
+        # sd-scripts refuses to run with both: the cached outputs are of one caption.
+        for family, recipe in server.RECIPES.items():
+            if recipe["tool"] == "sd-scripts":
+                self.assertNotIn("--shuffle_caption", self.kohya(family, shuffleCaption=True, trigger="x"))
+
+    def test_low_vram_keeps_blocks_off_the_card(self):
+        self.assertNotIn("--blocks_to_swap=18", self.kohya("flux"))
+        args = self.kohya("flux", lowVram=True)
+        self.assertIn("--blocks_to_swap=18", args)
+        self.assertIn("--fp8_base", args)
+        self.assertNotIn("--fp8_base", self.kohya("anima", lowVram=True), "Anima's guide says it is unsupported")
+
+    def test_musubi_encodes_a_set_before_training_on_it(self):
+        steps = self.musubi("zimage")
+        self.assertEqual([phase for phase, _ in steps], ["caching", "caching", "loading"])
+        self.assertTrue(steps[0][1][0].endswith("zimage_cache_latents.py"))
+        self.assertTrue(steps[1][1][0].endswith("zimage_cache_text_encoder_outputs.py"))
+        self.assertTrue(steps[2][1][0].endswith("zimage_train_network.py"))
+
+    def test_klein_is_told_its_size_and_whether_it_is_the_base_model(self):
+        self.assertEqual(server.klein_version("flux-2-klein-4b.safetensors", "4b"), "klein-4b")
+        self.assertEqual(server.klein_version("flux-2-klein-9b.safetensors", "9b"), "klein-9b")
+        self.assertEqual(server.klein_version("flux-2-klein-base-9b.safetensors", ""), "klein-base-9b")
+        for _, args in self.musubi("flux2", base="/m/flux-2-klein-base-4b.safetensors", variant="4b"):
+            self.assertIn("--model_version=klein-base-4b", args)
+
+    def test_one_half_of_wan_is_held_to_its_part_of_the_schedule(self):
+        flags, latent = server.wan_flags("wan2.2_t2v_high_noise_14B.safetensors", "t2v")
+        self.assertEqual(flags, ["--task=t2v-A14B", "--min_timestep=875", "--max_timestep=1000"])
+        self.assertEqual(latent, [])
+        flags, latent = server.wan_flags("wan2.2_i2v_low_noise_14B.safetensors", "i2v")
+        self.assertEqual(flags, ["--task=i2v-A14B", "--min_timestep=0", "--max_timestep=900"])
+        self.assertEqual(latent, ["--i2v"])
+
+    def test_wan_takes_its_text_encoder_by_another_name(self):
+        steps = self.musubi("wan")
+        self.assertIn("--t5=/m/t5", steps[1][1])
+        self.assertIn("--t5=/m/t5", steps[2][1])
+
+    def test_each_repeat_folder_is_a_dataset_with_a_cache_of_its_own(self):
+        root = tempfile.mkdtemp(dir=TMP)
+        for folder in ("10_mika", "4_mika"):
+            os.makedirs(os.path.join(root, folder))
+        toml = server.dataset_toml({"resolution": 1024}, server.RECIPES["zimage"], root, "/cache")
+        self.assertIn("resolution = [1024, 1024]", toml)
+        self.assertIn("num_repeats = 10", toml)
+        self.assertIn("num_repeats = 4", toml)
+        self.assertEqual(toml.count("[[datasets]]"), 2)
+        self.assertIn(os.path.join("/cache", "10_mika").replace("\\", "\\\\"), toml)
+
+    def test_a_family_no_tool_has_is_not_claimed(self):
+        for family in ("ernie", "pid", "qwen21", "sd2"):
+            self.assertNotIn(family, server.TRAINABLE)
+
+
 class ArgsTest(unittest.TestCase):
     def test_an_sdxl_run_uses_the_sdxl_script_and_keeps_its_vae_in_full_precision(self):
         args = server.build_args({"name": "ink"}, "sdxl", "/m/pony.safetensors", "/d", "/o", None, "bf16")
@@ -108,6 +198,20 @@ class PathsTest(unittest.TestCase):
         self.assertTrue(server.resolve_in_models("sdxl/main/pony.safetensors", size, root))
         self.assertIsNone(server.resolve_in_models("Stable-diffusion/Pony.safetensors", size + 1, root))
         self.assertIsNone(server.resolve_in_models("../../etc/passwd", 0, root))
+
+    def test_the_new_families_are_told_apart_as_forge_tells_them(self):
+        for family, keys in {
+            "anima": ["net.blocks.0.mlp.layer1.weight"], "wan": ["head.modulation"],
+            "flux2": ["double_blocks.0.img_attn.norm.key_norm.scale", "double_stream_modulation_img.lin.weight"],
+            "chroma": ["double_blocks.0.img_attn.norm.key_norm.scale", "distilled_guidance_layer.norms.0.scale"],
+            "flux": ["model.diffusion_model.double_blocks.0.img_attn.norm.key_norm.scale"],
+            "qwen": ["txt_norm.weight"], "krea2": ["txtfusion.projector.weight"], "ernie": ["layers.0.mlp.linear_fc2.weight"],
+            "moss": ["shared_block_modulation.weight"], "pid": ["lq_proj.latent_proj.0.weight"],
+            "qwen21": ["txt_in.text_norm.weight", "modulation.1.weight"],
+        }.items():
+            path = os.path.join(TMP, "family", f"{family}.safetensors")
+            safetensors(path, keys)
+            self.assertEqual(server.checkpoint_family(path), family)
 
     def test_the_family_is_read_off_the_tensor_names(self):
         root = tempfile.mkdtemp(dir=TMP)
@@ -271,6 +375,54 @@ class ApiTest(unittest.TestCase):
             th.join()
         self.assertEqual(errors, [])
         self.assertEqual(server.load_job(job["id"])["state"], "done")
+
+    def test_a_new_family_trains_with_its_modules_and_leaves_nothing_of_the_set_behind(self):
+        safetensors(os.path.join(TMP, "models", "Stable-diffusion", "z_image_bf16.safetensors"),
+                    {"noise_refiner.0.attention.k_norm.weight": 1, "cap_embedder.1.weight": 1})
+        path = os.path.join(TMP, "models", "Stable-diffusion", "z_image_bf16.safetensors")
+        header = json.dumps({
+            "cap_embedder.1.weight": {"dtype": "F16", "shape": [3840, 2560], "data_offsets": [0, 2]},
+            "noise_refiner.0.attention.k_norm.weight": {"dtype": "F16", "shape": [1], "data_offsets": [0, 2]},
+        }).encode()
+        with open(path, "wb") as f:
+            f.write(struct.pack("<Q", len(header)) + header + b"\0\0")
+        for name in ("qwen_3_4b.safetensors",):
+            safetensors(os.path.join(TMP, "models", "text_encoder", name), ["x"])
+        safetensors(os.path.join(TMP, "models", "VAE", "ae.safetensors"), ["x"])
+        _, body = self.submit({
+            "name": "zlora", "base": {"key": "Stable-diffusion/z_image_bf16.safetensors"},
+            "modules": {"text_encoder": {"key": "text_encoder/qwen_3_4b.safetensors"}, "ae": {"key": "VAE/ae.safetensors"}},
+        })
+        job = json.loads(body)
+        done = self.wait(job["id"])
+        self.assertEqual(done["state"], "done", done)
+        self.assertEqual(done["family"], "zimage")
+        with open(server.job_path(job["id"], "output", "zlora.safetensors"), "rb") as f:
+            # Z-Image's LoRA goes through convert_lora.py, or it does nothing in Forge.
+            self.assertTrue(f.read().endswith(b"-converted"))
+        self.assertFalse(os.path.exists(server.job_path(job["id"], "dataset")))
+        self.assertFalse(os.path.exists(server.job_path(job["id"], "cache")))
+
+    def test_a_family_with_no_tool_fails_saying_so(self):
+        safetensors(os.path.join(TMP, "models", "Stable-diffusion", "ernie.safetensors"), ["layers.0.mlp.linear_fc2.weight"])
+        _, body = self.submit({"name": "e", "base": {"key": "Stable-diffusion/ernie.safetensors"}})
+        done = self.wait(json.loads(body)["id"])
+        self.assertEqual(done["state"], "error")
+        self.assertIn("neither sd-scripts nor musubi-tuner", done["error"])
+
+    def test_a_module_that_did_not_arrive_fails_saying_which(self):
+        safetensors(os.path.join(TMP, "models", "Stable-diffusion", "anima.safetensors"), ["net.blocks.0.mlp.layer1.weight"])
+        _, body = self.submit({"name": "a", "base": {"key": "Stable-diffusion/anima.safetensors"}})
+        done = self.wait(json.loads(body)["id"])
+        self.assertEqual(done["state"], "error")
+        self.assertIn("qwen3", done["error"])
+
+    def test_health_says_which_families_it_trains(self):
+        code, body = self.call("GET", "/health")
+        self.assertEqual(code, 200)
+        health = json.loads(body)
+        self.assertIn("anima", health["families"])
+        self.assertIn("modules", health["features"])
 
     def test_a_job_with_a_bad_name_is_refused(self):
         self.assertEqual(self.call("POST", "/jobs", json.dumps({"name": "../x", "base": {"key": "k"}}).encode())[0], 400)

@@ -108,11 +108,14 @@ const PERIODS: { id: string; label: string }[] = [
   { id: "day", label: "Today" },
 ];
 
-// The base models worth a filter, as the catalogue names them. The list is what
-// people actually run rather than every value the API has ever seen.
+// The base models worth a filter, as the catalogue names them (its /enums), newest of
+// each kind first. The list is what people actually run rather than every value the
+// API has ever seen.
 const BASES: string[] = [
-  "SD 1.5", "SD 2.1", "SDXL 1.0", "Pony", "Illustrious", "NoobAI",
-  "Flux.1 D", "Flux.1 S", "SD 3.5", "Kolors", "Hunyuan 1", "Wan Video",
+  "Illustrious", "NoobAI", "Pony", "SDXL 1.0", "SD 1.5", "SD 2.1",
+  "Anima", "Flux.2 Klein 9B", "Flux.2 Klein 4B", "Flux.1 D", "Flux.1 S", "Flux.1 Kontext", "Flux.1 Krea", "Chroma",
+  "ZImageTurbo", "ZImageBase", "Qwen 2.1", "Qwen", "Krea 2", "Krea 2 Turbo", "Lumina", "Ernie", "MOSS Image",
+  "Kolors", "Hunyuan 1", "Wan Video",
 ];
 
 @customElement("oppai-civitai")

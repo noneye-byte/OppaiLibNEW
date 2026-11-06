@@ -123,6 +123,8 @@ import net.fourbakers.oppailib.data.VideoSession
 import net.fourbakers.oppailib.data.GenWildcard
 import net.fourbakers.oppailib.data.DetailerRequest
 import net.fourbakers.oppailib.data.LoraCategories
+import net.fourbakers.oppailib.data.baseGroup
+import net.fourbakers.oppailib.data.baseGroups
 import net.fourbakers.oppailib.data.LoraCategoryAssign
 import net.fourbakers.oppailib.data.UpscaleRequest
 import net.fourbakers.oppailib.data.GenLoraPick
@@ -224,6 +226,9 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit, to
     // The setup sheet that is up, if any.
     var sheet by remember { mutableStateOf<SetupSheet?>(null) }
     var loraFilter by remember { mutableStateOf("") }
+    // The base model chip that is on over each sheet, null for all of them.
+    var modelGroup by remember { mutableStateOf<String?>(null) }
+    var loraGroup by remember { mutableStateOf<String?>(null) }
     var negative by remember { mutableStateOf(draft.negative) }
     var width by remember { mutableStateOf(draft.width) }
     var height by remember { mutableStateOf(draft.height) }
@@ -826,7 +831,13 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit, to
                             shape = RoundedCornerShape(24.dp),
                             modifier = Modifier.fillMaxWidth(),
                         )
-                        val shown = st.models.distinctBy { it.title }.filter {
+                        // PiD is not drawn with: it finishes a picture another model drew.
+                        val drawable = st.models.distinctBy { it.title }.filter { it.family != "pid" }
+                        val groups = baseGroups(drawable) { baseGroup(it.base, it.family) }
+                        BaseChips(groups, modelGroup) { modelGroup = it }
+                        val shown = drawable.filter {
+                            modelGroup == null || baseGroup(it.base, it.family).key == modelGroup
+                        }.filter {
                             modelFilter.isBlank() || it.modelName.contains(modelFilter, true) ||
                                 it.title.contains(modelFilter, true) || it.base.contains(modelFilter, true)
                         }
@@ -877,10 +888,13 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit, to
                                 }
                             }
                         }
+                        BaseChips(baseGroups(st.loras) { baseGroup(it.base, it.family) }, loraGroup) { loraGroup = it }
                         // Keyed by name, and Compose throws if two items share a key; an
                         // older server can name two LoRAs alike, so duplicates go first.
                         val shown = st.loras.distinctBy { it.name }.filter {
                             catFilter == null || LoraCategories.of(it) == catFilter
+                        }.filter {
+                            loraGroup == null || baseGroup(it.base, it.family).key == loraGroup
                         }.filter {
                             loraFilter.isBlank() || it.name.contains(loraFilter, true) || it.alias.contains(loraFilter, true) ||
                                 it.triggerPhrases.any { p -> p.contains(loraFilter, true) }
@@ -1883,6 +1897,27 @@ private fun SizePreview(width: Int, height: Int) {
                     if (width == height) "square" else if (width > height) "landscape" else "portrait",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/** The base model chips over a sheet. One group is no choice, so it shows none; a chip
+    tapped again lets go of it. */
+@Composable
+private fun BaseChips(
+    groups: List<Pair<net.fourbakers.oppailib.data.BaseGroup, Int>>,
+    selected: String?,
+    onPick: (String?) -> Unit,
+) {
+    if (groups.size < 2) return
+    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FilterChip(selected = selected == null, onClick = { onPick(null) }, label = { Text("All") })
+        groups.forEach { (group, count) ->
+            FilterChip(
+                selected = selected == group.key,
+                onClick = { onPick(if (selected == group.key) null else group.key) },
+                label = { Text("${group.label} · $count") },
             )
         }
     }

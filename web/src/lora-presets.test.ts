@@ -104,6 +104,18 @@ test("SDXL-family checkpoints want larger pictures and more VRAM", () => {
   assert.equal(wantsLowVram(undefined, "sdxl"), false);
 });
 
+test("every family since SD 1.5 trains at a megapixel", () => {
+  for (const base of ["anima Anima", "flux Flux.1", "zimage Z-Image", "qwen Qwen"]) assert.equal(minSideFor(base), 768, base);
+});
+
+test("the large models ask for more of a card than SDXL does", () => {
+  assert.equal(wantsLowVram(14 * 1024, "sdxl"), false);
+  assert.equal(wantsLowVram(14 * 1024, "anima Anima"), false);
+  assert.equal(wantsLowVram(14 * 1024, "flux Flux.1"), true);
+  assert.equal(wantsLowVram(14 * 1024, "qwen Qwen"), true);
+  assert.equal(wantsLowVram(24 * 1024, "flux Flux.1"), false);
+});
+
 test("a caption is the trigger, then the tags not struck out, as the server writes it", () => {
   const tags = ["blonde hair", "smile", "Blonde_Hair", "beach", "ohwx"];
   assert.equal(captionOf("ohwx", tags, ["blonde_hair"], "tags"), "ohwx, smile, beach");

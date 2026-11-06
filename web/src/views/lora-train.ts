@@ -23,6 +23,7 @@ import {
   playDownNames, presetById, setKeep, shareLine, suggestLeaveOut, tagKey, togglePlayDown, wantsLowVram, type Effort, type PresetId,
 } from "../lora-presets.js";
 import { picturesToEnlarge, trainResolution } from "../train-fit.js";
+import { baseFamily, baseGroups, browseModels, familyLabel, familyOf } from "../lora-categories.js";
 import { loraStyles } from "./lora-styles.js";
 import "./lora-gather.js";
 import "./lora-comic.js";
@@ -555,7 +556,30 @@ export class OppaiLoraTrain extends LitElement {
 
   private baseFamily(): string {
     const m = this.models.find((x) => x.title === this.base);
-    return `${m?.base ?? ""} ${m?.model_name ?? ""}`;
+    return `${m?.family ?? ""} ${m?.base ?? ""} ${m?.model_name ?? ""}`;
+  }
+
+  /** Whether this trainer has a tool for a checkpoint. A trainer from before the list
+      trains what it always did. */
+  private canTrain(m: GenModel): boolean {
+    const fam = familyOf(m);
+    if (!fam) return true;
+    const families = this.trainer?.families ?? ["sd1", "sdxl"];
+    return !this.trainer || families.includes(fam);
+  }
+
+  /** What the picked checkpoint needs saying: a text encoder missing for training the
+      same as for drawing, and a trainer too old to know a family that is new. */
+  private trainNote() {
+    const m = this.models.find((x) => x.title === this.base);
+    if (!m) return nothing;
+    if (!this.canTrain(m)) {
+      const label = familyLabel(familyOf(m));
+      return html`<div class="note">${this.trainer?.families
+        ? `${label} can't be trained yet: neither sd-scripts nor musubi-tuner has it.`
+        : `Training ${label} needs a newer trainer. Update the oppailib-trainer container.`}</div>`;
+    }
+    return nothing;
   }
 
   // ── tagging ───────────────────────────────────────────────────────────────
@@ -1348,8 +1372,14 @@ export class OppaiLoraTrain extends LitElement {
           <p class="sub">A LoRA works on the family it was trained on: one trained on a Pony checkpoint suits Pony and its merges, not SD 1.5. Pick the checkpoint you'll generate with.</p>
           <select @change=${(e: Event) => (this.base = (e.target as HTMLSelectElement).value)}>
             ${!this.base ? html`<option value="">Choose a checkpoint</option>` : nothing}
-            ${this.models.map((m) => html`<option value=${m.title} ?selected=${m.title === this.base}>${m.model_name || m.title}${m.base ? ` · ${m.base}` : ""}</option>`)}
+            ${baseGroups(this.models).map((g) => html`<optgroup label=${g.label}>
+              ${browseModels(this.models, g.key, "name").map((m) => {
+                const can = this.canTrain(m);
+                return html`<option value=${m.title} ?selected=${m.title === this.base} ?disabled=${!can}>${m.model_name || m.title}${can ? "" : " — can't be trained yet"}</option>`;
+              })}
+            </optgroup>`)}
           </select>
+          ${this.trainNote()}
 
           <label class="field">How long</label>
           <div class="seg">
@@ -1477,7 +1507,7 @@ export class OppaiLoraTrain extends LitElement {
           ${preset ? html`<span>${preset.title}</span>` : nothing}
           ${t.trigger ? html`<span>Trigger <b>${t.trigger}</b></span>` : nothing}
           <span>${t.images} pictures</span>
-          <span>${t.baseModel}${t.family ? ` (${t.family === "sdxl" ? "SDXL" : "SD 1.5"})` : ""}</span>
+          <span>${t.baseModel}${t.family ? ` (${familyLabel(baseFamily(t.family))})` : ""}</span>
           <span>${new Date(t.createdAt * 1000).toLocaleString()}</span>
         </div>
         ${t.status === "done" ? html`<div class="note">Installed — pick it under LoRAs in the studio${t.trigger ? html`, and put <b>${t.trigger}</b> in the prompt` : ""}.</div>` : nothing}

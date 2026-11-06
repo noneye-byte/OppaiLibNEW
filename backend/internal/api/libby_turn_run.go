@@ -422,6 +422,7 @@ func (s *Server) makeRoom(ctx context.Context, place string, progress func(camer
 		return libbyBackgroundView{}, errShotRefused
 	}
 	gr := generateReq{
+		ModelSettings: true,
 		Prompt: scenePrompt(place), NegativePrompt: sceneNegative(cur.LibbyGenNegativePrompt),
 		Checkpoint: cur.LibbyGenModel, Board: cur.LibbyGenBoard, Width: 768, Height: 512, Count: 1, Seed: -1,
 	}

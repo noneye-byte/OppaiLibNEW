@@ -3,6 +3,7 @@ import type { CameraSpec } from "./camera.js";
 import type { OutfitGear } from "./outfit-loadout.js";
 import type { CustomPass } from "./detailer.js";
 import type { RegionPerson } from "./regions.js";
+import type { ForgeChoices } from "./forge.js";
 
 /**
  * Local draft persistence for the Creation tab.
@@ -85,6 +86,8 @@ export interface GenDraft {
   vae?: string;
   templateId?: string;
   scheduler?: string;
+  /** Forge's overrides. Reference pictures are left out, being pictures. */
+  forge?: Partial<ForgeChoices>;
 
   width?: number;
   height?: number;
@@ -257,6 +260,22 @@ export function loadDraft(): GenDraft | null {
       if (typeof v === "string" || typeof v === "boolean") cam[k] = v;
     }
     if (Object.keys(cam).length) out.camera = cam as Partial<CameraSpec>;
+  }
+
+  // Each kept only at the type it should be: a model's name that became a number would
+  // be sent to Forge as one.
+  if (d.forge && typeof d.forge === "object" && !Array.isArray(d.forge)) {
+    const f = d.forge as Record<string, unknown>;
+    const forge: Record<string, unknown> = {};
+    for (const k of ["scheduler", "refiner", "pid"]) if (typeof f[k] === "string") forge[k] = f[k];
+    for (const k of ["shift", "refinerAt", "rescaleCfg"]) {
+      if (typeof f[k] === "number" && Number.isFinite(f[k])) forge[k] = f[k];
+    }
+    for (const k of ["asReference", "spectrum", "sparse", "offload", "tiledVae", "mahiro"]) {
+      if (typeof f[k] === "boolean") forge[k] = f[k];
+    }
+    if (isStringArray(f.modules)) forge.modules = f.modules;
+    out.forge = forge as Partial<ForgeChoices>;
   }
 
   if (isRecordOfNumbers(d.selectedLoras)) out.selectedLoras = d.selectedLoras;

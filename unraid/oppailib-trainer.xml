@@ -9,7 +9,7 @@
   <Privileged>false</Privileged>
   <Support>https://github.com/noneye-byte/OppaiLibNEW/issues</Support>
   <Project>https://github.com/noneye-byte/OppaiLibNEW</Project>
-  <Overview>The LoRA trainer for OppaiLib. OppaiLib's Create → Train screen sends it pictures from your library, captioned from their tags, and it trains a LoRA for an SD 1.5 or SDXL (Pony, Illustrious, NoobAI) checkpoint with kohya's sd-scripts; OppaiLib then installs the result into Automatic1111 or InvokeAI by itself. Needs an NVIDIA GPU (the Nvidia Driver plugin) — 12 GB or more for SDXL, or Low VRAM mode below that. Pictures are deleted from here the moment their run ends.</Overview>
+  <Overview>The LoRA trainer for OppaiLib. OppaiLib's Create → Train screen sends it pictures from your library, captioned from their tags, and it trains a LoRA for an SD 1.5, SDXL (Pony, Illustrious, NoobAI), Anima, Flux, Chroma, Lumina, Z-Image, Qwen, Krea 2, MOSS Image or Wan 2.2 model with kohya's sd-scripts; OppaiLib then installs the result into Automatic1111 or InvokeAI by itself. Needs an NVIDIA GPU (the Nvidia Driver plugin) — 12 GB or more for SDXL, or Low VRAM mode below that. Pictures are deleted from here the moment their run ends.</Overview>
   <Category>MediaApp:Other</Category>
   <WebUI/>
   <TemplateURL>https://raw.githubusercontent.com/noneye-byte/OppaiLibNEW/main/unraid/oppailib-trainer.xml</TemplateURL>

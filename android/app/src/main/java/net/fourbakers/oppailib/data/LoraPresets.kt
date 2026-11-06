@@ -87,8 +87,12 @@ fun triggerFrom(name: String): String = name.lowercase().replace(Regex("[^a-z0-9
 /** Whether a run should start in low-VRAM mode for this card and checkpoint family. */
 fun wantsLowVram(vramMB: Int, base: String): Boolean {
     if (vramMB <= 0) return false
-    val xl = Regex("xl|pony|illustrious|noob", RegexOption.IGNORE_CASE).containsMatchIn(base)
-    return if (xl) vramMB < 12 * 1024 else vramMB < 6 * 1024
+    // Everything since SD 1.5 trains at a megapixel, so it is SD 1.5 that is the
+    // exception, and the large text encoders and transformers want more than SDXL does.
+    val sd1 = Regex("sd[ -]?1|1\\.5", RegexOption.IGNORE_CASE).containsMatchIn(base)
+    if (sd1) return vramMB < 6 * 1024
+    val large = Regex("flux|chroma|qwen|krea|moss|wan", RegexOption.IGNORE_CASE).containsMatchIn(base)
+    return vramMB < (if (large) 16 else 12) * 1024
 }
 
 /** Whether the run still has something to do. */

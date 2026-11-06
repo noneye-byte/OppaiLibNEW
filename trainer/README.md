@@ -2,15 +2,17 @@
 
 The container OppaiLib trains LoRAs on. OppaiLib itself is one Go binary with no
 Python in it; this is PyTorch, CUDA and kohya's
-[sd-scripts](https://github.com/kohya-ss/sd-scripts) (pinned in the
+[sd-scripts](https://github.com/kohya-ss/sd-scripts) and
+[musubi-tuner](https://github.com/kohya-ss/musubi-tuner) (pinned in the
 [Dockerfile](Dockerfile)) behind a small HTTP API ([server.py](server.py)). OppaiLib's
 Create → Train screen sends it pictures from the library, captioned from their tags,
 follows the run, and installs the finished LoRA into Automatic1111 or InvokeAI.
 
 ## Running it
 
-Needs an NVIDIA GPU: 12 GB or more for SDXL (Pony, Illustrious, NoobAI), less with
-Low VRAM, 8 GB is plenty for SD 1.5. On Unraid, see [below](#on-unraid). Elsewhere:
+Needs an NVIDIA GPU: 12 GB or more for SDXL (Pony, Illustrious, NoobAI) and Anima, 16
+GB or more for the larger models, less with Low VRAM; 8 GB is plenty for SD 1.5. On
+Unraid, see [below](#on-unraid). Elsewhere:
 
 ```sh
 docker run -d --name oppailib-trainer --gpus all --shm-size=8g -p 7870:7870 \
@@ -32,6 +34,37 @@ The image also finds the people in a picture for the comic gatherer's **Find peo
 ([detect.py](detect.py)): ADetailer's own `person_yolov8m-seg` model, baked in so it
 works offline, run on the GPU between trainings and on the CPU while one runs. A
 trainer from before it (version 2) shows no Find people button until it is updated.
+
+## What it trains
+
+| Family | Tool | Needs beside the model |
+|--------|------|------------------------|
+| SD 1.5, SDXL (Pony, Illustrious, NoobAI) | sd-scripts | nothing |
+| Anima | sd-scripts | Qwen3 0.6B, Qwen-Image VAE |
+| Flux.1 | sd-scripts | CLIP-L, T5-XXL, Flux VAE |
+| Chroma | sd-scripts | T5-XXL, Flux VAE |
+| Lumina | sd-scripts | Gemma 2 2B, Flux VAE |
+| MOSS Image | sd-scripts | Qwen3.5 9B, Flux.2 VAE |
+| Z-Image | musubi-tuner | Qwen3 4B, Flux VAE |
+| Qwen | musubi-tuner | Qwen 2.5 VL, Qwen-Image VAE |
+| Flux.2 Klein | musubi-tuner | Qwen3 4B or 8B, Flux.2 VAE |
+| Krea 2 | musubi-tuner | Qwen3 VL 4B, Qwen-Image VAE |
+| Wan 2.2 | musubi-tuner | Wan VAE, and the T5 below |
+
+OppaiLib sends the files beside the model the same way it sends a checkpoint, or the
+trainer finds them in `/models`. They have to be the full files: a trainer cannot use
+the `fp8_scaled` and `int8` versions a generator can. Ernie, PiD and Qwen 2.1 are in
+neither tool, and the Train screen says so rather than offering them.
+
+Wan's text encoder is the exception. musubi-tuner reads only the file Wan's makers
+published, and the first Wan run downloads it (11 GB) into `/data/bases`.
+
+The first run of a family may fetch its tokenizer from Hugging Face if the image could
+not bake it in; the Dockerfile bakes in what is public.
+
+A single Wan 2.2 model is trained alone, on its share of the noise schedule, by what
+its name says (`high_noise`, `low_noise`); a LoRA for both is two runs. Pictures train
+Wan's look, not its motion.
 
 ## On Unraid
 

@@ -886,7 +886,10 @@ data class GenModel(
     /** The model's record: InvokeAI's key, or an A1111 model's path under its folder. */
     val key: String = "",
     @SerialName("model_name") val modelName: String = "",
+    /** What it is built on, as finely as anything can say: "Illustrious", "Anima". */
     val base: String = "",
+    /** Its architecture, read off the file where it can be: "sdxl", "anima". */
+    val family: String = "",
     val defaults: GenModelDefaults? = null,
 )
 
@@ -899,6 +902,9 @@ data class GenModelDefaults(
     val width: Int = 0,
     val height: Int = 0,
     val vae: String = "",
+    /** Forge's: the noise schedule, and a family's shift or distilled CFG. */
+    val schedule: String? = null,
+    val shift: Double? = null,
     /** A LoRA's recommended strength; zero on main models. */
     val weight: Double = 0.0,
     // Kept by the server rather than the generator, which has no field for them. Null
@@ -1282,6 +1288,8 @@ data class GenLora(
     val name: String,
     val key: String = "",
     val alias: String = "",
+    val base: String = "",
+    val family: String = "",
     val triggerPhrases: List<String> = emptyList(),
     /** The strength the generator recommends (InvokeAI keeps one per LoRA); zero
         when it has no opinion, in which case picking the LoRA starts it at 1. */

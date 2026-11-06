@@ -397,13 +397,28 @@ func (s *Server) handleTrainStart(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	if _, err := s.trainer.Health(ctx, base, token); err != nil {
+	health, err := s.trainer.Health(ctx, base, token)
+	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
 	}
 	ckpt, err := s.imagegen.CheckpointFile(ctx, set.GenURL(), req.Base)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	family, variant, modules, err := s.imagegen.TrainModules(ctx, set.GenURL(), req.Base)
+	// Whether it can be trained at all comes first: being told to fetch a text encoder
+	// of several gigabytes for a family nothing trains would be worse than no answer.
+	var missing *imagegen.MissingModulesError
+	if errors.As(err, &missing) {
+		family = missing.Family
+	}
+	if cannot := trainerCanTrain(health, family); cannot != nil {
+		err = cannot
+	}
+	if err != nil {
+		writeErr(w, http.StatusConflict, err.Error())
 		return
 	}
 	pics, err := s.trainPics(ctx, req.Source)
@@ -429,9 +444,33 @@ func (s *Server) handleTrainStart(w http.ResponseWriter, r *http.Request) {
 	st.preparing[t.ID] = true
 	st.mu.Unlock()
 	fit := s.trainFitFor(ctx, set.GenURL(), req)
-	go s.trainPrepare(t, req, ckpt, pics, fit)
+	go s.trainPrepare(t, req, trainBase{ckpt, family, variant, modules}, pics, fit)
 	s.trainWatch()
 	writeJSON(w, http.StatusOK, trainingOutOf(t, nil))
+}
+
+// trainBase is what a run trains on: the checkpoint, what it is, and the files a bare
+// model takes beside it.
+type trainBase struct {
+	imagegen.CheckpointFile
+	family, variant string
+	modules         []imagegen.TrainFile
+}
+
+// trainerCanTrain says why a run on this family can't go ahead, before anything is
+// sent: said now, it is a message on the Train screen rather than a failed run minutes
+// of uploading later. A trainer that does not list the family and is older than the
+// list needs updating; one that does list families and leaves this out has no tool for
+// it, and updating will not help.
+func trainerCanTrain(h *trainer.Health, family string) error {
+	if h.Trains(family) {
+		return nil
+	}
+	label := imagegen.FamilyLabel(family)
+	if len(h.Families) == 0 {
+		return fmt.Errorf("training a %s LoRA needs a newer trainer — update the oppailib-trainer container", label)
+	}
+	return fmt.Errorf("%s can't be trained yet: neither sd-scripts nor musubi-tuner has it", label)
 }
 
 // trainBaseName is the checkpoint as a person knows it. The studio picks one by its
@@ -450,7 +489,7 @@ func (s *Server) trainBaseName(ctx context.Context, genBase, selector string) st
 
 // trainPrepare makes sure the trainer has the checkpoint and sends it the pictures.
 // It runs in the background: a checkpoint is gigabytes.
-func (s *Server) trainPrepare(t db.LoraTraining, req trainRequest, ckpt imagegen.CheckpointFile, pics []trainPic, fit trainFit) {
+func (s *Server) trainPrepare(t db.LoraTraining, req trainRequest, ckpt trainBase, pics []trainPic, fit trainFit) {
 	st := s.trainState()
 	defer func() {
 		st.mu.Lock()
@@ -466,26 +505,13 @@ func (s *Server) trainPrepare(t db.LoraTraining, req trainRequest, ckpt imagegen
 		}
 	}
 	base, token, _ := s.trainerSettings()
-	ref := trainer.BaseRef{Key: ckpt.Key, Size: ckpt.Size}
-	have, err := s.trainer.HasBase(ctx, base, token, ref)
-	if err != nil {
-		fail(err)
-		return
+	files := []imagegen.CheckpointFile{ckpt.CheckpointFile}
+	for _, m := range ckpt.modules {
+		files = append(files, m.CheckpointFile)
 	}
-	if !have {
-		if ckpt.Local == "" {
-			fail(fmt.Errorf("the trainer can't see %s — mount the generator's models folder into the trainer at /models, or Automatic1111's models folder into OppaiLib so the checkpoint can be sent", ckpt.Key))
-			return
-		}
-		f, err := os.Open(ckpt.Local)
-		if err != nil {
-			fail(fmt.Errorf("can't read the checkpoint to send it: %w", err))
-			return
-		}
-		err = s.trainer.UploadBase(ctx, base, token, ref, f)
-		f.Close()
-		if err != nil {
-			fail(fmt.Errorf("sending the checkpoint to the trainer: %w", err))
+	for _, file := range files {
+		if err := s.trainSendFile(ctx, base, token, file); err != nil {
+			fail(err)
 			return
 		}
 	}
@@ -556,6 +582,31 @@ func (s *Server) trainPrepare(t db.LoraTraining, req trainRequest, ckpt imagegen
 	s.trainWatch()
 }
 
+// trainSendFile makes sure the trainer has one model file: found in its own mount, or
+// sent from here. A checkpoint is gigabytes, and a bare one brings as many again.
+func (s *Server) trainSendFile(ctx context.Context, base, token string, file imagegen.CheckpointFile) error {
+	ref := trainer.BaseRef{Key: file.Key, Size: file.Size}
+	have, err := s.trainer.HasBase(ctx, base, token, ref)
+	if err != nil {
+		return err
+	}
+	if have {
+		return nil
+	}
+	if file.Local == "" {
+		return fmt.Errorf("the trainer can't see %s — mount the generator's models folder into the trainer at /models, or Automatic1111's models folder into OppaiLib so the file can be sent", file.Key)
+	}
+	f, err := os.Open(file.Local)
+	if err != nil {
+		return fmt.Errorf("can't read %s to send it: %w", file.Key, err)
+	}
+	defer f.Close()
+	if err := s.trainer.UploadBase(ctx, base, token, ref, f); err != nil {
+		return fmt.Errorf("sending %s to the trainer: %w", file.Key, err)
+	}
+	return nil
+}
+
 // trainReadPicture decrypts one picture into memory. It never touches the disk on
 // this side; the trainer deletes its copy when the run ends.
 func (s *Server) trainReadPicture(p trainPic) ([]byte, error) {
@@ -573,12 +624,19 @@ func (s *Server) trainReadPicture(p trainPic) ([]byte, error) {
 // trainSpec is the trainer's job for a request. The sample, when asked for, is the
 // trigger word and the tags the set has most in common — something that should look
 // like the pictures — with the checkpoint's own recommended negative.
-func (s *Server) trainSpec(ctx context.Context, req trainRequest, ckpt imagegen.CheckpointFile, tagSets [][]models.Tag, images int) trainer.Spec {
+func (s *Server) trainSpec(ctx context.Context, req trainRequest, ckpt trainBase, tagSets [][]models.Tag, images int) trainer.Spec {
 	spec := trainer.Spec{
 		Name: req.Name, Trigger: req.Trigger, Base: trainer.BaseRef{Key: ckpt.Key, Size: ckpt.Size},
 		Resolution: req.Resolution, Rank: req.Rank, Epochs: req.Epochs, Repeats: req.Repeats,
 		LearningRate: req.LearningRate, Optimizer: req.Optimizer, ClipSkip: req.ClipSkip, Flip: req.Flip,
 		Alpha: req.Alpha, NoiseOffset: req.NoiseOffset, TextEncoderLR: req.TextEncoderLR,
+		Family: ckpt.family, Variant: ckpt.variant, LowVRAM: req.LowVRAM,
+	}
+	if len(ckpt.modules) > 0 {
+		spec.Modules = map[string]trainer.BaseRef{}
+		for _, m := range ckpt.modules {
+			spec.Modules[m.Role] = trainer.BaseRef{Key: m.Key, Size: m.Size}
+		}
 	}
 	if spec.Repeats <= 0 {
 		spec.Repeats = loraRepeats(images)
@@ -949,7 +1007,7 @@ func (s *Server) trainDress(ctx context.Context, t *db.LoraTraining, genBase str
 		weight := imagegen.ModelDefaults{Weight: 1}
 		changes := imagegen.ModelChanges{Description: &desc, TriggerPhrases: &phrases, Defaults: &weight}
 		if jobErr == nil && job.Family != "" {
-			family := map[string]string{"sdxl": "SDXL 1.0", "sd1": "SD 1.5"}[job.Family]
+			family := trainedBase(job.Family)
 			changes.Base = &family
 		}
 		if _, err := s.imagegen.UpdateModel(ctx, genBase, t.ModelKey, changes); err != nil {
@@ -969,6 +1027,15 @@ func (s *Server) trainDress(ctx context.Context, t *db.LoraTraining, genBase str
 	if err := s.trainer.Delete(ctx, base, token, t.TrainerJob); err != nil && !errors.Is(err, trainer.ErrNotFound) {
 		s.log.Warn("train: forget on the trainer", "job", t.TrainerJob, "err", err)
 	}
+}
+
+// trainedBase is the catalogue's name for what a LoRA was trained on, where that differs
+// from how the family is said.
+func trainedBase(family string) string {
+	if family == imagegen.FamilySDXL {
+		return "SDXL 1.0"
+	}
+	return imagegen.FamilyLabel(family)
 }
 
 // trainEnded is the end of a run, however it ended.

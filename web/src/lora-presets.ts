@@ -266,15 +266,18 @@ export function captionOf(trigger: string, tags: string[], leaveOut: string[], m
   return parts.join(", ");
 }
 
-/** The short side a picture wants for a checkpoint family to train sharp. */
+/** The short side a picture wants for a checkpoint family to train sharp. Everything
+    since SD 1.5 trains at a megapixel, so it is SD 1.5 that is the exception. */
 export function minSideFor(base: string | undefined): number {
-  return /xl|pony|illustrious|noob/i.test(base ?? "") ? 768 : 448;
+  return /sd[ -]?1|1\.5/i.test(base ?? "") ? 448 : 768;
 }
 
-/** Whether a run should be started in low-VRAM mode for this card and family. */
+/** Whether a run should be started in low-VRAM mode for this card and family. SDXL and
+    the smaller models fit in 12 GB; the large text encoders and transformers do not. */
 export function wantsLowVram(vramMB: number | undefined, base: string | undefined): boolean {
   if (!vramMB) return false;
-  return minSideFor(base) > 448 ? vramMB < 12 * 1024 : vramMB < 6 * 1024;
+  if (minSideFor(base) === 448) return vramMB < 6 * 1024;
+  return vramMB < (/flux|chroma|qwen|krea|moss|wan/i.test(base ?? "") ? 16 : 12) * 1024;
 }
 
 // ── playing a tag down ──────────────────────────────────────────────────────

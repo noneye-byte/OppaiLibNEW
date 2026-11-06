@@ -198,7 +198,8 @@ fun LoraTrainTab(repo: Repository, models: List<GenModel>, checkpoint: String) {
         if (starting || name.isBlank() || base.isBlank() || pv.count == 0) return
         val preset = LORA_PRESETS.first { it.id == presetId }
         val word = trigger.trim().ifBlank { triggerFrom(name) }
-        val family = (models.find { it.title == base }?.base ?: "") + " " + base
+        val picked = models.find { it.title == base }
+        val family = "${picked?.family ?: ""} ${picked?.base ?: ""} $base"
         scope.launch {
             starting = true
             runCatching {

@@ -5,7 +5,7 @@ import { api, type GenLora, type LoraCivitaiResult } from "../api.js";
 import { openMenu, menuDivider, type MenuItem } from "../context-menu.js";
 import { isPickClick, pickClick } from "../pick-range.js";
 import {
-  LORA_CATEGORIES, LORA_ORDERS, baseFamily, browseLoras, categoryCounts, categoryOf, civitaiSortSummary,
+  LORA_CATEGORIES, LORA_ORDERS, baseFamily, baseGroups, browseLoras, categoryCounts, categoryOf, civitaiSortSummary,
   familyLabel, fitsModel, loraLabel, unfitCount, type CategoryFilter, type LoraCategoryKey, type LoraOrder,
 } from "../lora-categories.js";
 
@@ -52,6 +52,7 @@ interface Prefs {
   order?: LoraOrder;
   fitOnly?: boolean;
   category?: CategoryFilter;
+  group?: string;
 }
 
 function readPrefs(): Prefs {
@@ -69,6 +70,8 @@ export class OppaiLoraPicker extends LitElement {
   @property({ attribute: false }) selected: Record<string, number> = {};
   /** The picked checkpoint's base, which LoRAs are matched against. */
   @property() modelBase = "";
+  /** The base model chip that is on, a group from lora-categories.ts; "" for all. */
+  @state() private group = "";
   @property({ type: Number }) thumbVersion = 0;
   /** LoRA settings can be edited (A1111 with its models folder, or InvokeAI). */
   @property({ type: Boolean }) canEdit = false;
@@ -205,6 +208,11 @@ export class OppaiLoraPicker extends LitElement {
       }
       .badge .material-symbols-rounded { font-size: 13px; }
       .badge.base { left: 6px; top: 6px; }
+      /* Scrolls sideways rather than wrapping: a library spanning every family would
+         push the grid off the drawer. flex:none, or a column squeezes it to nothing. */
+      .base-chips { display: flex; gap: 6px; overflow-x: auto; flex: none; padding-bottom: 2px; scrollbar-width: none; }
+      .base-chips .toggle { flex: none; white-space: nowrap; }
+      .base-chips .count { margin-left: 5px; opacity: .6; font-variant-numeric: tabular-nums; }
       .badge.warn { background: color-mix(in srgb, var(--oppai-error, #f2b8b5) 80%, #000); }
       .badge.on { right: 6px; top: 6px; background: var(--oppai-primary); color: var(--oppai-on-primary); }
       .pick {
@@ -259,6 +267,7 @@ export class OppaiLoraPicker extends LitElement {
     const p = readPrefs();
     if (p.order && LORA_ORDERS.some((o) => o.id === p.order)) this.order = p.order;
     if (typeof p.fitOnly === "boolean") this.fitOnly = p.fitOnly;
+    if (typeof p.group === "string") this.group = p.group;
     if (p.category && (p.category === "all" || p.category === "none" || LORA_CATEGORIES.some((c) => c.key === p.category))) {
       this.category = p.category;
     }
@@ -266,7 +275,7 @@ export class OppaiLoraPicker extends LitElement {
 
   private savePrefs() {
     try {
-      localStorage.setItem(PREFS_KEY, JSON.stringify({ order: this.order, fitOnly: this.fitOnly, category: this.category } satisfies Prefs));
+      localStorage.setItem(PREFS_KEY, JSON.stringify({ order: this.order, fitOnly: this.fitOnly, category: this.category, group: this.group } satisfies Prefs));
     } catch {
       // A private window: the picker forgets its tab, which is all.
     }
@@ -274,6 +283,12 @@ export class OppaiLoraPicker extends LitElement {
 
   private emit<T>(name: string, detail: T) {
     this.dispatchEvent(new CustomEvent<T>(name, { detail, bubbles: true, composed: true }));
+  }
+
+  private setGroup(group: string) {
+    this.group = group;
+    this.limit = PAGE;
+    this.savePrefs();
   }
 
   private pickCategory(c: CategoryFilter) {
@@ -531,8 +546,11 @@ export class OppaiLoraPicker extends LitElement {
     }
     const fam = baseFamily(this.modelBase);
     const fitOnly = this.fitOnly && !!fam;
+    const groups = baseGroups(this.loras);
+    // A group that has gone (its last LoRA deleted) must not leave the list empty.
+    const group = groups.some((g) => g.key === this.group) ? this.group : "";
     const shown = browseLoras(this.loras, {
-      category: this.category, query: this.query, fitOnly, modelBase: this.modelBase, order: this.order,
+      category: this.category, query: this.query, fitOnly, modelBase: this.modelBase, group, order: this.order,
     });
     const order = shown.map((l) => l.name);
     const hidden = fam ? unfitCount(this.loras, this.modelBase) : 0;
@@ -559,6 +577,13 @@ export class OppaiLoraPicker extends LitElement {
             </button>`
           : nothing}
       </div>
+      ${groups.length > 1
+        ? html`<div class="base-chips" role="group" aria-label="Base model">
+            <button class="toggle ${group ? "" : "on"}" aria-pressed=${group ? "false" : "true"} @click=${() => this.setGroup("")}>All</button>
+            ${groups.map((g) => html`<button class="toggle ${g.key === group ? "on" : ""}" aria-pressed=${g.key === group ? "true" : "false"}
+              @click=${() => this.setGroup(g.key === group ? "" : g.key)}>${g.label}<span class="count">${g.count}</span></button>`)}
+          </div>`
+        : nothing}
       <div class="filters">
         ${this.renderCategoryPicker()}
         ${fam && hidden

@@ -1,5 +1,6 @@
 // Package trainer talks to the OppaiLib trainer: the companion container in
-// trainer/ that trains LoRAs with kohya's sd-scripts on a box with a GPU.
+// trainer/ that trains LoRAs with kohya's sd-scripts and musubi-tuner on a box with a
+// GPU.
 //
 // OppaiLib keeps no Python and no PyTorch, so it never trains anything itself. It
 // gathers the pictures, captions them, hands the trainer a job and follows it;
@@ -46,6 +47,7 @@ type Health struct {
 	OK            bool   `json:"ok"`
 	Version       string `json:"version"`
 	SDScripts     string `json:"sdScripts"`
+	MusubiTuner   string `json:"musubiTuner,omitempty"`
 	Busy          bool   `json:"busy"`
 	Queued        int    `json:"queued"`
 	ModelsMounted bool   `json:"modelsMounted"`
@@ -54,6 +56,21 @@ type Health struct {
 	VRAMUsedMB    int    `json:"vramUsedMB,omitempty"`
 	// Features are what the trainer can do beyond the first protocol.
 	Features []string `json:"features,omitempty"`
+	// Families are the model families it can train. A trainer from before them lists
+	// none, and trains SD 1.5 and SDXL.
+	Families []string `json:"families,omitempty"`
+}
+
+// Trains says whether the trainer can train a family. Anything it cannot tell is left
+// for the run to find out, which reads the file and says so.
+func (h *Health) Trains(family string) bool {
+	if h == nil || family == "" {
+		return true
+	}
+	if len(h.Families) == 0 {
+		return family == "sd1" || family == "sdxl"
+	}
+	return slices.Contains(h.Families, family)
 }
 
 // Has says whether the trainer has a feature.
@@ -108,6 +125,15 @@ type Spec struct {
 	Name          string         `json:"name"`
 	Trigger       string         `json:"trigger,omitempty"`
 	Base          BaseRef        `json:"base"`
+	// Family and Variant are what the generator's side knows of the checkpoint. The
+	// trainer reads the file itself and goes by this only for a file it cannot read,
+	// and for what a header does not hold.
+	Family  string `json:"family,omitempty"`
+	Variant string `json:"variant,omitempty"`
+	// Modules are the files a bare model trains with, by the trainer's name for each.
+	Modules map[string]BaseRef `json:"modules,omitempty"`
+	// LowVRAM keeps part of the model off the card, on the families that can.
+	LowVRAM       bool           `json:"lowVram,omitempty"`
 	Resolution    int            `json:"resolution,omitempty"`
 	Rank          int            `json:"rank,omitempty"`
 	Alpha         float64        `json:"alpha,omitempty"`

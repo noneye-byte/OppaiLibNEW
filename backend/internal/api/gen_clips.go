@@ -270,6 +270,10 @@ func mergeClipLoras(base, extra []settings.ClipLora) []settings.ClipLora {
 func (s *Server) handleComfyModels(w http.ResponseWriter, r *http.Request) {
 	set := s.settings.Get()
 	if strings.TrimSpace(set.LibbyClipURL) == "" {
+		if s.clipsOnForge(r.Context(), set) {
+			s.writeForgeClipModels(w, r, set)
+			return
+		}
 		writeErr(w, http.StatusConflict, "give ComfyUI's address and save first")
 		return
 	}
@@ -361,7 +365,10 @@ func (s *Server) handleImageGenClip(w http.ResponseWriter, r *http.Request) {
 	if req.Models != nil && strings.TrimSpace(req.Models.Model) != "" {
 		recipe, extra = clipRecipe{models: settings.CleanClipModels(*req.Models)}, nil
 	}
-	if !recipe.ready(set.LibbyClipURL) {
+	// ComfyUI when its address is set; failing that, Forge, on the files the studio
+	// picked, there being no Settings for Forge's.
+	onForge := s.clipsOnForge(r.Context(), set)
+	if !recipe.ready(set.LibbyClipURL) && !(onForge && recipe.built()) {
 		what := "words"
 		if fromImage {
 			what = "a picture"
@@ -392,8 +399,14 @@ func (s *Server) handleImageGenClip(w http.ResponseWriter, r *http.Request) {
 	}
 
 	vars := clipVars(req)
-	s.serveClipJob(w, r, req.JobID, req.Detach, "clip", func(ctx context.Context, report func(imagegen.Progress)) (genResult, error) {
-		outs, err := recipe.run(ctx, s.imagegen, set.LibbyClipURL, vars, extra, init, report)
+	make := func(ctx context.Context, report func(imagegen.Progress)) (genResult, error) {
+		var outs []imagegen.ComfyOutput
+		var err error
+		if onForge {
+			outs, err = s.imagegen.RunForgeClip(ctx, set.GenURL(), recipe.wanClip(vars, extra), init, report)
+		} else {
+			outs, err = recipe.run(ctx, s.imagegen, set.LibbyClipURL, vars, extra, init, report)
+		}
 		if err != nil {
 			return genResult{}, err
 		}
@@ -407,7 +420,14 @@ func (s *Server) handleImageGenClip(w http.ResponseWriter, r *http.Request) {
 		}
 		clip.ID = s.genCache.put(preview)
 		return genResult{Images: []genResultImage{}, Prompt: req.Prompt, Positive: req.Prompt, Negative: req.NegativePrompt, Clip: clip}, nil
-	})
+	}
+	if onForge {
+		// A clip on Forge is a picture as far as the card goes: the generator must keep
+		// its place on it, not be asked to step off for itself.
+		s.serveLongJob(w, r, req.JobID, req.Detach, "clip", s.lendCardToImages, make)
+		return
+	}
+	s.serveClipJob(w, r, req.JobID, req.Detach, "clip", make)
 }
 
 // serveClipJob makes a clip, or an enlargement of one, under its job: answering with it

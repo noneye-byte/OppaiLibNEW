@@ -1381,8 +1381,15 @@ export interface GenModel {
   key?: string;
   model_name: string;
   hash?: string;
-  /** Model family — "sd-1", "sd-2", "sdxl" — when the generator reports one. */
+  /** What it is built on, as finely as anything can say: "Illustrious", "Anima", "sdxl". */
   base?: string;
+  /** Its architecture ("sdxl", "anima"), read off the file where it can be. See
+      lora-categories.ts for how the two sort. */
+  family?: string;
+  /** Tells files of one family apart: "4b" or "9b" for Flux.2 Klein. */
+  variant?: string;
+  /** The file carries its own text encoder and VAE, so nothing is needed beside it. */
+  bundled?: boolean;
   /** The generator's recommended settings for this model, applied on selection. */
   defaults?: GenModelDefaults;
 }
@@ -1396,6 +1403,9 @@ export interface GenModelDefaults {
   height?: number;
   vae?: string;
   vaePrecision?: "fp32" | "fp16";
+  /** Forge's: the noise schedule, and a family's shift or distilled CFG. */
+  schedule?: string;
+  shift?: number;
   /** Kept by OppaiLib, since neither generator has a field for them: a checkpoint's
    *  quality prefix and clip skip, either kind's negative, a LoRA's weight range. */
   positive?: string;
@@ -1431,6 +1441,7 @@ export interface GenLora {
   path?: string;
   hash?: string;
   base?: string;
+  family?: string;
   weight?: number;
   triggerPhrases?: string[];
   /** Added to the negative prompt while the LoRA is on. */
@@ -1508,6 +1519,17 @@ export interface ImageGenStatus {
   backend?: string;
   /** On "a1111": it is Forge or a fork of it, such as Forge Neo. */
   forge?: boolean;
+  /** On Forge: its text encoders and VAEs, and where each family among its checkpoints
+      stands. See forge.ts. */
+  forgeModules?: { name: string; kind: string; key: string }[];
+  forgeFamilies?: ForgeFamily[];
+  /** On Forge: the scripts it has loaded of the ones the studio can drive. */
+  forgeExtras?: string[];
+  /** On Forge: its own names for what it samples with and on. */
+  forgeSamplers?: string[];
+  forgeSchedulers?: string[];
+  /** "forge" when clips are made on Forge, there being no ComfyUI set up. */
+  clipsOn?: string;
   error?: string;
   models?: GenModel[];
   loras?: GenLora[];
@@ -1552,6 +1574,59 @@ export interface ImageGenStatus {
       why not when it can't. */
   matte?: boolean;
   matteProblem?: string;
+}
+
+/** One thing a family needs beside a bare model, as things stand. */
+export interface ForgeSlot {
+  kind: string;
+  label: string;
+  /** What Forge has that fits, best first. */
+  have: string[];
+  /** It is in the folder, but Forge has not read it yet. */
+  onDisk?: boolean;
+  get: { name: string; url: string; gb: number };
+}
+
+/** One family among the checkpoints on a Forge, with what it draws with. */
+export interface ForgeFamily {
+  /** What a model's family and variant name: the id, and the size for Klein's two. */
+  key: string;
+  id: string;
+  label: string;
+  sampler?: string;
+  scheduler?: string;
+  steps?: number;
+  cfgScale?: number;
+  /** What Forge's one extra field means for it: "shift", "distilled" or nothing. */
+  tune?: string;
+  shift?: number;
+  video?: boolean;
+  /** It can edit from a picture as well as draw over one. */
+  reference?: string;
+  needs?: ForgeSlot[];
+  /** A checkpoint of it can be drawn with as things stand. */
+  ready: boolean;
+  /** What it needs is on its way. */
+  downloading?: boolean;
+}
+
+/** What a run asks of Forge beyond the usual. Everything is an override; see forge.ts. */
+export interface ForgeParams {
+  scheduler?: string;
+  shift?: number;
+  modules?: string[];
+  asReference?: boolean;
+  references?: string[];
+  refiner?: string;
+  refinerAt?: number;
+  refinerCfg?: number;
+  spectrum?: boolean;
+  sparse?: boolean;
+  offload?: boolean;
+  tiledVae?: boolean;
+  rescaleCfg?: number;
+  mahiro?: boolean;
+  pid?: string;
 }
 
 /** One clip workflow: which of image, prompt, negative, seed, width, height, frames,
@@ -1852,6 +1927,8 @@ export interface GenerateParams {
       `upscaler`, and drawn again at the larger size. With upscaleOnly and
       initImage, only `upscaler` and `scale` are read. */
   upscale?: { enabled: boolean; upscaler?: string; scale?: number; denoise?: number; steps?: number };
+  /** What only Forge reads. */
+  forge?: ForgeParams;
   /** With initImage: enlarge it with the upscaler and redraw nothing (A1111). */
   upscaleOnly?: boolean;
   /** Start from a gallery picture by name, in place of initImage: the server reads
@@ -1893,6 +1970,9 @@ export interface TrainerHealth {
   vramUsedMB?: number;
   /** What it can do beyond the first protocol: "repeats-per-file", "detect-people". */
   features?: string[];
+  /** The families it can train. A trainer from before them lists none, and trains SD
+      1.5 and SDXL alone. */
+  families?: string[];
 }
 
 /** The people the trainer found in one picture (trainer/detect.py), largest first. */
@@ -3865,6 +3945,16 @@ export const api = {
   loraCategoryCivitai: (loras: string[]) =>
     request<{ results: LoraCivitaiResult[] }>("/api/imagegen/lora-categories/civitai",
       { method: "POST", body: JSON.stringify({ loras }) }, 110_000),
+
+  /** Fetches what a family is missing into Forge's models folder. */
+  getModules: (family: string) =>
+    request<{ jobs: { id: number; status: string }[] }>("/api/imagegen/modules/get",
+      { method: "POST", body: JSON.stringify({ family }) }, 30_000),
+  /** Asks Civitai what files are built on, by hash — at most 24 a call. What it learns
+      is kept, so the next status has it. */
+  basesCivitai: (keys: string[]) =>
+    request<{ results: { key: string; base?: string; outcome: string }[] }>("/api/imagegen/bases/civitai",
+      { method: "POST", body: JSON.stringify({ keys }) }, 110_000),
 
   // ── names ──────────────────────────────────────────────────────────────────
   // LoRAs and detectors named after what Civitai says they are; see

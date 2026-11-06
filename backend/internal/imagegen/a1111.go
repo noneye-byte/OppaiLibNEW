@@ -41,6 +41,8 @@ type txt2imgPayload struct {
 	Height           int            `json:"height"`
 	CfgScale         float64        `json:"cfg_scale"`
 	SamplerName      string         `json:"sampler_name,omitempty"`
+	// Scheduler is the noise schedule, a field of its own on Forge and a modern A1111.
+	Scheduler        string         `json:"scheduler,omitempty"`
 	Seed             int64          `json:"seed"`
 	NIter            int            `json:"n_iter"`
 	BatchSize        int            `json:"batch_size"`
@@ -70,6 +72,18 @@ type txt2imgPayload struct {
 	// Forge's hires fix only: what to load for the second pass. It has no default a
 	// call can leave out, see forgeHiresModules.
 	HRAdditionalModules []string `json:"hr_additional_modules,omitempty"`
+	// Forge's one field for a family's shift or distilled CFG, the first pass's and the
+	// hires pass's. The hires one has a default of its own, 3.5, that is wrong for most
+	// families, and hr_cfg is 1 unless told, which drops the negative prompt.
+	DistilledCFG   float64 `json:"distilled_cfg_scale,omitempty"`
+	HRDistilledCFG float64 `json:"hr_distilled_cfg,omitempty"`
+	HRCfg          float64 `json:"hr_cfg,omitempty"`
+	// The refiner: what takes over partway, Wan's low-noise half or an SDXL refiner.
+	RefinerCheckpoint string  `json:"refiner_checkpoint,omitempty"`
+	RefinerSwitchAt   float64 `json:"refiner_switch_at,omitempty"`
+	RefinerCFG        float64 `json:"refiner_cfg,omitempty"`
+	// vaeInModules says Forge's modules carry the VAE asked for; see forgeApply.
+	vaeInModules bool
 }
 
 // forgeHiresModules keeps a hires fix on the modules the picture was drawn with. Forge
@@ -104,16 +118,24 @@ func (c *Client) a1111Generate(ctx context.Context, base string, req GenerateReq
 		Width:          req.Width,
 		Height:         req.Height,
 		CfgScale:       req.CfgScale,
-		SamplerName:    req.Sampler,
+		SamplerName:    a1111SamplerName(req.Sampler),
 		Seed:           req.Seed,
 		NIter:          req.Count,
 		BatchSize:      1,
 		RestoreAfter:   true,
 	}
 	payload.OverrideSettings = map[string]any{}
+	if c.IsForge(ctx, base) {
+		if err := c.forgeApply(ctx, base, req, &payload); err != nil {
+			return nil, err
+		}
+	}
 	if req.Detailer.Enabled {
 		args := a1111DetailerArgs(req)
-		payload.AlwaysOnScripts = map[string]any{"ADetailer": map[string]any{"args": args}}
+		if payload.AlwaysOnScripts == nil {
+			payload.AlwaysOnScripts = map[string]any{}
+		}
+		payload.AlwaysOnScripts["ADetailer"] = map[string]any{"args": args}
 		if tabs := len(args) - 2; tabs > 2 {
 			// ADetailer runs as many tabs as its "Max models" setting has (two unless
 			// changed), so a third pass would be dropped without a word.
@@ -141,6 +163,8 @@ func (c *Client) a1111Generate(ctx context.Context, base string, req GenerateReq
 		payload.DenoisingStrength = up.Denoise
 		if c.IsForge(ctx, base) {
 			payload.HRAdditionalModules = forgeHiresModules
+			payload.HRDistilledCFG = payload.DistilledCFG
+			payload.HRCfg = payload.CfgScale
 		}
 	}
 	endpoint := "/sdapi/v1/txt2img"
@@ -165,7 +189,7 @@ func (c *Client) a1111Generate(ctx context.Context, base string, req GenerateReq
 	if req.Checkpoint != "" {
 		payload.OverrideSettings["sd_model_checkpoint"] = req.Checkpoint
 	}
-	if req.VAE != "" {
+	if req.VAE != "" && !payload.vaeInModules {
 		payload.OverrideSettings["sd_vae"] = req.VAE
 	}
 

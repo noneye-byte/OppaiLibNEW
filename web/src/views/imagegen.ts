@@ -96,6 +96,8 @@ import "./outfit-wardrobe.js";
 import { createZip, type ZipEntry } from "../zip.js";
 import "./imagegen-gallery.js";
 import { LORA_DRAG_TYPE } from "./imagegen-loras.js";
+import "./imagegen-forge.js";
+import { NO_FORGE_CHOICES, familyFor, forgeParams, needsLine, needsState, samplerOptions, type ForgeChoices } from "../forge.js";
 import "./rename-dialog.js";
 import "./imagegen-detailer.js";
 import "./gpu-switch.js";
@@ -154,6 +156,7 @@ import { filterTriggerGroups, inlineTriggers, triggerGroups, wordlessLoras, type
 import { explainGenError } from "../gen-errors.js";
 import {
   LORA_CATEGORIES, filedByCategory, moveToCategory, type LoraCategoryKey,
+  MODEL_ORDERS, baseGroups, basesToLookUp, browseModels, type ModelOrder,
 } from "../lora-categories.js";
 
 // ── Web Speech typings ─────────────────────────────────────────────────────────
@@ -493,6 +496,9 @@ function newJobId(): string {
  * (the browser never reaches the generator directly), so it works the same on a phone
  * as on a desktop; speech uses the browser's own recognition where available.
  */
+/** Where the model drawer's chip and order are remembered, per browser. */
+const MODEL_PREFS_KEY = "oppai.modelPicker";
+
 @customElement("oppai-imagegen")
 export class OppaiImageGen extends LitElement {
   /**
@@ -772,6 +778,16 @@ export class OppaiImageGen extends LitElement {
   @state() private cpuNoise = true;
   @state() private board = "none";
   @state() private scheduler = "";
+  /** What only Forge reads; see forge.ts. */
+  @state() private forgeChoices: ForgeChoices = NO_FORGE_CHOICES;
+  /** Pictures an edit model works from. Not kept in the draft, being pictures. */
+  @state() private forgeReferences: string[] = [];
+  /** The base model chip that is on above the checkpoints, and their order. A
+      per-browser convenience, so it lives in localStorage rather than the draft. */
+  @state() private modelGroup = "";
+  @state() private modelOrder: ModelOrder = "name";
+  /** Asking Civitai what the unsorted SDXL files are, as "12 of 40". */
+  @state() private basesLookup = "";
   @state() private count = 1;
   @state() private seed = -1;
   @state() private detailerEnabled = false;
@@ -1434,6 +1450,24 @@ export class OppaiImageGen extends LitElement {
         color: var(--oppai-text-muted);
         margin: 22px 0 10px;
       }
+      .forge-needs {
+        display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 12px; margin-bottom: 10px;
+        border-radius: 12px; font-size: 13px; background: var(--oppai-primary-container); color: var(--oppai-text);
+      }
+      .forge-needs .material-symbols-rounded { font-size: 18px; }
+      .forge-needs .chip, .model-sort .chip { display: inline-flex; align-items: center; gap: 5px; }
+      .forge-needs .chip .material-symbols-rounded, .model-sort .chip .material-symbols-rounded { font-size: 16px; }
+      .forge-needs-line { flex: 1 1 200px; min-width: 0; }
+      .model-sort { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; }
+      /* Sideways rather than wrapping: a library of every family would otherwise push
+         the cards down the drawer. flex:none, or a column squeezes it to nothing. */
+      .base-chips { display: flex; gap: 6px; overflow-x: auto; flex: 1 1 100%; min-width: 0; padding-bottom: 2px; scrollbar-width: none; }
+      .base-chips .chip { flex: none; white-space: nowrap; }
+      .chip-count { margin-left: 5px; opacity: 0.6; font-variant-numeric: tabular-nums; }
+      .model-order {
+        padding: 5px 8px; border-radius: 8px; font: inherit; font-size: 12px; color: var(--oppai-text);
+        background: transparent; border: 1px solid var(--oppai-border, rgba(127, 127, 127, 0.3));
+      }
       .toast {
         position: fixed;
         bottom: 24px;
@@ -2047,6 +2081,8 @@ export class OppaiImageGen extends LitElement {
 
   disconnectedCallback() {
     super.disconnectedCallback();
+    window.clearInterval(this.forgeWatch);
+    this.forgeWatch = 0;
     this.unwatchClips?.();
     this.unwatchKept?.();
     this.unsubscribeStore?.();
@@ -2072,7 +2108,7 @@ export class OppaiImageGen extends LitElement {
    * those would mean a write per animation frame.
    */
   private static readonly DRAFT_FIELDS = new Set<string>([
-    "prompt", "negative", "checkpoint", "vae", "templateId", "scheduler",
+    "prompt", "negative", "checkpoint", "vae", "templateId", "scheduler", "forgeChoices",
     "width", "height", "steps", "cfg", "cfgRescale", "clipSkip",
     "seamlessX", "seamlessY", "vaePrecision", "cpuNoise", "count", "seed", "board",
     "selectedLoras", "selectedTriggers", "selectedChars", "selectedPoses",
@@ -2279,6 +2315,7 @@ export class OppaiImageGen extends LitElement {
       vae: this.vae,
       templateId: this.templateId,
       scheduler: this.scheduler,
+      forge: this.forgeChoices,
       width: this.width,
       height: this.height,
       steps: this.steps,
@@ -2363,6 +2400,7 @@ export class OppaiImageGen extends LitElement {
     if (d.vae !== undefined) this.vae = d.vae;
     if (d.templateId !== undefined) this.templateId = d.templateId;
     if (d.scheduler !== undefined) this.scheduler = d.scheduler;
+    if (d.forge !== undefined) this.forgeChoices = { ...NO_FORGE_CHOICES, ...d.forge };
     if (d.width !== undefined) this.width = d.width;
     if (d.height !== undefined) this.height = d.height;
     if (d.steps !== undefined) this.steps = d.steps;
@@ -2447,6 +2485,7 @@ export class OppaiImageGen extends LitElement {
   }
 
   private async loadStatus() {
+    this.loadModelPrefs();
     this.status = null;
     this.error = "";
     try {
@@ -2549,9 +2588,17 @@ export class OppaiImageGen extends LitElement {
   // steps/CFG/size/VAE per model) — everything stays editable afterwards. Its
   // recommended prompts replace the last model's (model-defaults.ts).
   private pickModel(m: GenModel) {
-    const prev = (this.status?.models ?? []).find((x) => x.title === this.checkpoint)?.defaults;
+    const before = (this.status?.models ?? []).find((x) => x.title === this.checkpoint);
+    const prev = before?.defaults;
     this.checkpoint = m.title;
     const d = m.defaults;
+    // A family's overrides mean nothing to the next one: Anima's text encoder would be
+    // handed to Flux. Only what is the same whichever model it is stays set.
+    if (before?.family !== m.family) {
+      const { spectrum, sparse, offload, tiledVae, mahiro } = this.forgeChoices;
+      this.forgeChoices = { ...NO_FORGE_CHOICES, spectrum, sparse, offload, tiledVae, mahiro };
+      this.forgeReferences = [];
+    }
     if (prev?.positive || d?.positive) this.prompt = swapPromptDefault(this.prompt, prev?.positive, d?.positive, "start");
     if (prev?.negative || d?.negative) this.negative = swapPromptDefault(this.negative, prev?.negative, d?.negative, "end");
     if (!d) return;
@@ -2560,12 +2607,98 @@ export class OppaiImageGen extends LitElement {
     if (d.cfgScale) this.cfg = d.cfgScale;
     if (d.cfgRescale !== undefined) this.cfgRescale = d.cfgRescale;
     if (d.scheduler) this.scheduler = d.scheduler;
+    if (d.schedule) this.forgeChoices = { ...this.forgeChoices, scheduler: d.schedule };
+    if (d.shift) this.forgeChoices = { ...this.forgeChoices, shift: d.shift };
     if (d.width) this.width = d.width;
     if (d.height) this.height = d.height;
     if (d.vae) this.vae = d.vae;
     // fp16 VAE decoding can yield valid but all-black PNGs. The server now always
     // uses fp32, even when an older InvokeAI model default recommends fp16.
     this.vaePrecision = "fp32";
+  }
+
+  /** The checkpoint that is picked. */
+  private get pickedModel(): GenModel | undefined {
+    return (this.status?.models ?? []).find((m) => m.title === this.checkpoint);
+  }
+
+  // ── Forge ─────────────────────────────────────────────────────────────────
+
+  private forgeWatch = 0;
+
+  /** Fetches what a family needs, and follows the status until it has arrived. */
+  private async getModules(key: string) {
+    try {
+      await api.getModules(key);
+      await this.refreshStatus();
+      this.watchModules();
+    } catch (e) {
+      this.showToast((e as Error).message);
+    }
+  }
+
+  private watchModules() {
+    if (this.forgeWatch) return;
+    this.forgeWatch = window.setInterval(() => {
+      void this.refreshStatus().then(() => {
+        if ((this.status?.forgeFamilies ?? []).some((f) => f.downloading)) return;
+        window.clearInterval(this.forgeWatch);
+        this.forgeWatch = 0;
+      });
+    }, 5000);
+  }
+
+  private async restartForge() {
+    try {
+      await api.restartGenerator();
+      this.showToast("Forge is restarting. It can take a minute to come back.");
+    } catch (e) {
+      this.showToast((e as Error).message);
+    }
+  }
+
+  /** What a picked family still needs, with what can be done about it. */
+  private renderForgeNeeds() {
+    const fam = familyFor(this.status, this.pickedModel);
+    const state = needsState(fam);
+    if (!fam || state === "ready") return nothing;
+    return html`<div class="forge-needs">
+      <span class="material-symbols-rounded">${state === "downloading" ? "hourglass_empty" : "info"}</span>
+      <span class="forge-needs-line">${needsLine(fam)}</span>
+      ${state === "get" && this.status?.manageModels
+        ? html`<button class="chip" @click=${() => this.getModules(fam.key)}>
+            <span class="material-symbols-rounded">download</span>Get ${fam.needs!.filter((s) => !s.have.length && !s.onDisk).length > 1 ? "them" : "it"}
+          </button>`
+        : nothing}
+      ${state === "restart" && this.status?.canRestart
+        ? html`<button class="chip" @click=${() => this.restartForge()}>
+            <span class="material-symbols-rounded">restart_alt</span>Restart Forge
+          </button>`
+        : nothing}
+    </div>`;
+  }
+
+  /** Asks Civitai what the SDXL files with nothing finer known are built on, in batches
+      so the button can say how far it has got. */
+  private async lookUpBases() {
+    const status = this.status;
+    if (!status || this.basesLookup) return;
+    const keys = basesToLookUp([...(status.models ?? []), ...(status.loras ?? [])]);
+    let done = 0;
+    let found = 0;
+    try {
+      while (done < keys.length) {
+        this.basesLookup = `${done} of ${keys.length}`;
+        const { results } = await api.basesCivitai(keys.slice(done, done + 24));
+        found += results.filter((r) => r.base).length;
+        done += results.length;
+      }
+      this.showToast(found ? `Civitai knew ${found} of ${keys.length}.` : "Civitai knew none of them.");
+    } catch (e) {
+      this.showToast((e as Error).message);
+    }
+    this.basesLookup = "";
+    await this.refreshStatus();
   }
 
   // ── speech ────────────────────────────────────────────────────────────────
@@ -3682,7 +3815,9 @@ export class OppaiImageGen extends LitElement {
         .map(([name, weight]) => ({ name, weight })),
       detailer: this.status?.detailerAvailable && this.detailerEnabled && this.detailerHasPasses
         ? this.detailerParams() : undefined,
-      upscale: src ? undefined : this.hiresParams(),
+      upscale: src || this.forgeChoices.pid ? undefined : this.hiresParams(),
+      forge: this.status?.forge
+        ? forgeParams(this.forgeChoices, familyFor(this.status, this.pickedModel), this.forgeReferences) : undefined,
       regions: src || !this.regionsActive ? undefined
         : regionParams(true, this.regionsRows, this.regionPeople, this.characters, this.status?.loras ?? []),
       // A square's home is its wardrobe (storeOutfitWip). A set is sixty-odd pictures,
@@ -5197,7 +5332,7 @@ export class OppaiImageGen extends LitElement {
       <span class="head-spacer"></span>
       ${mode === "video"
         ? html`<span class="gen-pill static" title="Clips are made by ComfyUI"><span class="gen-icon"><span class="material-symbols-rounded">movie</span></span>
-            <span class="gen-text"><span class="gen-kicker"><span class="status-dot ${st.clips?.image || st.clips?.text ? "" : "off"}"></span>ComfyUI</span>
+            <span class="gen-text"><span class="gen-kicker"><span class="status-dot ${st.clips?.image || st.clips?.text ? "" : "off"}"></span>${st.clipsOn === "forge" ? "Forge" : "ComfyUI"}</span>
             <span class="gen-name">${st.clips?.image || st.clips?.text ? "Wan video" : "Not set up"}</span></span></span>`
         : html`<button class="gen-pill" title=${model?.title ?? "Choose a model"}
             @click=${() => { if (this.studio) this.openSpriteTab("models"); else this.openCreateTab("models"); }}>
@@ -6875,10 +7010,37 @@ export class OppaiImageGen extends LitElement {
       );
     }
     const filter = this.pickerFilter.trim().toLowerCase();
+    // PiD is not drawn with: it finishes a picture another model drew (Model settings).
+    const drawable = models.filter((m) => m.family !== "pid");
+    const groups = baseGroups(drawable);
+    // A group that has gone must not leave the list empty with nothing to say why.
+    const group = groups.some((g) => g.key === this.modelGroup) ? this.modelGroup : "";
+    const listed = browseModels(drawable, group, this.modelOrder);
     const shown = filter
-      ? models.filter((m) => `${m.model_name} ${m.title} ${m.base ?? ""}`.toLowerCase().includes(filter))
-      : models;
+      ? listed.filter((m) => `${m.model_name} ${m.title} ${m.base ?? ""}`.toLowerCase().includes(filter))
+      : listed;
+    const toLookUp = this.status?.civitai ? basesToLookUp([...models, ...(this.status?.loras ?? [])]).length : 0;
     const body = html`
+      ${this.renderForgeNeeds()}
+      <div class="model-sort">
+        ${groups.length > 1
+          ? html`<div class="base-chips" role="group" aria-label="Base model">
+              <button class="chip ${group ? "" : "on"}" aria-pressed=${group ? "false" : "true"} @click=${() => this.setModelGroup("")}>All</button>
+              ${groups.map((g) => html`<button class="chip ${g.key === group ? "on" : ""}" aria-pressed=${g.key === group ? "true" : "false"}
+                @click=${() => this.setModelGroup(g.key === group ? "" : g.key)}>${g.label}<span class="chip-count">${g.count}</span></button>`)}
+            </div>`
+          : nothing}
+        <select class="model-order" aria-label="Order" @change=${(e: Event) => this.setModelOrder((e.target as HTMLSelectElement).value as ModelOrder)}>
+          ${MODEL_ORDERS.map((o) => html`<option value=${o.id} ?selected=${o.id === this.modelOrder}>${o.label}</option>`)}
+        </select>
+        ${toLookUp
+          ? html`<button class="chip" ?disabled=${!!this.basesLookup}
+              title="Illustrious, Pony and NoobAI are SDXL inside. Civitai can tell them apart by each file's hash."
+              @click=${() => this.lookUpBases()}>
+              <span class="material-symbols-rounded">travel_explore</span>${this.basesLookup || "Sort SDXL with Civitai"}
+            </button>`
+          : nothing}
+      </div>
       ${filter && !shown.length ? html`<div class="sec-note">No model matches “${this.pickerFilter}”.</div>` : nothing}
       <div class="cards">
         ${shown.map((m) => {
@@ -6899,6 +7061,34 @@ export class OppaiImageGen extends LitElement {
       </div>
     `;
     return this.section("models", "Models", String(models.length), body);
+  }
+
+  private setModelGroup(group: string) {
+    this.modelGroup = group;
+    this.saveModelPrefs();
+  }
+
+  private setModelOrder(order: ModelOrder) {
+    this.modelOrder = order;
+    this.saveModelPrefs();
+  }
+
+  private saveModelPrefs() {
+    try {
+      localStorage.setItem(MODEL_PREFS_KEY, JSON.stringify({ group: this.modelGroup, order: this.modelOrder }));
+    } catch {
+      // A private window: the drawer forgets, which is all.
+    }
+  }
+
+  private loadModelPrefs() {
+    try {
+      const p = JSON.parse(localStorage.getItem(MODEL_PREFS_KEY) ?? "{}") as { group?: string; order?: ModelOrder };
+      if (typeof p.group === "string") this.modelGroup = p.group;
+      if (MODEL_ORDERS.some((o) => o.id === p.order)) this.modelOrder = p.order as ModelOrder;
+    } catch {
+      // Nothing kept, or nothing readable: the defaults are right.
+    }
   }
 
   private renderLoraSection(loras: GenLora[], loraError?: string) {
@@ -6971,16 +7161,21 @@ export class OppaiImageGen extends LitElement {
   }
 
   private renderSettingsSection(invoke: boolean, boards: GalleryBoard[]) {
+    const forge = !!this.status?.forge;
+    const family = familyFor(this.status, this.pickedModel);
     const body = html`
       <div class="settings">
         <div class="full">
-          <label class="field">Scheduler</label>
+          <label class="field">${forge ? "Sampler" : "Scheduler"}</label>
           <select
             class="num"
             .value=${this.scheduler}
             @change=${(e: Event) => (this.scheduler = (e.target as HTMLSelectElement).value)}
           >
-            ${SCHEDULERS.map((s) => html`<option value=${s.id} ?selected=${s.id === this.scheduler}>${s.label}</option>`)}
+            ${forge && this.status?.forgeSamplers?.length
+              ? html`<option value="" ?selected=${!this.scheduler}>Automatic${family?.sampler ? ` (${family.sampler})` : ""}</option>
+                  ${samplerOptions(this.status.forgeSamplers, this.scheduler).map((s) => html`<option value=${s} ?selected=${s === this.scheduler}>${s}</option>`)}`
+              : SCHEDULERS.map((s) => html`<option value=${s.id} ?selected=${s.id === this.scheduler}>${s.label}</option>`)}
           </select>
         </div>
         <div>
@@ -7031,6 +7226,12 @@ export class OppaiImageGen extends LitElement {
             @change=${(e: Event) => (this.seamlessY = (e.target as HTMLInputElement).checked)} /> Seamless Y</label>
         ` : nothing}
         ${this.canUpscale ? this.renderUpscaleSettings() : nothing}
+        ${forge
+          ? html`<div class="full"><oppai-forge-panel .status=${this.status} .family=${family} .model=${this.pickedModel}
+              .choices=${this.forgeChoices} .references=${this.forgeReferences} ?fromPicture=${!!this.source}
+              @forge-change=${(e: CustomEvent<{ changes: Partial<ForgeChoices> }>) => (this.forgeChoices = { ...this.forgeChoices, ...e.detail.changes })}
+              @forge-references=${(e: CustomEvent<{ references: string[] }>) => (this.forgeReferences = e.detail.references)}></oppai-forge-panel></div>`
+          : nothing}
       </div>
     `;
     return this.section("settings", "Model settings", `${this.steps} steps`, body);

@@ -426,6 +426,7 @@ func (s *Server) actGenerate(w http.ResponseWriter, r *http.Request, cur setting
 	// picture is of her as she is in this conversation. See libbySelfiePrompt.
 	prompt, stateTags := s.libbySelfiePrompt(cur.LibbyGenPrompt, subject, req.Outfit, normalizeWearing(req.Wearing), req.Activity, req.Intensity)
 	gen := generateReq{
+		ModelSettings: true,
 		Prompt:         prompt,
 		NegativePrompt: cur.LibbyGenNegativePrompt,
 		Checkpoint:     cur.LibbyGenModel,

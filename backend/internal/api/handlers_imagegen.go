@@ -181,10 +181,12 @@ func (s *Server) handleImageGenStatus(w http.ResponseWriter, r *http.Request) {
 		s.civitaiTriggerWords(ctx, loras)
 	}
 	s.overlayStatusDefaults(ctx, models, loras)
+	s.overlayStatusBases(ctx, models, loras)
 	s.overlayLoraCategories(ctx, loras)
 	out := map[string]any{"enabled": true, "reachable": true, "backend": backend, "models": models, "loras": loras}
 	// Forge speaks Automatic1111's API, so it is that backend; this is for saying which.
-	out["forge"] = backend == imagegen.KindA1111 && s.imagegen.IsForge(ctx, set.GenURL())
+	forge := backend == imagegen.KindA1111 && s.imagegen.IsForge(ctx, set.GenURL())
+	out["forge"] = forge
 	// Background removal runs here rather than on a generator, so it is offered
 	// whatever the generator is; the problem says why not when it can't run.
 	out["matte"] = s.matteProblem() == ""
@@ -225,6 +227,9 @@ func (s *Server) handleImageGenStatus(w http.ResponseWriter, r *http.Request) {
 	// Clips are ComfyUI's (gen_clips.go): read off the settings, not probed, because a
 	// render box that is asleep should not take the Video drawer away.
 	out["clips"] = clipsStatus(set)
+	if forge {
+		s.forgeStatus(ctx, set, models, loras, out)
+	}
 	// What a picture can be enlarged with: on A1111 its upscaler models (an upscale
 	// or a hires fix) and latent modes (a hires fix only). InvokeAI lists none.
 	if ups, latent, err := s.imagegen.Upscalers(ctx, set.GenURL()); err == nil && backend != imagegen.KindInvokeAI {
@@ -334,6 +339,30 @@ type generateReq struct {
 	ReferenceWeight     float64 `json:"referenceWeight"`
 	ReferenceFace       string  `json:"referenceFace"`
 	ReferenceFaceWeight float64 `json:"referenceFaceWeight"`
+	// Forge is what only Forge takes (imagegen/forge.go).
+	Forge forgeReq `json:"forge"`
+	// ModelSettings has the checkpoint's family's steps, CFG and sampler beat the ones
+	// here: set by a run that did not choose them for this checkpoint, as Libby's do.
+	ModelSettings bool `json:"modelSettings"`
+}
+
+// forgeReq is imagegen.ForgeRun as the studio sends it. Its pictures are data URLs.
+type forgeReq struct {
+	Scheduler   string   `json:"scheduler"`
+	Shift       float64  `json:"shift"`
+	Modules     []string `json:"modules"`
+	AsReference bool     `json:"asReference"`
+	References  []string `json:"references"`
+	Refiner     string   `json:"refiner"`
+	RefinerAt   float64  `json:"refinerAt"`
+	RefinerCFG  float64  `json:"refinerCfg"`
+	Spectrum    bool     `json:"spectrum"`
+	Sparse      bool     `json:"sparse"`
+	Offload     bool     `json:"offload"`
+	TiledVAE    bool     `json:"tiledVae"`
+	RescaleCFG  float64  `json:"rescaleCfg"`
+	MaHiRo      bool     `json:"mahiro"`
+	PiD         string   `json:"pid"`
 }
 
 type regionsReq struct {
@@ -458,7 +487,10 @@ func (s *Server) handleImageGenGenerate(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		status := http.StatusBadGateway
-		if errors.Is(err, imagegen.ErrControlUnsupported) && req.Reference != "" {
+		var missing *imagegen.MissingModulesError
+		if errors.As(err, &missing) {
+			status = http.StatusConflict
+		} else if errors.Is(err, imagegen.ErrControlUnsupported) && req.Reference != "" {
 			// Said as what to do about it: the studio shows this under the square.
 			err = errReferenceUnsupported
 			status = http.StatusConflict
@@ -723,6 +755,18 @@ func (s *Server) prepareGenerate(req *generateReq) (gen imagegen.GenerateRequest
 			Enabled: req.Upscale.Enabled, Upscaler: req.Upscale.Upscaler, Scale: req.Upscale.Scale,
 			Denoise: req.Upscale.Denoise, Steps: req.Upscale.Steps,
 		},
+		Forge: imagegen.ForgeRun{
+			Scheduler: req.Forge.Scheduler, Shift: req.Forge.Shift, Modules: req.Forge.Modules,
+			AsReference: req.Forge.AsReference, Refiner: req.Forge.Refiner, RefinerAt: req.Forge.RefinerAt,
+			RefinerCFG: req.Forge.RefinerCFG, Spectrum: req.Forge.Spectrum, Sparse: req.Forge.Sparse,
+			Offload: req.Forge.Offload, TiledVAE: req.Forge.TiledVAE, RescaleCFG: req.Forge.RescaleCFG,
+			MaHiRo: req.Forge.MaHiRo, PiD: req.Forge.PiD, ModelSettings: req.ModelSettings,
+		},
+	}
+	for _, r := range req.Forge.References {
+		if data, err := decodeDataImage(r); err == nil && len(data) > 0 {
+			gen.Forge.References = append(gen.Forge.References, data)
+		}
 	}
 	for _, p := range req.Detailer.Custom {
 		if model := strings.TrimSpace(p.Model); model != "" {

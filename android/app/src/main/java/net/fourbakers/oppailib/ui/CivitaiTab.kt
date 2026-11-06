@@ -109,7 +109,9 @@ private val civitaiPeriods = listOf(
     "" to "All time", "year" to "Year", "month" to "Month", "week" to "Week", "day" to "Today",
 )
 private val civitaiBases = listOf(
-    "SD 1.5", "SD 2.1", "SDXL 1.0", "Pony", "Illustrious", "NoobAI", "Flux.1 D", "Flux.1 S", "SD 3.5",
+    "Illustrious", "NoobAI", "Pony", "SDXL 1.0", "SD 1.5", "SD 2.1", "Anima",
+    "Flux.2 Klein 9B", "Flux.2 Klein 4B", "Flux.1 D", "Flux.1 S", "Flux.1 Kontext", "Flux.1 Krea", "Chroma",
+    "ZImageTurbo", "ZImageBase", "Qwen 2.1", "Qwen", "Krea 2", "Krea 2 Turbo", "Lumina", "Ernie", "MOSS Image",
 )
 
 /**

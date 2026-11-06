@@ -64,7 +64,7 @@ func TestAPresetsFinerSettingsReachTheTrainer(t *testing.T) {
 	s, _ := newTestServer(t)
 	spec := s.trainSpec(context.Background(), trainRequest{
 		Name: "ink", Preset: "style", Alpha: 8, NoiseOffset: 0.05, TextEncoderLR: 0.00005,
-	}, imagegen.CheckpointFile{Key: "base.safetensors"}, nil, 20)
+	}, trainBase{CheckpointFile: imagegen.CheckpointFile{Key: "base.safetensors"}}, nil, 20)
 	if spec.Alpha != 8 || spec.NoiseOffset != 0.05 || spec.TextEncoderLR != 0.00005 {
 		t.Fatalf("spec = %+v", spec)
 	}

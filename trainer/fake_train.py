@@ -1,4 +1,4 @@
-"""Stands in for sd-scripts in the tests: prints what a training run prints and
+"""Stands in for the trainers in the tests: prints what a training run prints and
 writes the file one leaves behind. TRAINER_COMMAND points here."""
 
 import os
@@ -8,6 +8,13 @@ import time
 import zlib
 
 args = dict(a[2:].split("=", 1) for a in sys.argv[1:] if a.startswith("--") and "=" in a)
+if "target" in args:  # musubi-tuner's convert_lora.py, which rewrites the file.
+    with open(args["input"], "rb") as src, open(args["output"], "wb") as dst:
+        dst.write(src.read() + b"-converted")
+    sys.exit(0)
+if "output_dir" not in args:  # one of musubi-tuner's caching steps.
+    print("caching latents.", flush=True)
+    sys.exit(0)
 out, name = args["output_dir"], args["output_name"]
 if os.environ.get("FAKE_TRAIN_FAIL"):
     print("torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 2.00 GiB", flush=True)

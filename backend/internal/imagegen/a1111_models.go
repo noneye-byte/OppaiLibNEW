@@ -60,8 +60,10 @@ var (
 	a1111Upscalers   = a1111Folder{"upscaler", "ESRGAN", []string{"esrgan", "upscale_models"}}
 	// ADetailer's detectors: YOLO models that find a part of a picture to redo.
 	a1111DetectorFolder = a1111Folder{"detection", "adetailer", []string{"adetailer"}}
+	// Forge's text encoders, which a bare diffusion model loads beside it.
+	a1111TextEncoders = a1111Folder{"text_encoder", "text_encoder", []string{"text_encoder", "text_encoders", "clip"}}
 
-	a1111AllFolders = []a1111Folder{a1111Checkpoints, a1111LoraFolder, a1111VaeFolder, a1111ControlNet, a1111Upscalers, a1111DetectorFolder}
+	a1111AllFolders = []a1111Folder{a1111Checkpoints, a1111LoraFolder, a1111VaeFolder, a1111ControlNet, a1111Upscalers, a1111DetectorFolder, a1111TextEncoders}
 )
 
 // a1111InstallFolders maps a catalogue type (as the Civitai search filter names it,
@@ -78,6 +80,8 @@ var a1111InstallFolders = map[string]a1111Folder{
 	"controlnet": a1111ControlNet,
 	"upscaler":   a1111Upscalers,
 	"detection":  a1111DetectorFolder,
+	// Not a type on the catalogue: forge.go fetches these.
+	"text_encoder": a1111TextEncoders,
 }
 
 // A1111InstallFolder says where a model of the catalogue's type would be installed,
@@ -628,6 +632,9 @@ const (
 	// sidecarDefaults is this app's own key: the recommended generation settings
 	// InvokeAI keeps per model. A1111 ignores it and keeps it on its own edits.
 	sidecarDefaults = "oppailib defaults"
+	// sidecarBase is this app's too: the catalogue's name for the base model. A1111's
+	// own card has room for a family alone, which would make Illustrious SDXL.
+	sidecarBase = "oppailib base"
 )
 
 func readSidecar(local string) a1111Sidecar {
@@ -706,7 +713,7 @@ func a1111SDVersion(base string) string {
 		return "SD1"
 	case strings.Contains(b, "sd 2"):
 		return "SD2"
-	case strings.Contains(b, "sdxl"), strings.Contains(b, "pony"), strings.Contains(b, "illustrious"), strings.Contains(b, "noob"):
+	case strings.Contains(b, "sdxl"), strings.Contains(b, "pony") && !strings.Contains(b, "v7"), strings.Contains(b, "illustrious"), strings.Contains(b, "noob"):
 		return "SDXL"
 	}
 	return "Unknown"
@@ -794,6 +801,7 @@ func (c *Client) a1111Update(ctx context.Context, base, key string, ch ModelChan
 	}
 	if ch.Base != nil && *ch.Base != "" {
 		sc[sidecarVersion] = a1111SDVersion(*ch.Base)
+		sc[sidecarBase] = strings.TrimSpace(*ch.Base)
 	}
 	if ch.Defaults != nil {
 		d := *ch.Defaults
@@ -1117,16 +1125,24 @@ func (c *Client) a1111Dress(ctx context.Context, base string, models []Model, lo
 		return
 	}
 	dir := c.home(ctx, base)
+	forge := len(models) > 0 && c.IsForge(ctx, base)
+	c.readFactsOf(dir, files)
 	for i := range models {
 		f, ok := a1111Find(files, models[i].Title)
 		if !ok {
 			continue
 		}
 		models[i].Key = f.Key
+		var sc a1111Sidecar
 		if dir.set() {
-			sc := readSidecar(dir.path(f.Key))
+			sc = readSidecar(dir.path(f.Key))
 			models[i].Defaults = sc.defaults()
-			models[i].Base = sc.str(sidecarVersion)
+		}
+		facts := c.factsOf(dir, *f)
+		models[i].Base, models[i].Family = settleBase(sc, facts)
+		models[i].Variant, models[i].Bundled = facts.Variant, facts.HasTE && facts.HasVAE
+		if forge {
+			models[i].Defaults = familyDefaults(models[i].Defaults, models[i].Family, f.Key)
 		}
 	}
 	for i := range loras {
@@ -1135,16 +1151,17 @@ func (c *Client) a1111Dress(ctx context.Context, base string, models []Model, lo
 			continue
 		}
 		loras[i].Key = f.Key
+		var sc a1111Sidecar
 		if dir.set() {
-			sc := readSidecar(dir.path(f.Key))
+			sc = readSidecar(dir.path(f.Key))
 			if phrases := activationPhrases(sc.str(sidecarActivation)); len(phrases) > 0 {
 				loras[i].TriggerPhrases = phrases
 			}
 			if w := sc.weight(); w != 0 {
 				loras[i].Weight = w
 			}
-			loras[i].Base = sc.str(sidecarVersion)
 		}
+		loras[i].Base, loras[i].Family = settleBase(sc, c.factsOf(dir, *f))
 	}
 }
 

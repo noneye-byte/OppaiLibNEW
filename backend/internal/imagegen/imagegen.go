@@ -74,6 +74,7 @@ type Client struct {
 	ComfyDirs func() ComfyFolders
 	// HashCachePath is where the hashes of that folder's files are remembered.
 	HashCachePath string
+	fileFacts     *factsCache
 
 	fileHashes    *fileHashes
 	installs      *a1111Jobs
@@ -102,7 +103,14 @@ type Model struct {
 	Key      string         `json:"key,omitempty"`
 	Name     string         `json:"model_name"`
 	Hash     string         `json:"hash,omitempty"`
+	// Base is the finest name for what it is built on ("Illustrious", "Anima"), which
+	// is what the picker sorts by; Family is the architecture ("sdxl", "anima").
 	Base     string         `json:"base,omitempty"`
+	Family   string         `json:"family,omitempty"`
+	// Variant tells files of one family apart where it matters (forge_status.go), and
+	// Bundled says the file carries its own text encoder and VAE.
+	Variant  string         `json:"variant,omitempty"`
+	Bundled  bool           `json:"bundled,omitempty"`
 	Defaults *ModelDefaults `json:"defaults,omitempty"`
 }
 
@@ -118,6 +126,11 @@ type ModelDefaults struct {
 	Height       int     `json:"height,omitempty"`
 	Vae          string  `json:"vae,omitempty"`
 	VaePrecision string  `json:"vaePrecision,omitempty"`
+	// Schedule and Shift are Forge's: the noise schedule Scheduler (which here names
+	// the sampler, as InvokeAI's field does) runs on, and a family's shift or distilled
+	// CFG. See families.go.
+	Schedule string  `json:"schedule,omitempty"`
+	Shift    float64 `json:"shift,omitempty"`
 	// Weight is a LoRA's recommended strength (InvokeAI stores just this for LoRAs).
 	Weight float64 `json:"weight,omitempty"`
 
@@ -164,6 +177,7 @@ type Lora struct {
 	Path           string   `json:"path,omitempty"`
 	Hash           string   `json:"hash,omitempty"`
 	Base           string   `json:"base,omitempty"`
+	Family         string   `json:"family,omitempty"`
 	Weight         float64  `json:"weight,omitempty"`
 	TriggerPhrases []string `json:"triggerPhrases,omitempty"`
 	// Negative is what the LoRA's recommended settings add to the negative prompt
@@ -363,6 +377,8 @@ type GenerateRequest struct {
 	// extension; a backend that cannot fails with ErrControlUnsupported so the caller
 	// can decide whether the picture is still worth taking without them.
 	Controls []ControlUnit
+	// Forge is what only Forge takes; see forge.go.
+	Forge ForgeRun
 	// Progress, when set, is called as the generator reports on the run: the step
 	// count and, every few steps, a preview of the picture so far. Called from a
 	// goroutine beside the request, so it must be safe to call concurrently with the

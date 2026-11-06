@@ -1,10 +1,10 @@
 """OppaiLib's LoRA trainer.
 
 OppaiLib is one Go binary with no Python in it, and training a LoRA needs PyTorch, a
-GPU and kohya's sd-scripts — gigabytes the library has no business carrying. So the
+GPU and kohya's two trainers — gigabytes the library has no business carrying. So the
 training runs here, in a companion container, and OppaiLib drives it over HTTP:
 
-    GET    /health                 what this box is (GPU, queue, sd-scripts version)
+    GET    /health                 what this box is (GPU, queue, trainers, families)
     GET    /bases?key=&size=       whether a base checkpoint is already here
     PUT    /bases?key=&size=       upload one into the cache (OppaiLib sends it)
     POST   /jobs                   a job's settings (JSON); it waits for its pictures
@@ -26,9 +26,14 @@ lose the queue; a job that was running when it stopped is marked failed, since
 sd-scripts cannot pick up where it was.
 
 The pictures arrive decrypted: they are library content, and they are on this disk
-only while their job needs them. The dataset folder is deleted the moment training
-ends, however it ends, and only the trained file (and any samples) is kept until
-OppaiLib has installed it and deletes the job.
+only while their job needs them. The dataset folder and anything cached from it are
+deleted the moment training ends, however it ends, and only the trained file (and any
+samples) is kept until OppaiLib has installed it and deletes the job.
+
+Which tool trains what is RECIPES: sd-scripts takes SD 1.5, SDXL and the newer models
+it knows, and musubi-tuner the rest. They are sister projects with the same log format,
+so a run reads the same whichever it is, but musubi-tuner encodes a set in steps of its
+own ahead of training, so one job can be several commands.
 
 Only the standard library is imported at the top, so the request handling and the
 argument building can be tested without a GPU (test_server.py).
@@ -54,12 +59,13 @@ from urllib.parse import parse_qs, urlparse
 
 import detect
 
-VERSION = "3"
+VERSION = "4"
 # What this trainer can do beyond version 1's protocol, for OppaiLib to check before
 # it relies on one: "repeats-per-file" is a picture shown more or less often than the
 # rest, which is how a tag the pictures have too much of is played down;
-# "detect-people" (added at /health when the detector is there) is POST /detect.
-FEATURES = ["repeats-per-file"]
+# "detect-people" (added at /health when the detector is there) is POST /detect;
+# "modules" is a job naming the text encoders and VAE a bare model is trained with.
+FEATURES = ["repeats-per-file", "modules"]
 # The largest picture /detect reads: a comic page is a few megabytes.
 DETECT_MAX_BYTES = 40 << 20
 _can_detect: bool | None = None
@@ -79,6 +85,8 @@ MODELS = os.environ.get("TRAINER_MODELS", "/models")
 TOKEN = os.environ.get("TRAINER_TOKEN", "")
 SD_SCRIPTS = os.environ.get("SD_SCRIPTS", "/opt/sd-scripts")
 SD_SCRIPTS_VERSION = os.environ.get("SD_SCRIPTS_VERSION", "")
+MUSUBI = os.environ.get("MUSUBI_TUNER", "/opt/musubi-tuner")
+MUSUBI_VERSION = os.environ.get("MUSUBI_TUNER_VERSION", "")
 PYTHON = os.environ.get("TRAINER_PYTHON", sys.executable)
 # TRAINER_COMMAND replaces the sd-scripts invocation with another command, which is
 # handed the job's arguments. The tests use it to stand in for a training run.
@@ -87,7 +95,8 @@ COMMAND = os.environ.get("TRAINER_COMMAND", "")
 # them from here and only downloads the ones missing (the image bakes them in).
 TOKENIZERS = os.environ.get("TRAINER_TOKENIZERS", "/opt/tokenizers")
 # How many base checkpoints the upload cache keeps. Each is gigabytes.
-KEEP_BASES = int(os.environ.get("TRAINER_KEEP_BASES", "3"))
+# A bare model brings up to three more files with it, so this is more than three.
+KEEP_BASES = int(os.environ.get("TRAINER_KEEP_BASES", "6"))
 # A finished job nobody came back for is removed after this long.
 KEEP_JOBS_SECONDS = int(os.environ.get("TRAINER_KEEP_JOBS_DAYS", "7")) * 86400
 
@@ -109,7 +118,9 @@ def bases_dir() -> str:
 # side reads them (backend/internal/imagegen/a1111_models.go): a key names A1111's
 # own folder, and the folder here may be called something else.
 FOLDER_ALIASES = {
-    "stable-diffusion": ["stable-diffusion", "checkpoints", "checkpoint", "ckpt"],
+    "stable-diffusion": ["stable-diffusion", "checkpoints", "checkpoint", "ckpt", "diffusion_models", "unet"],
+    "text_encoder": ["text_encoder", "text_encoders", "clip"],
+    "vae": ["vae"],
 }
 
 
@@ -207,22 +218,60 @@ def prune_bases(keep: str) -> None:
                 pass
 
 
+def read_header(path: str) -> dict:
+    """A safetensors file's header: every tensor's name and shape. Only the header is
+    read, however large the file."""
+    with open(path, "rb") as f:
+        (n,) = struct.unpack("<Q", f.read(8))
+        if n <= 0 or n > 200_000_000:
+            raise ValueError("not a safetensors file")
+        return json.loads(f.read(n))
+
+
+PREFIXES = ("", "model.diffusion_model.", "diffusion_model.", "net.", "model.", "transformer.")
+
+
 def checkpoint_family(path: str) -> str:
-    """Reads which model family a checkpoint is from its tensor names: "sdxl",
-    "sd1", or what it is when it is something sd-scripts' LoRA trainer here does
-    not take. Only a safetensors header is read; a .ckpt is a pickle, and is taken
-    to be SD 1 as nearly all of them are."""
+    """Reads which model family a checkpoint is from its tensor names, as Forge does
+    and in the order it does, since some of these names are in more than one: the same
+    tests as OppaiLib's imagegen/file_facts.go. Only a safetensors header is read; a
+    .ckpt is a pickle, and is taken to be SD 1 as nearly all of them are."""
     if not path.lower().endswith(".safetensors"):
         return "sd1"
     try:
-        with open(path, "rb") as f:
-            (n,) = struct.unpack("<Q", f.read(8))
-            if n <= 0 or n > 200_000_000:
-                return "unknown"
-            header = json.loads(f.read(n))
+        header = read_header(path)
     except (OSError, ValueError, struct.error):
         return "unknown"
     keys = header.keys()
+    for p in PREFIXES:
+        def has(*names):
+            return any(p + n in header for n in names)
+
+        if has("cap_embedder.1.weight") and has("noise_refiner.0.attention.k_norm.weight", "layers.0.attention.to_out.0.qweight"):
+            shape = header[p + "cap_embedder.1.weight"].get("shape") or [0]
+            return "zimage" if shape[0] == 3840 else "lumina"
+        if has("head.modulation"):
+            return "wan"
+        if has("double_stream_modulation_img.lin.weight"):
+            return "flux2"
+        if has("distilled_guidance_layer.0.norms.0.scale", "distilled_guidance_layer.norms.0.scale"):
+            return "chroma"
+        if has("double_blocks.0.img_attn.norm.key_norm.scale", "double_blocks.0.img_attn.norm.key_norm.weight"):
+            return "flux"
+        if has("blocks.0.mlp.layer1.weight"):
+            return "anima"
+        if has("lq_proj.latent_proj.0.weight"):
+            return "pid"
+        if has("txt_in.text_norm.weight") and has("modulation.1.weight"):
+            return "qwen21"
+        if has("shared_block_modulation.weight"):
+            return "moss"
+        if has("txt_norm.weight"):
+            return "qwen"
+        if has("txtfusion.projector.weight"):
+            return "krea2"
+        if has("layers.0.mlp.linear_fc2.weight"):
+            return "ernie"
     if any(k.startswith("conditioner.embedders.1.") for k in keys):
         return "sdxl"
     if any(k.startswith("cond_stage_model.transformer.") for k in keys):
@@ -232,6 +281,273 @@ def checkpoint_family(path: str) -> str:
     if any(k.startswith(("double_blocks.", "model.diffusion_model.double_blocks.")) for k in keys):
         return "flux"
     return "unknown"
+
+
+# ── the new families ───────────────────────────────────────────────────────────
+
+# How each family that is a bare diffusion model is trained. "files" hands each file
+# OppaiLib names (by the role in its family table, imagegen/families.go) to the argument
+# the tool takes it by. "flags" are the tool's own recommended settings for the family,
+# from each one's documentation, and "rank" and "alpha" its defaults: most are written
+# for an alpha of 1, which is not what SD's half-the-rank habit would give them.
+# "swap" is how many blocks a low-VRAM run keeps off the card, and "fp8" and "fp8_te"
+# are what cut the model and text encoder down there. "steps" and "cfg" draw a sample.
+#
+# Nothing here trains Ernie, PiD or Qwen 2.1: neither tool has them. Qwen-Image 2.1 is
+# not Qwen-Image with a new number, and musubi-tuner's model_version list stops short of it.
+SD_FLAGS = ["--network_train_unet_only", "--cache_text_encoder_outputs", "--cache_text_encoder_outputs_to_disk"]
+RECIPES = {
+    "flux": {
+        "tool": "sd-scripts", "script": "flux_train_network.py", "network": "networks.lora_flux",
+        "files": {"clip_l": "--clip_l", "t5xxl": "--t5xxl", "ae": "--ae"},
+        "flags": ["--guidance_scale=1.0", "--timestep_sampling=flux_shift", "--model_prediction_type=raw"],
+        "rank": 16, "alpha": 1, "swap": 18, "fp8": ["--fp8_base"], "steps": 20, "cfg": 1,
+    },
+    "chroma": {
+        "tool": "sd-scripts", "script": "flux_train_network.py", "network": "networks.lora_flux",
+        "files": {"t5xxl": "--t5xxl", "ae": "--ae"},
+        "flags": ["--model_type=chroma", "--guidance_scale=0.0", "--timestep_sampling=sigmoid",
+                  "--apply_t5_attn_mask", "--model_prediction_type=raw"],
+        "rank": 16, "alpha": 1, "swap": 18, "fp8": ["--fp8_base"], "steps": 26, "cfg": 4,
+        # Chroma has no guidance built in, and renders grey with one.
+        "sample": " --g 0.0",
+    },
+    "lumina": {
+        "tool": "sd-scripts", "script": "lumina_train_network.py", "network": "networks.lora_lumina",
+        "files": {"gemma2": "--gemma2", "ae": "--ae"},
+        "flags": ["--timestep_sampling=nextdit_shift", "--discrete_flow_shift=6.0", "--model_prediction_type=raw",
+                  "--system_prompt=You are an assistant designed to generate high-quality images based on user prompts."],
+        "rank": 8, "alpha": 8, "swap": 12, "fp8": ["--fp8_base"], "steps": 32, "cfg": 4,
+    },
+    "anima": {
+        "tool": "sd-scripts", "script": "anima_train_network.py", "network": "networks.lora_anima",
+        "files": {"qwen3": "--qwen3", "vae": "--vae"},
+        "flags": ["--timestep_sampling=sigmoid", "--discrete_flow_shift=1.0", "--vae_chunk_size=64", "--vae_disable_cache"],
+        "rank": 8, "alpha": 1, "swap": 14, "steps": 32, "cfg": 4,
+    },
+    "moss": {
+        "tool": "sd-scripts", "script": "moss_image_train_network.py", "network": "networks.lora_generic",
+        "files": {"text_encoder": "--text_encoder", "ae": "--vae"},
+        "flags": ["--timestep_sampling=truncated_logit_normal", "--logit_mean=-1.09", "--logit_std=0.95",
+                  "--discrete_flow_shift=1.0"],
+        "rank": 16, "alpha": 1, "swap": 16, "fp8": ["--convrot_int8"], "steps": 50, "cfg": 3,
+    },
+    "zimage": {
+        "tool": "musubi", "prefix": "zimage", "network": "networks.lora_zimage",
+        "files": {"text_encoder": "--text_encoder", "ae": "--vae"},
+        "flags": ["--timestep_sampling=shift", "--weighting_scheme=none", "--discrete_flow_shift=2.0"],
+        "rank": 32, "alpha": 32, "swap": 14, "fp8": ["--fp8_base", "--fp8_scaled"], "fp8_te": "--fp8_llm",
+        "steps": 28, "cfg": 4,
+        # Forge reads Z-Image's fused attention by the Diffusers names alone. Left as
+        # trained, the LoRA loads, matches nothing and changes nothing, without a word.
+        "convert": True,
+    },
+    "qwen": {
+        "tool": "musubi", "prefix": "qwen_image", "network": "networks.lora_qwen_image",
+        "files": {"text_encoder": "--text_encoder", "vae": "--vae"}, "version": ["--model_version=original"],
+        "flags": ["--timestep_sampling=shift", "--weighting_scheme=none", "--discrete_flow_shift=2.2"],
+        "rank": 16, "alpha": 16, "swap": 30, "fp8": ["--fp8_base", "--fp8_scaled"], "fp8_te": "--fp8_vl",
+        "steps": 30, "cfg": 2.5,
+    },
+    "flux2": {
+        "tool": "musubi", "prefix": "flux_2", "network": "networks.lora_flux_2",
+        "files": {"text_encoder": "--text_encoder", "ae": "--vae"},
+        "flags": ["--timestep_sampling=flux2_shift", "--weighting_scheme=none"],
+        "rank": 32, "alpha": 32, "swap": 12, "fp8": ["--fp8_base", "--fp8_scaled"], "fp8_te": "--fp8_text_encoder",
+        "steps": 4, "cfg": 1,
+    },
+    "krea2": {
+        "tool": "musubi", "prefix": "krea2", "network": "networks.lora_krea2",
+        "files": {"text_encoder": "--text_encoder", "vae": "--vae"},
+        "flags": ["--timestep_sampling=shift", "--weighting_scheme=none", "--discrete_flow_shift=2.5"],
+        "rank": 32, "alpha": 32, "swap": 14, "fp8": ["--fp8_base", "--fp8_scaled"], "steps": 28, "cfg": 5.5,
+    },
+    "wan": {
+        "tool": "musubi", "prefix": "wan", "network": "networks.lora_wan",
+        "files": {"vae": "--vae"},
+        "flags": ["--timestep_sampling=shift", "--discrete_flow_shift=3.0", "--preserve_distribution_shape"],
+        "rank": 32, "alpha": 32, "swap": 20, "fp8": ["--fp8_base"], "fp8_te": "--fp8_t5", "steps": 20, "cfg": 3.5,
+        "resolution": 768,
+    },
+}
+# musubi-tuner reads Wan's text encoder in the shape of the file Wan's makers published
+# and nothing else, loaded strictly, so the file Forge and ComfyUI use for it fails. The
+# first Wan run fetches this one, which is public and is kept with the bases.
+WAN_T5 = "models_t5_umt5-xxl-enc-bf16.pth"
+WAN_T5_URL = "https://huggingface.co/Wan-AI/Wan2.1-I2V-14B-720P/resolve/main/" + WAN_T5
+TRAINABLE = sorted(["sd1", "sdxl", *RECIPES])
+OPTIMIZERS_MUSUBI = {"AdamW8bit": "adamw8bit", "AdamW": "adamw", "Adafactor": "adafactor"}
+
+
+def klein_version(name: str, variant: str) -> str:
+    """musubi-tuner's name for a Flux.2 Klein file. The sizes differ by which text
+    encoder they take and "base" is the undistilled one, which is the one worth training."""
+    size = "9b" if variant == "9b" or "9b" in name.lower() else "4b"
+    return f"klein-base-{size}" if "base" in name.lower() else f"klein-{size}"
+
+
+def wan_flags(name: str, variant: str) -> tuple[list[str], list[str]]:
+    """Wan 2.2 comes as two models that each take part of the noise schedule. Trained
+    alone, one is held to its own part of it, by what its name says it is; the task and
+    the point it splits at go by which way the file runs. Returns the training flags,
+    and the flags the latents are cached with."""
+    i2v = variant == "i2v" or "i2v" in name.lower()
+    split = 900 if i2v else 875
+    flags = [f"--task={'i2v' if i2v else 't2v'}-A14B"]
+    if "high" in name.lower():
+        flags += [f"--min_timestep={split}", "--max_timestep=1000"]
+    elif "low" in name.lower():
+        flags += ["--min_timestep=0", f"--max_timestep={split}"]
+    return flags, (["--i2v"] if i2v else [])
+
+
+def dataset_toml(cfg: dict, recipe: dict, dataset: str, cache: str) -> str:
+    """musubi-tuner's dataset file. Each N_word folder is a dataset of its own, since
+    that is where a tag played down has its pictures, with a cache folder of its own:
+    sharing one mixes the items up."""
+    res = int(_num(cfg, "resolution", recipe.get("resolution", 1024), 256, 2048, int)) // 64 * 64
+    batch = int(_num(cfg, "batchSize", 1, 1, 16, int))
+    lines = ["[general]", f"resolution = [{res}, {res}]", 'caption_extension = ".txt"',
+             f"batch_size = {batch}", "enable_bucket = true", "bucket_no_upscale = true", ""]
+    for name in sorted(os.listdir(dataset)):
+        folder = os.path.join(dataset, name)
+        if not os.path.isdir(folder):
+            continue
+        repeats = name.split("_", 1)[0]
+        lines += ["[[datasets]]", f"image_directory = {json.dumps(folder)}",
+                  f"cache_directory = {json.dumps(os.path.join(cache, name))}",
+                  f"num_repeats = {int(repeats) if repeats.isdigit() else 1}", ""]
+    return "\n".join(lines)
+
+
+def build_kohya_dit(cfg: dict, recipe: dict, base: str, files: dict, train_dir: str, out_dir: str,
+                    sample_file: str | None, precision: str) -> list[str]:
+    """sd-scripts' command line for a bare model. Its text encoder is frozen and its
+    outputs cached, so the captions are fixed: nothing here shuffles them."""
+    res = int(_num(cfg, "resolution", recipe.get("resolution", 1024), 256, 2048, int)) // 64 * 64
+    rank = int(_num(cfg, "rank", recipe["rank"], 1, 256, int))
+    epochs = int(_num(cfg, "epochs", 10, 1, 200, int))
+    optimizer = cfg.get("optimizer") or "AdamW8bit"
+    if optimizer not in ("AdamW8bit", "AdamW", "Adafactor", "Lion"):
+        optimizer = "AdamW8bit"
+    args = [
+        os.path.join(SD_SCRIPTS, recipe["script"]),
+        f"--pretrained_model_name_or_path={base}",
+        *(f"{flag}={files[role]}" for role, flag in recipe["files"].items()),
+        f"--train_data_dir={train_dir}",
+        f"--output_dir={out_dir}",
+        f"--output_name={cfg['name']}",
+        "--save_model_as=safetensors",
+        f"--network_module={recipe['network']}",
+        f"--network_dim={rank}",
+        f"--network_alpha={_num(cfg, 'alpha', recipe['alpha'], 0.1, 256):g}",
+        f"--resolution={res},{res}",
+        "--enable_bucket",
+        "--min_bucket_reso=256",
+        f"--max_bucket_reso={max(res * 2, 1024)}",
+        "--bucket_reso_steps=64",
+        "--bucket_no_upscale",
+        "--caption_extension=.txt",
+        f"--max_train_epochs={epochs}",
+        f"--train_batch_size={int(_num(cfg, 'batchSize', 1, 1, 16, int))}",
+        f"--learning_rate={_num(cfg, 'learningRate', 1e-4, 1e-7, 1.0):g}",
+        "--lr_scheduler=constant",
+        f"--optimizer_type={optimizer}",
+        f"--mixed_precision={precision}",
+        "--cache_latents",
+        "--cache_latents_to_disk",
+        "--gradient_checkpointing",
+        f"--seed={int(_num(cfg, 'seed', 42, 0, 2**31 - 1, int))}",
+        "--max_data_loader_n_workers=1",
+        "--persistent_data_loader_workers",
+        "--training_comment=Trained in OppaiLib",
+        f"--tokenizer_cache_dir={TOKENIZERS}",
+        *SD_FLAGS,
+        *recipe["flags"],
+    ]
+    if recipe["script"] != "anima_train_network.py":
+        args.append("--sdpa")
+    if cfg.get("lowVram"):
+        args += [f"--blocks_to_swap={recipe['swap']}", *recipe.get("fp8", [])]
+    save_every = int(_num(cfg, "saveEvery", 0, 0, 200, int))
+    if save_every:
+        args.append(f"--save_every_n_epochs={save_every}")
+    if sample_file:
+        args += [f"--sample_prompts={sample_file}", f"--sample_every_n_epochs={int(_num(cfg, 'sampleEvery', epochs, 1, 200, int))}"]
+    return args
+
+
+def build_musubi(cfg: dict, family: str, recipe: dict, base: str, files: dict, toml: str, out_dir: str,
+                 sample_file: str | None, precision: str, variant: str) -> list[tuple[str, list[str]]]:
+    """musubi-tuner's run: the latents encoded, the captions encoded, then the training.
+    Each is its own process, so that the VAE and text encoder are off the card before
+    the model goes on it, which is most of what lets these run on a home GPU."""
+    prefix = recipe["prefix"]
+    name = os.path.basename(base)
+    version = list(recipe.get("version", []))
+    latent_flags: list[str] = []
+    if family == "flux2":
+        version = [f"--model_version={klein_version(name, variant)}"]
+    train_flags = list(recipe["flags"])
+    if family == "wan":
+        task, latent_flags = wan_flags(name, variant)
+        train_flags = task + train_flags
+    te_role = "t5" if family == "wan" else "text_encoder"
+    te_flag = "--t5" if family == "wan" else "--text_encoder"
+    vae_flag = f"--vae={files['vae'] if 'vae' in recipe['files'] else files['ae']}"
+    low = cfg.get("lowVram")
+    fp8_te = [recipe["fp8_te"]] if low and recipe.get("fp8_te") else []
+
+    def script(s: str) -> str:
+        return os.path.join(MUSUBI, f"{prefix}_{s}.py")
+
+    latents = [script("cache_latents"), f"--dataset_config={toml}", vae_flag, *version, *latent_flags]
+    captions = [script("cache_text_encoder_outputs"), f"--dataset_config={toml}",
+                f"{te_flag}={files[te_role]}", "--batch_size=1", *version, *fp8_te]
+    epochs = int(_num(cfg, "epochs", 10, 1, 200, int))
+    train = [
+        script("train_network"),
+        f"--dit={base}",
+        vae_flag,
+        f"{te_flag}={files[te_role]}",
+        *version,
+        f"--dataset_config={toml}",
+        "--sdpa",
+        f"--mixed_precision={precision}",
+        f"--optimizer_type={OPTIMIZERS_MUSUBI.get(cfg.get('optimizer') or '', 'adamw8bit')}",
+        f"--learning_rate={_num(cfg, 'learningRate', 1e-4, 1e-7, 1.0):g}",
+        "--gradient_checkpointing",
+        "--max_data_loader_n_workers=1",
+        "--persistent_data_loader_workers",
+        f"--network_module={recipe['network']}",
+        f"--network_dim={int(_num(cfg, 'rank', recipe['rank'], 1, 256, int))}",
+        f"--network_alpha={_num(cfg, 'alpha', recipe['alpha'], 0.1, 256):g}",
+        f"--max_train_epochs={epochs}",
+        f"--seed={int(_num(cfg, 'seed', 42, 0, 2**31 - 1, int))}",
+        f"--output_dir={out_dir}",
+        f"--output_name={cfg['name']}",
+        *train_flags,
+    ]
+    if low:
+        train += [f"--blocks_to_swap={recipe['swap']}", *recipe.get("fp8", []), *fp8_te]
+    save_every = int(_num(cfg, "saveEvery", 0, 0, 200, int))
+    if save_every:
+        train.append(f"--save_every_n_epochs={save_every}")
+    if sample_file:
+        train += [f"--sample_prompts={sample_file}", f"--sample_every_n_epochs={int(_num(cfg, 'sampleEvery', epochs, 1, 200, int))}"]
+    return [("caching", latents), ("caching", captions), ("loading", train)]
+
+
+def fetch(url: str, dest: str, say) -> None:
+    """Downloads a public file into the bases folder, whole or not at all."""
+    import urllib.request
+
+    say(f"downloading {url}")
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    part = dest + ".part"
+    with urllib.request.urlopen(url, timeout=120) as src, open(part, "wb") as out:
+        shutil.copyfileobj(src, out, 1 << 20)
+    os.replace(part, dest)
 
 
 # ── building the run ───────────────────────────────────────────────────────────
@@ -331,17 +647,20 @@ def build_args(cfg: dict, family: str, base: str, train_dir: str, out_dir: str,
 
 
 def sample_lines(cfg: dict, family: str) -> list[str]:
-    """sd-scripts' sample prompt file: one picture per line, with its settings."""
+    """The trainers' sample prompt file: one picture per line, with its settings."""
     out = []
-    size = 1024 if family == "sdxl" else 512
+    recipe = RECIPES.get(family, {})
+    size = 512 if family == "sd1" else recipe.get("resolution", 1024)
+    steps, scale = recipe.get("steps", 24), recipe.get("cfg", 6)
     for i, s in enumerate(cfg.get("samples") or []):
         prompt = str(s.get("prompt", "")).replace("\n", " ").strip()
         if not prompt:
             continue
         neg = str(s.get("negative", "")).replace("\n", " ").replace("--", " ").strip()
-        line = f"{prompt.replace('--', ' ')} --w {size} --h {size} --s 24 --l 6 --d {1000 + i}"
+        line = f"{prompt.replace('--', ' ')} --w {size} --h {size} --s {steps} --l {scale:g} --d {1000 + i}"
         if neg:
             line += f" --n {neg}"
+        line += recipe.get("sample", "")
         out.append(line)
     return out[:4]
 
@@ -352,7 +671,7 @@ STEP_RE = re.compile(r"steps:\s*\d+%.*?\|\s*(\d+)/(\d+)\s*\[([^<\]]*)<([^,\]]*)"
 LOSS_RE = re.compile(r"avr_loss=([0-9.]+(?:e-?\d+)?)")
 EPOCH_RE = re.compile(r"^\s*epoch (\d+)/(\d+)")
 PHASES = [
-    (re.compile(r"caching latents", re.I), "caching"),
+    (re.compile(r"caching latents|caching text encoder|encoding", re.I), "caching"),
     (re.compile(r"loading (?:u-?net|model|text encoder|vae)|load (?:stable diffusion|StableDiffusion) checkpoint", re.I), "loading"),
     (re.compile(r"generating sample images|sample images", re.I), "sampling"),
     (re.compile(r"saving checkpoint|model saved", re.I), "saving"),
@@ -416,7 +735,16 @@ def save_job(job: dict) -> None:
     with _save_lock:
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(job, f)
-        os.replace(tmp, path)
+        # Windows will not rename over a file someone has open, and a request reading
+        # the job's state does for a moment. Everywhere else the first try is it.
+        for attempt in range(40):
+            try:
+                os.replace(tmp, path)
+                break
+            except PermissionError:
+                if attempt == 39:
+                    raise
+                time.sleep(0.025)
 
 
 def all_jobs() -> list[dict]:
@@ -481,6 +809,9 @@ def create_job(cfg) -> dict:
     base = cfg.get("base") or {}
     if not isinstance(base, dict) or not base.get("key"):
         raise ValueError("the job names no base model")
+    modules = cfg.get("modules") or {}
+    if not isinstance(modules, dict) or not all(isinstance(m, dict) and m.get("key") for m in modules.values()):
+        raise ValueError("a module of the job names no file")
     job_id = time.strftime("%Y%m%d-%H%M%S") + "-" + secrets.token_hex(3)
     root = job_path(job_id)
     os.makedirs(os.path.join(root, "dataset", concept_folder(cfg)))
@@ -608,6 +939,46 @@ def gpu_info() -> dict:
         return {"gpu": ""}
 
 
+def run_command(args: list[str], job: dict, say, root: str) -> int:
+    """Runs one of a job's commands to its end, following its output, and returns how
+    it exited. args[0] is the script; TRAINER_COMMAND stands in for it in the tests."""
+    cmd = shlex.split(COMMAND, posix=os.name != "nt") + args[1:] if COMMAND else [PYTHON, *args]
+    say("$ " + " ".join(cmd))
+    env = dict(os.environ, PYTHONUNBUFFERED="1")
+    script_dir = os.path.dirname(args[0])
+    proc = subprocess.Popen(cmd, cwd=script_dir if os.path.isdir(script_dir) else root,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, start_new_session=True)
+    with LOCK:
+        RUNNING[job["id"]] = proc
+    last_save = 0.0
+    buf = b""
+    while True:
+        chunk = proc.stdout.read1(4096) if hasattr(proc.stdout, "read1") else proc.stdout.read(4096)
+        if not chunk:
+            break
+        buf += chunk
+        # tqdm redraws its bar with carriage returns; each redraw is a reading.
+        pieces = re.split(rb"[\r\n]", buf)
+        buf = pieces.pop()
+        for raw in pieces:
+            text = raw.decode("utf-8", "replace").rstrip()
+            if not text:
+                continue
+            read_progress(text, job)
+            if not STEP_RE.search(text):
+                say(text)
+        if time.time() - last_save > 2:
+            last_save = time.time()
+            save_job(job)
+    code = proc.wait()
+    proc.stdout.close()
+    with LOCK:
+        RUNNING.pop(job["id"], None)
+    if buf:
+        say(buf.decode("utf-8", "replace"))
+    return code
+
+
 def run_job(job: dict) -> None:
     """Runs one queued job to its end and files the result."""
     root = job_path(job["id"])
@@ -631,56 +1002,67 @@ def run_job(job: dict) -> None:
             finish("error", f"the base model {base['key']} is not here: mount the models folder at {MODELS}, or let OppaiLib send it")
             return
         family = checkpoint_family(path)
-        if family not in ("sd1", "sdxl"):
-            finish("error", f"the base model is {family}; this trainer makes LoRAs for SD 1.5 and SDXL (Pony, Illustrious, NoobAI) checkpoints")
+        if family == "unknown":
+            # Not a file this could read; OppaiLib has the file's name and its card.
+            family = str(cfg.get("family") or "unknown")
+        if family not in TRAINABLE:
+            finish("error", f"the base model is {family}, which neither sd-scripts nor musubi-tuner trains. "
+                            f"This trainer makes LoRAs for {', '.join(TRAINABLE)}.")
             return
         job["family"] = family
+        recipe = RECIPES.get(family)
+        files = {}
+        for role, ref in (cfg.get("modules") or {}).items():
+            found, _ = find_base(str(ref["key"]), int(ref.get("size") or 0))
+            if found:
+                files[role] = found
+        if family == "wan":
+            t5 = os.path.join(bases_dir(), WAN_T5)
+            found, _ = find_base("text_encoder/" + WAN_T5, 0)
+            if found:
+                t5 = found
+            elif not os.path.isfile(t5):
+                job.update(state="running", phase="loading", started=int(time.time()))
+                save_job(job)
+                fetch(WAN_T5_URL, t5, say)
+            files["t5"] = t5
+        lacking = [role for role in (recipe or {}).get("files", {}) if role not in files]
+        if lacking:
+            finish("error", f"{' and '.join(lacking)} for {family} did not reach the trainer: "
+                            f"mount the models folder at {MODELS}, or let OppaiLib send it")
+            return
         out_dir = os.path.join(root, "output")
         os.makedirs(out_dir, exist_ok=True)
-        lines = sample_lines(cfg, family)
+        # Low VRAM runs skip the samples on the new families: a sample needs the text
+        # encoder back on a card that was only just big enough without it.
+        lines = [] if recipe and cfg.get("lowVram") else sample_lines(cfg, family)
         sample_file = None
         if lines:
             sample_file = os.path.join(root, "samples.txt")
             with open(sample_file, "w", encoding="utf-8") as f:
                 f.write("\n".join(lines) + "\n")
         precision = cfg.get("precision") or ("bf16" if COMMAND or bf16_supported() else "fp16")
-        args = build_args(cfg, family, path, os.path.join(root, "dataset"), out_dir, sample_file, precision)
-        cmd = shlex.split(COMMAND, posix=os.name != "nt") + args[1:] if COMMAND else [PYTHON, *args]
+        dataset = os.path.join(root, "dataset")
+        if recipe is None:
+            steps = [("loading", build_args(cfg, family, path, dataset, out_dir, sample_file, precision))]
+        elif recipe["tool"] == "sd-scripts":
+            steps = [("loading", build_kohya_dit(cfg, recipe, path, files, dataset, out_dir, sample_file, precision))]
+        else:
+            toml = os.path.join(root, "dataset.toml")
+            with open(toml, "w", encoding="utf-8") as f:
+                f.write(dataset_toml(cfg, recipe, dataset, os.path.join(root, "cache")))
+            steps = build_musubi(cfg, family, recipe, path, files, toml, out_dir, sample_file, precision,
+                                 str(cfg.get("variant") or ""))
         say(f"base {base['key']} ({where}, {family}); {job['images']} pictures")
-        say("$ " + " ".join(cmd))
         job.update(state="running", phase="loading", started=int(time.time()))
         save_job(job)
-        env = dict(os.environ, PYTHONUNBUFFERED="1")
-        proc = subprocess.Popen(cmd, cwd=SD_SCRIPTS if os.path.isdir(SD_SCRIPTS) else root,
-                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, start_new_session=True)
-        with LOCK:
-            RUNNING[job["id"]] = proc
-        last_save = 0.0
-        buf = b""
-        while True:
-            chunk = proc.stdout.read1(4096) if hasattr(proc.stdout, "read1") else proc.stdout.read(4096)
-            if not chunk:
+        code = 0
+        for phase, args in steps:
+            job["phase"] = phase
+            save_job(job)
+            code = run_command(args, job, say, root)
+            if code != 0:
                 break
-            buf += chunk
-            # tqdm redraws its bar with carriage returns; each redraw is a reading.
-            pieces = re.split(rb"[\r\n]", buf)
-            buf = pieces.pop()
-            for raw in pieces:
-                text = raw.decode("utf-8", "replace").rstrip()
-                if not text:
-                    continue
-                read_progress(text, job)
-                if not STEP_RE.search(text):
-                    say(text)
-            if time.time() - last_save > 2:
-                last_save = time.time()
-                save_job(job)
-        code = proc.wait()
-        proc.stdout.close()
-        with LOCK:
-            RUNNING.pop(job["id"], None)
-        if buf:
-            say(buf.decode("utf-8", "replace"))
         with LOCK:
             cancelled = job["id"] in CANCELLING
             CANCELLING.discard(job["id"])
@@ -695,6 +1077,16 @@ def run_job(job: dict) -> None:
                 reason = "the GPU ran out of memory — try Low VRAM, a smaller resolution, or free the generator's GPU while training"
             finish("error", reason or f"training stopped (exit {code})")
             return
+        if recipe and recipe.get("convert"):
+            job["phase"] = "saving"
+            save_job(job)
+            converted = output + ".converted"
+            code = run_command([os.path.join(MUSUBI, "convert_lora.py"), f"--input={output}",
+                                f"--output={converted}", "--target=other"], job, say, root)
+            if code != 0 or not os.path.isfile(converted):
+                finish("error", f"the LoRA trained, but converting it for the generator failed (exit {code})")
+                return
+            os.replace(converted, output)
         job["output"] = os.path.basename(output)
         sample_dir = os.path.join(out_dir, "sample")
         if os.path.isdir(sample_dir):
@@ -705,8 +1097,10 @@ def run_job(job: dict) -> None:
         finish("error", str(e))
     finally:
         log.close()
-        # The pictures are library content; they go as soon as they are not needed.
+        # The pictures are library content; they go as soon as they are not needed, and
+        # what was encoded from them with them.
         shutil.rmtree(os.path.join(root, "dataset"), ignore_errors=True)
+        shutil.rmtree(os.path.join(root, "cache"), ignore_errors=True)
 
 
 def worker() -> None:
@@ -717,7 +1111,14 @@ def worker() -> None:
             WAKE.wait(30)
             WAKE.clear()
             continue
-        run_job(min(queued, key=lambda j: j.get("created", 0)))
+        job = min(queued, key=lambda j: j.get("created", 0))
+        # One job's trouble is that job's. This thread is the whole queue, and if it
+        # dies nothing after it ever runs, with nothing to say why.
+        try:
+            run_job(job)
+        except Exception as e:  # noqa: BLE001
+            print(f"job {job.get('id')}: {e}", file=sys.stderr, flush=True)
+            time.sleep(1)
 
 
 def prune_old_jobs() -> None:
@@ -813,6 +1214,7 @@ class Handler(BaseHTTPRequestHandler):
             jobs = all_jobs()
             return self.send_json(200, {
                 "ok": True, "version": VERSION, "features": features(), "sdScripts": SD_SCRIPTS_VERSION,
+                "musubiTuner": MUSUBI_VERSION, "families": TRAINABLE,
                 "busy": any(j["state"] == "running" for j in jobs),
                 "queued": sum(1 for j in jobs if j["state"] == "queued"),
                 "modelsMounted": os.path.isdir(MODELS) and bool(os.listdir(MODELS)),

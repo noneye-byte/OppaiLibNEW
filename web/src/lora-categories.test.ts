@@ -36,7 +36,7 @@ test("filing a LoRA moves it and leaves the rest as they were", () => {
   assert.equal(out[1].categoryKey, undefined);
 });
 
-const { baseFamily, fitsModel, sortLoras, browseLoras, unfitCount, civitaiSortSummary, filedByCategory, matchesQuery } =
+const { baseFamily, baseGroup, baseGroups, basesToLookUp, browseModels, fitsModel, sortLoras, browseLoras, unfitCount, civitaiSortSummary, filedByCategory, matchesQuery } =
   await import("./lora-categories.ts");
 
 test("every backend's name for a base reads as one family", () => {
@@ -74,7 +74,7 @@ test("category order follows the list, the unsorted last", () => {
 });
 
 test("base order groups the families, the unsaid last", () => {
-  assert.deepEqual(sortLoras(library, "base").map((l) => l.name), ["item9", "alpha", "item10", "zeta", "Beta"]);
+  assert.deepEqual(sortLoras(library, "base").map((l) => l.name), ["item10", "zeta", "item9", "alpha", "Beta"]);
 });
 
 test("a search needs every word, in the name, alias or trigger words", () => {
@@ -108,4 +108,71 @@ test("filed results are grouped by category, off-list keys dropped", () => {
     { lora: "mika", outcome: "unknown" },
   ]);
   assert.deepEqual([...got.entries()], [["style", ["ink", "pen"]]]);
+});
+
+test("the newer base models read the same from every catalogue", () => {
+  const cases: [string, string][] = [
+    ["Anima", "anima"], ["Flux.2 Klein 9B", "flux2"], ["Flux.2 Klein 4B-base", "flux2"], ["Flux.1 Kontext", "flux"],
+    ["Flux.1 Krea", "flux"], ["Chroma", "chroma"], ["Qwen", "qwen"], ["Qwen 2", "qwen"], ["Qwen 2.1", "qwen21"],
+    ["ZImageTurbo", "zimage"], ["ZImageBase", "zimage"], ["z-image", "zimage"], ["Krea 2", "krea2"],
+    ["Krea 2 Turbo", "krea2"], ["Ernie", "ernie"], ["MOSS Image", "moss"], ["Lumina", "lumina"],
+    ["Wan Video 2.2 I2V-A14B", "wan"],
+  ];
+  for (const [base, family] of cases) assert.equal(baseFamily(base), family, base);
+});
+
+test("a base that only sounds like one Forge runs is not taken for it", () => {
+  for (const b of ["Pony V7", "Flux.3", "Qwen 3", "Hunyuan 1"]) assert.equal(baseFamily(b), "", b);
+});
+
+test("Chroma takes Flux's LoRAs, and no other family takes another's", () => {
+  assert.equal(fitsModel("Flux.1 D", "Chroma"), true);
+  assert.equal(fitsModel("Chroma", "Flux.1 D"), false);
+  assert.equal(fitsModel("Anima", "Illustrious"), false);
+  assert.equal(fitsModel("Flux.1 D", "Flux.2 Klein 9B"), false);
+  assert.equal(fitsModel("Qwen", "Qwen 2.1"), false);
+});
+
+test("SDXL's kinds are grouped apart though they share a family", () => {
+  assert.equal(baseGroup({ base: "Illustrious" }).label, "Illustrious");
+  assert.equal(baseGroup({ base: "NoobAI" }).label, "NoobAI");
+  assert.equal(baseGroup({ base: "Pony" }).label, "Pony");
+  assert.equal(baseGroup({ base: "SDXL 1.0" }).label, "SDXL");
+  assert.equal(baseGroup({ base: "sdxl" }).key, "sdxl");
+});
+
+test("what the file was read as outranks a base saying nothing", () => {
+  assert.equal(baseGroup({ family: "anima" }).label, "Anima");
+  assert.equal(baseGroup({ base: "Unknown", family: "flux2" }).label, "Flux.2 Klein");
+  assert.equal(baseGroup({}).label, "Other");
+});
+
+test("groups come counted and in a fixed order, whatever order the files came in", () => {
+  const items = [{ base: "Anima" }, { base: "SD 1.5" }, { base: "Illustrious" }, { base: "Anima" }, { base: "?" }];
+  assert.deepEqual(baseGroups(items).map((g) => [g.label, g.count]), [["Illustrious", 1], ["Anima", 2], ["SD 1.5", 1], ["Other", 1]]);
+});
+
+test("a picked chip narrows the LoRAs on top of everything else", () => {
+  const loras = [{ name: "a", base: "Anima" }, { name: "b", base: "Illustrious" }, { name: "c", base: "Illustrious" }];
+  const view = { category: "all" as const, query: "", fitOnly: false, group: "illustrious", order: "name" as const };
+  assert.deepEqual(browseLoras(loras, view).map((l) => l.name), ["b", "c"]);
+  assert.deepEqual(browseLoras(loras, { ...view, group: "" }).map((l) => l.name), ["a", "b", "c"]);
+});
+
+test("checkpoints filter by a chip and sort by base, names breaking the ties", () => {
+  const models = [
+    { model_name: "zeta", base: "Anima" }, { model_name: "alpha", base: "SD 1.5" },
+    { model_name: "item10", base: "Illustrious" }, { model_name: "item9", base: "Illustrious" },
+  ];
+  assert.deepEqual(browseModels(models, "", "base").map((m) => m.model_name), ["item9", "item10", "zeta", "alpha"]);
+  assert.deepEqual(browseModels(models, "", "name").map((m) => m.model_name), ["alpha", "item9", "item10", "zeta"]);
+  assert.deepEqual(browseModels(models, "illustrious", "name-desc").map((m) => m.model_name), ["item10", "item9"]);
+});
+
+test("only plain SDXL files are worth asking Civitai about", () => {
+  const items = [
+    { key: "a", base: "SDXL" }, { key: "b", base: "Illustrious" }, { key: "c", base: "Anima" },
+    { base: "SDXL" }, { key: "d", family: "sdxl" },
+  ];
+  assert.deepEqual(basesToLookUp(items), ["a", "d"]);
 });

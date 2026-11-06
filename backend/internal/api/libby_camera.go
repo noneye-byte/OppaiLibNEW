@@ -224,6 +224,7 @@ func (s *Server) takePictures(ctx context.Context, req cameraRequest) (cameraRes
 		chosenNames = append(chosenNames, l.Name)
 	}
 	gr := generateReq{
+		ModelSettings: true,
 		Prompt:         prompt,
 		NegativePrompt: withAdultNegative(cur.LibbyGenNegativePrompt),
 		Checkpoint:     cur.LibbyGenModel,
