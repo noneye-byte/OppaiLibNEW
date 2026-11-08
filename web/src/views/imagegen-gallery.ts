@@ -42,7 +42,7 @@ const SIZE_KEY = "oppai.gallerySize";
  * with a play mark and played in the viewer; what a clip can be used for is the Video
  * studio's, so its actions open it there ("open-clip") rather than in the Image studio.
  *
- * The host view calls refresh() after a generation so new images appear without
+ * The studio calls galleryChanged() after a generation so new images appear without
  * a manual reload. A picture can go back to the studio as the one to start from
  * ("use-picture": image to image, paint to fix, its faces redone, enlarged, or
  * animated into a clip).
@@ -73,6 +73,17 @@ const TYPES: { id: GalleryType | ""; label: string; icon: string; empty: string 
   { id: "upscaled", label: "Upscaled", icon: "open_in_full", empty: "Nothing here has been upscaled yet." },
   { id: "videos", label: "Videos", icon: "movie", empty: "No clips here yet — make one in the Video studio." },
 ];
+
+const changedListeners = new Set<() => void>();
+
+/** Tells every gallery on screen that the server has kept something new. Said to the
+    module rather than to a panel the caller holds: a run outlives the studio it was
+    started from — leave Create and come back while it draws, and the panel it would
+    have refreshed is gone, while the one on screen loaded before the picture existed
+    and never showed it. */
+export function galleryChanged() {
+  for (const fn of changedListeners) fn();
+}
 
 /** The expanded grid's tile sizes, smallest first. */
 const SIZES = [{ id: "s", px: 120 }, { id: "m", px: 170 }, { id: "l", px: 250 }] as const;
@@ -112,6 +123,9 @@ export class OppaiInvokeGallery extends LitElement {
   @state() private items: GalleryImage[] = [];
   @state() private total = 0;
   @state() private loading = false;
+  /** Counts page loads, so only the newest one is shown; see loadPage. */
+  private loadSeq = 0;
+  private readonly onGalleryChanged = () => void this.refresh();
   @state() private error = "";
   /** The picture open in the viewer. */
   @state() private viewing: GalleryImage | null = null;
@@ -418,6 +432,7 @@ export class OppaiInvokeGallery extends LitElement {
     super.connectedCallback();
     profileUpdates(this, "generation gallery");
     window.addEventListener("keydown", this.onKey);
+    changedListeners.add(this.onGalleryChanged);
     if (this.startBoard) this.board = this.startBoard;
     try {
       const size = localStorage.getItem(SIZE_KEY);
@@ -431,6 +446,7 @@ export class OppaiInvokeGallery extends LitElement {
   disconnectedCallback() {
     super.disconnectedCallback();
     window.removeEventListener("keydown", this.onKey);
+    changedListeners.delete(this.onGalleryChanged);
     this.more?.disconnect();
   }
 
@@ -587,18 +603,25 @@ export class OppaiInvokeGallery extends LitElement {
     }
   }
 
+  /** A next page waits for the load in flight; a first page replaces it. A refresh
+      used to be dropped whenever any load was in flight — a scroll's next page, or
+      the refresh of a run that finished a moment before — and the picture it was for
+      stayed missing until the gallery was reopened. The same check let a board's
+      first page land under the board picked after it. */
   private async loadPage(reset: boolean) {
-    if (this.loading) return;
+    if (this.loading && !reset) return;
+    const seq = ++this.loadSeq;
     this.loading = true;
     try {
       const offset = reset ? 0 : this.items.length;
       const page = await api.galleryImages(this.board, offset, PAGE, this.sort, this.own && this.type ? this.type : undefined);
+      if (seq !== this.loadSeq) return;
       this.items = reset ? page.items : [...this.items, ...page.items.filter((i) => !this.items.some((o) => o.name === i.name))];
       this.total = page.total;
     } catch (e) {
-      this.error = (e as Error).message;
+      if (seq === this.loadSeq) this.error = (e as Error).message;
     } finally {
-      this.loading = false;
+      if (seq === this.loadSeq) this.loading = false;
     }
   }
 

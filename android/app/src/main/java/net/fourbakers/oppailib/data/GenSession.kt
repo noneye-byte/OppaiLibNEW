@@ -94,7 +94,11 @@ object GenSession {
                     // Stopped from the button: not a failure worth a red line.
                     val cancelled = _state.value.progress?.cancelled == true ||
                         err.message?.contains("cancelled", ignoreCase = true) == true
-                    if (!cancelled) _state.update { it.copy(error = err.message ?: "Generation failed") }
+                    // The gallery reloads all the same: the server keeps a run as it comes
+                    // off the generator, so a reply lost on the way (a proxy giving up on a
+                    // long one) is still a picture there, which stayed hidden until the
+                    // Gallery tab was reopened.
+                    if (!cancelled) _state.update { it.copy(error = err.message ?: "Generation failed", finished = it.finished + 1) }
                 }
             poll?.cancel()
             _state.update { it.copy(generating = false, jobId = "", progress = null) }

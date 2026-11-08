@@ -115,7 +115,7 @@ import {
   MOTION_STEPS, canMake, clipTake, nextStep, pictureTake, squareSteps, stepCounts, stepWork, stepsFor,
   type MotionStep, type SquareMotion,
 } from "../sprite-motion.js";
-import { GALLERY_DRAG_TYPE } from "./imagegen-gallery.js";
+import { GALLERY_DRAG_TYPE, galleryChanged } from "./imagegen-gallery.js";
 import {
   loadLayout, loadPrompts, moveItem, patchShot, rememberPrompt, rememberShots, saveLayout, savePrompts, stepThrough,
   type RecentPrompt, type StudioMode,
@@ -3918,6 +3918,11 @@ export class OppaiImageGen extends LitElement {
       res = await this.collectRun(params.jobId, e as Error);
     } finally {
       this.stopProgressWatch();
+      // Whether or not this side heard back. The server keeps a run as it comes off
+      // the generator, so a reply lost on the way (a proxy giving up, a job collected
+      // too late) is still a picture in the gallery, and used to stay hidden there
+      // until the gallery was reopened.
+      if (!params.noGallery) galleryChanged();
     }
     // Wildcards were rolled server-side: the record has to say what was actually
     // sent, or "use the same parameters" would roll again instead of reproducing.
@@ -3990,7 +3995,6 @@ export class OppaiImageGen extends LitElement {
         savePrompts(this.recentPrompts);
       }
     }
-    void this.galleryPanel?.refresh();
     return made.length;
   }
 
@@ -4659,7 +4663,7 @@ export class OppaiImageGen extends LitElement {
     this.shots = this.shots.map((s) => (s.id === shot.id ? { ...s, saved: true, gallery: undefined } : s));
     store.history = patchShot(store.history, shot.id, { saved: true, gallery: undefined });
     storeChanged();
-    if (shot.gallery) void this.galleryPanel?.refresh();
+    if (shot.gallery) galleryChanged();
     this.dispatchEvent(new CustomEvent("imported", { bubbles: true, composed: true }));
     return res.id;
   }
