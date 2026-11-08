@@ -2431,7 +2431,11 @@ export class OppaiImageGen extends LitElement {
     if (d.selectedTriggers) this.selectedTriggers = d.selectedTriggers;
     if (d.selectedChars) this.selectedChars = d.selectedChars;
     if (d.selectedPoses) this.selectedPoses = d.selectedPoses;
-    if (d.outfitOn !== undefined) this.outfitOn = d.outfitOn;
+    // Sprites' alone. The draft is shared with Create, where the switch is nowhere on
+    // screen, and taking it from there made every Image run after a visit to Sprites a
+    // sprite square: the square's wording added to the prompt, one picture a run, and
+    // kept out of the gallery, so the picture drew and was never seen there.
+    if (d.outfitOn !== undefined && this.studio) this.outfitOn = d.outfitOn;
     if (d.outfitText !== undefined) this.outfitText = d.outfitText;
     // Normalized rather than spread: a draft written before colours existed stores a
     // plain description per slot, and that is still every garment the user typed.
