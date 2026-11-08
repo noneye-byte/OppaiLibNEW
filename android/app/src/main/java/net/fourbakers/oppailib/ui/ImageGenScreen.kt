@@ -136,6 +136,9 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import net.fourbakers.oppailib.data.LibbyMeter
 import net.fourbakers.oppailib.data.LibbyVoice
 import net.fourbakers.oppailib.data.GenTemplate
+import net.fourbakers.oppailib.data.fragmentWords
+import net.fourbakers.oppailib.data.joinPrompt
+import net.fourbakers.oppailib.data.readsProse
 import net.fourbakers.oppailib.data.GenProgress
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.drop
@@ -396,21 +399,23 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit, to
             .flatMap { it.triggerPhrases }
             .distinct()
         parts += availableTriggers.filter { it in selectedTriggers }
+        // On Anima a character or pose with a description is sent as its description.
+        val prose = readsProse(status?.models?.find { it.title == checkpoint }?.family)
         for (id in selectedChars) {
             val c = characters.find { it.id == id } ?: continue
-            if (c.prompt.isNotBlank()) parts += c.prompt.trim()
+            parts += fragmentWords(c, prose)
             if (c.negativePrompt.isNotBlank()) negParts += c.negativePrompt.trim()
         }
         // Poses after the characters: who, then what they are doing.
         for (id in selectedPoses) {
             val p = poses.find { it.id == id } ?: continue
-            if (p.prompt.isNotBlank()) parts += p.prompt.trim()
+            parts += fragmentWords(p, prose)
             if (p.negativePrompt.isNotBlank()) negParts += p.negativePrompt.trim()
         }
         // What the LoRAs that are on ask to keep out of the picture.
         negParts += loraNegatives(negParts.joinToString(", "),
             status?.loras.orEmpty().filter { it.name in loraWeights }.map { it.negative })
-        var pos = parts.filter { it.isNotEmpty() }.joinToString(", ")
+        var pos = joinPrompt(parts)
         var neg = negParts.filter { it.isNotEmpty() }.joinToString(", ")
         val tpl: GenTemplate? = status?.templates?.find { it.id == templateId }
         if (tpl != null) {

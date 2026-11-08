@@ -4,6 +4,7 @@ import {
   DEFAULT_OUTFIT_GEAR,
   EMPTY_OUTFIT_GEAR,
   OUTFIT_LEVEL_STANCES,
+  OUTFIT_LEVEL_STANCE_PROSE,
   OUTFIT_UNDRESS_LEVELS,
   levelStance,
   OUTFIT_GEAR_SLOTS,
@@ -12,7 +13,11 @@ import {
   gearColorNegatives,
   gearKey,
   gearPhrase,
+  gearProse,
   gearWorn,
+  isPluralGarment,
+  withArticle,
+  wearingProse,
   isOutfitGear,
   normalizeOutfitGear,
   undressLevel,
@@ -248,4 +253,63 @@ test("no two levels stand alike, so a column is not one pose with less on", () =
   assert.equal(OUTFIT_LEVEL_STANCES.length, OUTFIT_UNDRESS_LEVELS.length);
   assert.equal(levelStance(99), OUTFIT_LEVEL_STANCES[OUTFIT_LEVEL_STANCES.length - 1]);
   assert.equal(levelStance(-1), OUTFIT_LEVEL_STANCES[0]);
+});
+
+test("on a checkpoint that reads prose each level stands as a sentence of its own", () => {
+  assert.equal(OUTFIT_LEVEL_STANCE_PROSE.length, OUTFIT_LEVEL_STANCES.length);
+  assert.equal(new Set(OUTFIT_LEVEL_STANCE_PROSE).size, OUTFIT_LEVEL_STANCE_PROSE.length);
+  assert.equal(levelStance(0, true), OUTFIT_LEVEL_STANCE_PROSE[0]);
+  assert.equal(levelStance(9, true), OUTFIT_LEVEL_STANCE_PROSE[4]);
+});
+
+test("undressing in sentences says what the tags say, and hides what they hide", () => {
+  for (let level = 0; level < OUTFIT_UNDRESS_LEVELS.length; level++) {
+    const tags = undressPrompt(DEFAULT_OUTFIT_GEAR, undressLevel(level));
+    const prose = undressPrompt(DEFAULT_OUTFIT_GEAR, undressLevel(level), true);
+    assert.deepEqual(prose.hidden, tags.hidden);
+    assert.deepEqual(prose.negative, tags.negative);
+    assert.equal(prose.prompt.length, tags.prompt.length);
+  }
+  assert.deepEqual(undressPrompt(DEFAULT_OUTFIT_GEAR, undressLevel(1), true).prompt,
+    ["Her fitted top is slipping off one shoulder."]);
+  assert.deepEqual(undressPrompt(DEFAULT_OUTFIT_GEAR, undressLevel(2), true).prompt,
+    ["Her fitted top is pulled aside.", "Her lace bra is showing."]);
+  assert.equal(undressPrompt(DEFAULT_OUTFIT_GEAR, undressLevel(4), true).prompt[0], "She is completely nude.");
+  const overalls = { ...DEFAULT_OUTFIT_GEAR, top: { color: "", item: "denim overalls" } };
+  assert.deepEqual(undressPrompt(overalls, undressLevel(1), true).prompt, ["Her denim overalls are slipping off one shoulder."]);
+});
+
+test("a garment is named with the article a sentence gives it", () => {
+  assert.equal(withArticle("cream white fitted top"), "a cream white fitted top");
+  assert.equal(withArticle("ivory blouse"), "an ivory blouse");
+  assert.equal(withArticle("off-white dress"), "an off-white dress");
+  assert.equal(withArticle("uniform"), "a uniform");
+  assert.equal(withArticle("black ankle boots"), "black ankle boots");
+  assert.equal(withArticle("a pair of glasses"), "a pair of glasses");
+  assert.equal(isPluralGarment("lace panties"), true);
+  assert.equal(isPluralGarment("silk dress"), false);
+  assert.equal(isPluralGarment("hibiscus"), false);
+});
+
+test("a hand holds what it holds and wears what it wears", () => {
+  assert.equal(gearProse(slotFor("hand1"), { color: "silver", item: "sword" }), "a silver sword in her left hand");
+  assert.equal(gearProse(slotFor("hand2"), { color: "black", item: "leather glove" }), "a black leather glove on her right hand");
+  assert.equal(gearProse(slotFor("top"), { color: "red", item: "tee", off: true }), "");
+});
+
+test("what she wears is one sentence, leaving out what the level hides", () => {
+  assert.equal(wearingProse(DEFAULT_OUTFIT_GEAR, ["bra", "panties"]),
+    "She is wearing a cream white fitted top, a charcoal pleated skirt and black ankle boots.");
+  const armed = { ...EMPTY_OUTFIT_GEAR, top: { color: "", item: "tunic" }, hand1: { color: "", item: "staff" } };
+  assert.equal(wearingProse(armed), "She is wearing a tunic, with a staff in her left hand.");
+  assert.equal(wearingProse({ ...EMPTY_OUTFIT_GEAR, hand1: { color: "", item: "staff" } }), "She has a staff in her left hand.");
+  assert.equal(wearingProse(EMPTY_OUTFIT_GEAR), "");
+});
+
+test("colour locking says each colour again rather than weighting it", () => {
+  const gear = { ...EMPTY_OUTFIT_GEAR, top: { color: "crimson", item: "fitted top" }, shoes: { color: "black", item: "ankle boots" } };
+  const said = wearingProse(gear, [], true);
+  assert.equal(said, "She is wearing a crimson fitted top and black ankle boots. " +
+    "The colours are exactly as named: the fitted top is crimson and the ankle boots are black.");
+  assert.doesNotMatch(said, /[()]|:\d/);
 });

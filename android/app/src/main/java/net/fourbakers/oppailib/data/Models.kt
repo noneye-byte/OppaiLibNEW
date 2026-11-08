@@ -954,6 +954,40 @@ data class GenModelMeta(
     val description: String = "",
     val triggerPhrases: List<String> = emptyList(),
     val defaults: GenModelDefaults? = null,
+    /** Its Civitai page, when it is linked to one. */
+    val civitai: GenModelCivitai? = null,
+)
+
+/** A model's Civitai page as the editor needs it: where its pictures and comments are. */
+@Serializable
+data class GenModelCivitai(
+    val modelId: Long = 0,
+    val versionId: Long = 0,
+    val modelName: String = "",
+    val versionName: String = "",
+    val creator: String = "",
+    /** The Civitai picture chosen as its cover; "" for the first showcase one. */
+    val coverUrl: String = "",
+    val page: String = "",
+)
+
+/** One comment from a model's Civitai discussion. [html] is sanitized by the server. */
+@Serializable
+data class CivitaiComment(
+    val id: Long = 0,
+    val user: String = "",
+    val avatar: String = "",
+    val createdAt: String = "",
+    val html: String = "",
+    val replies: Int = 0,
+    val likes: Int = 0,
+)
+
+@Serializable
+data class CivitaiCommentsResponse(
+    val items: List<CivitaiComment> = emptyList(),
+    val nextCursor: String = "",
+    val page: String = "",
 )
 
 /**
@@ -1348,6 +1382,10 @@ data class GenCharacter(
     val prompt: String = "",
     val negativePrompt: String = "",
     val hasThumb: Boolean = false,
+    /** A plain-text description, sent instead of [prompt] on an Anima checkpoint
+        (PromptWords.kt). Edited on the web; a save from here leaves it as it is, since
+        the server keeps a description the request does not carry. */
+    val description: String = "",
 )
 
 /** Create (empty/absent id) or update a character. [imageData] is an optional new

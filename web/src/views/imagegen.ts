@@ -57,6 +57,7 @@ import {
   compileCamera,
   DEFAULT_CAMERA,
   outfitShotPrompt,
+  outfitShotProse,
   savedShot,
   scaleFor,
   type CameraSpec,
@@ -87,6 +88,7 @@ import {
   undressLevel,
   undressPrompt,
   unaskedLayers,
+  wearingProse,
   type GearPiece,
   type OutfitGear,
   type OutfitGearKey,
@@ -102,7 +104,8 @@ import "./rename-dialog.js";
 import "./imagegen-detailer.js";
 import "./gpu-switch.js";
 import "./model-civitai.js";
-import { fragmentWords, readsProse } from "../fragment-words.js";
+import { fragmentWords, joinPrompt, readsProse } from "../fragment-words.js";
+import { pubicProse, spriteSquareProse } from "../sprite-prose.js";
 import {
   animatePicture, clipFormProblem, clipParamsFor, clipsRunning, comfyListsReady, followClip, newClipJobId, onClipKept, onClipsChange,
   openGalleryClip, refreshComfyLists, spriteForm, toggleVideoDrawer, videoDrawerOpen, type ClipPicture, type GalleryClip,
@@ -346,19 +349,19 @@ const SHORTCUTS: { keys: string; what: string; mode?: StudioMode }[] = [
 
 /** Every expression the wardrobe accepts, and the face each one wants. Kept in the
  * same order as LIBBY_EMOTIONS so Next pose walks the editor's slot grid exactly. */
-const OUTFIT_FACES: { id: LibbyEmotion; label: string; face: string; pose: string }[] = [
-  { id: "neutral", label: "Neutral", face: "calm neutral expression, relaxed face, looking at viewer", pose: "both arms hanging naturally at her sides, relaxed hands" },
-  { id: "happy", label: "Happy", face: "warm genuine smile, bright eyes, cheerful expression", pose: "hands loosely clasped behind her lower back, open cheerful posture" },
-  { id: "mischievous", label: "Mischievous", face: "smirk, half-lidded eyes, teasing knowing expression", pose: "one hand resting on her hip, other arm relaxed at her side" },
-  { id: "surprised", label: "Surprised", face: "surprised expression, wide eyes, slightly open mouth", pose: "hands open near her waist, elbows bent slightly in surprise" },
-  { id: "thinking", label: "Thinking", face: "thoughtful expression, looking to the side", pose: "one fingertip resting at her chin, other arm folded gently across her waist" },
-  { id: "shy", label: "Shy", face: "bashful shy expression, blushing cheeks, averted eyes, hesitant small smile", pose: "hands clasped low in front of her skirt, shoulders tucked slightly inward" },
-  { id: "smug", label: "Smug", face: "self-satisfied smug expression, raised eyebrow, confident knowing smirk", pose: "one hand planted on her hip, other arm loose, confident stance" },
-  { id: "sad", label: "Sad", face: "sad wistful expression, downcast eyes, slight frown, vulnerable face", pose: "arms hanging softly at her sides, shoulders slightly slumped" },
-  { id: "annoyed", label: "Annoyed", face: "annoyed irritated expression, furrowed brows, impatient pout", pose: "arms crossed low beneath her chest, weight shifted impatiently" },
-  { id: "sleepy", label: "Sleepy", face: "sleepy drowsy expression, heavy half-closed eyes, relaxed tired face", pose: "arms loose at her sides, languid slouched posture" },
-  { id: "loving", label: "Loving", face: "tender loving expression, soft adoring eyes, affectionate gentle smile", pose: "hands gently clasped low over her abdomen, body leaning affectionately forward" },
-  { id: "excited", label: "Excited", face: "excited thrilled expression, sparkling wide eyes, eager open smile", pose: "hands held eagerly near her hips, lively forward-leaning stance" },
+const OUTFIT_FACES: { id: LibbyEmotion; label: string; face: string; pose: string; prose: string }[] = [
+  { id: "neutral", label: "Neutral", face: "calm neutral expression, relaxed face, looking at viewer", pose: "both arms hanging naturally at her sides, relaxed hands", prose: "She has a calm, neutral expression on a relaxed face and looks at the viewer, both arms hanging naturally at her sides with relaxed hands." },
+  { id: "happy", label: "Happy", face: "warm genuine smile, bright eyes, cheerful expression", pose: "hands loosely clasped behind her lower back, open cheerful posture", prose: "She smiles a warm, genuine smile with bright eyes, cheerful, her hands loosely clasped behind her lower back in an open posture." },
+  { id: "mischievous", label: "Mischievous", face: "smirk, half-lidded eyes, teasing knowing expression", pose: "one hand resting on her hip, other arm relaxed at her side", prose: "She smirks with half-lidded eyes and a teasing, knowing look, one hand resting on her hip and the other arm relaxed at her side." },
+  { id: "surprised", label: "Surprised", face: "surprised expression, wide eyes, slightly open mouth", pose: "hands open near her waist, elbows bent slightly in surprise", prose: "She looks surprised, her eyes wide and her mouth slightly open, her hands open near her waist with her elbows bent a little." },
+  { id: "thinking", label: "Thinking", face: "thoughtful expression, looking to the side", pose: "one fingertip resting at her chin, other arm folded gently across her waist", prose: "She looks to the side, thoughtful, one fingertip resting at her chin and the other arm folded gently across her waist." },
+  { id: "shy", label: "Shy", face: "bashful shy expression, blushing cheeks, averted eyes, hesitant small smile", pose: "hands clasped low in front of her skirt, shoulders tucked slightly inward", prose: "She is bashful and shy, blushing, her eyes averted and a small hesitant smile on her lips, her hands clasped low in front of her and her shoulders tucked slightly inward." },
+  { id: "smug", label: "Smug", face: "self-satisfied smug expression, raised eyebrow, confident knowing smirk", pose: "one hand planted on her hip, other arm loose, confident stance", prose: "She looks smug and self-satisfied, one eyebrow raised over a confident, knowing smirk, one hand planted on her hip and the other arm loose." },
+  { id: "sad", label: "Sad", face: "sad wistful expression, downcast eyes, slight frown, vulnerable face", pose: "arms hanging softly at her sides, shoulders slightly slumped", prose: "She looks sad and wistful, her eyes downcast and a slight frown on her vulnerable face, her arms hanging softly at her sides and her shoulders slightly slumped." },
+  { id: "annoyed", label: "Annoyed", face: "annoyed irritated expression, furrowed brows, impatient pout", pose: "arms crossed low beneath her chest, weight shifted impatiently", prose: "She looks annoyed, her brows furrowed in an impatient pout, her arms crossed low beneath her chest and her weight shifted impatiently." },
+  { id: "sleepy", label: "Sleepy", face: "sleepy drowsy expression, heavy half-closed eyes, relaxed tired face", pose: "arms loose at her sides, languid slouched posture", prose: "She looks sleepy and drowsy, her eyes heavy and half closed in a relaxed, tired face, her arms loose at her sides in a languid slouch." },
+  { id: "loving", label: "Loving", face: "tender loving expression, soft adoring eyes, affectionate gentle smile", pose: "hands gently clasped low over her abdomen, body leaning affectionately forward", prose: "She looks tender and loving, with soft, adoring eyes and a gentle, affectionate smile, her hands clasped low over her abdomen as she leans affectionately forward." },
+  { id: "excited", label: "Excited", face: "excited thrilled expression, sparkling wide eyes, eager open smile", pose: "hands held eagerly near her hips, lively forward-leaning stance", prose: "She looks thrilled, her eyes wide and sparkling and an eager open smile on her face, her hands held near her hips as she leans forward, lively." },
 ];
 
 /**
@@ -375,51 +378,51 @@ const OUTFIT_FACES: { id: LibbyEmotion; label: string; face: string; pose: strin
  * carries a `face` of its own rather than borrowing the expression picker's — a pose
  * this specific reads wrong with an unrelated expression stapled to it.
  */
-const OUTFIT_ACTIVITIES: { id: string; label: string; face: string; pose: string; heat: number; intimate?: boolean; app?: boolean }[] = [
-  { id: "typing", label: "Typing", heat: 0, app: true, face: "focused expression, eyes on a screen, faint smile", pose: "sitting at a desk, both hands on a keyboard, leaning slightly toward the monitor" },
-  { id: "reading", label: "Reading", heat: 0, face: "absorbed expression, eyes lowered to the page", pose: "curled up holding an open book, one leg tucked under her" },
-  { id: "gaming", label: "Gaming", heat: 0, face: "intent expression, eyes wide on the screen, tongue at the corner of her mouth", pose: "sitting cross-legged holding a game controller in both hands" },
-  { id: "lounging", label: "Lounging", heat: 0, face: "relaxed expression, eyes half closed, easy smile", pose: "sprawled back across a sofa, arms loose, one knee raised" },
-  { id: "drinking", label: "Drinking", heat: 0, face: "contented expression, eyes closed over the rim", pose: "holding a steaming mug in both hands near her chest" },
-  { id: "eating", label: "Eating", heat: 0, face: "cheeks slightly full, pleased expression", pose: "holding food up to her mouth mid-bite, other hand cupped beneath it" },
-  { id: "stretching", label: "Stretching", heat: 0, face: "eyes shut, mouth open in a small yawn", pose: "arms stretched overhead, back arched, rising onto her toes" },
-  { id: "napping", label: "Napping", heat: 0, face: "sleeping, eyes closed, lips parted, peaceful", pose: "curled on her side asleep, hands tucked under her cheek" },
-  { id: "dancing", label: "Dancing", heat: 0, face: "eyes closed, delighted open smile", pose: "mid-step with hips turned, one arm raised loosely, hair in motion" },
-  { id: "tidying", label: "Tidying", heat: 0, face: "mildly absorbed expression, glancing at what she is holding", pose: "reaching to shelve something, weight on one foot" },
-  { id: "drawing", label: "Drawing", heat: 0, face: "concentrating, brow faintly furrowed, tongue between her teeth", pose: "hunched over a sketchbook, pencil in hand, other arm steadying the page" },
-  { id: "waving", label: "Waving", heat: 0, face: "bright welcoming smile, eyes on the viewer", pose: "one arm raised waving at the viewer, weight on one hip" },
+const OUTFIT_ACTIVITIES: { id: string; label: string; face: string; pose: string; prose: string; heat: number; intimate?: boolean; app?: boolean }[] = [
+  { id: "typing", label: "Typing", heat: 0, app: true, face: "focused expression, eyes on a screen, faint smile", pose: "sitting at a desk, both hands on a keyboard, leaning slightly toward the monitor", prose: "She sits at a desk with both hands on a keyboard, leaning slightly toward the monitor, focused, her eyes on the screen and a faint smile on her lips." },
+  { id: "reading", label: "Reading", heat: 0, face: "absorbed expression, eyes lowered to the page", pose: "curled up holding an open book, one leg tucked under her", prose: "She is curled up holding an open book, one leg tucked under her, absorbed, her eyes lowered to the page." },
+  { id: "gaming", label: "Gaming", heat: 0, face: "intent expression, eyes wide on the screen, tongue at the corner of her mouth", pose: "sitting cross-legged holding a game controller in both hands", prose: "She sits cross-legged holding a game controller in both hands, intent, her eyes wide on the screen and her tongue at the corner of her mouth." },
+  { id: "lounging", label: "Lounging", heat: 0, face: "relaxed expression, eyes half closed, easy smile", pose: "sprawled back across a sofa, arms loose, one knee raised", prose: "She is sprawled back across a sofa with her arms loose and one knee raised, relaxed, her eyes half closed and an easy smile on her face." },
+  { id: "drinking", label: "Drinking", heat: 0, face: "contented expression, eyes closed over the rim", pose: "holding a steaming mug in both hands near her chest", prose: "She holds a steaming mug in both hands near her chest, contented, her eyes closed over the rim." },
+  { id: "eating", label: "Eating", heat: 0, face: "cheeks slightly full, pleased expression", pose: "holding food up to her mouth mid-bite, other hand cupped beneath it", prose: "She holds food up to her mouth mid-bite, her other hand cupped beneath it, her cheeks slightly full and her face pleased." },
+  { id: "stretching", label: "Stretching", heat: 0, face: "eyes shut, mouth open in a small yawn", pose: "arms stretched overhead, back arched, rising onto her toes", prose: "She stretches her arms overhead with her back arched, rising onto her toes, her eyes shut and her mouth open in a small yawn." },
+  { id: "napping", label: "Napping", heat: 0, face: "sleeping, eyes closed, lips parted, peaceful", pose: "curled on her side asleep, hands tucked under her cheek", prose: "She is asleep, curled on her side with her hands tucked under her cheek, her eyes closed and her lips parted, peaceful." },
+  { id: "dancing", label: "Dancing", heat: 0, face: "eyes closed, delighted open smile", pose: "mid-step with hips turned, one arm raised loosely, hair in motion", prose: "She is dancing mid-step with her hips turned, one arm raised loosely and her hair in motion, her eyes closed and her smile delighted." },
+  { id: "tidying", label: "Tidying", heat: 0, face: "mildly absorbed expression, glancing at what she is holding", pose: "reaching to shelve something, weight on one foot", prose: "She reaches to put something on a shelf, her weight on one foot, mildly absorbed and glancing at what she is holding." },
+  { id: "drawing", label: "Drawing", heat: 0, face: "concentrating, brow faintly furrowed, tongue between her teeth", pose: "hunched over a sketchbook, pencil in hand, other arm steadying the page", prose: "She is hunched over a sketchbook with a pencil in hand, her other arm steadying the page, concentrating, her brow faintly furrowed and her tongue between her teeth." },
+  { id: "waving", label: "Waving", heat: 0, face: "bright welcoming smile, eyes on the viewer", pose: "one arm raised waving at the viewer, weight on one hip", prose: "She waves at the viewer with one arm raised and her weight on one hip, a bright welcoming smile on her face and her eyes on the viewer." },
 
   // The intimate states carry the heat their picture is drawn at, since a MISC square
   // has no tier of its own: "spread" with every stitch neatly on is not the picture.
-  { id: "undressing", label: "Undressing", heat: 2, intimate: true, face: "half-lidded eyes, small knowing smile, watching the viewer", pose: "peeling clothing off one shoulder, other hand at her waistband" },
-  { id: "teasing", label: "Teasing", heat: 2, intimate: true, face: "smirking, heavy-lidded eyes locked on the viewer", pose: "posing for the viewer, back arched, hands framing her hips" },
-  { id: "touching", label: "Touching herself", heat: 2, intimate: true, face: "flushed, lips parted, eyes on the viewer", pose: "one hand pressed between her thighs over her clothes, other hand at her chest" },
-  { id: "rubbing", label: "Rubbing", heat: 3, intimate: true, face: "deep blush, mouth open, eyes unfocused", pose: "reclining with one hand rubbing between her spread thighs" },
-  { id: "fingering", label: "Fingering", heat: 4, intimate: true, face: "blushing, head tipped back, brow drawn, mouth open", pose: "lying back with her fingers inside herself, knees fallen open" },
-  { id: "spread", label: "Spread", heat: 4, intimate: true, face: "flushed, watching the viewer, mouth open", pose: "lying back holding herself open with both hands, legs spread wide" },
-  { id: "vibrator", label: "Vibrator", heat: 3, intimate: true, face: "eyes squeezed shut, mouth open, deep blush", pose: "holding a vibrator against herself, thighs tensed together" },
-  { id: "dildo", label: "Dildo", heat: 4, intimate: true, face: "flushed, half-lidded, biting her lip", pose: "using a dildo on herself, one hand braced behind her" },
-  { id: "riding", label: "Riding", heat: 4, intimate: true, face: "flushed, head thrown back, mouth open", pose: "straddling and riding a toy, hands braced on her thighs, back arched" },
-  { id: "grinding", label: "Grinding", heat: 3, intimate: true, face: "flushed, eyes shut, teeth in her lip", pose: "straddling a pillow, hips rolling forward, hands gripping it" },
-  { id: "climax", label: "Climax", heat: 4, intimate: true, face: "eyes rolled up, mouth wide open, whole face flushed", pose: "body arched taut mid-orgasm, toes curled, hands fisted" },
-  { id: "afterglow", label: "Afterglow", heat: 3, intimate: true, face: "dazed exhausted smile, heavy-lidded eyes, deep blush", pose: "collapsed limp on her back, limbs loose" },
+  { id: "undressing", label: "Undressing", heat: 2, intimate: true, face: "half-lidded eyes, small knowing smile, watching the viewer", pose: "peeling clothing off one shoulder, other hand at her waistband", prose: "She is peeling her clothing off one shoulder, her other hand at her waistband, watching the viewer with half-lidded eyes and a small knowing smile." },
+  { id: "teasing", label: "Teasing", heat: 2, intimate: true, face: "smirking, heavy-lidded eyes locked on the viewer", pose: "posing for the viewer, back arched, hands framing her hips", prose: "She poses for the viewer with her back arched and her hands framing her hips, smirking, her heavy-lidded eyes locked on the viewer." },
+  { id: "touching", label: "Touching herself", heat: 2, intimate: true, face: "flushed, lips parted, eyes on the viewer", pose: "one hand pressed between her thighs over her clothes, other hand at her chest", prose: "She presses one hand between her thighs over her clothes, her other hand at her chest, flushed, her lips parted and her eyes on the viewer." },
+  { id: "rubbing", label: "Rubbing", heat: 3, intimate: true, face: "deep blush, mouth open, eyes unfocused", pose: "reclining with one hand rubbing between her spread thighs", prose: "She reclines, rubbing between her spread thighs with one hand, deeply blushing, her mouth open and her eyes unfocused." },
+  { id: "fingering", label: "Fingering", heat: 4, intimate: true, face: "blushing, head tipped back, brow drawn, mouth open", pose: "lying back with her fingers inside herself, knees fallen open", prose: "She lies back with her knees fallen open and her fingers inside herself, blushing, her head tipped back, her brow drawn and her mouth open." },
+  { id: "spread", label: "Spread", heat: 4, intimate: true, face: "flushed, watching the viewer, mouth open", pose: "lying back holding herself open with both hands, legs spread wide", prose: "She lies back with her legs spread wide, holding herself open with both hands, flushed, watching the viewer with her mouth open." },
+  { id: "vibrator", label: "Vibrator", heat: 3, intimate: true, face: "eyes squeezed shut, mouth open, deep blush", pose: "holding a vibrator against herself, thighs tensed together", prose: "She holds a vibrator against herself with her thighs tensed together, her eyes squeezed shut, her mouth open and her face deeply blushing." },
+  { id: "dildo", label: "Dildo", heat: 4, intimate: true, face: "flushed, half-lidded, biting her lip", pose: "using a dildo on herself, one hand braced behind her", prose: "She is using a dildo on herself, one hand braced behind her, flushed and half-lidded, biting her lip." },
+  { id: "riding", label: "Riding", heat: 4, intimate: true, face: "flushed, head thrown back, mouth open", pose: "straddling and riding a toy, hands braced on her thighs, back arched", prose: "She straddles a toy and rides it, her hands braced on her thighs and her back arched, flushed, her head thrown back and her mouth open." },
+  { id: "grinding", label: "Grinding", heat: 3, intimate: true, face: "flushed, eyes shut, teeth in her lip", pose: "straddling a pillow, hips rolling forward, hands gripping it", prose: "She straddles a pillow and grips it as her hips roll forward, flushed, her eyes shut and her teeth in her lip." },
+  { id: "climax", label: "Climax", heat: 4, intimate: true, face: "eyes rolled up, mouth wide open, whole face flushed", pose: "body arched taut mid-orgasm, toes curled, hands fisted", prose: "Her body is arched taut mid-orgasm, her toes curled and her hands fisted, her eyes rolled up, her mouth wide open and her whole face flushed." },
+  { id: "afterglow", label: "Afterglow", heat: 3, intimate: true, face: "dazed exhausted smile, heavy-lidded eyes, deep blush", pose: "collapsed limp on her back, limbs loose", prose: "She lies collapsed on her back with her limbs loose, a dazed, exhausted smile on her face, her eyes heavy-lidded and her cheeks deeply blushing." },
 
   // The app's: shown at moments of its own rather than chosen by her, typing among
   // them. Their clip lengths, and the rest's, are in misc-motion.ts.
-  { id: "talking", label: "Talking", heat: 0, app: true, face: "talking, mouth open mid-word, friendly expression, eyes on the viewer", pose: "facing the viewer, one hand raised a little as she speaks" },
-  { id: "greeting", label: "Greeting", heat: 0, app: true, face: "bright welcoming smile, eyes on the viewer", pose: "one hand raised in a small wave hello, leaning slightly toward the viewer" },
-  { id: "startled", label: "Startled", heat: 0, app: true, face: "startled expression, wide eyes, mouth open in a small gasp", pose: "flinching back, both hands raised in front of her chest" },
+  { id: "talking", label: "Talking", heat: 0, app: true, face: "talking, mouth open mid-word, friendly expression, eyes on the viewer", pose: "facing the viewer, one hand raised a little as she speaks", prose: "She faces the viewer, talking, her mouth open mid-word and her expression friendly, one hand raised a little as she speaks." },
+  { id: "greeting", label: "Greeting", heat: 0, app: true, face: "bright welcoming smile, eyes on the viewer", pose: "one hand raised in a small wave hello, leaning slightly toward the viewer", prose: "She raises one hand in a small wave hello, leaning slightly toward the viewer with a bright welcoming smile." },
+  { id: "startled", label: "Startled", heat: 0, app: true, face: "startled expression, wide eyes, mouth open in a small gasp", pose: "flinching back, both hands raised in front of her chest", prose: "She flinches back, startled, both hands raised in front of her chest, her eyes wide and her mouth open in a small gasp." },
 ];
 
 /** Heat owns the emotional performance. What she has on at a tier is undressLevel, and
  * how she stands is levelStance. */
-const OUTFIT_TIERS: { label: string; mood: string }[] = [
-  { label: "Calm", mood: "composed" },
-  { label: "Warm", mood: "soft light blush" },
-  { label: "Flirty", mood: "flirty, visible blush" },
-  { label: "Heated", mood: "blush, sultry, parted lips, heavy-lidded eyes" },
+const OUTFIT_TIERS: { label: string; mood: string; moodProse: string }[] = [
+  { label: "Calm", mood: "composed", moodProse: "She is composed." },
+  { label: "Warm", mood: "soft light blush", moodProse: "A soft, light blush colours her cheeks." },
+  { label: "Flirty", mood: "flirty, visible blush", moodProse: "She is flirty, with a visible blush." },
+  { label: "Heated", mood: "blush, sultry, parted lips, heavy-lidded eyes", moodProse: "She is blushing and sultry, her lips parted and her eyes heavy-lidded." },
   // Not "flushed skin" or "breathless": to a booru-trained model both mean sweat.
-  { label: "Peak", mood: "deep blush, needy expression, parted lips" },
+  { label: "Peak", mood: "deep blush, needy expression, parted lips", moodProse: "She is deeply blushing, with a needy expression and parted lips." },
 ];
 
 /** Kept out of every square. See outfitFragment. */
@@ -2845,7 +2848,10 @@ export class OppaiImageGen extends LitElement {
     const misc = OUTFIT_ACTIVITIES.find((item) => item.id === this.outfitMisc);
     const heat = misc ? misc.heat : this.outfitTier;
     const tier = OUTFIT_TIERS[heat];
-    const undress = undressPrompt(this.resolvedGear(), undressLevel(heat));
+    // On Anima the square is described in sentences rather than tagged. What it says is
+    // the same; see sprite-prose.ts.
+    const prose = readsProse(this.pickedModel);
+    const undress = undressPrompt(this.resolvedGear(), undressLevel(heat), prose);
     const background = this.outfitBackground === "black"
       ? "perfectly solid pure black studio background, seamless black backdrop, background evenly lit with no texture"
       : "perfectly solid pure white studio background, seamless white backdrop, background evenly lit with no texture";
@@ -2855,7 +2861,19 @@ export class OppaiImageGen extends LitElement {
         ? `${this.outfitPubicHairColor.trim() || "dark brown"} pubic hair visible`
         : "clean-shaven pubic area, no pubic hair"
       : "";
-    const parts = [
+    const prompt = prose
+      ? spriteSquareProse({
+        shot: outfitShotProse(this.camera.shot),
+        doing: misc ? misc.prose : face.prose,
+        stance: misc ? "" : levelStance(heat, true),
+        mood: tier.moodProse,
+        wearing: wearingProse(this.resolvedGear(), undress.hidden, this.outfitLockColors),
+        undress: undress.prompt,
+        pubic: heat === OUTFIT_TIERS.length - 1 ? pubicProse(this.outfitPubicHair, this.outfitPubicHairColor) : "",
+        extra: this.outfitText,
+        backdrop: this.outfitBackground === "black" ? "black" : "white",
+      })
+      : [
       "solo, one person, single subject",
       outfitShotPrompt(this.camera.shot),
       misc ? misc.face : face.face,
@@ -2868,9 +2886,9 @@ export class OppaiImageGen extends LitElement {
       pubic,
       this.outfitText.trim(),
       background,
-    ];
+    ].filter(Boolean).join(", ");
     return {
-      prompt: parts.filter(Boolean).join(", "),
+      prompt,
       negative: [
         "multiple people, two people, group, crowd, 2girls, 2boys, extra person, duplicate person",
         // The arms rule keeps the board's twelve portraits consistent, and fights most
@@ -2966,7 +2984,7 @@ export class OppaiImageGen extends LitElement {
     // What the LoRAs that are on ask to keep out of the picture.
     negParts.push(loraNegatives(negParts.join(", "),
       (this.status?.loras ?? []).filter((l) => l.name in this.selectedLoras).map((l) => l.negative)));
-    let prompt = parts.filter(Boolean).join(", ");
+    let prompt = joinPrompt(parts);
     let negative = negParts.filter(Boolean).join(", ");
 
     const tpl = (this.status?.templates ?? []).find((t) => t.id === this.templateId);
@@ -3833,7 +3851,8 @@ export class OppaiImageGen extends LitElement {
       forge: this.status?.forge
         ? forgeParams(this.forgeChoices, familyFor(this.status, this.pickedModel), this.forgeReferences) : undefined,
       regions: src || !this.regionsActive ? undefined
-        : regionParams(true, this.regionsRows, this.regionPeople, this.characters, this.status?.loras ?? []),
+        : regionParams(true, this.regionsRows, this.regionPeople, this.characters, this.status?.loras ?? [],
+          readsProse(this.pickedModel)),
       // A square's home is its wardrobe (storeOutfitWip). A set is sixty-odd pictures,
       // redrawn until they are right, and each of them landing in the gallery as well
       // buried everything made there on purpose.
@@ -6525,7 +6544,9 @@ export class OppaiImageGen extends LitElement {
           </button>
         </div>
         <div class="focus-about">
-          <div class="focus-desc">${activity ? `${activity.face}; ${activity.pose}.` : face ? `${face.face}; ${face.pose}.` : nothing}</div>
+          <div class="focus-desc">${readsProse(this.pickedModel)
+            ? (activity ?? face)?.prose ?? nothing
+            : activity ? `${activity.face}; ${activity.pose}.` : face ? `${face.face}; ${face.pose}.` : nothing}</div>
           ${shot ? html`<div class="focus-meta">
             <span title="Seed"><span class="material-symbols-rounded" style="font-size:14px;">casino</span>${shot.seed}</span>
             ${shot.info?.model ? html`<span title="Model"><span class="material-symbols-rounded" style="font-size:14px;">deployed_code</span>${shot.info.model}</span>` : nothing}

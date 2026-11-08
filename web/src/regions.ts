@@ -37,10 +37,18 @@ type LoraInfo = Pick<GenLora, "name" | "triggerPhrases" | "categoryKey">;
  * trigger words. A recipe LoRA brings its trigger words into the prompt; a person's
  * LoRA did not, and a character LoRA without the words that call the character up
  * draws a stranger in that character's colours.
+ *
+ * `prose` is a checkpoint that reads sentences (Anima): a character with a description
+ * is drawn from that, as it is in the shared prompt — fragmentWords' rule, repeated here
+ * because the test runner cannot follow a sibling import. A person's part sent the tags
+ * while the same character alone was sent the description, and came out a different
+ * person for it.
  */
-export function personPrompt(p: RegionPerson, characters: GenCharacter[], loras: LoraInfo[] = []): string {
+export function personPrompt(p: RegionPerson, characters: GenCharacter[], loras: LoraInfo[] = [], prose = false): string {
   const c = characters.find((ch) => ch.id === p.character);
-  const words = [c?.prompt.trim() ?? "", p.words.trim()].filter(Boolean).join(", ");
+  // Its closing full stop goes: a person's own words follow it after a comma.
+  const described = prose ? (c?.description ?? "").trim().replace(/\.+$/, "") : "";
+  const words = [described || (c?.prompt.trim() ?? ""), p.words.trim()].filter(Boolean).join(", ");
   const said = words.toLowerCase();
   const triggers = p.lora
     ? (loras.find((l) => l.name === p.lora)?.triggerPhrases ?? []).map((t) => t.trim()).filter((t) => t && !said.includes(t.toLowerCase()))
@@ -50,11 +58,11 @@ export function personPrompt(p: RegionPerson, characters: GenCharacter[], loras:
 
 /** The regions to send, or nothing when there are not two people to draw. */
 export function regionParams(
-  on: boolean, rows: boolean, people: RegionPerson[], characters: GenCharacter[], loras: LoraInfo[] = [],
+  on: boolean, rows: boolean, people: RegionPerson[], characters: GenCharacter[], loras: LoraInfo[] = [], prose = false,
 ): RegionsParams | undefined {
   if (!on) return undefined;
   const parts = people.slice(0, MAX_PEOPLE).map((p) => ({
-    prompt: personPrompt(p, characters, loras),
+    prompt: personPrompt(p, characters, loras, prose),
     loras: p.lora ? [{ name: p.lora, weight: p.loraWeight }] : undefined,
     share: p.share > 0 && p.share !== 1 ? p.share : undefined,
   }));

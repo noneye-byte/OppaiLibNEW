@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { compileCamera, outfitShotPrompt, savedShot, scaleFor, DEFAULT_CAMERA, CAMERA_OPTIONS, type CameraSpec } from "./camera.ts";
+import { compileCamera, outfitShotPrompt, outfitShotProse, savedShot, scaleFor, DEFAULT_CAMERA, CAMERA_OPTIONS, type CameraSpec } from "./camera.ts";
 
 const spec = (over: Partial<CameraSpec> = {}): CameraSpec => ({ ...DEFAULT_CAMERA, ...over });
 
@@ -183,4 +183,11 @@ test("a saved full body is the old default unless it was picked, and other shots
   assert.equal(savedShot("full-body", false), "three-quarter");
   assert.equal(savedShot("full-body", true), "full-body");
   assert.equal(savedShot("bust", false), "bust");
+});
+
+test("every framing has a sentence for a checkpoint that reads prose", () => {
+  for (const shot of CAMERA_OPTIONS.shots.map((o) => o.id)) {
+    assert.match(outfitShotProse(shot), /^[A-Z].*\.$/);
+  }
+  assert.match(outfitShotProse(DEFAULT_CAMERA.shot), /cowboy shot/);
 });

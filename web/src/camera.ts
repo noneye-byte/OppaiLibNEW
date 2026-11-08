@@ -138,6 +138,23 @@ export function outfitShotPrompt(shot: ShotSize): string {
   return SHOTS[shot].prompt;
 }
 
+/** The outfit helper's framing as a sentence, for a checkpoint that reads prose (Anima).
+ *  "Cowboy shot" stays in its sentence: it is the one framing word Anima's tags taught
+ *  it that no plain description says as exactly. */
+const SHOT_PROSE: Record<ShotSize, string> = {
+  "extreme-closeup": "An extreme close-up: her face fills the frame, with fine detail in her eyes.",
+  closeup: "A close-up portrait in which her face and hair fill the frame.",
+  "head-shoulders": "A head-and-shoulders portrait, her shoulders at the edge of the frame.",
+  bust: "A bust shot, framed from her chest up.",
+  "waist-up": "A waist-up shot of her upper body, cropped at the waist.",
+  "three-quarter": "A cowboy shot, framed from her head to mid-thigh.",
+  "full-body": "A full-body shot with her whole figure in the frame, from head to feet.",
+};
+
+export function outfitShotProse(shot: ShotSize): string {
+  return SHOT_PROSE[shot];
+}
+
 /**
  * The shot a saved draft or recipe is read as.
  *

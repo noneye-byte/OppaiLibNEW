@@ -15,6 +15,17 @@ test("a person is drawn from their character's words and then their own", () => 
   assert.equal(personPrompt({ ...newPerson(), character: "gone" }, chars), "");
 });
 
+test("on a checkpoint that reads prose a person's character is drawn from its description", () => {
+  const described = [{ ...chars[0], description: "A woman with long red hair and green eyes." }, chars[1]];
+  const alice = { ...newPerson(), character: "a", words: "waving" };
+  assert.equal(personPrompt(alice, described, [], true), "A woman with long red hair and green eyes, waving");
+  assert.equal(personPrompt(alice, described, [], false), "red hair, green eyes, waving");
+  // A character with no description keeps its tags, prose or not.
+  assert.equal(personPrompt({ ...newPerson(), character: "b" }, described, [], true), "black hair");
+  assert.equal(regionParams(true, false, [alice, newPerson()], described, [], true)?.parts[0].prompt,
+    "A woman with long red hair and green eyes, waving");
+});
+
 test("two people are sent as two parts, each with their own LoRA", () => {
   const people = [
     { ...newPerson(), character: "a", lora: "alice_v2", loraWeight: 0.7, share: 2 },

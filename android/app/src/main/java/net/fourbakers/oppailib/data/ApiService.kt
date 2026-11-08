@@ -538,6 +538,7 @@ interface ApiService {
     @GET("api/imagegen/civitai/images")
     suspend fun civitaiImages(
         @Query("versionId") versionId: Long? = null,
+        @Query("modelId") modelId: Long? = null,
         @Query("username") username: String? = null,
         @Query("postId") postId: Long? = null,
         @Query("collectionId") collectionId: Long? = null,
@@ -581,6 +582,14 @@ interface ApiService {
         a later fetch of the same version. */
     @POST("api/imagegen/civitai/cover")
     suspend fun civitaiCover(@Body body: CivitaiCoverRequest)
+
+    /** What people said about a model on Civitai. Needs the user's Civitai key: without
+        one the server answers 409 with a sentence saying so. */
+    @GET("api/imagegen/civitai/comments")
+    suspend fun civitaiComments(
+        @Query("modelId") modelId: Long,
+        @Query("cursor") cursor: String? = null,
+    ): CivitaiCommentsResponse
 
     /** Installs another version (the newest when unsaid) and deletes the current
         record once the new file is in and dressed. */

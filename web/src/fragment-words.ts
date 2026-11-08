@@ -16,6 +16,21 @@ export function readsProse(model: Pick<GenModel, "family"> | undefined): boolean
   return !!model?.family && PROSE_FAMILIES.has(model.family);
 }
 
+/**
+ * The prompt's pieces joined: by commas, as tags are, except after a piece that ends a
+ * sentence, which the next follows after a space. Joined by commas alone, a description
+ * or a sprite square written in sentences came out "…green eyes., sitting".
+ */
+export function joinPrompt(parts: string[]): string {
+  let out = "";
+  for (const raw of parts) {
+    const part = raw.trim();
+    if (!part) continue;
+    out = !out ? part : /[.!?…]$/.test(out) ? `${out} ${part}` : `${out}, ${part}`;
+  }
+  return out;
+}
+
 /** The words a character or pose adds: its description on a model that reads prose, when
  *  it has one; its tags otherwise. */
 export function fragmentWords(fragment: { prompt: string; description?: string }, prose: boolean): string {

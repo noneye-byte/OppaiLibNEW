@@ -238,10 +238,44 @@ export const OUTFIT_LEVEL_STANCES: readonly string[] = [
   "arched back, hips pushed forward, one knee bent",
 ];
 
-export function levelStance(tier: number): string {
-  const at = Math.max(0, Math.min(OUTFIT_LEVEL_STANCES.length - 1, Math.round(tier)));
-  return OUTFIT_LEVEL_STANCES[at];
+/** The same stances said as sentences, for a checkpoint that reads them (Anima). */
+export const OUTFIT_LEVEL_STANCE_PROSE: readonly string[] = [
+  "She stands up straight, her weight even on both feet.",
+  "Her body is turned slightly to one side, her weight on one leg.",
+  "She stands in contrapposto, one hip cocked to the side and her head tilted.",
+  "Her body is angled with one shoulder forward, leaning toward the viewer.",
+  "Her back is arched and her hips pushed forward, one knee bent.",
+];
+
+export function levelStance(tier: number, prose = false): string {
+  const stances = prose ? OUTFIT_LEVEL_STANCE_PROSE : OUTFIT_LEVEL_STANCES;
+  const at = Math.max(0, Math.min(stances.length - 1, Math.round(tier)));
+  return stances[at];
 }
+
+/** How undressPrompt says each state: as tags, or as sentences for a checkpoint that
+ *  reads them. What is said follows the same rules either way; only the words change. */
+const UNDRESS_TAGS = {
+  loosened: (top: string) => `${top} slipping off one shoulder`,
+  open: (top: string) => `${top} pulled aside`,
+  showing: (key: string, _item: string) => `${key} visible`,
+  breasts: "bare breasts, nipples",
+  pussy: "pussy, vulva visible",
+  nude: "completely nude, naked",
+  underwear: "underwear only",
+};
+
+const UNDRESS_PROSE: typeof UNDRESS_TAGS = {
+  loosened: (top) => `Her ${top} ${isOrAre(top)} slipping off one shoulder.`,
+  open: (top) => `Her ${top} ${isOrAre(top)} pulled aside.`,
+  // By the garment's own name: "her lace bra is showing" is the one she has on, where
+  // "her bra" could be any.
+  showing: (key, item) => `Her ${item || key} ${isOrAre(item || key)} showing.`,
+  breasts: "Her breasts are bare, her nipples showing.",
+  pussy: "Her pussy is bare, her vulva visible.",
+  nude: "She is completely nude.",
+  underwear: "She is wearing only her underwear.",
+};
 
 /**
  * What a level does to the prompt, given what she is wearing.
@@ -254,11 +288,12 @@ export function levelStance(tier: number): string {
  *
  * `gear` is as the prompt will name it — a piece switched off reads as empty.
  */
-export function undressPrompt(gear: OutfitGear, exposure: OutfitExposure): {
+export function undressPrompt(gear: OutfitGear, exposure: OutfitExposure, prose = false): {
   hidden: OutfitGearKey[];
   prompt: string[];
   negative: string[];
 } {
+  const say = prose ? UNDRESS_PROSE : UNDRESS_TAGS;
   const worn = (key: OutfitGearKey) => gearWorn(gear[key]);
   const outer = worn("top") || worn("bottoms");
   const outerOff = exposure.outer === "off";
@@ -276,7 +311,7 @@ export function undressPrompt(gear: OutfitGear, exposure: OutfitExposure): {
       // unbuttoned" and "open clothes" each describe a particular garment — a shirt, a
       // jacket — and a generator given either over a plain top drew one on top of it.
       const top = gear.top.item.trim();
-      prompt.push(exposure.outer === "loosened" ? `${top} slipping off one shoulder` : `${top} pulled aside`);
+      prompt.push(exposure.outer === "loosened" ? say.loosened(top) : say.open(top));
     }
   }
 
@@ -294,18 +329,18 @@ export function undressPrompt(gear: OutfitGear, exposure: OutfitExposure): {
         hidden.push(key);
         negative.push(key);
       } else if (state === "showing" && covered(over)) {
-        prompt.push(`${key} visible`);
+        prompt.push(say.showing(key, gear[key].item.trim()));
       }
     } else if (state !== "hidden" || !covered(over)) {
       // Nothing worn underneath: whatever would have shown the underwear shows her.
       prompt.push(bare);
     }
   };
-  layer("bra", "top", "bare breasts, nipples");
-  layer("panties", "bottoms", "pussy, vulva visible");
+  layer("bra", "top", say.breasts);
+  layer("panties", "bottoms", say.pussy);
 
-  if (exposure.bra === "off" && exposure.panties === "off" && outerOff) prompt.unshift("completely nude, naked");
-  else if (outerOff && outer && (worn("bra") || worn("panties"))) prompt.unshift("underwear only");
+  if (exposure.bra === "off" && exposure.panties === "off" && outerOff) prompt.unshift(say.nude);
+  else if (outerOff && outer && (worn("bra") || worn("panties"))) prompt.unshift(say.underwear);
   if (hidden.includes("bra") && hidden.includes("panties")) negative.push("underwear, lingerie");
   return { hidden, prompt, negative };
 }
@@ -386,4 +421,79 @@ export const UNASKED_LAYERS: readonly string[] = [
 export function unaskedLayers(gear: OutfitGear, extra = ""): string[] {
   const worn = [extra, ...OUTFIT_GEAR_SLOTS.map(({ key }) => (gearWorn(gear[key]) ? gear[key].item : ""))].join(" ").toLowerCase();
   return UNASKED_LAYERS.filter((word) => !new RegExp(`\\b${word}`).test(worn));
+}
+
+// ── The loadout in sentences ────────────────────────────────────────────────────
+//
+// A checkpoint that reads prose (Anima, see fragment-words.ts) is told what she wears
+// in a sentence rather than as "top: (crimson fitted top:1.25)". Its text encoder is a
+// language model: the slot labels read as words about labels, and a weight in brackets
+// is punctuation to it. What colour locking did with a weight it does here by saying
+// each colour a second time, plainly.
+
+/** Whether a garment is named in the plural: "ankle boots", "lace panties", "glasses",
+ *  but not "dress" or "corset". By its last word, which is the noun. */
+export function isPluralGarment(phrase: string): boolean {
+  const last = phrase.trim().toLowerCase().split(/\s+/).pop() ?? "";
+  return /s$/.test(last) && !/(ss|us|is)$/.test(last);
+}
+
+function isOrAre(phrase: string): string {
+  return isPluralGarment(phrase) ? "are" : "is";
+}
+
+/** A garment with the article a sentence names it with: "a fitted top", "an ivory
+ *  blouse", "black ankle boots". A phrase that already has one is left as it is. */
+export function withArticle(phrase: string): string {
+  const text = phrase.trim();
+  if (!text) return "";
+  if (/^(a|an|the|her|some|one|two)\b/i.test(text) || isPluralGarment(text)) return text;
+  // By sound, roughly: "an off-white", but "a uniform".
+  const vowel = /^[aeiou]/i.test(text) && !/^(uni|use|usu|eu)/i.test(text);
+  return `${vowel ? "an" : "a"} ${text}`;
+}
+
+const HANDS: Partial<Record<OutfitGearKey, string>> = { hand1: "her left hand", hand2: "her right hand" };
+
+/** Something in a hand slot, held or worn: a glove is on her hand, a sword is in it. */
+function inHand(hand: string, item: string): string {
+  const worn = /\b(glove|gauntlet|mitten|ring|bracelet|bangle|watch|wristband|cuff)s?\b/i.test(item);
+  return `${withArticle(item)} ${worn ? "on" : "in"} ${hand}`;
+}
+
+/** One worn piece as a sentence names it, colour first: "a crimson fitted top". */
+export function gearProse(slot: typeof OUTFIT_GEAR_SLOTS[number], piece: GearPiece): string {
+  if (!gearWorn(piece)) return "";
+  const described = [piece.color.trim(), piece.item.trim()].filter(Boolean).join(" ");
+  const hand = HANDS[slot.key];
+  return hand ? inHand(hand, described) : withArticle(described);
+}
+
+/** "a, b and c". */
+function listed(items: string[]): string {
+  return items.length < 2 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+}
+
+/**
+ * What she is wearing, in one or two sentences: the pieces the level leaves on, what is
+ * in her hands, and, with colour locking, every colour said again garment by garment.
+ * That is how a sentence leans on a word where a tag prompt weights it.
+ */
+export function wearingProse(gear: OutfitGear, hidden: readonly OutfitGearKey[] = [], lockColors = false): string {
+  const shown = OUTFIT_GEAR_SLOTS.filter((slot) => !hidden.includes(slot.key) && gearWorn(gear[slot.key]));
+  const worn = shown.filter((slot) => !HANDS[slot.key]).map((slot) => gearProse(slot, gear[slot.key]));
+  const held = shown.filter((slot) => HANDS[slot.key]).map((slot) => gearProse(slot, gear[slot.key]));
+  const said: string[] = [];
+  if (worn.length) said.push(`She is wearing ${listed(worn)}${held.length ? `, with ${listed(held)}` : ""}.`);
+  else if (held.length) said.push(`She has ${listed(held)}.`);
+  if (lockColors) {
+    const colours = shown
+      .filter((slot) => gear[slot.key].color.trim())
+      .map((slot) => {
+        const item = gear[slot.key].item.trim();
+        return `the ${item} ${isOrAre(item)} ${gear[slot.key].color.trim()}`;
+      });
+    if (colours.length) said.push(`The colours are exactly as named: ${listed(colours)}.`);
+  }
+  return said.join(" ");
 }

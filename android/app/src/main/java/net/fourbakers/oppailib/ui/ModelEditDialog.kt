@@ -22,6 +22,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
+import net.fourbakers.oppailib.data.CivitaiCoverRequest
 import net.fourbakers.oppailib.data.GenModelDefaults
 import net.fourbakers.oppailib.data.GenModelMeta
 import net.fourbakers.oppailib.data.GenModelMetaPatch
@@ -31,6 +32,8 @@ import net.fourbakers.oppailib.data.Repository
  * Edits a model's (or LoRA's) record on the generator itself — name, description,
  * trigger phrases, recommended settings — via the server's /api/imagegen/model
  * proxy, so the change lands in InvokeAI's model manager, not in some local copy.
+ * Its picture, from its Civitai page, and the page's comments are at the top
+ * (ModelCivitaiPanel).
  */
 @Composable
 fun ModelEditDialog(
@@ -60,9 +63,13 @@ fun ModelEditDialog(
     var weightMin by remember { mutableStateOf("") }
     var weightMax by remember { mutableStateOf("") }
     var note by remember { mutableStateOf("") }
+    // A Civitai picture picked for its cover, applied with Save like everything else.
+    var cover by remember { mutableStateOf("") }
+    // Bumped to read the record again, once it has been found on Civitai.
+    var reload by remember { mutableStateOf(0) }
     val scope = rememberCoroutineScope()
 
-    LaunchedEffect(name) {
+    LaunchedEffect(name, reload) {
         runCatching { repo.api.modelMeta(name) }
             .onSuccess { m ->
                 meta = m
@@ -112,6 +119,9 @@ fun ModelEditDialog(
                 )
             }
             runCatching {
+                // The cover first: on Automatic1111 without a models folder the record's
+                // PATCH can fail, and the picture should not be lost with it.
+                if (cover.isNotEmpty()) repo.api.civitaiCover(CivitaiCoverRequest(m.key, cover))
                 repo.api.patchModelMeta(
                     GenModelMetaPatch(
                         key = m.key,
@@ -211,6 +221,14 @@ fun ModelEditDialog(
                     Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                 }
                 if (m != null) {
+                    ModelCivitaiPanel(
+                        repo = repo,
+                        meta = m,
+                        thumbUrl = if (m.type == "lora") repo.loraThumbUrl(name) else repo.modelThumbUrl(name),
+                        chosen = cover,
+                        onPick = { cover = it },
+                        onLinked = { reload++ },
+                    )
                     Text(
                         "Saved on the generator — InvokeAI's model manager, or the sidecar files Automatic1111 reads.",
                         style = MaterialTheme.typography.labelSmall,
