@@ -198,3 +198,32 @@ func TestImageGenSaveRecordAndSendAsLibby(t *testing.T) {
 		t.Fatalf("unknown media: %d", rec.Code)
 	}
 }
+
+// A pose's plain-text description, for Anima: kept by an edit that does not mention it
+// (the phone's editor has no field for it), cleared by one that sends it blank.
+func TestAPoseDescriptionSurvivesAnEditThatDoesNotSendOne(t *testing.T) {
+	s, token := newTestServer(t)
+	h := s.Handler()
+	rec := do(t, h, token, "POST", "/api/imagegen/poses",
+		`{"name":"Sitting","prompt":"sitting, holding mug","description":"She sits on the floor with her legs crossed, a mug in both hands."}`)
+	var created struct {
+		ID          string `json:"id"`
+		Description string `json:"description"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &created)
+	if created.Description == "" {
+		t.Fatalf("create: %s", rec.Body)
+	}
+	rec = do(t, h, token, "POST", "/api/imagegen/poses", `{"id":"`+created.ID+`","name":"Sitting","prompt":"sitting, mug"}`)
+	if !strings.Contains(rec.Body.String(), "legs crossed") {
+		t.Fatalf("an edit without a description lost it: %s", rec.Body)
+	}
+	rec = do(t, h, token, "GET", "/api/imagegen/poses", "")
+	if !strings.Contains(rec.Body.String(), "legs crossed") {
+		t.Fatalf("list: %s", rec.Body)
+	}
+	rec = do(t, h, token, "POST", "/api/imagegen/poses", `{"id":"`+created.ID+`","name":"Sitting","prompt":"sitting","description":""}`)
+	if strings.Contains(rec.Body.String(), "legs crossed") {
+		t.Fatalf("a blank description did not clear it: %s", rec.Body)
+	}
+}

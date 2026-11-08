@@ -366,10 +366,12 @@ behind any router.
 | GET | `/api/launchy/requests/{cmd}` | how that request went (`status`, and `message` or `error`) |
 | POST | `/api/launchy/launch` | `{gameId}` — the `launch` request, kept for the phone |
 | GET | `/api/launchy/launch/{cmd}` | the same as `/requests/{cmd}` |
-| GET | `/api/launchy/games` | every game with its remote and launcher state, for the sync |
-| POST | `/api/launchy/games` | multipart `meta` + optional `cover` — a launcher entry becomes a library game |
+| GET | `/api/launchy/games` | every game with its remote and launcher state, for the sync; games taken off the PC are left out, and `removed` lists the launcher entries whose games were deleted here |
+| POST | `/api/launchy/games` | multipart `meta` + optional `cover` — a launcher entry becomes a library game; 410 for an entry whose game was deleted here; a game taken off the PC with the same page is paired again instead of duplicated |
 | PUT | `/api/launchy/games/{id}` | `meta` — the launcher's state, and any metadata it changed |
-| DELETE | `/api/launchy/games/{id}` | unpairs; the game stays |
+| DELETE | `/api/launchy/games/{id}` | unpairs because the launcher no longer has it; the game stays, and is not offered to the PC again |
+| GET | `/api/launchy/removed` | `{removed, declined}` — how many games the sync keeps out on purpose |
+| DELETE | `/api/launchy/removed` | lets them all sync again |
 
 `meta` names the launcher's own entry (`launchyId`) and always carries what only the
 PC knows — `installed`, `version`, `playSeconds`, `lastPlayed`, `launchCount`. The
@@ -711,6 +713,8 @@ by hand.
 | Method | Path | Notes |
 |--------|------|-------|
 | GET | `/api/gpu` | → `{apps:[{id, name, set, holding, detail, canTake}], holder, busy?, vramTotal?, vramFree?}`. `id` is `chat`, `images` or `video`; `holder` the program last given the card (by work or by hand), `""` until then; `busy` what is being made; VRAM is the whole card's, as ComfyUI reports it |
+| GET | `/api/ai/restart` | → `{tools:[{id, name, set, how, container?, detail}], docker}`. `id` is `chat`, `images`, `video` (the clips' ComfyUI, listed only when it is not the picture generator), `trainer` or `voice` (a speech server); `how` is `self` (its own restart), `docker` (its container, found by its address, when Docker's socket is mapped in) or `""` with `detail` saying what would make it restartable |
+| POST | `/api/ai/restart/{id}` | → 202 `{how, message, container?}`. `chat` unloads her model and loads it again (waits for the load); `images`/`video` as `/api/imagegen/restart` and the ComfyUI one; `trainer` replaces its own process; otherwise the container is restarted, and her model is loaded back once text-generation-webui answers. 409 while a picture, clip or LoRA would be lost, or with what to change when nothing can restart it |
 | POST | `/api/gpu` | `{to: "chat" \| "images" \| "video"}` → `{state, problems}`. The other two let go: `video` parks her model and has the generator unload its checkpoint; `images` parks her model, frees ComfyUI and reloads the checkpoint; `chat` frees both and loads her model back (the one parked, else the one last loaded from here). A parked model comes back with the next chat turn either way. Waits for the hand-over (a model load is a minute or two). 409 while a picture or clip is being made |
 
 ## Text-generation models
@@ -785,6 +789,7 @@ falling back to A1111's short AutoV2 hash and a LoRA's AutoV3 until then.
 | GET | `/api/imagegen/civitai/models/{id}` | one model's page: sanitized HTML `description`, every version with `files`, showcase `images`, `publishedAt`, and the same `installed` flags. On search and here, a Wan version that is one half of a Wan 2.2 pair carries `stage` (`high`/`low`, read off its name: "High", "low noise", a lone "H"…) and `twin`, the id of the version that is its other half |
 | GET | `/api/imagegen/civitai/images?versionId=\|modelId=\|postId=\|collectionId=\|username=&sort=&period=&nsfw=&cursor=` | posted pictures → `{items, nextCursor, withPrompts, keySet}`. Each item carries the prompt and settings behind it when the poster kept them — which Civitai shares only with an API key, hence `withPrompts` and `keySet` — plus `postId` and `createdAt`. A posted clip is listed by its first frame (`url`) with the clip itself in `video`; the image proxy serves either, with ranges |
 | GET | `/api/imagegen/civitai/posts?username=&nsfw=&cursor=` | someone's posts, newest first → `{items:[{id, username, createdAt, images}], nextCursor}`. Civitai has no posts endpoint; a page of their pictures is grouped by `postId`, so a post can continue onto the next page (the clients merge it) |
+| GET | `/api/imagegen/civitai/comments?modelId=&cursor=` | a model's discussion → `{items:[{id, user, avatar?, createdAt?, html, replies?, likes?}], nextCursor?, page}`; `html` is sanitized like a description. Asked of the site's tRPC (`comment.getAll`) with the API key, since the public API has none and the site refuses it without an account: 409 `{error, needsKey:true, page}` with no key, 502 `{error, page}` when Civitai refuses. `GET /api/imagegen/model` carries `civitai:{modelId, versionId, modelName, versionName?, creator?, coverUrl?, page}` for a linked model, which is where the editor's pictures and comments come from |
 | GET | `/api/imagegen/civitai/collections?q=&sort=&cursor=` | public collections by name → `{items:[{id, name, description, type, count, cover, username, userId, nsfw}], nextCursor}`; `sort` ∈ newest (default), followers. The catalogue ignores every owner filter, so nobody's own collections can be listed — only searched. `images?collectionId=` lists an Image or Post collection's pictures; a Model collection cannot be opened (the model search rejects the filter) |
 | GET | `/api/imagegen/civitai/categories` | the catalogue's most-used tags → `{categories:[{name,count}]}` |
 | GET | `/api/imagegen/civitai/image?url=` | streams one preview through the server; Civitai hosts only |

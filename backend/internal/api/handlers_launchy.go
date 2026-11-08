@@ -24,7 +24,9 @@ import (
 //	GET    /api/launchy/games                 every game, with its remote and launcher state, for the sync
 //	POST   /api/launchy/games                 multipart meta + cover: a launcher entry becomes a library game
 //	PUT    /api/launchy/games/{id}            the launcher's state and any metadata it changed
-//	DELETE /api/launchy/games/{id}            unpair
+//	DELETE /api/launchy/games/{id}            unpair: the launcher no longer has it
+//	GET    /api/launchy/removed               how many games are kept out of the sync
+//	DELETE /api/launchy/removed               let them all sync again
 //
 // The connection itself — the long poll, the requests it carries, and the
 // launcher's report about itself — is in launchy_control.go; how the launcher
@@ -77,17 +79,93 @@ func (s *Server) gameSides(ctx context.Context, id int64) (*models.GameRemote, *
 	return remote, link
 }
 
+// handleLaunchyGames is the sync's list. Games taken off the PC are left out of it,
+// so no launcher adopts them back; `removed` names the launcher entries whose games
+// were deleted here, so a launcher that knows to read it drops them instead of
+// sending them back as new (one that does not is told 410 when it tries).
 func (s *Server) handleLaunchyGames(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.db.ListGames(r.Context())
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "db error")
 		return
 	}
+	declined, err := s.db.LaunchyDeclinedIDs(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	removed, err := s.db.LaunchyRemovedIDs(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "db error")
+		return
+	}
 	items := make([]launchyGame, 0, len(rows))
 	for _, row := range rows {
+		if declined[row.ID] {
+			continue
+		}
 		items = append(items, s.toLaunchyGame(r.Context(), row))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items, "status": s.launchy.status()})
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "removed": removed, "status": s.launchy.status()})
+}
+
+// declinedGameAt finds a game taken off the PC whose page is the one a launcher entry
+// names, so that adding the same game to Launchy again pairs it with the copy here
+// rather than making a second one. The declined game is not in the sync's list, which
+// is why the launcher could not find it by address itself.
+func (s *Server) declinedGameAt(ctx context.Context, meta launchyMeta) (int64, bool) {
+	want := map[string]bool{}
+	if meta.Remote != nil && meta.Remote.URL != "" {
+		want[normalizeGameURL(meta.Remote.URL)] = true
+	}
+	if meta.SourceURL != "" {
+		want[normalizeGameURL(meta.SourceURL)] = true
+	}
+	if len(want) == 0 {
+		return 0, false
+	}
+	declined, err := s.db.LaunchyDeclinedIDs(ctx)
+	if err != nil || len(declined) == 0 {
+		return 0, false
+	}
+	for id := range declined {
+		if remote := s.gameRemoteFor(ctx, id); remote != nil && want[normalizeGameURL(remote.URL)] {
+			return id, true
+		}
+		if row, err := s.db.GetMedia(ctx, id); err == nil {
+			if src := s.decrypt(row.SourceEnc, "source"); src != "" && want[normalizeGameURL(src)] {
+				return id, true
+			}
+		}
+	}
+	return 0, false
+}
+
+// handleLaunchyRemovals answers GET /api/launchy/removed: what Settings shows beside
+// the button that lets them back.
+func (s *Server) handleLaunchyRemovals(w http.ResponseWriter, r *http.Request) {
+	removed, err := s.db.LaunchyRemovedIDs(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	declined, err := s.db.LaunchyDeclinedIDs(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int{"removed": len(removed), "declined": len(declined)})
+}
+
+// handleForgetLaunchyRemovals answers DELETE /api/launchy/removed: the next sync may
+// send deleted games back here and put declined ones back on the PC.
+func (s *Server) handleForgetLaunchyRemovals(w http.ResponseWriter, r *http.Request) {
+	removed, declined, err := s.db.ForgetLaunchyRemovals(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int64{"removed": removed, "declined": declined})
 }
 
 // launchyMeta is what the launcher says about one of its entries. The media
@@ -134,6 +212,17 @@ func (s *Server) handleLaunchyCreateGame(w http.ResponseWriter, r *http.Request)
 	}
 	// The same launcher entry sent twice is the same game.
 	if id, err := s.db.GameByLaunchyID(r.Context(), meta.LaunchyID); err == nil {
+		s.applyLaunchyMeta(r.Context(), id, meta)
+		row, _ := s.db.GetMedia(r.Context(), id)
+		writeJSON(w, http.StatusOK, s.toLaunchyGame(r.Context(), row))
+		return
+	}
+	// Deleted here on purpose. This is the sync that used to bring it straight back.
+	if gone, err := s.db.LaunchyRemoved(r.Context(), meta.LaunchyID); err == nil && gone {
+		writeErr(w, http.StatusGone, "deleted from the OppaiLib library, so it is not sent there again")
+		return
+	}
+	if id, ok := s.declinedGameAt(r.Context(), meta); ok {
 		s.applyLaunchyMeta(r.Context(), id, meta)
 		row, _ := s.db.GetMedia(r.Context(), id)
 		writeJSON(w, http.StatusOK, s.toLaunchyGame(r.Context(), row))

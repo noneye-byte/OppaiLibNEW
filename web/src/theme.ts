@@ -277,6 +277,69 @@ export function applyTheme(pref: ThemePref): void {
     pref === "light" ||
     (pref === "system" && window.matchMedia("(prefers-color-scheme: light)").matches);
   document.documentElement.dataset.theme = light ? "light" : "";
+  syncThemeColor();
+}
+
+// --- Material You ------------------------------------------------------------
+// The palette worked out from a colour (material-you.ts), per device like the theme.
+// Applied as a stylesheet after the base tokens, so clearing it is removing it.
+//
+// What is stored is the stylesheet itself, worked out when the colour was picked, beside
+// the colour and style it came from. The colour maths is a library of some sixty
+// kilobytes, and this file is in the bundle everyone downloads before anything draws;
+// keeping the answer means the library is fetched only by the Settings screen, which
+// picks colours, and never by a page that only shows them.
+
+const YOU_KEY = "oppai_you";
+
+/** The stored choice as written, for material-you.ts to read: {seed, style, css, v}. */
+export function loadYouRaw(): string | null {
+  try {
+    return localStorage.getItem(YOU_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function saveYouRaw(value: string): void {
+  try {
+    localStorage.setItem(YOU_KEY, value);
+  } catch {
+    /* ignore quota / private-mode errors */
+  }
+}
+
+/** The stylesheet stored with the choice, "" for OppaiLib's own palette. */
+export function storedYouCss(): string {
+  try {
+    const css = (JSON.parse(loadYouRaw() ?? "null") as { css?: unknown } | null)?.css;
+    // Only ever a stylesheet this app wrote: token blocks on :root.
+    return typeof css === "string" && css.startsWith(":root {") ? css : "";
+  } catch {
+    return "";
+  }
+}
+
+export function applyYou(text: string): void {
+  let sheet = document.getElementById("oppai-you") as HTMLStyleElement | null;
+  if (!text) {
+    sheet?.remove();
+  } else {
+    if (!sheet) {
+      sheet = document.createElement("style");
+      sheet.id = "oppai-you";
+      document.head.appendChild(sheet);
+    }
+    sheet.textContent = text;
+  }
+  syncThemeColor();
+}
+
+/** The browser's own chrome (the address bar on a phone) takes the page's colour. */
+function syncThemeColor(): void {
+  const meta = document.querySelector('meta[name="theme-color"]');
+  const bg = getComputedStyle(document.documentElement).getPropertyValue("--oppai-bg").trim();
+  if (meta && bg) meta.setAttribute("content", bg);
 }
 
 /** Re-apply on OS changes while the preference is "system". */

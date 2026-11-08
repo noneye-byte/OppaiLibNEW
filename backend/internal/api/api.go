@@ -16,6 +16,7 @@ import (
 	"github.com/youruser/oppailib/internal/ai"
 	"github.com/youruser/oppailib/internal/config"
 	"github.com/youruser/oppailib/internal/db"
+	"github.com/youruser/oppailib/internal/docker"
 	"github.com/youruser/oppailib/internal/gamesites"
 	"github.com/youruser/oppailib/internal/imagegen"
 	"github.com/youruser/oppailib/internal/matte"
@@ -149,6 +150,9 @@ type Server struct {
 	// The LoRA trainer, and the runs being sent to it and followed. See
 	// lora_training.go.
 	trainer   *trainer.Client
+	// docker restarts an AI tool's container when the tool cannot restart itself; only
+	// when Docker's socket is mapped in. See ai_restart.go.
+	docker *docker.Client
 	train     *trainRunner
 	trainOnce sync.Once
 
@@ -272,6 +276,7 @@ func NewServer(cfg *config.Config, database *db.DB, store *storage.Store, sc *sc
 		describe:           newDescribeQueue(),
 		card:               &cardShare{},
 		trainer:            trainer.New(),
+		docker:             docker.New(""),
 		imageCache:         newImageProxyCache(),
 		gameDetails:        newResolveCache[gameDetail](gameDetailTTL),
 
@@ -525,6 +530,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/imagegen/names/suggest", s.requireAuth(s.handleNameSuggest))
 	mux.HandleFunc("POST /api/imagegen/names/rename", s.requireAuth(s.handleRename))
 	mux.HandleFunc("POST /api/imagegen/restart", s.requireAuth(s.handleRestart))
+	mux.HandleFunc("GET /api/ai/restart", s.requireAuth(s.handleAIRestartState))
+	mux.HandleFunc("POST /api/ai/restart/{id}", s.requireAuth(s.handleAIRestart))
 	mux.HandleFunc("POST /api/imagegen/modules/get", s.requireAuth(s.handleGetModules))
 	mux.HandleFunc("POST /api/imagegen/bases/civitai", s.requireAuth(s.handleBasesCivitai))
 	mux.HandleFunc("GET /api/imagegen/detectors", s.requireAuth(s.handleDetectors))
@@ -648,6 +655,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/imagegen/civitai/cover", s.requireAuth(s.handleCivitaiCover))
 	mux.HandleFunc("POST /api/imagegen/civitai/update", s.requireAuth(s.handleCivitaiUpdate))
 	mux.HandleFunc("GET /api/imagegen/civitai/posts", s.requireAuth(s.handleCivitaiPosts))
+	mux.HandleFunc("GET /api/imagegen/civitai/comments", s.requireAuth(s.handleCivitaiComments))
 	mux.HandleFunc("GET /api/imagegen/civitai/collections", s.requireAuth(s.handleCivitaiCollections))
 
 	// Libby outfits: user-made wardrobes for the mascot, one image per emotion.
@@ -814,6 +822,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/launchy/games", s.requireAuth(s.handleLaunchyCreateGame))
 	mux.HandleFunc("PUT /api/launchy/games/{id}", s.requireAuth(s.handleLaunchySyncGame))
 	mux.HandleFunc("DELETE /api/launchy/games/{id}", s.requireAuth(s.handleLaunchyUnpairGame))
+	mux.HandleFunc("GET /api/launchy/removed", s.requireAuth(s.handleLaunchyRemovals))
+	mux.HandleFunc("DELETE /api/launchy/removed", s.requireAuth(s.handleForgetLaunchyRemovals))
 
 	// Playing an imported HTML5 game build in place. See handlers_webgame.go for why
 	// serving a game's own scripts from this origin is safe.

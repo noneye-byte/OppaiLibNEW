@@ -47,6 +47,8 @@ export class OppaiLaunchyPanel extends LitElement {
   @state() private linking = false;
   /** Requests in flight, by a key naming what they act on, so each button shows its own. */
   @state() private busy: Record<string, boolean> = {};
+  /** Games the sync leaves alone because they were deleted on one side. */
+  @state() private removals: { removed: number; declined: number } | null = null;
 
   private timer: number | null = null;
   private linkIssuedAt = 0;
@@ -140,6 +142,7 @@ export class OppaiLaunchyPanel extends LitElement {
     } catch (err) {
       this.loadError = (err as Error).message;
     }
+    this.removals = await api.launchyRemovals().catch(() => this.removals);
     // A link waiting to be used: the new key is how we learn it was.
     if (this.link) {
       if (Date.now() / 1000 > this.linkExpires) {
@@ -153,6 +156,20 @@ export class OppaiLaunchyPanel extends LitElement {
           mascotSay(`Launchy on ${made.name} is linked.`);
         }
       }
+    }
+  }
+
+  /** Lets every game deleted on one side sync again. */
+  private async letRemovalsBack() {
+    this.busy = { ...this.busy, removals: true };
+    try {
+      await api.forgetLaunchyRemovals();
+      this.removals = { removed: 0, declined: 0 };
+      mascotSay("They'll come back with the next sync.");
+    } catch (err) {
+      mascotSay(`Couldn't do that: ${(err as Error).message}`, "error");
+    } finally {
+      this.busy = { ...this.busy, removals: false };
     }
   }
 
@@ -315,6 +332,7 @@ export class OppaiLaunchyPanel extends LitElement {
               </div>
             </div></div>`
           : nothing}
+        ${this.renderRemovals()}
         ${(st.accounts ?? []).map(
           (a) => html`<div class="row">
             <span class="dot ${a.challenged ? "warn" : a.signedIn ? "on" : ""}"></span>
@@ -332,6 +350,26 @@ export class OppaiLaunchyPanel extends LitElement {
         )}
       </section>
     `;
+  }
+
+  /** A deleted game stays deleted: the sync used to bring it back from the other side.
+      This is the way to undo that on purpose. */
+  private renderRemovals() {
+    const r = this.removals;
+    if (!r || (!r.removed && !r.declined)) return nothing;
+    const parts = [
+      r.removed ? `${r.removed} deleted here` : "",
+      r.declined ? `${r.declined} removed from Launchy` : "",
+    ].filter(Boolean);
+    return html`<div class="row">
+      <div class="grow">
+        <div class="label">Kept out of the sync</div>
+        <div class="help">${parts.join(" · ")} — the sync won't bring ${r.removed + r.declined === 1 ? "it" : "them"} back</div>
+      </div>
+      <button class="btn-inline" ?disabled=${this.busy.removals} @click=${() => void this.letRemovalsBack()}>
+        <span class="material-symbols-rounded">undo</span>Let them back
+      </button>
+    </div>`;
   }
 
   private renderRunning() {

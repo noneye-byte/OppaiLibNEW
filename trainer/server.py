@@ -64,8 +64,9 @@ VERSION = "4"
 # it relies on one: "repeats-per-file" is a picture shown more or less often than the
 # rest, which is how a tag the pictures have too much of is played down;
 # "detect-people" (added at /health when the detector is there) is POST /detect;
-# "modules" is a job naming the text encoders and VAE a bare model is trained with.
-FEATURES = ["repeats-per-file", "modules"]
+# "modules" is a job naming the text encoders and VAE a bare model is trained with;
+# "restart" is POST /restart, the quick restart OppaiLib offers for each AI tool.
+FEATURES = ["repeats-per-file", "modules", "restart"]
 # The largest picture /detect reads: a comic page is a few megabytes.
 DETECT_MAX_BYTES = 40 << 20
 _can_detect: bool | None = None
@@ -1324,6 +1325,15 @@ class Handler(BaseHTTPRequestHandler):
         parts, q = self.route()
         if not self.authorized():
             return self.fail(401, "wrong trainer token")
+        if parts == ["restart"]:
+            # A run would die with the process, so it is refused while one trains; queued
+            # jobs are on disk and recover() picks them up in the new one.
+            if any(j["state"] == "running" for j in all_jobs()):
+                return self.fail(409, "a LoRA is training — restarting now would lose it; stop it first")
+            self.send_json(202, {"status": "restarting"})
+            self.wfile.flush()
+            threading.Timer(0.3, RESTART).start()
+            return
         if parts == ["detect"]:
             length = int(self.headers.get("Content-Length", "0") or 0)
             if length <= 0 or length > DETECT_MAX_BYTES:
@@ -1384,6 +1394,19 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
         self.fail(404, "not found")
+
+
+def _restart() -> None:
+    """Replaces this process with a fresh one, same interpreter flags and all: the
+    container sees no exit, so it needs no restart policy to come back. orig_argv keeps
+    the -E -s it is run with, which sys.argv drops."""
+    sys.stderr.write("restarting at OppaiLib's request\n")
+    sys.stderr.flush()
+    os.execv(sys.executable, sys.orig_argv)
+
+
+# What POST /restart calls; the tests swap it for something that does not end them.
+RESTART = _restart
 
 
 def main() -> None:

@@ -365,6 +365,14 @@ func (c *Client) Cancel(ctx context.Context, base, token, id string) error {
 	return c.do(ctx, c.hc, http.MethodPost, base, token, "/jobs/"+url.PathEscape(id)+"/cancel", nil, -1, "", nil)
 }
 
+// FeatureRestart is a trainer that restarts itself (POST /restart).
+const FeatureRestart = "restart"
+
+// Restart asks the trainer to replace its own process. Refused while a run trains.
+func (c *Client) Restart(ctx context.Context, base, token string) error {
+	return c.do(ctx, c.hc, http.MethodPost, base, token, "/restart", nil, -1, "", nil)
+}
+
 // Delete forgets a finished job and its files.
 func (c *Client) Delete(ctx context.Context, base, token, id string) error {
 	return c.do(ctx, c.hc, http.MethodDelete, base, token, "/jobs/"+url.PathEscape(id), nil, -1, "", nil)

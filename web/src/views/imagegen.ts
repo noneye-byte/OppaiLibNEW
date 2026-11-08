@@ -101,6 +101,8 @@ import { NO_FORGE_CHOICES, familyFor, forgeParams, needsLine, needsState, sample
 import "./rename-dialog.js";
 import "./imagegen-detailer.js";
 import "./gpu-switch.js";
+import "./model-civitai.js";
+import { fragmentWords, readsProse } from "../fragment-words.js";
 import {
   animatePicture, clipFormProblem, clipParamsFor, clipsRunning, comfyListsReady, followClip, newClipJobId, onClipKept, onClipsChange,
   openGalleryClip, refreshComfyLists, spriteForm, toggleVideoDrawer, videoDrawerOpen, type ClipPicture, type GalleryClip,
@@ -467,6 +469,8 @@ interface CharDraft {
   name: string;
   prompt: string;
   negativePrompt: string;
+  /** Plain sentences for Anima, sent there in place of the prompt (fragment-words.ts). */
+  description?: string;
   /** A newly-chosen thumbnail as a data URL; undefined keeps the existing one. */
   imageData?: string;
   /** A just-generated preview to use as the thumbnail instead of an upload. */
@@ -861,6 +865,10 @@ export class OppaiImageGen extends LitElement {
   @state() private metaDraft: GenModelMeta | null = null;
   @state() private metaBusy = false;
   @state() private metaTriggerText = "";
+  /** A Civitai picture picked in the editor as the new cover, applied on Save. */
+  @state() private metaCover = "";
+  /** The name the editor was opened with, which is what the cover thumbnails take. */
+  private metaOpenedAs = "";
 
   /** Whether the Civitai browser is on screen. */
   @state() private civitaiOpen = false;
@@ -1128,6 +1136,7 @@ export class OppaiImageGen extends LitElement {
       .settings .full {
         grid-column: 1 / -1;
       }
+      .field-note { font-size: 11.5px; line-height: 1.45; color: var(--oppai-text-muted); margin-top: 4px; }
       label.field {
         font-size: 12px;
         font-weight: 600;
@@ -1506,6 +1515,7 @@ export class OppaiImageGen extends LitElement {
         flex-direction: column;
         gap: 12px;
       }
+      .dialog.wide { width: min(620px, 100%); }
       .dialog h3 {
         margin: 0;
         font-size: 16px;
@@ -2930,10 +2940,13 @@ export class OppaiImageGen extends LitElement {
       : this.selectedTriggers;
     const parts = [this.prompt.trim(), ...triggers, outfit.prompt];
     const negParts = [this.negative.trim(), outfit.negative];
+    // On Anima a character or pose with a description is sent as its description.
+    const prose = readsProse(this.pickedModel);
     for (const id of people ? [] : this.selectedChars) {
       const c = this.characters.find((ch) => ch.id === id);
       if (!c) continue;
-      if (c.prompt.trim()) parts.push(c.prompt.trim());
+      const words = fragmentWords(c, prose);
+      if (words) parts.push(words);
       if (c.negativePrompt?.trim()) negParts.push(c.negativePrompt.trim());
     }
     // Poses come after the characters: who, then what they are doing. The outfit
@@ -2942,7 +2955,8 @@ export class OppaiImageGen extends LitElement {
       for (const id of this.selectedPoses) {
         const p = this.poses.find((pose) => pose.id === id);
         if (!p) continue;
-        if (p.prompt.trim()) parts.push(p.prompt.trim());
+        const words = fragmentWords(p, prose);
+        if (words) parts.push(words);
         if (p.negativePrompt?.trim()) negParts.push(p.negativePrompt.trim());
       }
     }
@@ -4749,6 +4763,8 @@ export class OppaiImageGen extends LitElement {
     this.metaBusy = true;
     try {
       const meta = await api.modelMeta(name);
+      this.metaOpenedAs = name;
+      this.metaCover = "";
       this.metaDraft = meta;
       this.metaTriggerText = meta.triggerPhrases.join(", ");
     } catch (e) {
@@ -4791,6 +4807,13 @@ export class OppaiImageGen extends LitElement {
     if (!d || this.metaBusy) return;
     this.metaBusy = true;
     try {
+      // The picture first: it is kept even where the generator has no folder for the
+      // rest (the link remembers it), so a field that cannot be saved does not cost it.
+      if (this.metaCover) {
+        await api.civitaiCover(d.key, this.metaCover);
+        this.metaCover = "";
+        this.thumbVersion++;
+      }
       await api.patchModelMeta({
         key: d.key,
         name: d.name,
@@ -4943,6 +4966,7 @@ export class OppaiImageGen extends LitElement {
         name: d.name.trim(),
         prompt: d.prompt,
         negativePrompt: d.negativePrompt,
+        description: d.description ?? "",
         imageData: d.imageData,
       });
       this.charDraft = null;
@@ -5093,8 +5117,12 @@ export class OppaiImageGen extends LitElement {
     const isLora = d.type === "lora";
     return html`
       <div class="overlay" @click=${(e: Event) => { if (e.target === e.currentTarget) this.metaDraft = null; }}>
-        <div class="dialog">
+        <div class="dialog wide">
           <h3>Edit ${isLora ? "LoRA" : "model"} — saved on ${generatorName(this.status)}</h3>
+          <oppai-model-civitai .meta=${d} .chosen=${this.metaCover}
+            thumb=${`${isLora ? api.loraThumbURL(this.metaOpenedAs) : api.modelThumbURL(this.metaOpenedAs)}&v=${this.thumbVersion}`}
+            @cover-pick=${(e: CustomEvent<{ url: string }>) => (this.metaCover = e.detail.url)}
+            @linked=${() => void this.openMetaEditor(this.metaOpenedAs)}></oppai-model-civitai>
           <div>
             <label class="field">Name</label>
             <!-- Automatic1111 names a model by its file, so the name is not edited there. -->
@@ -7548,6 +7576,7 @@ export class OppaiImageGen extends LitElement {
                         name: c.name,
                         prompt: c.prompt,
                         negativePrompt: c.negativePrompt ?? "",
+                        description: c.description ?? "",
                       })}
                   >
                     <span class="material-symbols-rounded" style="font-size:15px;">edit</span>
@@ -7593,7 +7622,7 @@ export class OppaiImageGen extends LitElement {
                     <div class="card-name">${p.name}</div>
                   </button>
                   <button class="card-edit" title="Edit ${p.name}"
-                    @click=${() => (this.poseDraft = { id: p.id, name: p.name, prompt: p.prompt, negativePrompt: p.negativePrompt ?? "" })}>
+                    @click=${() => (this.poseDraft = { id: p.id, name: p.name, prompt: p.prompt, negativePrompt: p.negativePrompt ?? "", description: p.description ?? "" })}>
                     <span class="material-symbols-rounded" style="font-size:15px;">edit</span>
                   </button>
                 </div>`;
@@ -7683,7 +7712,7 @@ export class OppaiImageGen extends LitElement {
     try {
       const saved = await api.savePose({
         id: d.id, name: d.name.trim(), prompt: d.prompt, negativePrompt: d.negativePrompt,
-        imageData: d.imageData, previewId: d.previewId,
+        description: d.description ?? "", imageData: d.imageData, previewId: d.previewId,
       });
       this.poseDraft = null;
       this.bumpThumbs();
@@ -7747,6 +7776,20 @@ export class OppaiImageGen extends LitElement {
     }
   }
 
+  /** A character's or pose's plain-text description: Anima reads sentences, so on an
+      Anima checkpoint this goes in instead of the tags above it (fragment-words.ts). */
+  private renderDescriptionField(value: string, example: string, set: (v: string) => void) {
+    const anima = readsProse(this.pickedModel);
+    return html`<div>
+      <label class="field">Plain-text description (optional, for Anima)</label>
+      <textarea rows="2" .value=${value} placeholder=${example}
+        @input=${(e: Event) => set((e.target as HTMLTextAreaElement).value)}></textarea>
+      <div class="field-note">${anima
+        ? "The picked checkpoint is Anima, so this is sent instead of the tags."
+        : "Sent instead of the tags when an Anima checkpoint is picked; other models keep the tags."}</div>
+    </div>`;
+  }
+
   private renderPoseEditor(d: CharDraft) {
     const existingThumb =
       d.imageData ?? (d.previewId ? api.genPreviewURL(d.previewId)
@@ -7767,6 +7810,9 @@ export class OppaiImageGen extends LitElement {
             <textarea .value=${d.prompt} placeholder="sitting cross-legged, holding a steaming mug in both hands, …"
               @input=${(e: Event) => (this.poseDraft = { ...d, prompt: (e.target as HTMLTextAreaElement).value })}></textarea>
           </div>
+          ${this.renderDescriptionField(d.description ?? "",
+            "She sits cross-legged on the floor, holding a steaming mug in both hands.",
+            (v) => (this.poseDraft = { ...d, description: v }))}
           <div>
             <label class="field">Negative fragment (optional)</label>
             <textarea .value=${d.negativePrompt} placeholder="standing, …"
@@ -8417,6 +8463,9 @@ export class OppaiImageGen extends LitElement {
             <textarea .value=${d.prompt} placeholder="1girl, red hair, green eyes, …"
               @input=${(e: Event) => (this.charDraft = { ...d, prompt: (e.target as HTMLTextAreaElement).value })}></textarea>
           </div>
+          ${this.renderDescriptionField(d.description ?? "",
+            "A young woman with long red hair tied back, green eyes and freckles, in a grey hoodie.",
+            (v) => (this.charDraft = { ...d, description: v }))}
           <div>
             <label class="field">Negative fragment (optional)</label>
             <textarea .value=${d.negativePrompt} placeholder="blonde, …"

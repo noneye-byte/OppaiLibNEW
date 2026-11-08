@@ -1176,8 +1176,34 @@ func (s *Server) handleGetModelMeta(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.overlayDetailDefaults(ctx, detail)
-	writeJSON(w, http.StatusOK, detail)
+	// The editor's picture and comments come from the model's Civitai page, so it is told
+	// which page that is, when the model is linked to one.
+	out := struct {
+		*imagegen.ModelDetail
+		Civitai *metaCivitai `json:"civitai,omitempty"`
+	}{ModelDetail: detail}
+	if link, found, err := s.db.CivitaiLink(ctx, detail.Key); err == nil && found && link.ModelID > 0 {
+		out.Civitai = &metaCivitai{
+			ModelID: link.ModelID, VersionID: link.VersionID, ModelName: link.ModelName, VersionName: link.VersionName,
+			Creator: link.Creator, CoverURL: link.CoverURL,
+			Page: civitaiSiteBase(set.CivitaiAPIURL) + "/models/" + strconv.FormatInt(link.ModelID, 10),
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
 }
+
+// metaCivitai is the model's Civitai page as the editor needs it.
+type metaCivitai struct {
+	ModelID     int64  `json:"modelId"`
+	VersionID   int64  `json:"versionId"`
+	ModelName   string `json:"modelName"`
+	VersionName string `json:"versionName,omitempty"`
+	Creator     string `json:"creator,omitempty"`
+	// CoverURL is the Civitai picture chosen as the cover, "" for the first showcase one.
+	CoverURL string `json:"coverUrl,omitempty"`
+	Page     string `json:"page"`
+}
+
 
 type modelMetaPatch struct {
 	Key            string    `json:"key"`

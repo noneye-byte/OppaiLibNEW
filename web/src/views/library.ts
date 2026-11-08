@@ -1174,6 +1174,15 @@ export class OppaiLibrary extends LitElement {
   // Ordered ids of the list the viewer was opened from, so arrow keys can page
   // between neighbours (see onKey / stepItem).
   private viewerList: number[] = [];
+  /**
+   * The items of that list, by id, for the ones the grid's page does not hold.
+   *
+   * The viewer used to look its item up in `items` alone, which is the grid's current
+   * page. Home's rows are their own queries, so a tile there was only found when it
+   * happened to be on that page too: Recently added mostly was, and Libby Suggested,
+   * which is by design what you have not opened, mostly was not — "Item not found".
+   */
+  private viewerItems = new Map<number, Media>();
 
   connectedCallback() {
     super.connectedCallback();
@@ -1288,7 +1297,7 @@ export class OppaiLibrary extends LitElement {
   };
 
   private tileMenuItems(id: number, event: MouseEvent, open = false): MenuItem[] {
-    const item = this.items.find((m) => m.id === id);
+    const item = this.knownItem(id);
     if (!item) return [];
     const fav = this.favorites.has(id);
     const shareable = canShare(item);
@@ -1455,7 +1464,7 @@ export class OppaiLibrary extends LitElement {
 
   /** Deletes one item, used by the tile menu — the bulk bar handles selections. */
   private async deleteOne(id: number) {
-    const item = this.items.find((m) => m.id === id);
+    const item = this.knownItem(id);
     if (!item || !confirm(`Delete "${item.title}"? This cannot be undone.`)) return;
     this.busy = true;
     try {
@@ -1494,7 +1503,7 @@ export class OppaiLibrary extends LitElement {
         return;
     }
     if (this.selectedId == null || this.uploadOpen) return;
-    const reading = this.items.find((m) => m.id === this.selectedId)?.kind === "comic";
+    const reading = this.knownItem(this.selectedId)?.kind === "comic";
     switch (e.key) {
       case "ArrowRight":
         if (reading) return;
@@ -1756,8 +1765,12 @@ export class OppaiLibrary extends LitElement {
 
   private openItem(id: number, list?: Media[]) {
     this.ensureView("viewer");
-    if (list && list.length) this.viewerList = list.map((m) => m.id);
-    else if (!this.viewerList.includes(id)) this.viewerList = [id];
+    if (list && list.length) {
+      this.viewerList = list.map((m) => m.id);
+      this.viewerItems = new Map(list.map((m) => [m.id, m]));
+    } else if (!this.viewerList.includes(id)) {
+      this.viewerList = [id];
+    }
     // Opening the viewer is a place you can go back from. One history entry per
     // viewer session, however many items are paged through inside it, so the back
     // button — or the phone's back gesture — closes the viewer and lands where you
@@ -2267,8 +2280,32 @@ export class OppaiLibrary extends LitElement {
 
   private get viewerQueue(): Media[] {
     return this.viewerList
-      .map((id) => this.items.find((m) => m.id === id))
+      .map((id) => this.knownItem(id))
       .filter((m): m is Media => m != null);
+  }
+
+  /** An item on screen somewhere: the grid's copy when it has one, being the one a
+      refresh keeps current, else the copy from the row the viewer was opened from,
+      else one of Home's rows (whose tiles have menus too). */
+  private knownItem(id: number): Media | null {
+    const found = this.items.find((m) => m.id === id) ?? this.viewerItems.get(id);
+    if (found || !this.home) return found ?? null;
+    const h = this.home;
+    for (const list of [h.suggested, h.favorites, h.newest, h.resume, ...Object.values(h.byKind)]) {
+      const m = list.find((x) => x.id === id);
+      if (m) return m;
+    }
+    return null;
+  }
+
+  /** After an edit in the viewer: a row's copy is not refreshed with the grid, so the
+      edited item is asked for again rather than shown as it was before. */
+  private async refetchViewerItem(id: number) {
+    if (!this.viewerItems.has(id)) return;
+    try {
+      const fresh = await api.getMedia(id);
+      this.viewerItems = new Map(this.viewerItems).set(id, fresh);
+    } catch { /* deleted meanwhile; the viewer's own deleted event closes it */ }
   }
 
   render() {
@@ -2291,7 +2328,7 @@ export class OppaiLibrary extends LitElement {
       !isViewer && !isHome && !isFavorites && !isCollections && !isSearch && !isSettings &&
       !isBrowse && !isImageGen && !isStudio && !isChat;
 
-    const activeItem = isViewer ? this.items.find((m) => m.id === this.selectedId) ?? null : null;
+    const activeItem = isViewer && this.selectedId != null ? this.knownItem(this.selectedId) : null;
 
     let headerTitle = "Library";
     if (isViewer) headerTitle = activeItem ? activeItem.title : "Library";
@@ -2367,7 +2404,7 @@ export class OppaiLibrary extends LitElement {
                 @toggle-favorite=${() => this.toggleFavorite(activeItem.id)}
                 @navigate=${(e: CustomEvent<{ dir: number }>) => this.stepItem(e.detail.dir)}
                 @jump=${(e: CustomEvent<{ id: number }>) => (this.selectedId = e.detail.id)}
-                @changed=${() => this.refresh()}
+                @changed=${() => { this.refresh(); void this.refetchViewerItem(activeItem.id); }}
                 @deleted=${() => {
                   this.closeItem();
                   this.refresh();

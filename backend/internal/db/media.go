@@ -369,6 +369,13 @@ func (d *DB) DeleteMedia(ctx context.Context, id int64) (blobPath, thumbPath str
 	if err != nil {
 		return "", "", err
 	}
+	// A game paired with Launchy is remembered by its launcher entry, before the cascade
+	// takes the pairing with it; see launchy_removed in schema.sql.
+	if _, err = d.sql.ExecContext(ctx,
+		`INSERT OR REPLACE INTO launchy_removed(launchy_id, removed_at) SELECT launchy_id, ? FROM game_launchy WHERE game_id = ?`,
+		now(), id); err != nil {
+		return "", "", err
+	}
 	if _, err = d.sql.ExecContext(ctx, `DELETE FROM media WHERE id = ?`, id); err != nil {
 		return "", "", err
 	}

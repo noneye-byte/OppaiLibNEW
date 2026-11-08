@@ -270,6 +270,18 @@ class ApiTest(unittest.TestCase):
             time.sleep(0.05)
         self.fail("the job never finished")
 
+    def test_a_restart_waits_for_a_running_job_and_is_otherwise_done(self):
+        restarted = threading.Event()
+        old, server.RESTART = server.RESTART, restarted.set
+        try:
+            self.assertEqual(self.call("POST", "/restart", token="")[0], 401)
+            code, body = self.call("POST", "/restart")
+            self.assertEqual(code, 202, body)
+            self.assertTrue(restarted.wait(5), "the restart never ran")
+            self.assertIn("restart", json.loads(self.call("GET", "/health")[1])["features"])
+        finally:
+            server.RESTART = old
+
     def test_the_token_is_required(self):
         self.assertEqual(self.call("GET", "/health", token="")[0], 401)
         self.assertEqual(self.call("GET", "/health", token="wrong")[0], 401)

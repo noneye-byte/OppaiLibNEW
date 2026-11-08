@@ -1477,6 +1477,9 @@ export interface GenCharacter {
   name: string;
   prompt: string;
   negativePrompt?: string;
+  /** The same subject in plain sentences, sent instead of the tags to a checkpoint that
+      reads prose (Anima). See fragment-words.ts. */
+  description?: string;
   hasThumb: boolean;
 }
 
@@ -1743,6 +1746,23 @@ export interface GpuState {
   busy?: string;
   vramTotal?: number;
   vramFree?: number;
+}
+
+/** One AI tool as the restart list shows it (api/ai_restart.go). */
+export interface AiTool {
+  id: "chat" | "images" | "video" | "trainer" | "voice";
+  name: string;
+  set: boolean;
+  /** "self": its own restart; "docker": its container; "": nothing can, and detail says why. */
+  how: "" | "self" | "docker";
+  container?: string;
+  detail: string;
+}
+
+export interface AiRestartState {
+  tools: AiTool[];
+  /** Docker's socket is mapped into OppaiLib, so a container can be restarted. */
+  docker: boolean;
 }
 
 /** One clip, from words or from a picture. Knobs left out keep the workflow's own. */
@@ -2144,6 +2164,31 @@ export interface GenModelMeta {
   description?: string;
   triggerPhrases: string[];
   defaults?: GenModelDefaults;
+  /** Its Civitai page, when it is linked to one: where its pictures and comments come from. */
+  civitai?: GenModelCivitai;
+}
+
+export interface GenModelCivitai {
+  modelId: number;
+  versionId: number;
+  modelName: string;
+  versionName?: string;
+  creator?: string;
+  /** The Civitai picture chosen as its cover; absent for the first showcase one. */
+  coverUrl?: string;
+  page: string;
+}
+
+/** One comment from a model's Civitai discussion (api/civitai_comments.go). */
+export interface CivitaiComment {
+  id: number;
+  user: string;
+  avatar?: string;
+  createdAt?: string;
+  /** Sanitized server-side: the tags a description keeps, nothing that runs or loads. */
+  html: string;
+  replies?: number;
+  likes?: number;
 }
 
 /** One gallery board: InvokeAI's, or a folder of the studio's own gallery. Board id
@@ -3519,6 +3564,11 @@ export const api = {
   // Linking: a one-time code for a launchy://link link, and the keys it has bought.
   launchyPairing: () => request<{ code: string; expiresAt: number }>("/api/launchy/pairing", { method: "POST" }),
   launchyKeys: () => request<{ items: LaunchyKey[] }>("/api/launchy/keys"),
+  /** Games kept out of the sync on purpose: `removed` were deleted here, `declined`
+      were taken off the PC. See handlers_launchy.go. */
+  launchyRemovals: () => request<{ removed: number; declined: number }>("/api/launchy/removed"),
+  forgetLaunchyRemovals: () =>
+    request<{ removed: number; declined: number }>("/api/launchy/removed", { method: "DELETE" }),
   revokeLaunchyKey: (id: number) => request<void>(`/api/launchy/keys/${id}`, { method: "DELETE" }),
 
   // HTML5 game builds. playInfo 404s for a game that is only a download, which is
@@ -3583,6 +3633,10 @@ export const api = {
   /** Who has the graphics card, and giving it to one program. A switch to her model
       waits for it to load, which takes a minute or two. */
   gpuState: () => request<GpuState>("/api/gpu", {}, 15_000),
+  aiRestartState: () => request<AiRestartState>("/api/ai/restart", {}, 15_000),
+  /** Waits for the restart: her model's reload is a minute or two. */
+  aiRestart: (id: AiTool["id"]) =>
+    request<{ how: "self" | "docker"; message: string; container?: string }>(`/api/ai/restart/${id}`, { method: "POST" }, 11 * 60_000),
   gpuSwitch: (to: GpuApp["id"]) =>
     request<{ state: GpuState; problems: string[] }>("/api/gpu", { method: "POST", body: JSON.stringify({ to }) }, 11 * 60_000),
   comfyCheck: () => request<{ checks: GenCheck[] }>("/api/imagegen/comfy/check", { method: "POST" }, 65_000),
@@ -3702,6 +3756,7 @@ export const api = {
     name: string;
     prompt: string;
     negativePrompt?: string;
+    description?: string;
     previewId?: string;
     imageData?: string;
   }) =>
@@ -3724,6 +3779,7 @@ export const api = {
     name: string;
     prompt: string;
     negativePrompt?: string;
+    description?: string;
     previewId?: string;
     imageData?: string;
   }) =>
@@ -4073,6 +4129,10 @@ export const api = {
   },
   /** Make one of the catalogue's pictures the model's cover; the choice survives
    *  a later fetch of the same version. */
+  /** Needs a Civitai API key: the site shares comments only with an account. */
+  civitaiComments: (modelId: number, cursor?: string) =>
+    request<{ items: CivitaiComment[]; nextCursor?: string; page: string }>(
+      `/api/imagegen/civitai/comments?modelId=${modelId}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`, {}, 45_000),
   civitaiCover: (key: string, url: string) =>
     request<void>("/api/imagegen/civitai/cover", { method: "POST", body: JSON.stringify({ key, url }) }, 70_000),
   /** Install another version (the newest when unsaid) and delete the current

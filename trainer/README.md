@@ -182,6 +182,20 @@ reads each folder at its own repeats. OppaiLib uses it to play a tag down: the p
 with it are shown less often than the rest. `/health` lists `repeats-per-file` under
 `features` (version 2 on), and OppaiLib checks for it before relying on it.
 
+## Restarting it
+
+`POST /restart` replaces the trainer's process with a fresh one, with the same
+interpreter flags, so the container never sees it exit. It is refused (409) while a LoRA
+trains; queued runs are on disk and carry on in the new process. OppaiLib's Restart
+button (the studio's card menu) uses it, and `/health` lists `restart` in `features`.
+
+## ComfyUI's icon
+
+`comfyui-icon.png` is the mark for the ComfyUI container that runs beside OppaiLib: the
+book with a node graph where the eye is. Its template's Icon URL is
+`https://raw.githubusercontent.com/noneye-byte/OppaiLibNEW/main/trainer/comfyui-icon.png`.
+`comfyui-icon.svg` is the source; render it at 512×512 with a transparent background.
+
 ## What it keeps
 
 `/data/jobs/<id>/` holds a run: its settings, its log, the pictures while it trains —

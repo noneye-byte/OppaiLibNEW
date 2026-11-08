@@ -1,6 +1,6 @@
 {
   "name": "oppailib-web",
-  "version": "0.87.2",
+  "version": "0.88.0",
   "private": true,
   "type": "module",
   "description": "OppaiLib Material 3 web UI",
@@ -12,6 +12,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@material/material-color-utilities": "0.3.0",
     "@material/web": "^2.3.0",
     "lit": "^3.2.1"
   },

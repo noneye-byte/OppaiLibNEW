@@ -29,6 +29,10 @@ type promptFragment struct {
 	Name           string `json:"name"`
 	Prompt         string `json:"prompt"`
 	NegativePrompt string `json:"negativePrompt,omitempty"`
+	// Description is the same subject in plain sentences, for the models that read prose
+	// better than tags (Anima): the studio sends it in place of Prompt when one of those
+	// is picked. Blank sends the tags everywhere.
+	Description string `json:"description,omitempty"`
 }
 
 // promptFragmentView is what lists return: the record plus whether a thumbnail
@@ -114,6 +118,9 @@ type savePromptFragmentReq struct {
 	Name           string `json:"name"`
 	Prompt         string `json:"prompt"`
 	NegativePrompt string `json:"negativePrompt"`
+	// Description is a pointer because the phone's editor does not send one: absent
+	// keeps the description the entry has, rather than an edit there erasing it.
+	Description *string `json:"description"`
 	// Optional thumbnail, from either a just-generated preview or an upload; leaving
 	// both empty keeps whatever thumbnail the entry already has.
 	PreviewID string `json:"previewId"`
@@ -192,7 +199,8 @@ func (s *Server) handleSavePromptFragment(l promptLibrary, prepare func(r *http.
 			writeErr(w, http.StatusBadRequest, "a name is required")
 			return
 		}
-		if len(req.Name) > 120 || len(req.Prompt) > 4000 || len(req.NegativePrompt) > 4000 {
+		if len(req.Name) > 120 || len(req.Prompt) > 4000 || len(req.NegativePrompt) > 4000 ||
+			(req.Description != nil && len(*req.Description) > 4000) {
 			writeErr(w, http.StatusBadRequest, l.noun+" is too large")
 			return
 		}
@@ -211,6 +219,13 @@ func (s *Server) handleSavePromptFragment(l promptLibrary, prepare func(r *http.
 			prepare(r, &req, thumb)
 		}
 		f := promptFragment{ID: id, Name: req.Name, Prompt: strings.TrimSpace(req.Prompt), NegativePrompt: strings.TrimSpace(req.NegativePrompt)}
+		if req.Description != nil {
+			f.Description = strings.TrimSpace(*req.Description)
+		} else if req.ID != "" {
+			if old, err := s.readPromptFragment(l, id); err == nil {
+				f.Description = old.Description
+			}
+		}
 		if !s.writePromptFragment(w, l, f, thumb) {
 			return
 		}

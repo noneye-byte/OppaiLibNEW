@@ -131,6 +131,14 @@ func (d *DB) UpsertGameLaunchy(ctx context.Context, r *GameLaunchyRow) error {
 		  play_seconds=excluded.play_seconds, last_played=excluded.last_played,
 		  launch_count=excluded.launch_count, updated_at=excluded.updated_at`,
 		r.GameID, r.LaunchyID, boolToInt(r.Installed), r.Version, r.PlaySeconds, r.LastPlayed, r.LaunchCount, r.UpdatedAt)
+	if err != nil {
+		return err
+	}
+	// Paired again, so wanted on the PC again, and the entry is no longer a deleted one.
+	if _, err := d.sql.ExecContext(ctx, `DELETE FROM launchy_declined WHERE game_id=?`, r.GameID); err != nil {
+		return err
+	}
+	_, err = d.sql.ExecContext(ctx, `DELETE FROM launchy_removed WHERE launchy_id=?`, r.LaunchyID)
 	return err
 }
 
@@ -176,14 +184,82 @@ func (d *DB) ListGameLaunchy(ctx context.Context) ([]*GameLaunchyRow, error) {
 	return out, rows.Err()
 }
 
-// DeleteGameLaunchy unpairs a game. Reports whether it was paired.
+// DeleteGameLaunchy unpairs a game because the launcher no longer has it, and
+// remembers that it was taken off the PC so the next sync does not adopt it back.
+// Reports whether it was paired.
 func (d *DB) DeleteGameLaunchy(ctx context.Context, gameID int64) (bool, error) {
 	res, err := d.sql.ExecContext(ctx, `DELETE FROM game_launchy WHERE game_id=?`, gameID)
 	if err != nil {
 		return false, err
 	}
 	n, _ := res.RowsAffected()
+	if n > 0 {
+		if _, err := d.sql.ExecContext(ctx,
+			`INSERT OR REPLACE INTO launchy_declined(game_id, declined_at) VALUES(?, ?)`, gameID, now()); err != nil {
+			return true, err
+		}
+	}
 	return n > 0, nil
+}
+
+// LaunchyRemoved reports whether a launcher entry's game was deleted from the library.
+func (d *DB) LaunchyRemoved(ctx context.Context, launchyID string) (bool, error) {
+	var n int
+	err := d.sql.QueryRowContext(ctx, `SELECT COUNT(*) FROM launchy_removed WHERE launchy_id=?`, launchyID).Scan(&n)
+	return n > 0, err
+}
+
+// LaunchyRemovedIDs lists the launcher entries whose games were deleted here.
+func (d *DB) LaunchyRemovedIDs(ctx context.Context) ([]string, error) {
+	rows, err := d.sql.QueryContext(ctx, `SELECT launchy_id FROM launchy_removed ORDER BY removed_at`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+// LaunchyDeclinedIDs lists the library games taken off the PC.
+func (d *DB) LaunchyDeclinedIDs(ctx context.Context) (map[int64]bool, error) {
+	rows, err := d.sql.QueryContext(ctx, `SELECT game_id FROM launchy_declined`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[int64]bool{}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[id] = true
+	}
+	return out, rows.Err()
+}
+
+// ForgetLaunchyRemovals lets every deleted and declined game sync again: deleted
+// launcher entries may be sent here as new, declined games are offered to the PC.
+// Reports how many of each were forgotten.
+func (d *DB) ForgetLaunchyRemovals(ctx context.Context) (removed, declined int64, err error) {
+	res, err := d.sql.ExecContext(ctx, `DELETE FROM launchy_removed`)
+	if err != nil {
+		return 0, 0, err
+	}
+	removed, _ = res.RowsAffected()
+	res, err = d.sql.ExecContext(ctx, `DELETE FROM launchy_declined`)
+	if err != nil {
+		return removed, 0, err
+	}
+	declined, _ = res.RowsAffected()
+	return removed, declined, nil
 }
 
 // ListGames returns every game in the library, newest first. Games are the one

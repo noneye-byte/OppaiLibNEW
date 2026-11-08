@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The mark for the ComfyUI container that runs beside OppaiLib: the app's open book
+     (web/public/icon.svg) with a little node graph where its eye is — one node on the left
+     page wired to two on the right — cut out of the pages as the eye is, the same way the
+     trainer's mark (icon.svg) cuts a dumbbell. Round nodes rather than ComfyUI's boxes: at
+     icon size boxes read as letters. Rendered to comfyui-icon.png, which is what an
+     Unraid template points at; Unraid does not take an SVG. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="ink" x1="109" y1="0" x2="403" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ff8a00"/>
+      <stop offset="1" stop-color="#ff3d1f"/>
+    </linearGradient>
+    <!-- The left side is the right side mirrored, and a gradient mirrors with what it
+         fills, so that side's runs the other way to sweep across the whole mark. -->
+    <linearGradient id="ink-mirrored" x1="402.8" y1="0" x2="108.8" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ff8a00"/>
+      <stop offset="1" stop-color="#ff3d1f"/>
+    </linearGradient>
+    <mask id="graph" maskUnits="userSpaceOnUse" x="0" y="0" width="512" height="512">
+      <rect width="512" height="512" fill="#fff"/>
+      <g fill="none" stroke="#000" stroke-width="14" stroke-linecap="round">
+        <path d="M184 252C250 252 262 198 330 198"/>
+        <path d="M184 252C250 252 262 306 330 306"/>
+      </g>
+      <g fill="#000">
+        <circle cx="180" cy="252" r="30"/>
+        <circle cx="334" cy="198" r="26"/>
+        <circle cx="334" cy="306" r="26"/>
+      </g>
+    </mask>
+    <path id="page" d="M263.35 202.75C262.3 196.37 262.26 174.4 265.23 168.95C269.38 161.35 278.78 155.81 286.08 151.79C306.44 140.57 330.55 132.62 353.75 129.98C365.91 128.59 377.94 126.6 390.25 126.49C394.03 126.45 400.93 124.83 402.71 129.51C404.19 133.39 403.02 139.61 403.03 143.75L403.03 324.75C403.03 328.47 404.42 335.11 400.86 337.6C397.08 340.23 386.89 338.61 382.25 338.71C368.12 339.01 354.2 339.66 340.28 342.14C320.39 345.69 301.88 353.2 284.49 363.27C279.59 366.11 274.99 369.77 270.57 373.32C268.37 375.08 266.24 377.65 263.75 378.89C262.27 376.96 263.21 364.83 263.21 361.75Z"/>
+    <path id="swoosh" d="M391.12 352.75C389.88 360.29 376.46 368.65 369.91 371.21C360.47 374.91 350.23 374.47 340.25 375.14C326.51 376.08 312.83 377.42 299.33 380.16C292.82 381.48 286.26 383.32 279.93 385.23C276.86 386.16 272.08 388.87 269.1 388.25C289.12 363.15 326.86 353.51 357.25 351.31C365.54 350.71 373.97 350.77 382.25 351.38C384.87 351.58 388.99 351.28 391.12 352.75Z"/>
+  </defs>
+  <g mask="url(#graph)">
+    <use href="#page" fill="url(#ink)"/>
+    <use href="#page" fill="url(#ink-mirrored)" transform="translate(511.8 0) scale(-1 1)"/>
+  </g>
+  <use href="#swoosh" fill="url(#ink)"/>
+  <use href="#swoosh" fill="url(#ink-mirrored)" transform="translate(511.8 0) scale(-1 1)"/>
+</svg>

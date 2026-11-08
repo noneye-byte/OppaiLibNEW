@@ -183,6 +183,24 @@ CREATE TABLE IF NOT EXISTS game_launchy (
 );
 CREATE INDEX IF NOT EXISTS idx_game_launchy_launchy ON game_launchy(launchy_id);
 
+-- The two ways a pairing ends on purpose, remembered so the next sync does not undo
+-- them. Without these, deleting a game here left Launchy holding an entry it no longer
+-- found, which it sent back as new; and removing one from Launchy left an unpaired game
+-- here, which the next sync adopted back onto the PC.
+--
+-- launchy_removed: launcher entries whose game was deleted from the library. Keyed by
+-- the entry, because the game is gone; a sync that offers one is told 410.
+CREATE TABLE IF NOT EXISTS launchy_removed (
+    launchy_id TEXT PRIMARY KEY,
+    removed_at INTEGER NOT NULL
+);
+-- launchy_declined: library games taken off the PC. Left out of the sync's list, so no
+-- launcher, old or new, adopts them again.
+CREATE TABLE IF NOT EXISTS launchy_declined (
+    game_id     INTEGER PRIMARY KEY REFERENCES media(id) ON DELETE CASCADE,
+    declined_at INTEGER NOT NULL
+);
+
 -- Keys a program signs in with instead of a session — today only Launchy's. A
 -- session suits a person: it idles out, and a restart ends it on purpose. A launcher
 -- that sits on a PC and polls all day is not a person, and pairing it with a session

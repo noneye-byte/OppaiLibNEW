@@ -1,12 +1,13 @@
 import { LitElement, html, css, nothing } from "lit";
 import { customElement, state } from "lit/decorators.js";
 import { iconStyles, motionStyles } from "../theme.js";
-import { api, type GpuApp, type GpuState } from "../api.js";
+import { api, type AiRestartState, type AiTool, type GpuApp, type GpuState } from "../api.js";
 import { GPU_SHORT, cardHolder, vramShare, vramText } from "../gpu-card.js";
 
 /**
  * The studio header's graphics-card switch: which of her chat model, the image
- * generator and ComfyUI has the card, and a button to give it to another.
+ * generator and ComfyUI has the card, and a button to give it to another. Below it,
+ * a restart button for each AI tool, the trainer and speech server included.
  *
  * The server moves the card on its own as work starts (api/gpu_share.go); this is for
  * the times it can't know — someone about to use one of the three programs' own UIs,
@@ -15,7 +16,9 @@ import { GPU_SHORT, cardHolder, vramShare, vramText } from "../gpu-card.js";
  * minute or two, so the button says what it is waiting on.
  */
 
-const ICONS: Record<GpuApp["id"], string> = { chat: "chat", images: "image", video: "movie" };
+const ICONS: Record<AiTool["id"], string> = {
+  chat: "chat", images: "image", video: "movie", trainer: "model_training", voice: "record_voice_over",
+};
 
 @customElement("oppai-gpu-switch")
 export class OppaiGpuSwitch extends LitElement {
@@ -25,6 +28,10 @@ export class OppaiGpuSwitch extends LitElement {
   @state() private moving: GpuApp["id"] | "" = "";
   @state() private problems: string[] = [];
   @state() private error = "";
+  /** The restart list: every AI tool, and how each would be restarted. */
+  @state() private tools: AiRestartState | null = null;
+  @state() private restarting: AiTool["id"] | "" = "";
+  @state() private restartNote = "";
   private onDocClick = (e: MouseEvent) => {
     if (this.open && !e.composedPath().includes(this)) this.open = false;
   };
@@ -77,6 +84,11 @@ export class OppaiGpuSwitch extends LitElement {
       .tag .material-symbols-rounded, .give .material-symbols-rounded { font-size: 15px; }
       .foot { padding: 8px 14px 12px; font-size: 11.5px; line-height: 1.5; color: var(--oppai-text-muted); }
       .err { color: var(--oppai-error, #f2b8b5); }
+      .sect {
+        display: flex; align-items: center; gap: 8px; padding: 10px 14px 2px; border-top: 1px solid var(--oppai-border);
+        font-size: 11px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--oppai-text-muted);
+      }
+      .ok { color: var(--oppai-primary-bright, var(--oppai-primary)); }
       @media (max-width: 760px) {
         .label { display: none; }
         .btn { padding: 0 9px; }
@@ -112,6 +124,31 @@ export class OppaiGpuSwitch extends LitElement {
     this.open = !this.open;
     if (this.open) {
       this.problems = [];
+      this.restartNote = "";
+      void this.load();
+      void this.loadTools();
+    }
+  }
+
+  private async loadTools() {
+    try {
+      this.tools = await api.aiRestartState();
+    } catch {
+      /* the list stays as it was; the card half of the popover still works */
+    }
+  }
+
+  private async restart(tool: AiTool) {
+    this.restarting = tool.id;
+    this.restartNote = "";
+    this.error = "";
+    try {
+      const res = await api.aiRestart(tool.id);
+      this.restartNote = res.message;
+    } catch (e) {
+      this.error = (e as Error).message;
+    } finally {
+      this.restarting = "";
       void this.load();
     }
   }
@@ -134,11 +171,29 @@ export class OppaiGpuSwitch extends LitElement {
   render() {
     const holder = cardHolder(this.card);
     return html`<button class="btn ${this.open ? "on" : ""}" aria-expanded=${this.open ? "true" : "false"}
-        title="Which program has the graphics card — her chat, the image generator or ComfyUI" @click=${() => this.toggle()}>
+        title="Which program has the graphics card — her chat, the image generator or ComfyUI — and restarting any of the AI tools" @click=${() => this.toggle()}>
         <span class="material-symbols-rounded ${this.moving ? "spin" : ""}">${this.moving ? "refresh" : "memory"}</span>
         <span class="label">Card${holder || this.moving ? html`: <span class="who">${GPU_SHORT[this.moving || holder as GpuApp["id"]]}</span>` : nothing}</span>
       </button>
       ${this.open ? this.renderPop(holder) : nothing}`;
+  }
+
+  private renderRestarts() {
+    const tools = (this.tools?.tools ?? []).filter((t) => t.set);
+    if (!tools.length) return nothing;
+    const docker = !!this.tools?.docker;
+    return html`<div class="sect"><span class="material-symbols-rounded" style="font-size:15px">restart_alt</span>Restart</div>
+      <ul>
+        ${tools.map((t) => html`<li class="${t.how ? "" : "off"}">
+          <span class="ic"><span class="material-symbols-rounded">${ICONS[t.id]}</span></span>
+          <span><b>${t.name}</b><small title=${t.detail}>${t.detail}</small></span>
+          ${this.restarting === t.id
+            ? html`<span class="tag"><span class="material-symbols-rounded spin">refresh</span>${t.id === "chat" && t.how === "self" ? "Reloading…" : "Restarting…"}</span>`
+            : html`<button class="give" ?disabled=${!t.how || !!this.restarting || !!this.moving}
+                title=${restartTitle(t, docker)} @click=${() => void this.restart(t)}>
+                <span class="material-symbols-rounded">restart_alt</span>Restart</button>`}
+        </li>`)}
+      </ul>`;
   }
 
   private renderPop(holder: GpuApp["id"] | "") {
@@ -165,15 +220,25 @@ export class OppaiGpuSwitch extends LitElement {
           </li>`;
         })}
       </ul>
+      ${this.renderRestarts()}
       <div class="foot">
         ${card?.busy ? html`<div>Wait — ${card.busy}.</div>` : nothing}
+        ${this.restartNote ? html`<div class="ok">${this.restartNote}</div>` : nothing}
         ${this.problems.map((p) => html`<div class="err">${p}</div>`)}
         ${this.error ? html`<div class="err">${this.error}</div>` : nothing}
-        ${!this.problems.length && !this.error ? html`Pictures, clips and her replies take the card when they need it anyway; this is for
+        ${!this.problems.length && !this.error && !this.restartNote ? html`Pictures, clips and her replies take the card when they need it anyway; this is for
           using one of the three in its own window, or getting a long run of one kind ready.` : nothing}
       </div>
     </div>`;
   }
+}
+
+/** The restart half: each AI tool with a button, restarted the gentlest way it allows
+    (api/ai_restart.go). Kept beside the card because both are what you reach for when
+    one of the programs has stopped behaving. */
+function restartTitle(t: AiTool, docker: boolean): string {
+  if (t.how) return `Restart ${t.name}: ${t.detail}`;
+  return docker ? t.detail : `${t.detail}. Mapping Docker's socket into OppaiLib lets it restart the container instead.`;
 }
 
 declare global {

@@ -10,7 +10,7 @@
 import "@material/web/progress/circular-progress.js"; // app.ts's loading state
 import { styles as typescaleStyles } from "@material/web/typography/md-typescale-styles.js";
 
-import { globalStyles, applyTheme, loadTheme, watchSystemTheme } from "./theme.js";
+import { globalStyles, applyTheme, applyYou, loadTheme, storedYouCss, watchSystemTheme } from "./theme.js";
 import "./app.js";
 
 // Global M3 tokens + typography.
@@ -21,4 +21,5 @@ document.adoptedStyleSheets = [...document.adoptedStyleSheets, typescaleStyles.s
 
 // Apply the saved theme before first paint so there's no flash of the wrong one.
 applyTheme(loadTheme());
+applyYou(storedYouCss());
 watchSystemTheme();

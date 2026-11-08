@@ -13,6 +13,9 @@ import {
   loadTheme,
   saveTheme,
   applyTheme,
+  loadYouRaw,
+  saveYouRaw,
+  applyYou,
 } from "../theme.js";
 import { KIND_META, type Kind, type ComicFit, loadComicFit, saveComicFit } from "../media-meta.js";
 import { loadHideLibby, saveHideLibby } from "../libby.js";
@@ -22,6 +25,9 @@ import { LIBBY_PROGRESSION_MULTIPLIERS, getProgressionMultiplier, setProgression
 import "./launchy-panel.js";
 import "./model-transfer.js";
 import { generatorName } from "../model-manage.js";
+import {
+  YOU_SEEDS, YOU_STYLES, hexFromCss, readYouPref, storedYou, youCss, youIsStale, youPreview, type YouPref, type YouStyle,
+} from "../material-you.js";
 
 
 /** Libby's sections, drawn by the chat's settings panel through `only`. */
@@ -118,6 +124,8 @@ export class OppaiSettings extends LitElement {
   @state() private saved = false;
 
   @state() private theme: ThemePref = loadTheme();
+  /** The Material You colour and palette style; a null seed is OppaiLib's own palette. */
+  @state() private you: YouPref = readYouPref(loadYouRaw());
   @state() private fit: ComicFit = loadComicFit();
   @state() private hideLibby = loadHideLibby();
 
@@ -458,6 +466,23 @@ export class OppaiSettings extends LitElement {
         background: var(--oppai-on-primary);
       }
 
+      /* Material You swatches: Android's three-colour circles. */
+      .you { display: flex; flex-wrap: wrap; gap: 8px; max-width: 360px; justify-content: flex-end; }
+      .swatch {
+        position: relative; width: 40px; height: 40px; border-radius: 50%; padding: 0; cursor: pointer;
+        border: 2px solid transparent; background: none; display: grid; place-items: center;
+      }
+      .swatch.on { border-color: var(--oppai-text); }
+      .swatch .dot { width: 32px; height: 32px; border-radius: 50%; overflow: hidden; display: grid; grid-template: 1fr 1fr / 1fr 1fr; }
+      .swatch .dot i:first-child { grid-column: 1 / 3; }
+      .swatch .check {
+        position: absolute; inset: 0; display: grid; place-items: center; font-size: 18px;
+        color: #fff; text-shadow: 0 0 4px rgba(0, 0, 0, 0.6);
+      }
+      .swatch input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; }
+      .swatch.custom .dot { background: conic-gradient(#e53935, #ffb300, #43a047, #1e88e5, #6750a4, #e53935); }
+      .seg.wrap { flex-wrap: wrap; justify-content: flex-end; max-width: 420px; }
+
       /* Segmented choice */
       .seg {
         display: flex;
@@ -737,6 +762,8 @@ export class OppaiSettings extends LitElement {
 
   connectedCallback() {
     super.connectedCallback();
+    // A colour picked under an older mapping is made again with this one.
+    if (youIsStale(loadYouRaw())) this.pickYou(this.you);
     profileUpdates(this, "settings");
     this.load();
     void this.loadGenLists();
@@ -903,6 +930,24 @@ export class OppaiSettings extends LitElement {
     this.theme = pref;
     saveTheme(pref);
     applyTheme(pref);
+  }
+
+  private pickYou(pref: YouPref) {
+    this.you = pref;
+    saveYouRaw(storedYou(pref));
+    withViewTransition(() => applyYou(youCss(pref)));
+  }
+
+  /** The system's accent colour, where the browser shares it (the CSS AccentColor
+      keyword): Windows' accent on a desktop. Null when it does not. */
+  private systemAccent(): string | null {
+    if (!CSS.supports("color", "AccentColor")) return null;
+    const probe = document.createElement("span");
+    probe.style.color = "AccentColor";
+    document.body.appendChild(probe);
+    const hex = hexFromCss(getComputedStyle(probe).color);
+    probe.remove();
+    return hex;
   }
 
   private pickFit(fit: ComicFit) {
@@ -1103,6 +1148,31 @@ export class OppaiSettings extends LitElement {
     `;
   }
 
+  /** The swatches: OppaiLib's own palette, Android-style basic colours, the system's
+      accent where the browser shares it, and any colour at all. */
+  private renderSwatches() {
+    const { seed, style } = this.you;
+    const accent = this.systemAccent();
+    const known = new Set([...YOU_SEEDS.map((s) => s.hex), accent ?? ""]);
+    const swatch = (label: string, hex: string | null, colours: [string, string, string]) => html`<button
+      class="swatch ${seed === hex ? "on" : ""}" title=${label} aria-label=${label} aria-pressed=${seed === hex ? "true" : "false"}
+      @click=${() => this.pickYou({ seed: hex, style })}>
+      <span class="dot">${colours.map((c) => html`<i style="background:${c}"></i>`)}</span>
+      ${seed === hex ? html`<span class="material-symbols-rounded check">check</span>` : nothing}
+    </button>`;
+    return html`
+      ${swatch("OppaiLib (the original orange)", null, ["#FFB77C", "#E4C0A4", "#D2C78C"])}
+      ${YOU_SEEDS.map((s) => swatch(s.name, s.hex, youPreview(s.hex, style)))}
+      ${accent ? swatch("Your system's accent colour", accent, youPreview(accent, style)) : nothing}
+      ${seed && !known.has(seed) ? swatch("Your colour", seed, youPreview(seed, style)) : nothing}
+      <label class="swatch custom" title="Pick any colour">
+        <span class="dot"></span>
+        <span class="material-symbols-rounded check">colorize</span>
+        <input type="color" aria-label="Pick any colour" .value=${seed ?? "#ffb77c"}
+          @change=${(e: Event) => this.pickYou({ seed: (e.target as HTMLInputElement).value.toLowerCase(), style })} />
+      </label>`;
+  }
+
   private renderAppearance() {
     return html`
       <section class="card">
@@ -1131,6 +1201,29 @@ export class OppaiSettings extends LitElement {
             )}
           </div>
         </div>
+
+        <div class="field">
+          <div class="field-text">
+            <div class="field-label">Colours</div>
+            <div class="field-help">
+              Material You: the whole palette worked out from one colour, as Android does from your
+              wallpaper. The app on your phone follows the phone's own.
+            </div>
+          </div>
+          <div class="field-control you">${this.renderSwatches()}</div>
+        </div>
+        ${this.you.seed
+          ? html`<div class="field">
+              <div class="field-text">
+                <div class="field-label">Palette style</div>
+                <div class="field-help">Android's styles: how far the other colours stray from the one you picked.</div>
+              </div>
+              <div class="field-control seg wrap">
+                ${YOU_STYLES.map((s) => html`<button class=${this.you.style === s.id ? "on" : ""}
+                  @click=${() => this.pickYou({ ...this.you, style: s.id as YouStyle })}>${s.label}</button>`)}
+              </div>
+            </div>`
+          : nothing}
 
         <div class="field">
           <div class="field-text">

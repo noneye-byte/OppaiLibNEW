@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <Container version="2">
   <Name>OppaiLib</Name>
-  <Version>0.87.2</Version>
+  <Version>0.88.0</Version>
   <Repository>ghcr.io/noneye-byte/oppailib:latest</Repository>
   <Registry>https://github.com/noneye-byte/OppaiLibNEW/pkgs/container/oppailib</Registry>
   <Network>bridge</Network>
@@ -40,6 +40,7 @@
   <Config Name="Character data (optional)" Target="/characters" Default="" Mode="rw" Description="Optional. Imported character cards and their artwork — by default inside /config. Set OPPAI_CHARACTER_DIR to /characters to use it; copy /config/characters across first." Type="Path" Display="advanced" Required="false" Mask="false"></Config>
   <Config Name="Chat workspaces (optional)" Target="/chat" Default="" Mode="rw" Description="Optional. Conversations, your profile and the images shared into chat — by default inside /config. Set OPPAI_CHAT_DIR to /chat to use it; copy /config/chat across first." Type="Path" Display="advanced" Required="false" Mask="false"></Config>
   <Config Name="Processing scratch (optional)" Target="/scratch" Default="" Mode="rw" Description="Optional. ffmpeg frames, archives being built, AI tagger stills — by default inside /cache. Set OPPAI_TEMP_DIR to /scratch to put it on a fast pool separate from upload staging. Anything left here is deleted automatically once it is older than the window in Settings → Storage." Type="Path" Display="advanced" Required="false" Mask="false"></Config>
+  <Config Name="Docker socket (optional)" Target="/var/run/docker.sock" Default="" Mode="rw" Description="Optional. Map /var/run/docker.sock here to let the studio's Restart buttons restart an AI tool's container (text-generation-webui, Automatic1111, ComfyUI, the trainer, a speech server) when the tool cannot restart itself. OppaiLib only ever restarts the container a tool's address in Settings leads to, but mapping the socket gives this container control of Docker, so leave it blank unless you want that." Type="Path" Display="advanced" Required="false" Mask="false"></Config>
 
   <Config Name="Libby memory path" Target="OPPAI_LIBBY_DIR" Default="" Mode="" Description="Set to /libby only if you mapped the optional Libby memories path above. Blank keeps her memories inside /config, which is where they already are." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
   <Config Name="Character data path" Target="OPPAI_CHARACTER_DIR" Default="" Mode="" Description="Set to /characters only if you mapped the optional character path above." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
