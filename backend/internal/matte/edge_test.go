@@ -146,7 +146,7 @@ func TestABusyBackgroundIsNotTakenForABackdrop(t *testing.T) {
 	for i := range rgb {
 		rgb[i] = byte(i * 37)
 	}
-	if _, flat := backdropOf(rgb, make([]uint8, w*h)); flat {
+	if _, _, flat := backdropOf(rgb, make([]uint8, w*h)); flat {
 		t.Fatal("a noisy background read as flat")
 	}
 }
@@ -160,5 +160,123 @@ func TestAFrameWithoutHerIsClearAndDoesNotPanic(t *testing.T) {
 		if dst[i] != 0 {
 			t.Fatalf("alpha %d in an empty frame", dst[i])
 		}
+	}
+}
+
+// hairFrame is a band of hair on a white backdrop, with a gap two pixels wide down its
+// middle that is half hair, half backdrop: what a gap between strands becomes once a
+// clip has softened and smeared it. mask is how sure the model is of the hair and of
+// the gap.
+func hairFrame(w, h int, hair, gap uint8) (rgb []byte, mask []uint8) {
+	rgb, mask = make([]byte, w*h*3), make([]uint8, w*h)
+	strand := [3]byte{200, 90, 20}
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			i := y*w + x
+			c := [3]byte{255, 255, 255}
+			switch {
+			case x == 15 || x == 16:
+				for k := range c {
+					c[k] = byte((int(strand[k]) + 255) / 2)
+				}
+				mask[i] = gap
+			case x >= 4 && x < 28:
+				c = strand
+				mask[i] = hair
+			}
+			copy(rgb[i*3:], c[:])
+		}
+	}
+	return rgb, mask
+}
+
+func TestAGapBetweenStrandsTheModelFillsIsNotLeftWhite(t *testing.T) {
+	const w, h = 32, 16
+	rgb, mask := hairFrame(w, h, 255, 235)
+	dst := make([]byte, w*h*4)
+	var e edgeWork
+	e.composeEdge(dst, rgb, mask, w, h)
+	at := (8*w + 15) * 4
+	if a := dst[at+3]; a < 90 || a > 170 {
+		t.Fatalf("a gap that is half backdrop has alpha %d; it should be about half", a)
+	}
+	if r, g, b := dst[at], dst[at+1], dst[at+2]; r != 200 || g != 90 || b != 20 {
+		t.Fatalf("the gap shows rgb %d,%d,%d: the white it was mixed with is still in it", r, g, b)
+	}
+	if mid := (8*w + 8) * 4; dst[mid+3] != 255 || dst[mid] != 200 {
+		t.Fatalf("the hair beside the gap is rgb %d alpha %d", dst[mid], dst[mid+3])
+	}
+}
+
+func TestPaleColoursSheIsSureOfAreNotTakenApart(t *testing.T) {
+	// Pale skin is orange hair mixed with white, to within a few levels. Where the model
+	// is sure, well inside her, a pale colour is hers and stays solid.
+	const w, h = 32, 16
+	rgb, mask := hairFrame(w, h, 255, 255)
+	for y := 0; y < h; y++ {
+		for _, x := range []int{15, 16} {
+			copy(rgb[(y*w+x)*3:], []byte{250, 215, 190})
+		}
+	}
+	dst := make([]byte, w*h*4)
+	var e edgeWork
+	e.composeEdge(dst, rgb, mask, w, h)
+	at := (8*w + 15) * 4
+	if dst[at+3] != 255 || dst[at] != 250 || dst[at+1] != 215 {
+		t.Fatalf("a pale highlight she is sure of became rgb %d,%d alpha %d", dst[at], dst[at+1], dst[at+3])
+	}
+}
+
+func TestBackdropShowingThroughHerIsClearedWhereTheModelDoubtsIt(t *testing.T) {
+	const w, h = 32, 16
+	rgb, mask := hairFrame(w, h, 255, 230)
+	for y := 0; y < h; y++ {
+		for _, x := range []int{15, 16} {
+			copy(rgb[(y*w+x)*3:], []byte{255, 255, 255})
+		}
+	}
+	dst := make([]byte, w*h*4)
+	var e edgeWork
+	e.composeEdge(dst, rgb, mask, w, h)
+	if a := dst[(8*w+15)*4+3]; a != 0 {
+		t.Fatalf("white the model doubts, inside her hair, kept alpha %d", a)
+	}
+}
+
+func TestHerOwnWhiteTheModelIsSureOfIsKeptWhole(t *testing.T) {
+	// A trim or a drawstring is the backdrop's colour exactly, and the model is sure of
+	// it all the way across. So are the pixels where it meets the rest of her.
+	const w, h = 32, 16
+	rgb, mask := hairFrame(w, h, 255, 255)
+	for y := 0; y < h; y++ {
+		for _, x := range []int{15, 16} {
+			copy(rgb[(y*w+x)*3:], []byte{255, 255, 255})
+		}
+	}
+	dst := make([]byte, w*h*4)
+	var e edgeWork
+	e.composeEdge(dst, rgb, mask, w, h)
+	for _, x := range []int{14, 15, 16, 17} {
+		at := (8*w + x) * 4
+		if dst[at+3] != 255 {
+			t.Fatalf("(%d,8) of her trim and what borders it has alpha %d", x, dst[at+3])
+		}
+	}
+	if at := (8*w + 15) * 4; dst[at] != 255 {
+		t.Fatalf("her white trim was recoloured to %d", dst[at])
+	}
+}
+
+func TestTheAlphaIsSteadiedWhereItShimmersButNotWhereSheMoves(t *testing.T) {
+	var e edgeWork
+	first := []byte{0, 0, 0, 100, 0, 0, 0, 255}
+	e.steadyAlpha(first, true)
+	next := []byte{0, 0, 0, 120, 0, 0, 0, 0}
+	e.steadyAlpha(next, false)
+	if a := next[3]; a <= 100 || a >= 120 {
+		t.Fatalf("a shimmer of 20 became %d", a)
+	}
+	if a := next[7]; a != 0 {
+		t.Fatalf("where she moved away the alpha was held at %d: a ghost", a)
 	}
 }

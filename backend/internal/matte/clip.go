@@ -157,6 +157,7 @@ func (m *Matter) cutFrames(ctx context.Context, r io.Reader, w io.Writer, info C
 		}
 		copy(prev, mask.Pix)
 		edge.composeEdge(rgba, rgb, mask.Pix, info.Width, info.Height)
+		edge.steadyAlpha(rgba, n == 0)
 		if _, err := w.Write(rgba); err != nil {
 			return fmt.Errorf("ffmpeg stopped taking frames: %w", err)
 		}
