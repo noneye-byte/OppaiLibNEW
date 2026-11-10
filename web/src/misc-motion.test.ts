@@ -37,7 +37,7 @@ test("an expression square keeps the Motion tab's choices untouched", () => {
 });
 
 test("an empty prompt becomes the movement alone", () => {
-  assert.equal(miscClipForm({ seconds: 3, makeLoop: true, prompt: "" }, "typing").prompt, "Her fingers tap quickly at the keys.");
+  assert.equal(miscClipForm({ seconds: 3, makeLoop: true, prompt: "" }, "typing").prompt, "Her thumbs tap quickly across her phone's screen.");
 });
 
 test("the panel says how a square's clip is cut", () => {

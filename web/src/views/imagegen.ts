@@ -116,6 +116,7 @@ import {
   type MotionStep, type SquareMotion,
 } from "../sprite-motion.js";
 import { SCREEN_COLOURS, drawnColour, onScreen, screenPrompt, type SpriteScreen } from "../sprite-screen.js";
+import { proseBehind, squareWords, withChange, wordChange, type SquareWords, type WordChanges } from "../sprite-words.js";
 import { GALLERY_DRAG_TYPE, galleryChanged } from "./imagegen-gallery.js";
 import {
   loadLayout, loadPrompts, moveItem, patchShot, rememberPrompt, rememberShots, saveLayout, savePrompts, stepThrough,
@@ -380,7 +381,9 @@ const OUTFIT_FACES: { id: LibbyEmotion; label: string; face: string; pose: strin
  * this specific reads wrong with an unrelated expression stapled to it.
  */
 const OUTFIT_ACTIVITIES: { id: string; label: string; face: string; pose: string; prose: string; heat: number; intimate?: boolean; app?: boolean }[] = [
-  { id: "typing", label: "Typing", heat: 0, app: true, face: "focused expression, eyes on a screen, faint smile", pose: "sitting at a desk, both hands on a keyboard, leaning slightly toward the monitor", prose: "She sits at a desk with both hands on a keyboard, leaning slightly toward the monitor, focused, her eyes on the screen and a faint smile on her lips." },
+  // On her phone, as she is when she texts back: the square is the picture behind the
+  // chat's typing indicator, and the server's own tags for it say the same.
+  { id: "typing", label: "Typing", heat: 0, app: true, face: "focused expression, eyes on her phone, faint smile", pose: "holding a smartphone in both hands at chest height, thumbs on the screen, typing a message", prose: "She holds a smartphone in both hands at chest height, typing a message with her thumbs, focused, her eyes on the phone and a faint smile on her lips." },
   { id: "reading", label: "Reading", heat: 0, face: "absorbed expression, eyes lowered to the page", pose: "curled up holding an open book, one leg tucked under her", prose: "She is curled up holding an open book, one leg tucked under her, absorbed, her eyes lowered to the page." },
   { id: "gaming", label: "Gaming", heat: 0, face: "intent expression, eyes wide on the screen, tongue at the corner of her mouth", pose: "sitting cross-legged holding a game controller in both hands", prose: "She sits cross-legged holding a game controller in both hands, intent, her eyes wide on the screen and her tongue at the corner of her mouth." },
   { id: "lounging", label: "Lounging", heat: 0, face: "relaxed expression, eyes half closed, easy smile", pose: "sprawled back across a sofa, arms loose, one knee raised", prose: "She is sprawled back across a sofa with her arms loose and one knee raised, relaxed, her eyes half closed and an easy smile on her face." },
@@ -607,6 +610,12 @@ export class OppaiImageGen extends LitElement {
   @state() private sheetZoom = 0;
   /** Whether the assembled prompt is unfolded in the focus panel. */
   @state() private showSquarePrompt = false;
+  /** The user's rewrites of the squares' wording (sprite-words.ts), from the server. */
+  @state() private spriteWords: WordChanges = {};
+  /** The square whose wording is open for editing, and the fields as typed. */
+  @state() private wordsDraftId = "";
+  @state() private wordsDraft: SquareWords | null = null;
+  @state() private wordsSaving = false;
   /** Camera and shot composition. Compiled into terms, negatives and a frame size rather
       than appended as text — see camera.ts. */
   @state() private camera: CameraSpec = { ...DEFAULT_CAMERA };
@@ -2854,6 +2863,7 @@ export class OppaiImageGen extends LitElement {
     // face because "collapsed limp on her back" with a cheerful smile stapled on is not
     // the picture anybody asked for. It also brings its own heat, since it has no tier.
     const misc = OUTFIT_ACTIVITIES.find((item) => item.id === this.outfitMisc);
+    const words = this.squareWordsOf(misc ? misc.id : face.id);
     const heat = misc ? misc.heat : this.outfitTier;
     const tier = OUTFIT_TIERS[heat];
     // On Anima the square is described in sentences rather than tagged. What it says is
@@ -2874,7 +2884,7 @@ export class OppaiImageGen extends LitElement {
     const prompt = prose
       ? spriteSquareProse({
         shot: outfitShotProse(this.camera.shot),
-        doing: misc ? misc.prose : face.prose,
+        doing: words.prose,
         stance: misc ? "" : levelStance(heat, true),
         mood: tier.moodProse,
         wearing: wearingProse(this.resolvedGear(), undress.hidden, this.outfitLockColors),
@@ -2886,8 +2896,8 @@ export class OppaiImageGen extends LitElement {
       : [
       "solo, one person, single subject",
       outfitShotPrompt(this.camera.shot),
-      misc ? misc.face : face.face,
-      misc ? misc.pose : face.pose,
+      words.face,
+      words.pose,
       // A MISC pose is the whole of what her body is doing; a stance on top would argue.
       misc ? "" : levelStance(heat),
       tier.mood,
@@ -3562,6 +3572,76 @@ export class OppaiImageGen extends LitElement {
       return /cancelled/i.test(msg) ? "Stopped." : msg;
     } finally {
       this.setMotionBusy(key, null);
+    }
+  }
+
+  /** A square's wording as the studio writes it: an expression's or a MISC state's. */
+  private studioWordsOf(id: string): SquareWords {
+    const item = OUTFIT_FACES.find((f) => f.id === id) ?? OUTFIT_ACTIVITIES.find((a) => a.id === id);
+    return { face: item?.face ?? "", pose: item?.pose ?? "", prose: item?.prose ?? "" };
+  }
+
+  /** A square's wording as it is drawn: the studio's, with the user's rewrites over it. */
+  private squareWordsOf(id: string): SquareWords {
+    return squareWords(this.studioWordsOf(id), this.spriteWords[id]);
+  }
+
+  /**
+   * The selected square's own words, open to rewriting: the face and pose as tags, for
+   * most checkpoints, and the same as a plain sentence, which is what Anima reads. An
+   * expression's words are the same at every heat; the heat's mood and stance are added
+   * around them. A field cleared goes back to the studio's.
+   */
+  private renderWordsEditor(id: string, label: string, misc: boolean) {
+    const change = this.spriteWords[id];
+    const d = this.wordsDraftId === id ? this.wordsDraft : null;
+    if (!d) {
+      return html`<button class="adv-toggle" aria-expanded="false"
+          title="Rewrite this square's face, pose and Anima sentence"
+          @click=${() => { this.wordsDraftId = id; this.wordsDraft = this.squareWordsOf(id); }}>
+          <span class="material-symbols-rounded" style="font-size:17px;">edit_note</span>
+          ${change ? "Edit this square's wording · rewritten" : "Edit this square's wording"}
+        </button>
+        ${proseBehind(change) ? html`<div class="sec-note words-warn">Its tags were rewritten but not its sentence, so on Anima it is still drawn the studio's way.</div>` : nothing}`;
+    }
+    const base = this.studioWordsOf(id);
+    const next = wordChange(base, d);
+    const anima = readsProse(this.pickedModel);
+    const field = (key: keyof SquareWords, name: string, rows: number, used: boolean) => html`
+      <label class="field">${name}${used ? html` <span class="words-used">· this checkpoint reads it</span>` : nothing}</label>
+      <textarea class="num extras" rows=${rows} .value=${d[key]} placeholder=${base[key]}
+        @input=${(e: Event) => { this.wordsDraft = { ...this.wordsDraft!, [key]: (e.target as HTMLTextAreaElement).value }; }}></textarea>`;
+    return html`<div class="words-editor">
+      <div class="sec-note">${misc ? `${label}, as one square.` : `${label}, at every heat — the heat's mood and stance are added around it.`}
+        The tags are for most checkpoints; the sentence is the same picture in plain words, for Anima. Clear a field to go back to the studio's.</div>
+      ${field("face", "Face · tags", 2, !anima)}
+      ${field("pose", "Pose · tags", 2, !anima)}
+      ${field("prose", "Anima · plain sentence", 4, anima)}
+      ${proseBehind(next) ? html`<div class="sec-note words-warn">The tags changed but the sentence didn't — rewrite it too, or on Anima this square is still drawn the old way.</div>` : nothing}
+      <div class="words-actions">
+        <button class="btn primary" ?disabled=${this.wordsSaving} @click=${() => void this.saveWords(id, next)}>Save</button>
+        <button class="btn" ?disabled=${this.wordsSaving || !change} title="Back to the studio's words for this square"
+          @click=${() => void this.saveWords(id, undefined)}>
+          <span class="material-symbols-rounded" style="font-size:17px;">restart_alt</span>Studio's words</button>
+        <button class="btn" ?disabled=${this.wordsSaving} @click=${() => { this.wordsDraftId = ""; this.wordsDraft = null; }}>Cancel</button>
+      </div>
+    </div>`;
+  }
+
+  /** Keeps one square's rewrite, or drops it, and closes the editor. A square already
+      drawn keeps its picture: the new words are for its next one. */
+  private async saveWords(id: string, change: Partial<SquareWords> | undefined) {
+    this.wordsSaving = true;
+    try {
+      const saved = await api.putLibbySpriteWords(withChange(this.spriteWords, id, change));
+      this.spriteWords = saved.words ?? {};
+      this.wordsDraftId = "";
+      this.wordsDraft = null;
+      this.showToast(change ? "Wording saved — redo the square to draw it with the new words." : "Back to the studio's words.");
+    } catch (e) {
+      this.showToast(`Couldn't save the wording: ${(e as Error).message}`);
+    } finally {
+      this.wordsSaving = false;
     }
   }
 
@@ -6623,8 +6703,9 @@ export class OppaiImageGen extends LitElement {
         </div>
         <div class="focus-about">
           <div class="focus-desc">${readsProse(this.pickedModel)
-            ? (activity ?? face)?.prose ?? nothing
-            : activity ? `${activity.face}; ${activity.pose}.` : face ? `${face.face}; ${face.pose}.` : nothing}</div>
+            ? this.squareWordsOf(slot.emotion).prose
+            : `${this.squareWordsOf(slot.emotion).face}; ${this.squareWordsOf(slot.emotion).pose}.`}</div>
+          ${this.renderWordsEditor(slot.emotion, activity?.label ?? face?.label ?? slot.emotionLabel, isMisc)}
           ${shot ? html`<div class="focus-meta">
             <span title="Seed"><span class="material-symbols-rounded" style="font-size:14px;">casino</span>${shot.seed}</span>
             ${shot.info?.model ? html`<span title="Model"><span class="material-symbols-rounded" style="font-size:14px;">deployed_code</span>${shot.info.model}</span>` : nothing}
@@ -8930,6 +9011,9 @@ export class OppaiImageGen extends LitElement {
     if (this.studioLoaded) return;
     this.studioLoaded = true;
     try {
+      // The squares' own wording rides along, best effort: without it the studio's
+      // words stand, which is what a board with no rewrites uses anyway.
+      void api.libbySpriteWords().then((r) => { this.spriteWords = r.words ?? {}; }).catch(() => {});
       const [loadouts, outfits] = await Promise.all([api.libbyLoadouts(), api.libbyOutfits()]);
       this.loadouts = loadouts.loadouts;
       this.wardrobes = outfits.outfits;

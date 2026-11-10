@@ -1018,6 +1018,11 @@ export const studioStyles = css`
   .ref-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
   .ref-pane input[type="range"] { width: 100%; }
   .focus-about { display: grid; gap: 8px; padding-top: 10px; border-top: 1px solid var(--oppai-border); }
+  .words-editor { display: grid; gap: 6px; }
+  .words-editor textarea { width: 100%; box-sizing: border-box; }
+  .words-used { font-weight: 400; color: var(--oppai-primary); }
+  .words-warn { color: var(--oppai-warning, #e0a040); }
+  .words-actions { display: flex; flex-wrap: wrap; gap: 6px; }
   .focus-desc { font-size: 12px; line-height: 1.5; color: var(--oppai-text-dim); }
   /* Making the square move: a card of its own, its title a way to the Motion tab. */
   .motion-steps { display: grid; gap: 8px; padding: 10px; border-radius: 14px; border: 1px solid var(--oppai-border); background: var(--oppai-bg); }

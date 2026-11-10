@@ -764,6 +764,9 @@ func (s *Server) Handler() http.Handler {
 	// Outfit loadouts: the *recipe* an outfit is built from — which garment and colour
 	// sits in each equipment slot. Separate from the wardrobes above because one recipe
 	// can be rendered into several of them. See handlers_libby_loadouts.go.
+	// Each square's wording on the Sprites board, as rewritten: tags and Anima's sentence.
+	mux.HandleFunc("GET /api/libby/sprite-words", s.requireAuth(s.handleGetSpriteWords))
+	mux.HandleFunc("PUT /api/libby/sprite-words", s.requireAuth(s.handlePutSpriteWords))
 	mux.HandleFunc("GET /api/libby/loadouts", s.requireAuth(s.handleListLibbyLoadouts))
 	mux.HandleFunc("POST /api/libby/loadouts", s.requireAuth(s.handleSaveLibbyLoadout))
 	mux.HandleFunc("DELETE /api/libby/loadouts/{id}", s.requireAuth(s.handleDeleteLibbyLoadout))

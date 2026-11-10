@@ -72,7 +72,7 @@ type libbyActivity struct {
 	MinIntensity int `json:"minIntensity"`
 	// Auto marks a state the app sets rather than one she declares. There is one:
 	// typing. It used to be a state she could put herself into, which made no sense —
-	// "at a keyboard, typing back to them" is what she is doing whenever a reply is on
+	// "on her phone, typing back to them" is what she is doing whenever a reply is on
 	// its way, and the client already knows exactly when that is. So the slot is now
 	// the picture behind the typing indicator: shown while a reply is being written,
 	// with a speech bubble of dots beside it, and never chosen by a tag. The editor

@@ -4398,6 +4398,12 @@ export const api = {
     return `/api/libby/outfits/${encodeURIComponent(id)}/wip/${encodeURIComponent(emotion)}${query ? `?${query}` : ""}`;
   },
 
+  /** The Sprites board's rewrites of its squares' wording, by square id. */
+  libbySpriteWords: () => request<{ words: Record<string, { face?: string; pose?: string; prose?: string }> }>("/api/libby/sprite-words"),
+  /** Replaces the rewrites whole: a square left out goes back to the studio's words. */
+  putLibbySpriteWords: (words: Record<string, { face?: string; pose?: string; prose?: string }>) =>
+    request<{ words: Record<string, { face?: string; pose?: string; prose?: string }> }>("/api/libby/sprite-words",
+      { method: "PUT", body: JSON.stringify({ words }) }),
   /** Every square's stored clips, without their bytes. */
   libbyOutfitAnims: (id: string) =>
     request<{ anims: LibbyAnim[] }>(`/api/libby/outfits/${encodeURIComponent(id)}/anim`),

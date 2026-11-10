@@ -21,7 +21,7 @@ export interface MiscMotion {
 }
 
 export const MISC_MOTION: Readonly<Record<string, MiscMotion>> = {
-  typing: { seconds: 2, loop: true, motion: "Her fingers tap quickly at the keys" },
+  typing: { seconds: 2, loop: true, motion: "Her thumbs tap quickly across her phone's screen" },
   reading: { seconds: 4, loop: true, motion: "Her eyes move slowly along the lines of the page" },
   gaming: { seconds: 3, loop: true, motion: "Her thumbs work the buttons of the controller" },
   lounging: { seconds: 4, loop: true, motion: "She shifts lazily and settles back into the sofa" },
