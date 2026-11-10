@@ -57,6 +57,10 @@ type libbyAnim struct {
 	From      string `json:"from,omitempty"`
 	Bytes     int    `json:"bytes"`
 	UpdatedAt int64  `json:"updatedAt"`
+	// Approved says the clip was watched and kept: the Sprites studio cuts only
+	// approved clips, so a set is looked at between its clips and its cuts rather
+	// than cut wholesale. A redo files a new record and starts unapproved.
+	Approved bool `json:"approved,omitempty"`
 }
 
 func (s *Server) libbyAnimPath(id, emotion string, level int, stage string) string {
@@ -107,6 +111,11 @@ func (s *Server) writeLibbyAnim(id string, a libbyAnim, data []byte) error {
 	if err := os.WriteFile(s.libbyAnimPath(id, a.Emotion, a.Level, a.Stage), blob, 0o600); err != nil {
 		return err
 	}
+	return s.writeLibbyAnimMeta(id, a)
+}
+
+// writeLibbyAnimMeta writes a stage's record alone, over bytes already filed.
+func (s *Server) writeLibbyAnimMeta(id string, a libbyAnim) error {
 	raw, err := json.Marshal(a)
 	if err != nil {
 		return err
@@ -230,6 +239,41 @@ func (s *Server) handlePutLibbyOutfitAnim(w http.ResponseWriter, r *http.Request
 		a.Width, a.Height = src.record.Width, src.record.Height
 	}
 	if err := s.writeLibbyAnim(id, a, src.data); err != nil {
+		writeErr(w, http.StatusInternalServerError, "write failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, a)
+}
+
+type patchLibbyAnimReq struct {
+	Approved bool `json:"approved"`
+	// UpdatedAt is the take that was watched. A clip redone since is another take, and
+	// approving it unseen is what the approval exists to prevent: 409.
+	UpdatedAt int64 `json:"updatedAt"`
+}
+
+// handlePatchLibbyOutfitAnim approves a square's clip, or takes the approval back.
+func (s *Server) handlePatchLibbyOutfitAnim(w http.ResponseWriter, r *http.Request) {
+	id, emotion, level, stage, ok := s.libbyAnimSlot(w, r, true)
+	if !ok {
+		return
+	}
+	var req patchLibbyAnimReq
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	a, err := s.readLibbyAnim(id, emotion, level, stage)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "nothing animated for that square yet")
+		return
+	}
+	if req.UpdatedAt != a.UpdatedAt {
+		writeErr(w, http.StatusConflict, "this square has a newer clip than the one approved — watch it first")
+		return
+	}
+	a.Approved = req.Approved
+	if err := s.writeLibbyAnimMeta(id, *a); err != nil {
 		writeErr(w, http.StatusInternalServerError, "write failed")
 		return
 	}

@@ -47,6 +47,9 @@ func (s *Server) comfyChecks(ctx context.Context) []genCheck {
 		if running, pending, err := s.imagegen.ComfyQueue(ctx, base); err == nil {
 			add(comfyQueueCheck(running, pending))
 		}
+		if r := clipRecipeFor(set, true); r.built() {
+			add(comfyMemoryCheck(sys, r.models, s.comfyPlaces()))
+		}
 		if m, err := s.imagegen.ListComfyModels(ctx, base); err != nil {
 			add(genCheck{ID: "lists", Label: "Model lists", Detail: err.Error()})
 		} else {
@@ -142,6 +145,75 @@ func comfySystemLine(base string, sys imagegen.ComfySystem) string {
 		}
 	}
 	return line + "."
+}
+
+// renderRoom is roughly what Wan needs on the card beside its models to render a
+// sprite-sized clip and decode it, in bytes: CUDA's own share, the sampler's working
+// memory and the VAE decoding every frame.
+const renderRoom = 6 << 30
+
+// comfyMemoryCheck says whether a clip's models stay on the card from one clip to the
+// next. ComfyUI moving a model off between clips looks like OppaiLib unloading it, and
+// it is either ComfyUI's launch arguments, a pair too big to sit on the card together,
+// or a machine with too little memory to keep a model it moved off — which then comes
+// back off the disk, every clip. The cut is never it: that runs on OppaiLib's CPU.
+func comfyMemoryCheck(sys imagegen.ComfySystem, m settings.ClipModels, places imagegen.ComfyPlaces) genCheck {
+	c := genCheck{ID: "memory", Label: "Card memory", OK: true}
+	gb := func(n int64) string { return strconv.FormatFloat(float64(n)/(1<<30), 'f', 1, 64) + " GB" }
+	var notes []string
+	for _, a := range sys.Argv {
+		switch strings.ToLower(a) {
+		case "--disable-smart-memory":
+			c.OK = false
+			notes = append(notes, "ComfyUI was started with --disable-smart-memory, which moves every model off the card after each prompt, so every clip loads its models again. Take it out of ComfyUI's launch arguments.")
+		case "--cache-none":
+			c.OK = false
+			notes = append(notes, "ComfyUI was started with --cache-none, which forgets every model after each prompt, so every clip reads its files off the disk again. Take it out of ComfyUI's launch arguments.")
+		case "--lowvram", "--novram":
+			c.OK = false
+			notes = append(notes, fmt.Sprintf("ComfyUI was started with %s, which keeps models off the card and streams them in on every step. Take it out unless the card really is small.", a))
+		case "--cpu":
+			c.OK = false
+			notes = append(notes, "ComfyUI was started with --cpu, so clips render on the processor, not the card.")
+		}
+	}
+
+	folder := "diffusion_models"
+	if m.Checkpoint {
+		folder = "checkpoints"
+	}
+	dir := places[folder].Dir
+	pair := imagegen.ComfyFileSize(dir, m.Model)
+	if m.LowModel != "" && !m.Checkpoint && pair > 0 {
+		low := imagegen.ComfyFileSize(dir, m.LowModel)
+		if low == 0 {
+			pair = 0
+		} else {
+			pair += low
+		}
+	}
+	var vram int64
+	if len(sys.Devices) > 0 {
+		vram = sys.Devices[0].VRAMTotal
+	}
+	halves := "The model is"
+	if m.LowModel != "" && !m.Checkpoint {
+		halves = "The two halves are"
+	}
+	switch {
+	case pair == 0 || vram == 0:
+		notes = append(notes, "OppaiLib can't see the model files' sizes (the Wan models folder isn't set, or they aren't in it), so whether they fit on the card together is untested.")
+	case pair+renderRoom <= vram:
+		notes = append(notes, fmt.Sprintf("%s %s together and the card is %s, so they fit with room to render and stay loaded from clip to clip.", halves, gb(pair), gb(vram)))
+	default:
+		notes = append(notes, fmt.Sprintf("%s %s together on a %s card, which leaves too little to render in, so ComfyUI moves one off the card to make room for the other in every clip. That is ComfyUI, not OppaiLib or the cut, and from system memory it costs seconds; a smaller quantisation (a GGUF Q5 or Q6 pair, about 10–12 GB a half) keeps both on the card.", halves, gb(pair), gb(vram)))
+		if sys.RAMTotal > 0 && sys.RAMTotal < pair+(8<<30) {
+			c.OK = false
+			notes = append(notes, fmt.Sprintf("ComfyUI's machine has %s of memory, too little to keep the half it moved off as well, so that half is read off the disk again in every clip.", gb(sys.RAMTotal)))
+		}
+	}
+	c.Detail = strings.Join(notes, " ")
+	return c
 }
 
 func comfyQueueCheck(running, pending int) genCheck {
@@ -258,7 +330,7 @@ func comfyBuiltCheck(c genCheck, m settings.ClipModels, lists imagegen.ComfyMode
 	// The numbers left blank are settled for a speed file; ones typed in stand, and a
 	// distilled clip at a full-strength CFG is a slow smear of noise.
 	if clip.Distilled() && clip.CFG > 1.5 {
-		c.Detail = fmt.Sprintf("A speed model or LoRA (lightx2v, Lightning, a Rapid AIO) is picked, but CFG is set to %s — it wants 4 steps at CFG 1, and at this it comes out burned and takes many times as long. Blank steps and CFG and save.",
+		c.Detail = fmt.Sprintf("A speed model or LoRA (lightx2v, Lightning, Lightspeed, a Rapid AIO) is picked, but CFG is set to %s — it wants 4 steps at CFG 1, and at this it comes out burned and takes many times as long. Blank steps and CFG and save.",
 			strconv.FormatFloat(clip.CFG, 'f', -1, 64))
 		return c
 	}

@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/youruser/oppailib/internal/imagegen"
 	"github.com/youruser/oppailib/internal/settings"
 )
 
@@ -182,5 +183,50 @@ func TestAnUnreachableComfyIsExplainedByHowItFailed(t *testing.T) {
 	}
 	if got := comfyUnreachable("http://localhost:8188", errors.New("connect: connection refused")); !strings.Contains(got, "OppaiLib's own container") {
 		t.Errorf("localhost → %q", got)
+	}
+}
+
+func TestTheMemoryRowSaysWhyAClipsModelsLeaveTheCard(t *testing.T) {
+	dir := t.TempDir()
+	// Sparse files: their size is what is read, not their bytes.
+	sized := func(name string, gb int64) {
+		f, err := os.Create(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := f.Truncate(gb << 30); err != nil {
+			t.Fatal(err)
+		}
+		f.Close()
+	}
+	sized("high.safetensors", 14)
+	sized("low.safetensors", 14)
+	sized("high_q5.gguf", 10)
+	sized("low_q5.gguf", 10)
+	places := imagegen.ComfyPlaces{"diffusion_models": {Dir: dir}}
+	card := func(argv []string, ramGB int64) imagegen.ComfySystem {
+		return imagegen.ComfySystem{Argv: argv, RAMTotal: ramGB << 30,
+			Devices: []imagegen.ComfyDevice{{Name: "cuda:0 Tesla V100-SXM2-32GB", VRAMTotal: 32 << 30}}}
+	}
+	pair := settings.ClipModels{Model: "high.safetensors", LowModel: "wan/low.safetensors"}
+	small := settings.ClipModels{Model: "high_q5.gguf", LowModel: "low_q5.gguf"}
+
+	for _, c := range []struct {
+		name   string
+		sys    imagegen.ComfySystem
+		models settings.ClipModels
+		ok     bool
+		saying string
+	}{
+		{"a 14 GB pair on 32 GB swaps halves, from memory", card(nil, 64), pair, true, "moves one off the card"},
+		{"and from the disk when memory is short", card(nil, 32), pair, false, "read off the disk again"},
+		{"a Q5 pair stays put", card(nil, 32), small, true, "stay loaded from clip to clip"},
+		{"a launch flag that unloads every prompt", card([]string{"main.py", "--listen", "--disable-smart-memory"}, 64), small, false, "--disable-smart-memory"},
+		{"files it can't see", card(nil, 64), settings.ClipModels{Model: "elsewhere.safetensors"}, true, "untested"},
+	} {
+		got := comfyMemoryCheck(c.sys, c.models, places)
+		if got.OK != c.ok || !strings.Contains(got.Detail, c.saying) {
+			t.Errorf("%s: %+v", c.name, got)
+		}
 	}
 }

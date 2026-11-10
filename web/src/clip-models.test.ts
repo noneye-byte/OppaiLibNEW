@@ -41,6 +41,8 @@ test("a speed LoRA, or a merge with one in, is known by its name", () => {
   assert.ok(isSpeedFile("Wan2.2-Lightning_I2V-A14B-4steps-lora_HIGH_fp16.safetensors"));
   assert.ok(isSpeedFile("lightx2v_I2V_14B_480p_cfg_step_distill_rank64_bf16.safetensors"));
   assert.ok(!isSpeedFile("wan_bounce_v2_14steps.safetensors"));
+  assert.ok(isSpeedFile("DasiwaWAN22I2V14BLightspeed_snatchkissHighV9.safetensors"));
+  assert.ok(isSpeedFile("dasiwa-wan22-light-speed-low.gguf"));
 });
 
 const installed = {

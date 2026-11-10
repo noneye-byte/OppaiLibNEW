@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -53,6 +54,38 @@ func TestLibbyOutfitAnims(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Fatalf("manifest lacks %s: %s", want, body)
 		}
+	}
+
+	// A clip is filed unapproved, approved only as the take that was watched, and a
+	// redo starts unapproved again.
+	rec = do(t, h, token, "GET", base, "")
+	var listed struct {
+		Anims []libbyAnim `json:"anims"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &listed)
+	if len(listed.Anims) != 1 || listed.Anims[0].Approved {
+		t.Fatalf("a new clip is approved already: %+v", listed.Anims)
+	}
+	took := listed.Anims[0].UpdatedAt
+	if rec = do(t, h, token, "PATCH", base+"/happy?level=2&stage=clip", fmt.Sprintf(`{"approved":true,"updatedAt":%d}`, took-1)); rec.Code != http.StatusConflict {
+		t.Fatalf("approving another take: %d, want 409", rec.Code)
+	}
+	if rec = do(t, h, token, "PATCH", base+"/happy?level=2&stage=clip", fmt.Sprintf(`{"approved":true,"updatedAt":%d}`, took)); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"approved":true`) {
+		t.Fatalf("approve: %d %s", rec.Code, rec.Body)
+	}
+	if rec = do(t, h, token, "GET", base, ""); !strings.Contains(rec.Body.String(), `"approved":true`) {
+		t.Fatalf("approval not kept: %s", rec.Body)
+	}
+	if rec = do(t, h, token, "PATCH", base+"/sad?level=2&stage=clip", `{"approved":true,"updatedAt":1}`); rec.Code != http.StatusNotFound {
+		t.Fatalf("approving nothing: %d, want 404", rec.Code)
+	}
+	redo := s.genCache.put(&genPreview{data: []byte("0123456789webm"), mime: "video/webm", seed: 78})
+	if rec = do(t, h, token, "PUT", base+"/happy?level=2&stage=clip", `{"id":"`+redo+`","from":"seed-42"}`); rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), `"approved"`) {
+		t.Fatalf("a redo kept the approval: %d %s", rec.Code, rec.Body)
+	}
+	// Put the first take back, for what follows.
+	if rec = do(t, h, token, "PUT", base+"/happy?level=2&stage=clip", `{"id":"`+clip+`","from":"seed-42","recipe":"4 steps · CFG 1"}`); rec.Code != http.StatusOK {
+		t.Fatalf("put clip again: %d %s", rec.Code, rec.Body)
 	}
 
 	// It plays with ranges, which is how a video element asks for it.

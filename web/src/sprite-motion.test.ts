@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-const { canMake, clipTake, nextStep, pictureTake, squareSteps, stepCounts, stepWork, stepsFor } = await import("./sprite-motion.ts");
+const { canMake, clipTake, nextStep, nextWaiting, pictureTake, setStage, squareSteps, stageCounts, stepWork, stepsFor } = await import("./sprite-motion.ts");
 
 const clipOf = (picture: string, seed = 5, updatedAt = 100) => ({ seed, updatedAt, from: picture });
 
@@ -63,27 +63,74 @@ test("a square whose clip and cut are both of its picture is done", () => {
 });
 
 test("each step of a run works only through squares that have what it is made of", () => {
-  const clip = clipOf("seed-1");
+  const clip = { ...clipOf("seed-1"), approved: true };
   const squares = [
     { picture: "" },
-    { picture: "seed-1" },
-    { picture: "seed-1", clip },
-    { picture: "seed-1", clip, cut: { seed: 5, updatedAt: 1, from: clipTake(clip) } },
-    { picture: "seed-2", clip },
+    { picture: "seed-1", reviewed: true },
+    { picture: "seed-1", reviewed: true, clip },
+    { picture: "seed-1", reviewed: true, clip, cut: { seed: 5, updatedAt: 1, from: clipTake(clip) } },
+    { picture: "seed-2", reviewed: true, clip },
   ];
   assert.deepEqual(stepWork("picture", squares), [0]);
   assert.deepEqual(stepWork("clip", squares), [1, 4]);
   assert.deepEqual(stepWork("cut", squares), [2]);
 });
 
-test("the counts are of squares fresh at each step", () => {
+test("a run of clips waits for each still's review, and a run of cuts for each clip's", () => {
   const clip = clipOf("seed-1");
-  const counts = stepCounts([
-    { picture: "seed-1", clip, cut: { seed: 5, updatedAt: 1, from: clipTake(clip) } },
-    { picture: "seed-2", clip },
+  const squares = [
+    { picture: "seed-1" },
+    { picture: "seed-1", reviewed: true, clip },
+    { picture: "seed-1", reviewed: true, clip: { ...clip, approved: true } },
+  ];
+  assert.deepEqual(stepWork("clip", squares), [], "an unreviewed still is not animated");
+  assert.deepEqual(stepWork("cut", squares), [2], "an unapproved clip is not cut");
+});
+
+test("an approval belongs to the clip it was given, not the square", () => {
+  // The picture was redone: the approved clip is of the old one.
+  const sq = { picture: "seed-2", reviewed: true, clip: { ...clipOf("seed-1"), approved: true } };
+  assert.equal(setStage(sq), "clip");
+  assert.deepEqual(stepWork("cut", [sq]), []);
+});
+
+test("a square waits at each stage in turn", () => {
+  const clip = clipOf("seed-1");
+  const kept = { ...clip, approved: true };
+  assert.equal(setStage({ picture: "" }), "picture");
+  assert.equal(setStage({ picture: "seed-1" }), "review");
+  assert.equal(setStage({ picture: "seed-1", reviewed: true }), "clip");
+  assert.equal(setStage({ picture: "seed-1", reviewed: true, clip }), "approve");
+  assert.equal(setStage({ picture: "seed-1", reviewed: true, clip: kept }), "cut");
+  assert.equal(setStage({ picture: "seed-1", reviewed: true, clip: kept, cut: { seed: 5, updatedAt: 1, from: clipTake(kept) } }), "done");
+});
+
+test("the next square to review comes after the one open, round to the start", () => {
+  const clip = clipOf("seed-1");
+  const squares = [
+    { picture: "seed-1", reviewed: true, clip },
+    { picture: "seed-1" },
+    { picture: "seed-1", reviewed: true, clip },
+    { picture: "seed-1" },
+  ];
+  assert.equal(nextWaiting("review", squares), 1);
+  assert.equal(nextWaiting("review", squares, 1), 3);
+  assert.equal(nextWaiting("review", squares, 3), 1);
+  assert.equal(nextWaiting("approve", squares, 0), 2);
+  assert.equal(nextWaiting("approve", squares, 2), 0);
+  assert.equal(nextWaiting("approve", [{ picture: "" }]), -1);
+});
+
+test("the counts are of squares fresh at each stage", () => {
+  const clip = clipOf("seed-1");
+  const kept = { ...clip, approved: true };
+  const counts = stageCounts([
+    { picture: "seed-1", reviewed: true, clip: kept, cut: { seed: 5, updatedAt: 1, from: clipTake(kept) } },
+    { picture: "seed-2", reviewed: true, clip },
+    { picture: "seed-1", clip },
     { picture: "" },
   ]);
-  assert.deepEqual(counts, { picture: 2, clip: 1, cut: 1 });
+  assert.deepEqual(counts, { picture: 3, review: 2, clip: 2, approve: 1, cut: 1 });
 });
 
 test("a picture's take changes with its seed, its recipe, or a new upload of one's own", () => {

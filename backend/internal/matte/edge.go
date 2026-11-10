@@ -204,7 +204,8 @@ const (
 // about a megapixel.
 type edgeWork struct {
 	class []uint8
-	depth []uint8 // rings in from a doubted pixel, 1..coreInset; 0 is deeper
+	depth []uint8 // rings in from a doubted pixel, 1..coreInset (despillReach on a screen); 0 is deeper
+	plate []float32 // a screen's colour at each pixel, three to a pixel (screen.go)
 	src   []int32 // the nearest pixel certainly hers, -1 for none in reach
 	alpha []uint8 // the last frame's alpha, for steadyAlpha
 	queue []int32
@@ -240,9 +241,14 @@ func (e *edgeWork) composeEdge(dst, rgb []byte, mask []uint8, w, h int) {
 	n := w * h
 	e.size(n)
 	backdrop, plateNear, flat := backdropOf(rgb, mask)
-	e.classify(rgb, mask, backdrop, plateNear, flat, w, h)
-	e.inset(w, h)
+	if ch := screenChannel(backdrop); ch >= 0 {
+		e.composeScreen(dst, rgb, mask, w, h, ch)
+		return
+	}
+	e.classify(mask, func(i int) bool { return flat && near(rgb[i*3:i*3+3], backdrop, plateNear) }, flat, w, h)
+	e.inset(w, h, coreInset)
 	e.spread(dst, rgb, w, h)
+	back := [3]float64{float64(backdrop[0]), float64(backdrop[1]), float64(backdrop[2])}
 
 	for i := 0; i < n; i++ {
 		m := mask[i]
@@ -252,15 +258,15 @@ func (e *edgeWork) composeEdge(dst, rgb []byte, mask []uint8, w, h int) {
 			a, own = edgeAlpha(m), true
 		case pxSure:
 			a, own = 255, true
-			if flat && e.depth[i] != 0 && !e.besideWhite(i, w, h) {
-				if t, ok := e.mixed(rgb, i, backdrop); ok {
+			if flat && e.inBand(i) && !e.besideWhite(i, w, h) {
+				if t, ok := e.mixed(rgb, i, back, mixResidual, mixLow); ok {
 					a, own = t, t == 255
 				}
 			}
 		case pxUnsure:
 			a = edgeAlpha(m)
 			if flat && !e.besideWhite(i, w, h) {
-				if t, ok := e.mixed(rgb, i, backdrop); ok {
+				if t, ok := e.mixed(rgb, i, back, mixResidual, mixLow); ok {
 					a = min(t, vote(m))
 				}
 			}
@@ -273,15 +279,16 @@ func (e *edgeWork) composeEdge(dst, rgb []byte, mask []uint8, w, h int) {
 	}
 }
 
-// classify reads each pixel as the mask and its colour say. A backdrop-coloured patch
-// is judged whole, by the model's average over it: her white trim is sure in the
-// model's eyes all the way across, and a gap between strands is not.
-func (e *edgeWork) classify(rgb []byte, mask []uint8, backdrop [3]byte, plateNear int, flat bool, w, h int) {
+// classify reads each pixel as the mask and its colour say; plate says whether a
+// pixel is the backdrop's colour. A backdrop-coloured patch is judged whole, by the
+// model's average over it: her white trim is sure in the model's eyes all the way
+// across, and a gap between strands is not.
+func (e *edgeWork) classify(mask []uint8, plate func(int) bool, flat bool, w, h int) {
 	for i, m := range mask {
 		switch {
 		case m <= clearBelow:
 			e.class[i] = pxClear
-		case flat && near(rgb[i*3:i*3+3], backdrop, plateNear):
+		case flat && plate(i):
 			e.class[i] = pxPlate
 		case m >= sureHer || !flat && m >= edgeFull:
 			e.class[i] = pxSure
@@ -318,9 +325,10 @@ func (e *edgeWork) classify(rgb []byte, mask []uint8, backdrop [3]byte, plateNea
 	}
 }
 
-// inset marks the pixels within coreInset of one that is not certainly her: the band
-// that may be part backdrop, and so is not where her colour is taken from.
-func (e *edgeWork) inset(w, h int) {
+// inset marks the pixels within rings of one that is not certainly her. The first
+// coreInset are the band that may be part backdrop, and so is not where her colour is
+// taken from; a screen's cut looks further in, for its colour on her (screen.go).
+func (e *edgeWork) inset(w, h, rings int) {
 	e.queue = e.queue[:0]
 	for i, c := range e.class {
 		e.depth[i] = 0
@@ -328,7 +336,7 @@ func (e *edgeWork) inset(w, h int) {
 			e.queue = append(e.queue, int32(i))
 		}
 	}
-	for ring := uint8(1); ring <= coreInset && len(e.queue) > 0; ring++ {
+	for ring := uint8(1); int(ring) <= rings && len(e.queue) > 0; ring++ {
 		e.next = e.next[:0]
 		for _, at := range e.queue {
 			neighbours(int(at), w, h, func(j int) {
@@ -351,7 +359,7 @@ func (e *edgeWork) spread(dst, rgb []byte, w, h int) {
 	e.queue = e.queue[:0]
 	for i, c := range e.class {
 		e.src[i] = -1
-		if c != pxSure || e.depth[i] != 0 {
+		if c != pxSure || e.inBand(i) {
 			continue
 		}
 		e.src[i] = int32(i)
@@ -389,11 +397,16 @@ func (e *edgeWork) spread(dst, rgb []byte, w, h int) {
 	}
 }
 
+// inBand says whether pixel i is within coreInset of a pixel that is not certainly
+// her: close enough to the edge to be part backdrop.
+func (e *edgeWork) inBand(i int) bool { return e.depth[i] != 0 && e.depth[i] <= coreInset }
+
 // mixed is how much of pixel i is her, read as a mix of the backdrop and the colour of
 // the nearest pixel certainly hers. It is not a mix (ok false) when there is no such
 // pixel in reach, when that colour is too near the backdrop's to tell the two apart, or
-// when the pixel lies off the line between them: then it is a colour of hers.
-func (e *edgeWork) mixed(rgb []byte, i int, backdrop [3]byte) (uint8, bool) {
+// when the pixel lies more than residual off the line between them: then it is a
+// colour of hers. A share of her under low counts as none.
+func (e *edgeWork) mixed(rgb []byte, i int, backdrop [3]float64, residual, low float64) (uint8, bool) {
 	s := e.src[i]
 	if s < 0 {
 		return 0, false
@@ -401,8 +414,8 @@ func (e *edgeWork) mixed(rgb []byte, i int, backdrop [3]byte) (uint8, bool) {
 	var fb, cb [3]float64
 	contrast, dot, den := 0.0, 0.0, 0.0
 	for c := 0; c < 3; c++ {
-		fb[c] = float64(rgb[int(s)*3+c]) - float64(backdrop[c])
-		cb[c] = float64(rgb[i*3+c]) - float64(backdrop[c])
+		fb[c] = float64(rgb[int(s)*3+c]) - backdrop[c]
+		cb[c] = float64(rgb[i*3+c]) - backdrop[c]
 		contrast += math.Abs(fb[c])
 		dot += cb[c] * fb[c]
 		den += fb[c] * fb[c]
@@ -415,10 +428,10 @@ func (e *edgeWork) mixed(rgb []byte, i int, backdrop [3]byte) (uint8, bool) {
 	for c := 0; c < 3; c++ {
 		off += math.Abs(cb[c] - t*fb[c])
 	}
-	if off > mixResidual {
+	if off > max(residual, mixResidual) {
 		return 0, false
 	}
-	share := min(max((t-mixLow)/(mixHigh-mixLow), 0), 1)
+	share := min(max((t-low)/(mixHigh-low), 0), 1)
 	return uint8(share*255 + 0.5), true
 }
 

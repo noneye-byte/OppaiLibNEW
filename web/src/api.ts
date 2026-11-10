@@ -2829,6 +2829,8 @@ export interface LibbyAnim {
   from?: string;
   bytes: number;
   updatedAt: number;
+  /** A clip watched and kept: only approved clips are cut. A redo starts unapproved. */
+  approved?: boolean;
 }
 
 /**
@@ -4405,6 +4407,13 @@ export const api = {
     request<LibbyAnim>(
       `/api/libby/outfits/${encodeURIComponent(id)}/anim/${encodeURIComponent(emotion)}?stage=${stage}${level ? `&level=${level}` : ""}`,
       { method: "PUT", body: JSON.stringify(body) },
+    ),
+  /** Approves a square's clip, or takes the approval back. updatedAt is the take that
+      was watched; a clip redone since answers 409. */
+  approveLibbyOutfitAnim: (id: string, emotion: string, level: number, approved: boolean, updatedAt: number) =>
+    request<LibbyAnim>(
+      `/api/libby/outfits/${encodeURIComponent(id)}/anim/${encodeURIComponent(emotion)}?stage=clip${level ? `&level=${level}` : ""}`,
+      { method: "PATCH", body: JSON.stringify({ approved, updatedAt }) },
     ),
   /** Throws a square's clip away, and its cut with it; or only the cut. */
   deleteLibbyOutfitAnim: (id: string, emotion: string, level: number, stage?: LibbyAnim["stage"]) =>

@@ -256,6 +256,7 @@ func TestASpeedFileLeftAtBlankNumbersSamplesFourStepsAtCFGOne(t *testing.T) {
 		{"lightx2v", WanClip{Loras: []WanLora{{Name: "wan/lightx2v_I2V_14B_480p_cfg_step_distill_rank64.safetensors", Weight: 1}}}, true},
 		{"a Rapid AIO merge", WanClip{Model: "wan2.2-rapid-mega-aio-v10.safetensors", Checkpoint: true}, true},
 		{"an AIO by its name alone", WanClip{Model: "Wan22_I2V_AIO_fp8.safetensors", Checkpoint: true}, true},
+		{"a DaSiWa Lightspeed pair", WanClip{Model: "DasiwaWAN22I2V14BLightspeed_snatchkissHighV9.safetensors", LowModel: "DasiwaWAN22I2V14BLightspeed_snatchkissLowV9.safetensors"}, true},
 		{"a speed LoRA turned off", WanClip{Loras: []WanLora{{Name: "lightx2v.safetensors", Weight: 0}}}, false},
 		{"the plain pair", wan22Pair, false},
 		{"a word that only looks fast", WanClip{Loras: []WanLora{{Name: "radio_14steps_chaos.safetensors", Weight: 1}}}, false},

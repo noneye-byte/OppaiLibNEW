@@ -13,6 +13,7 @@ import {
 import { MOTION_PRESETS, hasPhrase, isShowcase, togglePhrase, toggleShowcase } from "../motion-presets.js";
 import { comfyKindOf, noteFor, parseTriggers, startWeight, withNegative, withoutNegative, withTriggers, withoutTriggers } from "../clip-notes.js";
 import { GALLERY_DRAG_TYPE } from "./imagegen-gallery.js";
+import type { SpriteScreen } from "../sprite-screen.js";
 
 /**
  * The Video studio: a few seconds of moving picture, from words or from a still.
@@ -205,9 +206,11 @@ export interface ClipForm {
 
 /** How the Sprites studio animates a square: always from its picture, and by default
     the showcase — she stays put and comes alive — looping, short enough to sit behind
-    the interface. `enlarge` runs the clip through an upscale before its cut. */
+    the interface. `enlarge` runs the clip through an upscale before its cut, and
+    `screen` is what she stands on in it (sprite-screen.ts). */
 export interface SpriteClipForm extends ClipForm {
   enlarge: boolean;
+  screen: SpriteScreen;
 }
 
 const SPRITE_FORM_KEY = "oppai.sprite.motion.v1";
@@ -216,6 +219,7 @@ function defaultSpriteForm(): SpriteClipForm {
   return {
     from: "image", prompt: toggleShowcase(""), negative: "", aspect: "portrait", long: 832, seconds: 3, fps: 16, steps: 20,
     variations: 1, keepSeed: false, makeLoop: true, recipes: {}, loraQuery: "", upscaler: "", upscaleBy: 2, enlarge: false,
+    screen: "green",
   };
 }
 
@@ -1575,8 +1579,10 @@ export class OppaiVideoStudio extends LitElement {
     const size = this.size();
     return html`<aside class="inspector">
       <div class="ins-scroll">
-        <div class="note">Each square is animated from its own picture, on the flat backdrop it was drawn on —
-          which is what lets its background be cut off cleanly afterwards.</div>
+        <div class="note">${spriteForm.screen === "drawn"
+          ? "Each square is animated from its own picture, on the flat backdrop it was drawn on — which is what lets its background be cut off afterwards."
+          : `Each square is animated from its reviewed cutout, standing on a ${spriteForm.screen} screen — which is what lets its background be cut off cleanly afterwards.`}</div>
+        ${this.renderScreen()}
         ${this.renderMotion(true)}
         ${this.renderModel()}
         ${this.takes("loras") ? this.renderLoras() : nothing}
@@ -1698,6 +1704,21 @@ export class OppaiVideoStudio extends LitElement {
           @change=${(e: Event) => this.setForm("keepSeed", (e.target as HTMLInputElement).checked)} />
         ${sprites ? "Every square on the selected square's seed" : "Keep the selected clip's seed"}${keptSeed ? html` <span style="opacity:.7;font-variant-numeric:tabular-nums">· ${keptSeed}</span>` : nothing}
       </label>` : nothing}`;
+  }
+
+  /** What a sprite stands on in its clip: a screen the cut keys out, or the backdrop
+      it was drawn on. A screen needs the square's cutout reviewed first. */
+  private renderScreen() {
+    const f = spriteForm;
+    const choices: [SpriteScreen, string, string][] = [
+      ["green", "Green screen", "Animated on a flat green screen, which the cut takes off cleanly — her whites and pale skin are nothing like it. Needs the square's cutout reviewed."],
+      ["blue", "Blue screen", "As green, for an outfit or eyes that are green themselves. Needs the square's cutout reviewed."],
+      ["drawn", "As drawn", "Animated on the white or black she was drawn on. Her whites are that colour too, so the cut has to guess at them."],
+    ];
+    return html`<div class="k">Backdrop</div>
+      <div class="seg" role="group" aria-label="What she stands on in the clip">${choices.map(([id, label, title]) => html`<button
+        class=${f.screen === id ? "on" : ""} title=${title} aria-pressed=${f.screen === id ? "true" : "false"}
+        @click=${() => this.setForm("screen", id)}>${label}</button>`)}</div>`;
   }
 
   /** A sprite's clip enlarged before its cut: what the stage's Upscale does to one

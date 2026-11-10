@@ -1025,8 +1025,11 @@ export const studioStyles = css`
   .ms-head .material-symbols-rounded { font-size: 16px; color: var(--oppai-primary-bright, var(--oppai-primary)); }
   .ms-head .link-btn { margin-left: auto; letter-spacing: 0; text-transform: none; font-weight: 650; }
   .ms-length { padding: 1px 7px; border-radius: 999px; background: var(--oppai-surface-2); letter-spacing: 0; text-transform: none; font-weight: 650; color: var(--oppai-text); }
-  .ms-actions { display: flex; align-items: center; gap: 6px; }
+  .ms-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
   .ms-actions .btn { flex: 1; justify-content: center; min-width: 0; white-space: nowrap; padding-inline: 8px; }
+  /* Approving is the decision a clip's review is for, so it gets a line of its own over
+     Redo and Cut rather than a third of one: three buttons don't fit the panel. */
+  .ms-actions .btn.approve { flex: 1 0 100%; order: -1; }
   .ms-busy { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px 8px; font-size: 11.5px; color: var(--oppai-text-muted); font-variant-numeric: tabular-nums; }
   .ms-busy b { color: var(--oppai-text); }
   .ms-busy .sp-bar { grid-column: 1; }

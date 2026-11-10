@@ -758,6 +758,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/libby/outfits/{id}/anim", s.requireAuth(s.handleListLibbyOutfitAnims))
 	mux.HandleFunc("GET /api/libby/outfits/{id}/anim/{emotion}", s.requireAuth(s.handleGetLibbyOutfitAnim))
 	mux.HandleFunc("PUT /api/libby/outfits/{id}/anim/{emotion}", s.requireAuth(s.handlePutLibbyOutfitAnim))
+	mux.HandleFunc("PATCH /api/libby/outfits/{id}/anim/{emotion}", s.requireAuth(s.handlePatchLibbyOutfitAnim))
 	mux.HandleFunc("DELETE /api/libby/outfits/{id}/anim/{emotion}", s.requireAuth(s.handleDeleteLibbyOutfitAnim))
 
 	// Outfit loadouts: the *recipe* an outfit is built from — which garment and colour

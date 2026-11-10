@@ -114,8 +114,11 @@ func wan22Latent(vae string) bool {
 // speedName is the files that distil Wan down to a handful of steps: the lightx2v,
 // Lightning and CausVid LoRAs, and the merges with one baked in — Civitai's "Rapid"
 // all-in-ones, which is most of what a Wan AIO is, since a one-file fast clip is the
-// point of one. The settings screen reads LoRAs the same way (web/src/clip-models.ts).
-var speedName = regexp.MustCompile(`(?i)lightx2v|lightning|causvid|distill|rapid|fastwan|(^|[^a-z])aio([^a-z]|$)|(^|[^0-9])4[\s_-]?steps?`)
+// point of one, and DaSiWa's "Lightspeed" pairs, which its page runs at 4 steps and
+// CFG 1. Missing that one ran every clip on it at 20 steps and CFG 3.5: forty passes
+// of a 14B model where four were wanted. The settings screen reads LoRAs the same way
+// (web/src/clip-models.ts).
+var speedName = regexp.MustCompile(`(?i)lightx2v|lightning|light[\s_-]?speed|causvid|distill|rapid|fastwan|(^|[^a-z])aio([^a-z]|$)|(^|[^0-9])4[\s_-]?steps?`)
 
 // IsSpeedFile reports whether a model or LoRA, by its name, is one of those.
 func IsSpeedFile(name string) bool { return speedName.MatchString(name) }

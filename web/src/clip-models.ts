@@ -48,7 +48,7 @@ export function loraTwin(name: string, offered: readonly string[]): string {
     Wan's usual 20 and 3.5 it burns the clip. The server reads names the same way
     (imagegen/comfy_wan.go) to settle the numbers left blank. */
 export function isSpeedFile(name: string): boolean {
-  return /lightx2v|lightning|causvid|distill|rapid|fastwan|(?<![a-z])aio(?![a-z])|(?<![0-9])4[\s_-]?steps?/i.test(name);
+  return /lightx2v|lightning|light[\s_-]?speed|causvid|distill|rapid|fastwan|(?<![a-z])aio(?![a-z])|(?<![0-9])4[\s_-]?steps?/i.test(name);
 }
 
 /** The steps and CFG a speed LoRA wants. */

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -18,6 +19,10 @@ import (
 type ComfySystem struct {
 	Version string
 	Devices []ComfyDevice
+	// Argv is how ComfyUI was started, and RAMTotal the machine's memory in bytes:
+	// between them they say whether a clip's models can stay where they were put.
+	Argv     []string
+	RAMTotal int64
 }
 
 // ComfyDevice is one card (or the CPU) ComfyUI runs on, its memory in bytes.
@@ -32,7 +37,9 @@ type ComfyDevice struct {
 func (c *Client) ComfySystemStats(ctx context.Context, base string) (ComfySystem, error) {
 	var raw struct {
 		System struct {
-			Version string `json:"comfyui_version"`
+			Version  string   `json:"comfyui_version"`
+			Argv     []string `json:"argv"`
+			RAMTotal int64    `json:"ram_total"`
 		} `json:"system"`
 		Devices []struct {
 			Name      string `json:"name"`
@@ -43,7 +50,7 @@ func (c *Client) ComfySystemStats(ctx context.Context, base string) (ComfySystem
 	if err := c.getJSON(ctx, comfyBase(base)+"/system_stats", &raw); err != nil {
 		return ComfySystem{}, err
 	}
-	out := ComfySystem{Version: raw.System.Version}
+	out := ComfySystem{Version: raw.System.Version, Argv: raw.System.Argv, RAMTotal: raw.System.RAMTotal}
 	for _, d := range raw.Devices {
 		out.Devices = append(out.Devices, ComfyDevice{Name: d.Name, VRAMTotal: d.VRAMTotal, VRAMFree: d.VRAMFree})
 	}
@@ -144,3 +151,29 @@ func ComfyBaseName(listed string) string {
 }
 
 func comfyBase(base string) string { return strings.TrimRight(strings.TrimSpace(base), "/") }
+
+// ComfyFileSize is the size in bytes of a file as ComfyUI lists it (a path under the
+// folder, in either separator), looked for in dir: at that path first, then by its
+// own name anywhere under it. 0 when it isn't there.
+func ComfyFileSize(dir, listed string) int64 {
+	if dir == "" || listed == "" {
+		return 0
+	}
+	rel := filepath.FromSlash(strings.ReplaceAll(listed, `\`, "/"))
+	if st, err := os.Stat(filepath.Join(dir, rel)); err == nil && !st.IsDir() {
+		return st.Size()
+	}
+	want, size := ComfyBaseName(listed), int64(0)
+	_ = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || size > 0 {
+			return filepath.SkipDir
+		}
+		if !d.IsDir() && d.Name() == want {
+			if info, err := d.Info(); err == nil {
+				size = info.Size()
+			}
+		}
+		return nil
+	})
+	return size
+}
