@@ -105,7 +105,7 @@ import "./imagegen-detailer.js";
 import "./gpu-switch.js";
 import "./model-civitai.js";
 import { fragmentWords, joinPrompt, readsProse } from "../fragment-words.js";
-import { pubicProse, spriteSquareProse } from "../sprite-prose.js";
+import { pubicProse, spriteSquareProse, type SpriteBackdrop } from "../sprite-prose.js";
 import {
   animatePicture, clipFormProblem, clipParamsFor, clipsRunning, comfyListsReady, followClip, newClipJobId, onClipKept, onClipsChange,
   openGalleryClip, refreshComfyLists, spriteForm, toggleVideoDrawer, videoDrawerOpen, type ClipPicture, type GalleryClip,
@@ -554,7 +554,7 @@ export class OppaiImageGen extends LitElement {
       of thing that gets discovered four hours in. */
   @state() private outfitMiscBatch = false;
   @state() private outfitTier = 0;
-  @state() private outfitBackground: "black" | "white" = "white";
+  @state() private outfitBackground: SpriteBackdrop = "white";
   @state() private outfitUnderwearColor = "black";
   @state() private outfitPubicHair = false;
   @state() private outfitPubicHairColor = "dark brown";
@@ -2862,7 +2862,9 @@ export class OppaiImageGen extends LitElement {
     const undress = undressPrompt(this.resolvedGear(), undressLevel(heat), prose);
     const background = this.outfitBackground === "black"
       ? "perfectly solid pure black studio background, seamless black backdrop, background evenly lit with no texture"
-      : "perfectly solid pure white studio background, seamless white backdrop, background evenly lit with no texture";
+      : this.outfitBackground === "green"
+        ? "green background, simple background, perfectly solid chroma key green screen, seamless green backdrop, background evenly lit with no texture"
+        : "perfectly solid pure white studio background, seamless white backdrop, background evenly lit with no texture";
     // Peak is the nude level, so there is nothing for the hair to be beneath.
     const pubic = heat === OUTFIT_TIERS.length - 1
       ? this.outfitPubicHair
@@ -2879,7 +2881,7 @@ export class OppaiImageGen extends LitElement {
         undress: undress.prompt,
         pubic: heat === OUTFIT_TIERS.length - 1 ? pubicProse(this.outfitPubicHair, this.outfitPubicHairColor) : "",
         extra: this.outfitText,
-        backdrop: this.outfitBackground === "black" ? "black" : "white",
+        backdrop: this.outfitBackground,
       })
       : [
       "solo, one person, single subject",
@@ -2903,7 +2905,8 @@ export class OppaiImageGen extends LitElement {
         // of the MISC poses outright — half of them are defined by where her hands are.
         misc ? "" : "arms raised, hands above head, arms behind head, hands in hair, both hands near face",
         "detailed background, scenery, gradient background, patterned background, background shadows",
-        this.outfitBackground === "black" ? "white background" : "black background",
+        this.outfitBackground === "black" ? "white background"
+          : this.outfitBackground === "green" ? "white background, black background, grey background" : "black background",
         // Booru-trained checkpoints pair a blush or an open mouth with beads of sweat so
         // often that every heated square came back glistening. Nothing on the board
         // asks for it, so it is kept out of all of them.
@@ -3444,20 +3447,25 @@ export class OppaiImageGen extends LitElement {
     let backdrop = this.outfitBackground;
     try {
       const drawn = (JSON.parse(shot.outfitConfig ?? "{}") as { background?: string }).background;
-      if (drawn === "black" || drawn === "white") backdrop = drawn;
+      if (drawn === "black" || drawn === "white" || drawn === "green") backdrop = drawn;
     } catch { /* a square from before the recipe was recorded */ }
     g.imageSmoothingQuality = "high";
     if (screen !== "drawn") {
       g.drawImage(bitmap, 0, 0, size.width, size.height);
       bitmap.close();
       const data = g.getImageData(0, 0, size.width, size.height);
-      if (!onScreen(data.data, size.width, size.height, drawnColour(backdrop === "black" ? "black" : "white"), SCREEN_COLOURS[screen])) {
-        throw new Error(`This square isn't cut out yet — review its cutout first: a ${screen}-screen clip starts from the cut-out picture.`);
+      if (!onScreen(data.data, size.width, size.height, drawnColour(backdrop), SCREEN_COLOURS[screen])) {
+        // A square drawn on green is on the green screen already, cut out or not.
+        if (backdrop !== "green" || screen !== "green") {
+          throw new Error(`This square isn't cut out yet — review its cutout first: a ${screen}-screen clip starts from the cut-out picture.`);
+        }
+      } else {
+        g.putImageData(data, 0, 0);
       }
-      g.putImageData(data, 0, 0);
       return { dataURL: canvas.toDataURL("image/png"), width: size.width, height: size.height };
     }
-    g.fillStyle = backdrop === "black" ? "#000" : "#fff";
+    const [fr, fg, fb] = drawnColour(backdrop === "green" ? "green" : backdrop === "black" ? "black" : "white");
+    g.fillStyle = backdrop === "green" ? `rgb(${fr}, ${fg}, ${fb})` : backdrop === "black" ? "#000" : "#fff";
     g.fillRect(0, 0, size.width, size.height);
     g.drawImage(bitmap, 0, 0, size.width, size.height);
     bitmap.close();
@@ -7047,14 +7055,15 @@ export class OppaiImageGen extends LitElement {
       <div>
         <label class="field">Solid generation background</label>
         <div class="chips">
-          ${(["white", "black"] as const).map((background) => html`<button
+          ${(["white", "black", "green"] as const).map((background) => html`<button
             class="chip ${this.outfitBackground === background ? "on" : ""}"
             ?disabled=${this.outfitBatchRunning}
             @click=${() => (this.outfitBackground = background)}>
-            ${background === "white" ? "White" : "Black"}
+            ${background === "white" ? "White" : background === "black" ? "Black" : "Green"}
           </button>`)}
         </div>
-        <div class="sec-note">Pick whichever contrasts most with her hair and clothes — it is what the cutout removes.</div>
+        <div class="sec-note">Pick whichever contrasts most with her hair and clothes — it is what the cutout removes.
+          Green is the screen her clips are made on, and her whites and pale skin are nothing like it; skip it if she wears green.</div>
       </div>
       <div>
         <label class="field">Default underwear colour</label>
@@ -8971,7 +8980,7 @@ export class OppaiImageGen extends LitElement {
       typeof body[key] === "string" ? (body[key] as string) : fallback;
     this.outfitGear = normalizeOutfitGear(body.gear);
     this.outfitText = str("theme", saved.name);
-    this.outfitBackground = body.background === "black" ? "black" : "white";
+    this.outfitBackground = body.background === "black" || body.background === "green" ? body.background : "white";
     this.outfitUnderwearColor = str("underwearColor", this.outfitUnderwearColor);
     this.outfitPubicHair = body.pubicHair === true;
     this.outfitPubicHairColor = str("pubicHairColor", this.outfitPubicHairColor);

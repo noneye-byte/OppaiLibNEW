@@ -11,8 +11,10 @@
 // The negative prompt is not rewritten. It is a list of things to keep out, and a list
 // is what it is to any encoder.
 
-/** The background every square is drawn on: flat, so the cutout has nothing to argue with. */
-export type SpriteBackdrop = "white" | "black";
+/** The background every square is drawn on: flat, so the cutout has nothing to argue with.
+    Green is the screen her clips are made on (sprite-screen.ts), so a square drawn on it
+    is on that screen already. */
+export type SpriteBackdrop = "white" | "black" | "green";
 
 export interface SpriteSquareWords {
   /** The framing, as a sentence. See outfitShotProse. */
@@ -38,6 +40,11 @@ export interface SpriteSquareWords {
 export const SPRITE_SOLO_PROSE = "A solo picture of one woman, alone in the frame.";
 
 export function backdropProse(backdrop: SpriteBackdrop): string {
+  // "Green studio backdrop" reads to a model as a green-painted room; a chroma-key screen
+  // is the flat, saturated thing that is wanted.
+  if (backdrop === "green") {
+    return "The background is a perfectly plain, solid chroma-key green screen, seamless and evenly lit, with no texture.";
+  }
   return `The background is a perfectly plain, solid pure ${backdrop} studio backdrop, seamless and evenly lit, with no texture.`;
 }
 

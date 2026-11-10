@@ -26,9 +26,11 @@ export const SCREEN_COLOURS: Record<Exclude<SpriteScreen, "drawn">, RGB> = {
   blue: [24, 56, 230],
 };
 
-/** The backdrop a square was drawn on, as its cutout's rim is mixed with. */
-export function drawnColour(background: "white" | "black"): RGB {
-  return background === "black" ? [8, 8, 8] : [248, 248, 248];
+/** The backdrop a square was drawn on, as its cutout's rim is mixed with. A square drawn
+    on green is taken to be on the screen's own green: the checkpoint's is near enough,
+    and a rim left a little green only meets the screen it was drawn for. */
+export function drawnColour(background: "white" | "black" | "green"): RGB {
+  return background === "black" ? [8, 8, 8] : background === "green" ? SCREEN_COLOURS.green : [248, 248, 248];
 }
 
 /** How far into her the rim is looked at, and how far her colour is fetched from. */

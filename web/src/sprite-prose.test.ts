@@ -14,6 +14,12 @@ const square = {
   backdrop: "white" as const,
 };
 
+test("a green backdrop is said as a chroma-key screen, not a green room", () => {
+  const said = spriteSquareProse({ ...square, backdrop: "green" as const });
+  assert.ok(said.endsWith("solid chroma-key green screen, seamless and evenly lit, with no texture."));
+  assert.ok(!said.includes("green studio backdrop"));
+});
+
 test("a square is said in sentences, one person first and the backdrop last", () => {
   const said = spriteSquareProse(square);
   assert.ok(said.startsWith(`${SPRITE_SOLO_PROSE} A cowboy shot`));

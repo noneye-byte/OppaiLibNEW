@@ -120,7 +120,7 @@ export interface GenDraft {
   /** Whether "Generate all" also renders the MISC block. */
   outfitMiscBatch?: boolean;
   outfitTier?: number;
-  outfitBackground?: "black" | "white";
+  outfitBackground?: "black" | "white" | "green";
   outfitUnderwearColor?: string;
   outfitPubicHair?: boolean;
   outfitPubicHairColor?: string;
