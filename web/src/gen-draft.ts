@@ -121,6 +121,10 @@ export interface GenDraft {
   outfitMiscBatch?: boolean;
   outfitTier?: number;
   outfitBackground?: "black" | "white" | "green";
+  /** Pixel art: a cell's side in pixels (0 or 1 is off), and the colours it is held to
+      (0 for any). See pixel-grid.ts. */
+  outfitPixel?: number;
+  outfitPalette?: number;
   outfitUnderwearColor?: string;
   outfitPubicHair?: boolean;
   outfitPubicHairColor?: string;
@@ -242,13 +246,13 @@ export function loadDraft(): GenDraft | null {
   (["width", "height", "steps", "cfg", "cfgRescale", "clipSkip", "count", "seed",
     "outfitFace", "outfitTier", "detailerConfidence", "detailerDenoise",
     "detailerMaskBlur", "hiresScale", "hiresDenoise", "hiresSteps", "upscaleBy", "scrollTop", "spriteReferenceStrength",
-    "spriteReferenceBuild"] as const).forEach(num);
+    "spriteReferenceBuild", "outfitPixel", "outfitPalette"] as const).forEach(num);
   (["seamlessX", "seamlessY", "cpuNoise", "outfitOn", "outfitCutout", "outfitPubicHair",
     "outfitLockColors", "outfitMiscBatch", "detailerEnabled", "detailerFaces", "detailerHands",
     "hiresEnabled", "showOptions", "spriteShotChosen"] as const).forEach(bool);
 
   if (d.vaePrecision === "fp16" || d.vaePrecision === "fp32") out.vaePrecision = d.vaePrecision;
-  if (d.outfitBackground === "black" || d.outfitBackground === "white") {
+  if (d.outfitBackground === "black" || d.outfitBackground === "white" || d.outfitBackground === "green") {
     out.outfitBackground = d.outfitBackground;
   }
 

@@ -193,6 +193,12 @@ func (s *Server) handleImageGenStatus(w http.ResponseWriter, r *http.Request) {
 	if p := s.matteProblem(); p != "" {
 		out["matteProblem"] = p
 	}
+	// A clip's cut is the model's too, unless Settings hand it to Bria.
+	out["clipCutBy"] = clipCutBy(set)
+	out["clipCut"] = s.clipCutProblem(set) == ""
+	if p := s.clipCutProblem(set); p != "" {
+		out["clipCutProblem"] = p
+	}
 	if loraErr != nil {
 		out["loraError"] = loraErr.Error()
 	}
@@ -341,6 +347,9 @@ type generateReq struct {
 	ReferenceFaceWeight float64 `json:"referenceFaceWeight"`
 	// Forge is what only Forge takes (imagegen/forge.go).
 	Forge forgeReq `json:"forge"`
+	// Pixel makes the picture pixel art with Forge's sd-pixel: a sprite set drawn as
+	// pixel art (imagegen/pixel.go).
+	Pixel *pixelReq `json:"pixel,omitempty"`
 	// ModelSettings has the checkpoint's family's steps, CFG and sampler beat the ones
 	// here: set by a run that did not choose them for this checkpoint, as Libby's do.
 	ModelSettings bool `json:"modelSettings"`
@@ -363,6 +372,13 @@ type forgeReq struct {
 	RescaleCFG  float64  `json:"rescaleCfg"`
 	MaHiRo      bool     `json:"mahiro"`
 	PiD         string   `json:"pid"`
+}
+
+// pixelReq is imagegen.Pixel as the studio sends it: a cell's side in pixels, and the
+// colours the picture is held to (0 for any).
+type pixelReq struct {
+	Size    int `json:"size"`
+	Palette int `json:"palette"`
 }
 
 type regionsReq struct {
@@ -495,7 +511,7 @@ func (s *Server) handleImageGenGenerate(w http.ResponseWriter, r *http.Request) 
 			err = errReferenceUnsupported
 			status = http.StatusConflict
 		} else if errors.Is(err, imagegen.ErrComfyPictureUnsupported) || errors.Is(err, imagegen.ErrInpaintUnsupported) || errors.Is(err, imagegen.ErrUpscaleUnsupported) ||
-			errors.Is(err, imagegen.ErrRegionsUnsupported) {
+			errors.Is(err, imagegen.ErrRegionsUnsupported) || errors.Is(err, imagegen.ErrPixelUnsupported) || errors.Is(err, imagegen.ErrPixelMissing) {
 			status = http.StatusConflict
 		} else {
 			s.log.Warn("image generate", "err", err)
@@ -762,6 +778,11 @@ func (s *Server) prepareGenerate(req *generateReq) (gen imagegen.GenerateRequest
 			Offload: req.Forge.Offload, TiledVAE: req.Forge.TiledVAE, RescaleCFG: req.Forge.RescaleCFG,
 			MaHiRo: req.Forge.MaHiRo, PiD: req.Forge.PiD, ModelSettings: req.ModelSettings,
 		},
+	}
+	if p := req.Pixel; p != nil {
+		gen.Pixel = imagegen.Pixel{
+			Size: min(max(p.Size, 0), imagegen.MaxPixelSize), Palette: min(max(p.Palette, 0), imagegen.MaxPixelPalette),
+		}
 	}
 	for _, r := range req.Forge.References {
 		if data, err := decodeDataImage(r); err == nil && len(data) > 0 {

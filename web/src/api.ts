@@ -598,6 +598,11 @@ export interface Settings {
   /** Leave the image generator's checkpoint on the card while a clip renders; off, it
       is unloaded first so ComfyUI has the whole card. */
   clipKeepImageModel?: boolean;
+  /** Clips' backgrounds are cut by Bria, a paid ComfyUI partner node, rather than on
+      this server; the Comfy.org API key pays for it and is write-only. */
+  clipCutBria?: boolean;
+  comfyOrgApiKey?: string;
+  comfyOrgApiKeySet?: boolean;
   /** The folders Civitai's video mode installs into, as the container sees them, one
       per kind. Each is used exactly as given; a blank one is not installed into. */
   comfyDiffusionDir?: string;
@@ -1577,6 +1582,11 @@ export interface ImageGenStatus {
       why not when it can't. */
   matte?: boolean;
   matteProblem?: string;
+  /** Whether a clip's background can be cut, and why not; Bria (through ComfyUI) or
+      this server's model, as Settings say. A picture's cutout is `matte`'s. */
+  clipCut?: boolean;
+  clipCutProblem?: string;
+  clipCutBy?: "bria" | "server";
 }
 
 /** One thing a family needs beside a bare model, as things stand. */
@@ -1949,6 +1959,9 @@ export interface GenerateParams {
   upscale?: { enabled: boolean; upscaler?: string; scale?: number; denoise?: number; steps?: number };
   /** What only Forge reads. */
   forge?: ForgeParams;
+  /** Pixel art, by Forge's sd-pixel extension: cells `size` pixels square, held to
+      `palette` colours (0 for any). A sprite set's; see pixel-grid.ts. */
+  pixel?: { size: number; palette: number };
   /** With initImage: enlarge it with the upscaler and redraw nothing (A1111). */
   upscaleOnly?: boolean;
   /** Start from a gallery picture by name, in place of initImage: the server reads
@@ -3601,7 +3614,7 @@ export const api = {
     request<GenerateResult>("/api/imagegen/clip/upscale", { method: "POST", body: JSON.stringify(params) }, params.detach ? 2 * 60_000 : 16 * 60_000),
 
   /** A finished clip with its background cut away on the server: a new clip beside it. */
-  matteClip: (params: { jobId?: string; gallery?: string; id?: string; outfit?: OutfitClipRef; board?: string; noGallery?: boolean; detach?: boolean }) =>
+  matteClip: (params: { jobId?: string; gallery?: string; id?: string; outfit?: OutfitClipRef; board?: string; noGallery?: boolean; detach?: boolean; grid?: { cols: number; rows: number } }) =>
     request<GenerateResult>("/api/imagegen/clip/matte", { method: "POST", body: JSON.stringify(params) }, params.detach ? 2 * 60_000 : 16 * 60_000),
   /** A picture's matte from the server's background-removal model: a greyscale PNG at
       its size, white where she is. */

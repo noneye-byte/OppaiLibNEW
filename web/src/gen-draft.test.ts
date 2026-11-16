@@ -216,3 +216,12 @@ test("a picture's gallery name comes back with it, so the stage can show the cop
   assert.equal(d?.shots?.[0].gallery, "42");
   assert.equal(d?.shots?.[1].gallery, undefined);
 });
+
+test("a board on the green screen, drawn as pixel art, comes back as it was", () => {
+  clearDraft();
+  saveDraft({ outfitBackground: "green", outfitPixel: 8, outfitPalette: 32 });
+  const d = loadDraft();
+  assert.equal(d?.outfitBackground, "green");
+  assert.equal(d?.outfitPixel, 8);
+  assert.equal(d?.outfitPalette, 32);
+});

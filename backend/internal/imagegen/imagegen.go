@@ -379,6 +379,9 @@ type GenerateRequest struct {
 	Controls []ControlUnit
 	// Forge is what only Forge takes; see forge.go.
 	Forge ForgeRun
+	// Pixel makes the picture pixel art, through Forge's sd-pixel extension; see
+	// pixel.go. Automatic1111 and Forge only.
+	Pixel Pixel
 	// Progress, when set, is called as the generator reports on the run: the step
 	// count and, every few steps, a preview of the picture so far. Called from a
 	// goroutine beside the request, so it must be safe to call concurrently with the
@@ -969,10 +972,16 @@ func (c *Client) Generate(ctx context.Context, base string, req GenerateRequest)
 		if req.Regions.Active() || len(req.Detailer.Custom) > 0 {
 			return nil, ErrRegionsUnsupported
 		}
+		if req.Pixel.Active() {
+			return nil, ErrPixelUnsupported
+		}
 		res, err := c.invokeGenerate(ctx, base, req)
 		return rejectBlackGeneration(res, err)
 	}
 	if kind == KindComfy {
+		if req.Pixel.Active() {
+			return nil, ErrPixelUnsupported
+		}
 		return rejectBlackGeneration(c.comfyGenerate(ctx, base, req))
 	}
 	if req.UpscaleOnly {

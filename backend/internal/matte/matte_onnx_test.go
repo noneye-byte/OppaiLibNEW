@@ -88,7 +88,7 @@ func TestTheRealModelCutsHerOut(t *testing.T) {
 	data, _ := os.ReadFile(src)
 	start = time.Now()
 	var last float64
-	cut, err := m.CutClip(context.Background(), data, ".mp4", func(p float64) { last = p })
+	cut, err := m.CutClip(context.Background(), data, ".mp4", ClipCut{}, func(p float64) { last = p })
 	if err != nil {
 		t.Fatal(err)
 	}

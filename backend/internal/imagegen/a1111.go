@@ -186,6 +186,17 @@ func (c *Client) a1111Generate(ctx context.Context, base string, req GenerateReq
 		}
 		payload.AlwaysOnScripts["controlnet"] = map[string]any{"args": a1111ControlArgs(req.Controls)}
 	}
+	if req.Pixel.Active() {
+		// Asked for where it is not loaded, the whole run fails with a 422 that names
+		// no fix; see pixel.go.
+		if err := c.a1111PixelReady(ctx, base); err != nil {
+			return nil, err
+		}
+		if payload.AlwaysOnScripts == nil {
+			payload.AlwaysOnScripts = map[string]any{}
+		}
+		payload.AlwaysOnScripts[pixelScript] = map[string]any{"args": pixelArgs(req.Pixel)}
+	}
 	if req.Checkpoint != "" {
 		payload.OverrideSettings["sd_model_checkpoint"] = req.Checkpoint
 	}

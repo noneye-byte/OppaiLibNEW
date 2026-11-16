@@ -239,6 +239,15 @@ type Settings struct {
 	// offloading to system memory, which turns a ten-minute clip into an hour's. See
 	// api/gpu_share.go.
 	ClipKeepImageModel bool `json:"clipKeepImageModel"`
+	// ClipCutBria has a clip's background cut by Bria, through the ComfyUI above, rather
+	// than by the matting model on this server. Bria is one of ComfyUI's partner (API)
+	// nodes: it runs on Comfy.org's servers, is paid for by the second of video from that
+	// account's credits, and a workflow queued over ComfyUI's HTTP API rather than from
+	// its own page carries the account's key itself, which is ComfyOrgAPIKey. Write-only,
+	// as every key here is. See imagegen/comfy_bria.go.
+	ClipCutBria       bool   `json:"clipCutBria"`
+	ComfyOrgAPIKey    string `json:"comfyOrgApiKey"`
+	ComfyOrgAPIKeySet bool   `json:"comfyOrgApiKeySet"`
 	// The folders installs from Civitai's video mode write into, as this container
 	// sees them, one per kind: ComfyUI has no API that takes a download. Each is
 	// exactly what was typed and a blank one is not installed into; nothing is
@@ -353,6 +362,8 @@ const (
 	keyClipImageModels    = "clip.image_models"
 	keyClipTextModels     = "clip.text_models"
 	keyClipKeepImageModel = "clip.keep_image_model"
+	keyClipCutBria        = "clip.cut_bria"
+	keyComfyOrgAPIKey     = "clip.comfy_org_api_key"
 	keyComfyModelsDir     = "clip.comfy_models_dir" // read once, by comfyFolderDefaults
 	keyComfyDiffusionDir  = "clip.comfy_diffusion_dir"
 	keyComfyCheckpointDir = "clip.comfy_checkpoint_dir"
@@ -663,6 +674,7 @@ func Merge(base Settings, stored map[string]string) Settings {
 		keyComfyLoraDir: &s.ComfyLoraDir, keyComfyVaeDir: &s.ComfyVaeDir,
 		keyClipTextWorkflow: &s.ClipTextWorkflow,
 		keyChatToolMode:     &s.ChatToolMode,
+		keyComfyOrgAPIKey:   &s.ComfyOrgAPIKey,
 	} {
 		if v, ok := stored[key]; ok {
 			*field = v
@@ -676,6 +688,9 @@ func Merge(base Settings, stored map[string]string) Settings {
 	}
 	if v, ok := parseBool(stored[keyClipKeepImageModel]); ok {
 		s.ClipKeepImageModel = v
+	}
+	if v, ok := parseBool(stored[keyClipCutBria]); ok {
+		s.ClipCutBria = v
 	}
 	if v, err := strconv.Atoi(stored[keyLibbyStoriesPerDay]); err == nil {
 		s.LibbyStoriesPerDay = v
@@ -760,6 +775,8 @@ func (s Settings) Map() map[string]string {
 		keyLibbyStories:       strconv.FormatBool(s.LibbyStories),
 		keyLibbyStoriesPerDay: strconv.Itoa(s.LibbyStoriesPerDay),
 		keyClipKeepImageModel: strconv.FormatBool(s.ClipKeepImageModel),
+		keyClipCutBria:        strconv.FormatBool(s.ClipCutBria),
+		keyComfyOrgAPIKey:     s.ComfyOrgAPIKey,
 		keyChatToolMode:       s.ChatToolMode,
 
 		keyIncognito: strconv.FormatBool(s.Incognito),
@@ -787,6 +804,8 @@ func (s Settings) Redacted() Settings {
 	s.VisionAPIKeySet = s.VisionAPIKey != ""
 	s.VisionAPIKey = ""
 	s.TTSAPIKeySet = s.TTSAPIKey != ""
+	s.ComfyOrgAPIKeySet = s.ComfyOrgAPIKey != ""
+	s.ComfyOrgAPIKey = ""
 	s.TTSAPIKey = ""
 	return s
 }
@@ -825,6 +844,7 @@ func (s *Settings) Clamp() {
 		s.CivitaiAPIURL = "https://civitai.red/api/v1"
 	}
 	s.CivitaiAPIKey = strings.TrimSpace(s.CivitaiAPIKey)
+	s.ComfyOrgAPIKey = strings.TrimSpace(s.ComfyOrgAPIKey)
 	s.TrainerURL = strings.TrimRight(strings.TrimSpace(s.TrainerURL), "/")
 	s.TrainerToken = strings.TrimSpace(s.TrainerToken)
 	s.F95Cookie = strings.TrimSpace(s.F95Cookie)

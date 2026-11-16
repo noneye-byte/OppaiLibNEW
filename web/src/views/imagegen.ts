@@ -64,7 +64,7 @@ import {
   type ShotSize,
 } from "../camera.js";
 import { libbyReact } from "../libby-voice.js";
-import { canvasToBlob, CutoutSession, DEFAULT_COMPOSE, loadImage } from "../cutout.js";
+import { canvasToBlob, CutoutSession, DEFAULT_COMPOSE, loadImage, type ComposeOptions } from "../cutout.js";
 import { outfitArchiveFilename, outfitImageFilename } from "../outfit-name.js";
 import { miscClipForm, miscMotionLabel } from "../misc-motion.js";
 import {
@@ -116,6 +116,7 @@ import {
   type MotionStep, type SquareMotion,
 } from "../sprite-motion.js";
 import { SCREEN_COLOURS, drawnColour, onScreen, screenPrompt, type SpriteScreen } from "../sprite-screen.js";
+import { PIXEL_PALETTES, PIXEL_SIZES, gridFor, pixelOfConfig, pixelPalette, pixelSize, snapAlpha, type Grid } from "../pixel-grid.js";
 import { proseBehind, squareWords, withChange, wordChange, type SquareWords, type WordChanges } from "../sprite-words.js";
 import { GALLERY_DRAG_TYPE, galleryChanged } from "./imagegen-gallery.js";
 import {
@@ -558,6 +559,10 @@ export class OppaiImageGen extends LitElement {
   @state() private outfitMiscBatch = false;
   @state() private outfitTier = 0;
   @state() private outfitBackground: SpriteBackdrop = "white";
+  /** Pixel art by Forge's sd-pixel: a cell's side in pixels, 0 for off, and the colours
+      it is held to, 0 for any. See pixel-grid.ts. */
+  @state() private outfitPixel = 0;
+  @state() private outfitPalette = 0;
   @state() private outfitUnderwearColor = "black";
   @state() private outfitPubicHair = false;
   @state() private outfitPubicHairColor = "dark brown";
@@ -646,6 +651,9 @@ export class OppaiImageGen extends LitElement {
   @state() private cutoutTool: "remove" | "add" | "subtract" = "remove";
   /** Non-destructive edge settings, re-applied from the mask on every render. */
   @state() private cutoutFeather = DEFAULT_COMPOSE.feather;
+  /** The cell size of the pixel-art square under review, 0 for any other picture: its
+      cutout is cut on the grid. */
+  @state() private cutoutPixel = 0;
   @state() private cutoutSpill = DEFAULT_COMPOSE.spill;
   /** Display magnification only; mask coordinates continue to use source pixels. */
   @state() private cutoutZoom = 1;
@@ -2139,7 +2147,7 @@ export class OppaiImageGen extends LitElement {
     "seamlessX", "seamlessY", "vaePrecision", "cpuNoise", "count", "seed", "board",
     "selectedLoras", "selectedTriggers", "selectedChars", "selectedPoses",
     "outfitOn", "outfitText", "outfitGear", "outfitFace", "outfitMisc", "outfitMiscBatch", "outfitTier", "outfitBackground",
-    "outfitLockColors", "outfitLoadoutId", "outfitWardrobeId", "sheetZoom",
+    "outfitPixel", "outfitPalette", "outfitLockColors", "outfitLoadoutId", "outfitWardrobeId", "sheetZoom",
     "outfitUnderwearColor", "outfitPubicHair", "outfitPubicHairColor", "camera", "spriteShotChosen", "spriteReference", "spriteReferenceStrength",
     "spriteReferenceBare", "spriteReferenceBuild",
     "detailerEnabled", "detailerModel", "detailerPrompt", "detailerNegative",
@@ -2367,6 +2375,8 @@ export class OppaiImageGen extends LitElement {
       outfitMiscBatch: this.outfitMiscBatch,
       outfitTier: this.outfitTier,
       outfitBackground: this.outfitBackground,
+      outfitPixel: this.outfitPixel,
+      outfitPalette: this.outfitPalette,
       outfitUnderwearColor: this.outfitUnderwearColor,
       outfitPubicHair: this.outfitPubicHair,
       outfitPubicHairColor: this.outfitPubicHairColor,
@@ -2462,6 +2472,8 @@ export class OppaiImageGen extends LitElement {
     if (d.outfitMiscBatch !== undefined) this.outfitMiscBatch = d.outfitMiscBatch;
     if (d.outfitTier !== undefined) this.outfitTier = Math.max(0, Math.min(OUTFIT_TIERS.length - 1, Math.round(d.outfitTier)));
     if (d.outfitBackground !== undefined) this.outfitBackground = d.outfitBackground;
+    if (d.outfitPixel !== undefined) this.outfitPixel = pixelSize(d.outfitPixel);
+    if (d.outfitPalette !== undefined) this.outfitPalette = pixelPalette(d.outfitPalette);
     if (d.outfitUnderwearColor !== undefined) this.outfitUnderwearColor = d.outfitUnderwearColor;
     if (d.outfitPubicHair !== undefined) this.outfitPubicHair = d.outfitPubicHair;
     if (d.spriteReference !== undefined) this.spriteReference = d.spriteReference;
@@ -3097,6 +3109,8 @@ export class OppaiImageGen extends LitElement {
         : "",
       lockColors: this.outfitLockColors,
       gear: gearKey(this.outfitGear),
+      // Only when on, so every square drawn before pixel art existed still matches.
+      ...(this.outfitPixel > 1 ? { pixel: this.outfitPixel, palette: this.outfitPalette } : {}),
     });
   }
 
@@ -3554,14 +3568,15 @@ export class OppaiImageGen extends LitElement {
     const key = slotKeyOf(slot);
     const sq = this.squareMotion(slot);
     if (!canMake("cut", sq)) return sq.clip ? "This square's clip is of an older picture — animate it again first." : "This square has no clip yet — its clip comes first.";
-    if (!this.status?.matte) return this.status?.matteProblem || "Background removal isn't available on this server.";
+    if (!this.status?.clipCut) return this.status?.clipCutProblem || "Background removal isn't available on this server.";
     if (this.motionBusy[key]) return "This square is being worked on already.";
     const wardrobeId = this.outfitWardrobeId;
     const jobId = newClipJobId();
     this.setMotionBusy(key, { step: "cut", percent: 0, jobId });
     try {
+      const grid = await this.squareGrid(this.shotAt(slot));
       const clip = await followClip(jobId, () => api.matteClip({
-        jobId, outfit: { outfit: wardrobeId, emotion: slot.emotion, level: slot.tier }, noGallery: true, detach: true,
+        jobId, outfit: { outfit: wardrobeId, emotion: slot.emotion, level: slot.tier }, noGallery: true, detach: true, grid,
       }), (percent) => this.setMotionBusy(key, { step: "cut", percent, jobId }));
       const now = this.squareMotion(slot).clip;
       if (!now || clipTake(now) !== clipTake(sq.clip!)) return "The clip changed while it was being cut, so that cut was dropped.";
@@ -3573,6 +3588,16 @@ export class OppaiImageGen extends LitElement {
     } finally {
       this.setMotionBusy(key, null);
     }
+  }
+
+  /** A pixel-art square's grid, which its clip's cut is put back on; undefined for any
+      other square. Read off the picture itself, which is the size sd-pixel worked at
+      after any hires fix. */
+  private async squareGrid(shot: Shot | undefined): Promise<Grid | undefined> {
+    const pixel = shot ? pixelOfConfig(shot.outfitConfig) : null;
+    if (!shot || !pixel) return undefined;
+    const img = await loadImage(this.liveURL(shot));
+    return gridFor(img.naturalWidth, img.naturalHeight, pixel.size);
   }
 
   /** A square's wording as the studio writes it: an expression's or a MISC state's. */
@@ -4011,6 +4036,7 @@ export class OppaiImageGen extends LitElement {
       // redrawn until they are right, and each of them landing in the gallery as well
       // buried everything made there on purpose.
       noGallery: outfit ? true : undefined,
+      pixel: outfit && this.outfitPixel > 1 ? { size: this.outfitPixel, palette: this.outfitPalette } : undefined,
     };
     // Held to its references, when there are any and this is not the only one. From
     // noise and a seed of its own all the same: see sprite-reference.ts.
@@ -5240,6 +5266,8 @@ export class OppaiImageGen extends LitElement {
     this.outfitFace = 0;
     this.outfitTier = 0;
     this.outfitBackground = "white";
+    this.outfitPixel = 0;
+    this.outfitPalette = 0;
     this.outfitUnderwearColor = "black";
     this.outfitPubicHair = false;
     this.outfitPubicHairColor = "dark brown";
@@ -5625,7 +5653,7 @@ export class OppaiImageGen extends LitElement {
     return html`<div class="workspace create">
       <div class="create-shell ${video ? "video" : "image"} ${tab && !video ? "drawer-open" : ""} ${galleryOut ? "with-gallery" : ""} ${this.loraDrag ? "lora-dragging" : ""}">
         ${video
-          ? html`<oppai-video-studio .clips=${st.clips ?? {}} .board=${this.board} ?matte=${!!st.matte} .matteProblem=${st.matteProblem ?? ""}
+          ? html`<oppai-video-studio .clips=${st.clips ?? {}} .board=${this.board} ?matte=${!!st.clipCut} .matteProblem=${st.clipCutProblem ?? ""} .cutBy=${st.clipCutBy ?? "server"}
               @use-frame=${(e: CustomEvent<ClipPicture>) => void this.usePicture(e.detail.url, e.detail.name, "img2img", true)}
               @find-video-models=${() => { this.civitaiMode = "video"; this.civitaiOpen = true; }}></oppai-video-studio>`
           : html`${this.renderCreateRail()}
@@ -6351,8 +6379,8 @@ export class OppaiImageGen extends LitElement {
     const { slot } = this.outfitSlot();
     const shot = this.shotAt(slot);
     const square = shot ? { width: shot.info?.width || this.width, height: shot.info?.height || this.height } : null;
-    return html`<oppai-video-studio variant="sprites" .clips=${st.clips ?? {}} .board=${this.board} ?matte=${!!st.matte}
-      .matteProblem=${st.matteProblem ?? ""} .square=${square} .keptSeed=${this.selectedClipSeed()}
+    return html`<oppai-video-studio variant="sprites" .clips=${st.clips ?? {}} .board=${this.board} ?matte=${!!st.clipCut}
+      .matteProblem=${st.clipCutProblem ?? ""} .cutBy=${st.clipCutBy ?? "server"} .square=${square} .keptSeed=${this.selectedClipSeed()}
       @animate-square=${() => void this.runSquareStep("clip")}
       @find-video-models=${() => { this.civitaiMode = "video"; this.civitaiOpen = true; }}></oppai-video-studio>`;
   }
@@ -6738,13 +6766,15 @@ export class OppaiImageGen extends LitElement {
     const anim = this.anims[key];
     const busy = this.motionBusy[key];
     const clips = this.status?.clips;
-    const matte = !!this.status?.matte;
+    const matte = !!this.status?.clipCut;
     const next = nextStep(sq);
     const cutMakes = stepsFor("cut", sq);
     const cutNeedsClip = cutMakes.includes("clip");
-    const cutTitle = !matte ? this.status?.matteProblem || "Background removal isn't available here"
+    const cutTitle = !matte ? this.status?.clipCutProblem || "Background removal isn't available here"
       : !shot ? "Its picture comes first"
-      : !cutNeedsClip ? "Remove the background: cut her out of the clip, frame by frame, on the server"
+      : !cutNeedsClip ? (this.status?.clipCutBy === "bria"
+        ? "Remove the background: Bria cuts her out of the clip, through ComfyUI (paid from Comfy.org credits)"
+        : "Remove the background: cut her out of the clip, frame by frame, on the server")
       : !clips?.image ? "No picture-to-video model is set up — Settings → Image generation → Video"
       : anim?.clip ? "Its clip is of an older picture: this makes a new clip of this one, then cuts it"
       : "This makes its clip, then cuts it";
@@ -6900,8 +6930,8 @@ export class OppaiImageGen extends LitElement {
               <span class="material-symbols-rounded" style="font-size:17px;">thumb_up</span>
               Review ${toApprove} clip${toApprove === 1 ? "" : "s"}
             </button>` : nothing}
-            <button class="btn ${toCut && !toApprove && !toAnimate ? "primary" : ""}" ?disabled=${!canMotion || !toCut || !this.status?.matte}
-              title=${!this.status?.matte ? this.status?.matteProblem || "Background removal isn't available on this server"
+            <button class="btn ${toCut && !toApprove && !toAnimate ? "primary" : ""}" ?disabled=${!canMotion || !toCut || !this.status?.clipCut}
+              title=${!this.status?.clipCut ? this.status?.clipCutProblem || "Background removal isn't available on this server"
                 : toCut ? "Cut the background off every approved clip, one after another"
                 : "Approve clips first: only an approved clip is cut"}
               @click=${() => void this.runMotion("cut")}>
@@ -7145,6 +7175,32 @@ export class OppaiImageGen extends LitElement {
         </div>
         <div class="sec-note">Pick whichever contrasts most with her hair and clothes — it is what the cutout removes.
           Green is the screen her clips are made on, and her whites and pale skin are nothing like it; skip it if she wears green.</div>
+      </div>
+      <div>
+        <label class="field">Pixel art</label>
+        <div class="chips" role="group" aria-label="Pixel art cell size">
+          ${[0, ...PIXEL_SIZES].map((size) => html`<button
+            class="chip ${this.outfitPixel === size ? "on" : ""}"
+            ?disabled=${this.outfitBatchRunning}
+            @click=${() => { this.outfitPixel = size; }}>
+            ${size ? `${size} px` : "Off"}
+          </button>`)}
+        </div>
+        ${this.outfitPixel > 1 ? html`<label class="field">Colours</label>
+        <div class="chips" role="group" aria-label="Pixel art palette">
+          ${PIXEL_PALETTES.map((palette) => html`<button
+            class="chip ${this.outfitPalette === palette ? "on" : ""}"
+            ?disabled=${this.outfitBatchRunning}
+            @click=${() => { this.outfitPalette = palette; }}>
+            ${palette ? String(palette) : "Any"}
+          </button>`)}
+        </div>` : nothing}
+        <div class="sec-note">${this.status?.backend && this.status.backend !== "a1111"
+          ? "Pixel art is made by Forge's sd-pixel extension, so it needs Forge (or Automatic1111) — not this generator."
+          : html`Drawn by Forge's sd-pixel extension: each square is shrunk to cells this many pixels across and blown
+            back up, so it keeps its size. Its cutout is cut on the grid, and its clip's cut is put back on it. The first
+            time, OppaiLib turns sd-pixel on for txt2img in Forge's settings and asks for Forge to be restarted. Changing
+            it starts a new set.`}</div>
       </div>
       <div>
         <label class="field">Default underwear colour</label>
@@ -8223,6 +8279,8 @@ export class OppaiImageGen extends LitElement {
 
   private async openCutout(url: string, name: string, outputName?: string, outfitShotId?: string) {
     this.cutout = { url, name, outputName, outfitShotId };
+    this.cutoutPixel = outfitShotId
+      ? pixelOfConfig(this.shots.find((s) => s.id === outfitShotId)?.outfitConfig)?.size ?? 0 : 0;
     this.cutoutError = "";
     this.cutoutBusy = true;
     this.showOriginal = false;
@@ -8256,7 +8314,7 @@ export class OppaiImageGen extends LitElement {
     const session = this.session;
     if (!session) return;
     this.cutoutCanvas = session.compose(
-      { feather: this.cutoutFeather, spill: this.cutoutSpill },
+      this.cutoutCompose(),
       this.showOriginal,
     );
     this.cutFraction = session.cutFraction;
@@ -8439,7 +8497,16 @@ export class OppaiImageGen extends LitElement {
    * and exporting that would silently hand back an opaque image. */
   private exportCanvas(): HTMLCanvasElement | null {
     if (!this.session) return null;
-    return this.session.compose({ feather: this.cutoutFeather, spill: this.cutoutSpill });
+    return this.session.compose(this.cutoutCompose());
+  }
+
+  /** How the cutout's edge is drawn: feathered, or on a pixel-art square's grid. */
+  private cutoutCompose(): ComposeOptions {
+    const size = this.cutoutPixel;
+    return {
+      feather: this.cutoutFeather, spill: this.cutoutSpill,
+      snap: size > 1 ? (alpha, w, h) => snapAlpha(alpha, w, h, gridFor(w, h, size)) : undefined,
+    };
   }
 
   private async downloadCutout() {
@@ -8616,14 +8683,16 @@ export class OppaiImageGen extends LitElement {
                 </div>
               `}
 
-          <div>
+          ${this.cutoutPixel > 1 ? html`<div class="sec-note">This square is pixel art, so it is cut on its
+            ${this.cutoutPixel}px grid: every cell is her or not, and there is no edge to feather. Brush whole cells.</div>`
+          : html`<div>
             <label class="field">Edge feather · ${this.cutoutFeather} px</label>
             <input type="range" min="0" max="12" step="1" .value=${String(this.cutoutFeather)}
               @input=${(e: Event) => {
                 this.cutoutFeather = Number((e.target as HTMLInputElement).value);
                 void this.paintCutout();
               }} />
-          </div>
+          </div>`}
           <div>
             <label class="field">
               Spill suppression · ${Math.round(this.cutoutSpill * 100)}%
@@ -9047,6 +9116,8 @@ export class OppaiImageGen extends LitElement {
       gear: this.outfitGear,
       theme: this.outfitText.trim(),
       background: this.outfitBackground,
+      pixel: this.outfitPixel,
+      palette: this.outfitPalette,
       underwearColor: this.outfitUnderwearColor,
       pubicHair: this.outfitPubicHair,
       pubicHairColor: this.outfitPubicHairColor,
@@ -9065,6 +9136,8 @@ export class OppaiImageGen extends LitElement {
     this.outfitGear = normalizeOutfitGear(body.gear);
     this.outfitText = str("theme", saved.name);
     this.outfitBackground = body.background === "black" || body.background === "green" ? body.background : "white";
+    this.outfitPixel = pixelSize(body.pixel);
+    this.outfitPalette = pixelPalette(body.palette);
     this.outfitUnderwearColor = str("underwearColor", this.outfitUnderwearColor);
     this.outfitPubicHair = body.pubicHair === true;
     this.outfitPubicHairColor = str("pubicHairColor", this.outfitPubicHairColor);

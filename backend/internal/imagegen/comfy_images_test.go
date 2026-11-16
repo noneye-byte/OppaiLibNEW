@@ -18,6 +18,7 @@ import (
 type fakeComfy struct {
 	mu     sync.Mutex
 	graphs []map[string]any
+	extras []map[string]any
 	checks []string
 	loras  []string
 }
@@ -53,10 +54,12 @@ func (f *fakeComfy) server(t *testing.T) *httptest.Server {
 	mux.HandleFunc("POST /prompt", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Prompt map[string]any `json:"prompt"`
+			Extra  map[string]any `json:"extra_data"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		f.mu.Lock()
 		f.graphs = append(f.graphs, body.Prompt)
+		f.extras = append(f.extras, body.Extra)
 		id := fmt.Sprintf("p%d", len(f.graphs))
 		f.mu.Unlock()
 		_ = json.NewEncoder(w).Encode(map[string]any{"prompt_id": id})

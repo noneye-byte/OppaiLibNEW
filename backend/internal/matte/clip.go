@@ -38,13 +38,47 @@ type ClipInfo struct {
 	FPS           string // as a rational, "16/1"
 }
 
+// ClipCut is what a cut does to each frame besides taking the background away.
+type ClipCut struct {
+	// Grid, when set, puts every frame on a pixel-art sprite's grid: see grid.go.
+	Grid Grid
+}
+
+// frameMask is one frame's verdict on where she is, 0–255, one byte a pixel.
+type frameMask func(ctx context.Context, frame *image.RGBA, rgb []byte) ([]uint8, error)
+
 // CutClip is the clip with its background cut away, as a VP9 WebM with alpha. ext
 // is the source's extension (".mp4", ".webm"), which ffmpeg reads the container by.
 // progress, when set, is called with the share of frames done.
-func (m *Matter) CutClip(ctx context.Context, src []byte, ext string, progress func(float64)) ([]byte, error) {
+func (m *Matter) CutClip(ctx context.Context, src []byte, ext string, cut ClipCut, progress func(float64)) ([]byte, error) {
 	if err := m.load(); err != nil {
 		return nil, err
 	}
+	return runClip(ctx, src, ext, cut, progress, m.modelFrames())
+}
+
+// modelFrames judges a clip's frames by the model, each mask eased towards the last
+// one's where it only flickers.
+func (m *Matter) modelFrames() frameMask {
+	var prev []uint8
+	return func(ctx context.Context, frame *image.RGBA, _ []byte) ([]uint8, error) {
+		mask, err := m.Mask(ctx, frame)
+		if err != nil {
+			return nil, err
+		}
+		if prev != nil {
+			steadied(mask.Pix, prev)
+		} else {
+			prev = make([]uint8, len(mask.Pix))
+		}
+		copy(prev, mask.Pix)
+		return mask.Pix, nil
+	}
+}
+
+// runClip decodes a clip, has mask judge each frame, composes it and encodes the
+// result.
+func runClip(ctx context.Context, src []byte, ext string, cut ClipCut, progress func(float64), mask frameMask) ([]byte, error) {
 	ffmpeg, ffprobe, err := tools()
 	if err != nil {
 		return nil, err
@@ -54,11 +88,8 @@ func (m *Matter) CutClip(ctx context.Context, src []byte, ext string, progress f
 		return nil, err
 	}
 	defer os.RemoveAll(dir)
-	if ext == "" || len(ext) > 6 {
-		ext = ".mp4"
-	}
-	in := filepath.Join(dir, "in"+ext)
-	if err := os.WriteFile(in, src, 0o600); err != nil {
+	in, err := writeClip(dir, src, ext)
+	if err != nil {
 		return nil, err
 	}
 	info, frames, err := probe(ctx, ffprobe, in)
@@ -103,7 +134,7 @@ func (m *Matter) CutClip(ctx context.Context, src []byte, ext string, progress f
 		_ = dec.Wait()
 		return nil, fmt.Errorf("ffmpeg would not start: %w", err)
 	}
-	cutErr := m.cutFrames(ctx, bufio.NewReaderSize(decOut, 1<<20), encIn, info, frames, progress)
+	cutErr := cutFrames(ctx, bufio.NewReaderSize(decOut, 1<<20), encIn, info, frames, cut, progress, mask)
 	encIn.Close()
 	if cutErr != nil {
 		_ = dec.Process.Kill()
@@ -120,14 +151,23 @@ func (m *Matter) CutClip(ctx context.Context, src []byte, ext string, progress f
 	return os.ReadFile(out)
 }
 
+// writeClip puts the source where ffprobe and ffmpeg can read it, by its extension.
+func writeClip(dir string, src []byte, ext string) (string, error) {
+	if ext == "" || len(ext) > 6 {
+		ext = ".mp4"
+	}
+	in := filepath.Join(dir, "in"+ext)
+	return in, os.WriteFile(in, src, 0o600)
+}
+
 // cutFrames reads raw RGB frames until the decoder is done and writes each as RGBA,
 // masked.
-func (m *Matter) cutFrames(ctx context.Context, r io.Reader, w io.Writer, info ClipInfo, frames int, progress func(float64)) error {
+func cutFrames(ctx context.Context, r io.Reader, w io.Writer, info ClipInfo, frames int, cut ClipCut, progress func(float64), judge frameMask) error {
 	rgb := make([]byte, info.Width*info.Height*3)
 	frame := image.NewRGBA(image.Rect(0, 0, info.Width, info.Height))
 	rgba := make([]byte, info.Width*info.Height*4)
-	var prev []uint8
 	var edge edgeWork
+	var grid gridWork
 	for n := 0; ; n++ {
 		if _, err := io.ReadFull(r, rgb); err != nil {
 			// A short last frame is a decoder that stopped mid-frame; what came before
@@ -146,18 +186,15 @@ func (m *Matter) cutFrames(ctx context.Context, r io.Reader, w io.Writer, info C
 		for i, j := 0, 0; i < len(rgb); i, j = i+3, j+4 {
 			frame.Pix[j], frame.Pix[j+1], frame.Pix[j+2], frame.Pix[j+3] = rgb[i], rgb[i+1], rgb[i+2], 255
 		}
-		mask, err := m.Mask(ctx, frame)
+		mask, err := judge(ctx, frame, rgb)
 		if err != nil {
 			return err
 		}
-		if prev != nil {
-			steadied(mask.Pix, prev)
-		} else {
-			prev = make([]uint8, len(mask.Pix))
-		}
-		copy(prev, mask.Pix)
-		edge.composeEdge(rgba, rgb, mask.Pix, info.Width, info.Height)
+		edge.composeEdge(rgba, rgb, mask, info.Width, info.Height)
 		edge.steadyAlpha(rgba, n == 0)
+		if cut.Grid.Active() {
+			grid.snap(rgba, info.Width, info.Height, cut.Grid)
+		}
 		if _, err := w.Write(rgba); err != nil {
 			return fmt.Errorf("ffmpeg stopped taking frames: %w", err)
 		}

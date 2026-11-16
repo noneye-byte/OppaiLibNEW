@@ -45,6 +45,12 @@ export interface ComposeOptions {
    * subject's own colour instead.
    */
   spill: number;
+  /**
+   * Puts the cut on a grid, in place of feathering it: a pixel-art square's cutout,
+   * whose every cell is her or not (pixel-grid.ts's snapAlpha, with the square's grid).
+   * Handed in rather than imported so this file stays plain arithmetic.
+   */
+  snap?: (alpha: Uint8Array, width: number, height: number) => Uint8Array;
 }
 
 export const DEFAULT_COMPOSE: ComposeOptions = { feather: 2, spill: 0.5 };
@@ -388,7 +394,11 @@ export class CutoutSession {
     };
     if (showOriginal) return out;
 
-    const alpha = this.featheredAlpha(Math.max(0, Math.round(options.feather)));
+    // A feathered edge on a grid would only be averaged away again, so a snapped cut
+    // starts from the hard one.
+    const alpha = options.snap
+      ? options.snap(this.featheredAlpha(0), this.width, this.height)
+      : this.featheredAlpha(Math.max(0, Math.round(options.feather)));
     const spill = clamp(options.spill, 0, 1);
     const [kr, kg, kb] = this.key;
 

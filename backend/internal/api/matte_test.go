@@ -2,14 +2,17 @@ package api
 
 import (
 	"bytes"
+	"encoding/json"
 	"image"
 	"image/png"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/youruser/oppailib/internal/matte"
@@ -80,6 +83,94 @@ func TestAClipsBackgroundIsCutIntoATakeBesideIt(t *testing.T) {
 	}
 	p, _ := s.genCache.get(out.Clip.ID)
 	// WebM starts with the EBML magic.
+	if p == nil || !bytes.HasPrefix(p.data, []byte{0x1a, 0x45, 0xdf, 0xa3}) {
+		t.Fatal("the cut clip is not a WebM")
+	}
+}
+
+func TestACutHandedToBriaWithoutAKeySaysSoAndIsNotRun(t *testing.T) {
+	s, token := newTestServer(t)
+	cur := s.settings.Get()
+	cur.LibbyClipURL = "http://127.0.0.1:1"
+	cur.ClipCutBria = true
+	s.settings.Set(cur)
+	rec := do(t, s.Handler(), token, http.MethodPost, "/api/imagegen/clip/matte", `{"id":"x"}`)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "Comfy.org API key") {
+		t.Fatalf("no key: %d %s", rec.Code, rec.Body)
+	}
+	// Bria needs no model on this server, so its problem is the only one said.
+	set := s.settings.Get()
+	if s.clipCutProblem(set) == s.matteProblem() || clipCutBy(set) != "bria" {
+		t.Fatalf("problem %q, by %q", s.clipCutProblem(set), clipCutBy(set))
+	}
+}
+
+func TestBriasCutComesBackOnItsScreenAndIsKeyedIntoATakeOnThePixelGrid(t *testing.T) {
+	ffmpeg, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("needs ffmpeg")
+	}
+	if _, err := exec.LookPath("ffprobe"); err != nil {
+		t.Skip("needs ffprobe")
+	}
+	// Her clip, on a blue screen; and what Bria sends back, her on flat blue.
+	dir := t.TempDir()
+	clip := func(name, colour string) []byte {
+		path := filepath.Join(dir, name)
+		if out, err := exec.Command(ffmpeg, "-v", "error", "-f", "lavfi", "-i", "color=c="+colour+":size=64x48:rate=8", "-t", "1",
+			"-vf", "drawbox=x=20:y=10:w=24:h=30:color=0xC85A14:t=fill", "-c:v", "mpeg4", "-pix_fmt", "yuv420p", path).CombinedOutput(); err != nil {
+			t.Fatalf("making the clip: %v %s", err, out)
+		}
+		data, _ := os.ReadFile(path)
+		return data
+	}
+	source, cutOut := clip("src.mp4", "0x1838E6"), clip("bria.mp4", "0x0000FF")
+	var mu sync.Mutex
+	var graph map[string]any
+	var extra map[string]any
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /upload/image", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"name":"up.mp4","subfolder":""}`)
+	})
+	mux.HandleFunc("POST /prompt", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Prompt map[string]any `json:"prompt"`
+			Extra  map[string]any `json:"extra_data"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		mu.Lock()
+		graph, extra = body.Prompt, body.Extra
+		mu.Unlock()
+		_, _ = io.WriteString(w, `{"prompt_id":"p1"}`)
+	})
+	mux.HandleFunc("GET /history/p1", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"p1":{"outputs":{"3":{"images":[{"filename":"bria.mp4","subfolder":"","type":"output"}]}},"status":{"status_str":"success"}}}`)
+	})
+	mux.HandleFunc("GET /view", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write(cutOut) })
+	comfy := httptest.NewServer(mux)
+	t.Cleanup(comfy.Close)
+
+	s, token := newTestServer(t)
+	cur := s.settings.Get()
+	cur.LibbyClipURL, cur.ClipCutBria, cur.ComfyOrgAPIKey = comfy.URL, true, "comfyui-key"
+	s.settings.Set(cur)
+	id := s.genCache.put(&genPreview{data: source, mime: "video/mp4", prompt: "she waves", seed: 7})
+	out := postClip(t, s, token, "/api/imagegen/clip/matte", map[string]any{"id": id, "grid": map[string]any{"cols": 16, "rows": 12}})
+	if !strings.Contains(out.Clip.Recipe, "by Bria") || !strings.Contains(out.Clip.Recipe, "16×12 pixel grid") {
+		t.Fatalf("cut clip: %+v", out.Clip)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if extra["api_key_comfy_org"] != "comfyui-key" {
+		t.Fatalf("extra_data = %v", extra)
+	}
+	for _, raw := range graph {
+		n := raw.(map[string]any)
+		if n["class_type"] == "BriaRemoveVideoBackground" && n["inputs"].(map[string]any)["background_color"] != "Blue" {
+			t.Fatalf("a clip on blue was cut onto %v", n["inputs"])
+		}
+	}
+	p, _ := s.genCache.get(out.Clip.ID)
 	if p == nil || !bytes.HasPrefix(p.data, []byte{0x1a, 0x45, 0xdf, 0xa3}) {
 		t.Fatal("the cut clip is not a WebM")
 	}

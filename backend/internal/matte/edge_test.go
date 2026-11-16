@@ -62,7 +62,7 @@ func cutTwoFrames(t *testing.T, w, h int, first, second []byte) []byte {
 	var out bytes.Buffer
 	m := NewFunc(64, softSeg)
 	info := ClipInfo{Width: w, Height: h, FPS: "16/1"}
-	if err := m.cutFrames(context.Background(), bytes.NewReader(append(append([]byte{}, first...), second...)), &out, info, 2, nil); err != nil {
+	if err := cutFrames(context.Background(), bytes.NewReader(append(append([]byte{}, first...), second...)), &out, info, 2, ClipCut{}, nil, m.modelFrames()); err != nil {
 		t.Fatal(err)
 	}
 	if out.Len() != w*h*4*2 {

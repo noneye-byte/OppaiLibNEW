@@ -78,13 +78,23 @@ func (c *Client) RunComfyWorkflow(ctx context.Context, base, workflow string, va
 
 // runComfyGraph queues a filled-in workflow and waits for what it saved.
 func (c *Client) runComfyGraph(ctx context.Context, base string, graph map[string]any, progress func(Progress)) ([]ComfyOutput, error) {
+	return c.runComfyGraphWith(ctx, base, graph, nil, progress)
+}
+
+// runComfyGraphWith is runComfyGraph with extra_data beside the graph: what a partner
+// node reads its Comfy.org key from when the workflow does not come from ComfyUI's page.
+func (c *Client) runComfyGraphWith(ctx context.Context, base string, graph, extra map[string]any, progress func(Progress)) ([]ComfyOutput, error) {
 	clientID := comfyClientID()
 	var queued struct {
 		PromptID string         `json:"prompt_id"`
 		Error    any            `json:"error"`
 		Nodes    map[string]any `json:"node_errors"`
 	}
-	if err := c.postJSON(ctx, base+"/prompt", map[string]any{"prompt": graph, "client_id": clientID}, &queued); err != nil {
+	body := map[string]any{"prompt": graph, "client_id": clientID}
+	if len(extra) > 0 {
+		body["extra_data"] = extra
+	}
+	if err := c.postJSON(ctx, base+"/prompt", body, &queued); err != nil {
 		return nil, fmt.Errorf("ComfyUI refused the workflow: %w", err)
 	}
 	if queued.PromptID == "" {

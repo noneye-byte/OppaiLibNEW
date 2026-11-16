@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"image"
 	"image/png"
 	"io"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/youruser/oppailib/internal/imagegen"
 	"github.com/youruser/oppailib/internal/matte"
+	"github.com/youruser/oppailib/internal/settings"
 )
 
 // Background removal, for sprites and clips (internal/matte).
@@ -23,6 +25,11 @@ import (
 // mask its brushes then correct. A clip's is a frame at a time on the CPU — minutes for
 // a long one — so it runs as a clip's enlargement does, detached and followed by its
 // job, and lands beside the clip it came from as a take of its own.
+//
+// A clip can instead be cut by Bria, through ComfyUI, when Settings say so
+// (ClipCutBria): Bria puts her on a flat screen and the screen is keyed out here, so
+// the model is not needed for it, only ffmpeg. Which screen is the one she was drawn
+// on, green unless that was blue: a screen is chosen to be a colour she is not.
 
 // matteMaxBytes bounds a picture sent to be cut; a sprite square is a few megabytes.
 const matteMaxBytes = 40 << 20
@@ -91,12 +98,38 @@ type clipMatteReq struct {
 	// NoGallery is as on clipReq: a sprite square's clip, cut on its way to the wardrobe.
 	NoGallery bool `json:"noGallery"`
 	Detach    bool `json:"detach"`
+	// Grid is a pixel-art sprite's cells, which every cut frame is put back on: see
+	// matte/grid.go.
+	Grid *matte.Grid `json:"grid,omitempty"`
+}
+
+// clipCutProblem says why a clip cannot have its background cut, "" when it can.
+func (s *Server) clipCutProblem(set settings.Settings) string {
+	if !set.ClipCutBria {
+		return s.matteProblem()
+	}
+	switch {
+	case strings.TrimSpace(set.LibbyClipURL) == "":
+		return "cutting with Bria runs through ComfyUI — set its address under Image generation → Video"
+	case set.ComfyOrgAPIKey == "":
+		return imagegen.ErrBriaKey.Error()
+	}
+	return matte.ToolsProblem()
+}
+
+// clipCutBy names what cuts a clip, for the studio to say so.
+func clipCutBy(set settings.Settings) string {
+	if set.ClipCutBria {
+		return "bria"
+	}
+	return "server"
 }
 
 // handleClipMatte cuts the background off a finished clip. The cut clip is a new one
 // beside it, as an enlargement is, so the original is there to go back to.
 func (s *Server) handleClipMatte(w http.ResponseWriter, r *http.Request) {
-	if p := s.matteProblem(); p != "" {
+	set := s.settings.Get()
+	if p := s.clipCutProblem(set); p != "" {
 		writeErr(w, http.StatusConflict, p)
 		return
 	}
@@ -105,7 +138,14 @@ func (s *Server) handleClipMatte(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid body")
 		return
 	}
-	set := s.settings.Get()
+	var cut matte.ClipCut
+	if req.Grid != nil {
+		if req.Grid.Cols > 4096 || req.Grid.Rows > 4096 || req.Grid.Cols < 0 || req.Grid.Rows < 0 {
+			writeErr(w, http.StatusBadRequest, "a pixel grid is up to 4096 cells a side")
+			return
+		}
+		cut.Grid = *req.Grid
+	}
 	src, ok := s.clipToUpscale(w, r, set, clipUpscaleReq{Gallery: req.Gallery, ID: req.ID, Outfit: req.Outfit})
 	if !ok {
 		return
@@ -115,25 +155,63 @@ func (s *Server) handleClipMatte(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "only a video clip can have its background cut — a GIF or WebP is a picture")
 		return
 	}
+	// Bria runs on Comfy.org's servers and ComfyUI only passes the clip along, so
+	// neither way lends it the card.
 	s.serveLongJob(w, r, req.JobID, req.Detach, "background cut", nil, func(ctx context.Context, report func(imagegen.Progress)) (genResult, error) {
-		data, err := s.matte.CutClip(ctx, src.data, ext, func(done float64) { report(imagegen.Progress{Percent: done}) })
+		if set.ClipCutBria {
+			data, err := s.briaCut(ctx, set, src.data, ext, cut, report)
+			if err != nil {
+				return genResult{}, err
+			}
+			return s.cutClip(ctx, req, src, data, "background removed by Bria"), nil
+		}
+		data, err := s.matte.CutClip(ctx, src.data, ext, cut, func(done float64) { report(imagegen.Progress{Percent: done}) })
 		if err != nil {
 			return genResult{}, err
 		}
-		return s.cutClip(ctx, req, src, data), nil
+		return s.cutClip(ctx, req, src, data, "background removed"), nil
+	})
+}
+
+// briaCut has Bria put her on the screen she was drawn on and keys it out. Bria's
+// half is the wait, so it has most of the bar.
+func (s *Server) briaCut(ctx context.Context, set settings.Settings, clip []byte, ext string, cut matte.ClipCut, report func(imagegen.Progress)) ([]byte, error) {
+	screen, err := matte.ClipScreen(ctx, clip, ext)
+	if err != nil {
+		return nil, err
+	}
+	colour := "Green"
+	if screen == "blue" {
+		colour = "Blue"
+	}
+	outs, err := s.imagegen.RunBriaCut(ctx, set.LibbyClipURL, set.ComfyOrgAPIKey, clip, ext, colour, func(p imagegen.Progress) {
+		report(imagegen.Progress{Percent: p.Percent * 0.8})
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := outs[0]
+	outExt, ok := clipVideoExt(out.MIME)
+	if !ok {
+		return nil, fmt.Errorf("Bria's cut came back as %s, not a video", out.MIME)
+	}
+	return matte.KeyClip(ctx, out.Data, outExt, cut, func(done float64) {
+		report(imagegen.Progress{Percent: 0.8 + done*0.2})
 	})
 }
 
 // cutClip files a clip with its background cut away: a preview, kept in the gallery
 // beside the clip it came from, with that clip's record.
-func (s *Server) cutClip(ctx context.Context, req clipMatteReq, src clipSource, data []byte) genResult {
+func (s *Server) cutClip(ctx context.Context, req clipMatteReq, src clipSource, data []byte, recipe string) genResult {
 	set := s.settings.Get()
 	const mime = "video/webm"
 	rec := src.record
 	if rec.Clip == nil {
 		rec.Clip = &genRecordClip{}
 	}
-	recipe := "background removed"
+	if req.Grid != nil && req.Grid.Active() {
+		recipe += fmt.Sprintf(" · on a %d×%d pixel grid", req.Grid.Cols, req.Grid.Rows)
+	}
 	if prev := strings.TrimSpace(rec.Clip.Recipe); prev != "" {
 		recipe = prev + " · " + recipe
 	}

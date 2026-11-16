@@ -320,3 +320,23 @@ test("a matte of the wrong size is refused rather than smeared", () => {
   const session = new CutoutSession(picture(withHole));
   assert.throws(() => session.applyMatte(new Uint8Array(3)));
 });
+
+test("a pixel-art square's cut is on its grid: every cell her or not, with no feather", async () => {
+  const { snapAlpha } = await import("./pixel-grid.ts");
+  // Two 2×2 cells across, two down: the subject covers three pixels of the top-left
+  // cell and one of the top-right.
+  const s = new CutoutSession(picture([
+    "##.#",
+    "#...",
+    "....",
+    "....",
+  ]));
+  s.applyMatte([
+    255, 255, 0, 255,
+    255, 0, 0, 0,
+    0, 0, 0, 0,
+    0, 0, 0, 0,
+  ]);
+  const px = s.composePixels({ feather: 4, spill: 0.5, snap: (a, w, h) => snapAlpha(a, w, h, { cols: 2, rows: 2 }) });
+  assert.deepEqual([alphaAt(px, 0, 0), alphaAt(px, 1, 1), alphaAt(px, 2, 0), alphaAt(px, 3, 0), alphaAt(px, 0, 2)], [255, 255, 0, 0, 0]);
+});
