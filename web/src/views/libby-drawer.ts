@@ -274,7 +274,9 @@ export class OppaiLibbyDrawer extends LitElement {
     try {
       const workspace = await api.chatWorkspace();
       this.profile = workspace.profile ?? null;
-      this.characters = (workspace.characters ?? []).filter((character) => character?.id);
+      // Browsing together is the library, and the library is Libby's: a card character
+      // is a SillyTavern card with no part in it, so it is not offered here.
+      this.characters = (workspace.characters ?? []).filter((character) => character?.id === "libby");
       if (!this.characters.some((character) => character.id === this.characterID)) {
         this.characterID = this.characters[0]?.id ?? "libby";
       }

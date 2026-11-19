@@ -65,6 +65,11 @@ ldflags, so there is nothing to edit there.
   each conversation's `rev`. A client that saves without sending back the `rev` it was
   last streamed cannot delete her messages, and one that drops `rev`, `images`, `voice`
   or `scene` on save (Android's `Models.kt`) loses them for everyone.
+- **Her prompt's head is a cache key.** `buildTurnPrompt` writes what holds still into
+  `head` and what changes per turn into `late`/`tail`/`Late` sections, which go in a
+  system note just before the newest message (`fitChatTurnCached`). Anything that moves
+  between turns written into `head` makes llama.cpp re-read the whole conversation every
+  turn, which on her V100 was most of the wait.
 - **`mediaColumns` and `briefColumns`** are the two column lists the media queries share.
   Adding a column to one scan means adding it to that constant, not to a single query.
 

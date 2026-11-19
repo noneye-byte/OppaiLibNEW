@@ -2063,3 +2063,48 @@ data class SourceSaveRequest(
     val kind: String? = null,
     val tags: List<String> = emptyList(),
 )
+
+/** A card character's expression pack: each label's file names, and SillyTavern's own
+ *  labels. See the server's chat_expressions.go. Libby has none: her face is her wardrobe. */
+@Serializable
+data class ExpressionPack(
+    val expressions: Map<String, List<String>> = emptyMap(),
+    val labels: List<String> = emptyList(),
+    val saved: List<String> = emptyList(),
+    val skipped: List<String> = emptyList(),
+)
+
+/** One chub.ai card in a search. `avatar` is the server's proxy of its picture. See chub.go. */
+@Serializable
+data class ChubCard(
+    val path: String,
+    val name: String,
+    val tagline: String = "",
+    val topics: List<String> = emptyList(),
+    val stars: Int = 0,
+    val chats: Int = 0,
+    val tokens: Int = 0,
+    val nsfw: Boolean = false,
+    val avatar: String = "",
+)
+
+@Serializable
+data class ChubPage(
+    val items: List<ChubCard> = emptyList(),
+    val total: Int = 0,
+    val page: Int = 1,
+    val more: Boolean = false,
+)
+
+/** One chub.ai card to import: a Character Card V2 object, its art as a data URL ("" for
+ *  none), and how many expressions its pack has a picture for. */
+@Serializable
+data class ChubCharacter(
+    val path: String,
+    val card: JsonObject,
+    val avatar: String = "",
+    val expressions: Int = 0,
+)
+
+@Serializable
+data class ChubExpressionsRequest(val path: String, val characterId: String)

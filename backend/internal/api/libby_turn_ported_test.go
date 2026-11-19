@@ -32,8 +32,25 @@ func turnFor(text, extra string) string {
 		`"messages":[{"id":"` + randomID() + `","role":"user","content":` + string(raw) + `,"at":` + strconv.Itoa(turnSeq) + `}]` + extra + `}`
 }
 
-// systemPrompt is the first message of a completion the fake received.
+// systemPrompt is everything a completion the fake received told her as system: the
+// system message and the turn's late note (fitChatTurnCached), joined.
 func systemPrompt(body map[string]any) string {
+	msgs, _ := body["messages"].([]any)
+	var parts []string
+	for _, raw := range msgs {
+		m, _ := raw.(map[string]any)
+		if m["role"] != "system" {
+			continue
+		}
+		if s, ok := m["content"].(string); ok {
+			parts = append(parts, s)
+		}
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+// firstSystem is the first message alone, the prefix the backend caches.
+func firstSystem(body map[string]any) string {
 	msgs, _ := body["messages"].([]any)
 	if len(msgs) == 0 {
 		return ""

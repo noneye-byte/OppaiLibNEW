@@ -25,6 +25,7 @@ import { LIBBY_PROGRESSION_MULTIPLIERS, getProgressionMultiplier, setProgression
 import "./launchy-panel.js";
 import "./model-transfer.js";
 import { generatorName } from "../model-manage.js";
+import { CLIP_CUT_MODELS, clipCutModelHelp } from "../clip-cut-models.js";
 import {
   YOU_SEEDS, YOU_STYLES, hexFromCss, readYouPref, storedYou, youCss, youIsStale, youPreview, type YouPref, type YouStyle,
 } from "../material-you.js";
@@ -2692,32 +2693,34 @@ export class OppaiSettings extends LitElement {
               </div>
               <div class="field">
                 <div class="field-text">
-                  <div class="field-label">Cut clips' backgrounds with Bria</div>
+                  <div class="field-label">Cut clips' backgrounds in ComfyUI</div>
                   <div class="field-help">
-                    Bria's video background removal, one of ComfyUI's partner nodes, takes her off her background in
-                    place of the model on this server; OppaiLib keys out the flat screen it hands back. It runs on
-                    Comfy.org's servers and is paid from that account's credits, about $0.05 a second of clip. A
-                    workflow sent by OppaiLib has no one signed in to ComfyUI's page, so it needs the account's API
-                    key, from <code>platform.comfy.org</code>. The key is stored on this server and never sent back to
-                    the browser.
+                    Cuts her out of a clip on the graphics card, with the ComfyUI-RMBG nodes, in place of the model on
+                    this server's processor — far quicker, and with a model made for drawn characters. Install
+                    <strong>ComfyUI-RMBG</strong> (by 1038lab) from ComfyUI Manager and restart ComfyUI; its models
+                    download themselves on first use, all but VRMBG's. OppaiLib keys out the flat screen ComfyUI lays
+                    her on.
                   </div>
                 </div>
                 <div class="field-control">
-                  <button class="switch ${s.clipCutBria ? "on" : ""}" role="switch"
-                    aria-checked=${s.clipCutBria ? "true" : "false"} aria-label="Cut clips' backgrounds with Bria"
-                    ?disabled=${!this.canEdit} @click=${() => this.edit({ clipCutBria: !s.clipCutBria })}></button>
+                  <button class="switch ${s.clipCutComfy ? "on" : ""}" role="switch"
+                    aria-checked=${s.clipCutComfy ? "true" : "false"} aria-label="Cut clips' backgrounds in ComfyUI"
+                    ?disabled=${!this.canEdit} @click=${() => this.edit({ clipCutComfy: !s.clipCutComfy })}></button>
                 </div>
-                ${s.clipCutBria ? html`<div class="field-control">
-                  <input type="password" autocomplete="new-password"
-                    placeholder=${s.comfyOrgApiKeySet ? "•••••••• (unchanged)" : "Comfy.org API key (comfyui-…)"}
-                    ?disabled=${!this.canEdit}
-                    @change=${(e: Event) => this.edit({ comfyOrgApiKey: (e.target as HTMLInputElement).value })} />
-                </div>
-                ${s.comfyOrgApiKeySet ? html`<div class="field-control">
-                  <button type="button" class="btn-inline" ?disabled=${!this.canEdit}
-                    @click=${() => this.edit({ comfyOrgApiKey: "", comfyOrgApiKeySet: false })}>Clear saved key</button>
-                </div>` : nothing}` : nothing}
               </div>
+              ${s.clipCutComfy ? html`<div class="field">
+                <div class="field-text">
+                  <div class="field-label">Cut with</div>
+                  <div class="field-help">${clipCutModelHelp(s.clipCutModel)}</div>
+                </div>
+                <div class="field-control">
+                  <select ?disabled=${!this.canEdit}
+                    @change=${(e: Event) => this.edit({ clipCutModel: (e.target as HTMLSelectElement).value })}>
+                    ${CLIP_CUT_MODELS.map((m) => html`<option value=${m.id}
+                      ?selected=${(s.clipCutModel || CLIP_CUT_MODELS[0].id) === m.id}>${m.label}</option>`)}
+                  </select>
+                </div>
+              </div>` : nothing}
               <div class="field-help" style="margin:0 0 4px;">
                 The files below are where the Video studio starts and what Libby's clips run; the studio picks its own
                 over them for each clip, as the Image studio picks a checkpoint.

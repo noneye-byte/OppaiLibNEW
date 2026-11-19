@@ -6772,8 +6772,8 @@ export class OppaiImageGen extends LitElement {
     const cutNeedsClip = cutMakes.includes("clip");
     const cutTitle = !matte ? this.status?.clipCutProblem || "Background removal isn't available here"
       : !shot ? "Its picture comes first"
-      : !cutNeedsClip ? (this.status?.clipCutBy === "bria"
-        ? "Remove the background: Bria cuts her out of the clip, through ComfyUI (paid from Comfy.org credits)"
+      : !cutNeedsClip ? (this.status?.clipCutBy === "comfy"
+        ? "Remove the background: ComfyUI cuts her out of the clip, on the graphics card"
         : "Remove the background: cut her out of the clip, frame by frame, on the server")
       : !clips?.image ? "No picture-to-video model is set up — Settings → Image generation → Video"
       : anim?.clip ? "Its clip is of an older picture: this makes a new clip of this one, then cuts it"

@@ -64,6 +64,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.TravelExplore
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Gif
 import androidx.compose.material.icons.filled.Image
@@ -115,6 +116,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -199,6 +201,8 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.buildJsonObject
 import net.fourbakers.oppailib.data.ChatCharacter
+import net.fourbakers.oppailib.data.ChubCard
+import net.fourbakers.oppailib.data.ChubExpressionsRequest
 import net.fourbakers.oppailib.data.ChatConversation
 import net.fourbakers.oppailib.data.ChatImage
 import net.fourbakers.oppailib.data.ChatImageUpload
@@ -223,7 +227,7 @@ import java.util.Date
 import java.util.Locale
 import java.util.UUID
 
-private object ChatColors {
+internal object ChatColors {
     val rail: Color @Composable get() = MaterialTheme.colorScheme.surface
     val side: Color @Composable get() = MaterialTheme.colorScheme.surfaceVariant
     val main: Color @Composable get() = MaterialTheme.colorScheme.background
@@ -398,6 +402,13 @@ fun ChatScreen(
     var settingsOpen by remember { mutableStateOf(false) }
     var settingsTab by remember { mutableStateOf("character") }
     var addFriend by remember { mutableStateOf(false) }
+    // chub.ai's search (ChubBrowseDialog), the card being imported from it, and the
+    // ones imported this time it was open.
+    var chubOpen by remember { mutableStateOf(false) }
+    var chubImporting by remember { mutableStateOf("") }
+    var chubAdded by remember { mutableStateOf(emptySet<String>()) }
+    // Card characters' expression packs by character id; see CardExpressionBanner.
+    var expressionPacks by remember { mutableStateOf(emptyMap<String, Map<String, List<String>>>()) }
     var friendName by remember { mutableStateOf("") }
     var imageTags by remember { mutableStateOf("") }
     var uploading by remember { mutableStateOf(false) }
@@ -593,6 +604,56 @@ fun ChatScreen(
                 }
             }.onSuccess { char -> val latest = workspace ?: ws; val next = newConversation(latest.copy(characters = latest.characters + char), char); save(next); message = "${char.name} joined your friends." }
                 .onFailure { message = "Couldn't import that character card." }
+        }
+    }
+
+    /**
+     * Imports a card found on chub.ai: the server hands it over as a V2 card, read by the
+     * same importer as a card file, with its art, which becomes their portrait; then its
+     * expression pack is filed by the server into theirs. The web does the same
+     * (importFromChub in chat.ts).
+     */
+    fun importFromChub(card: ChubCard) {
+        val ws = workspace ?: return
+        if (chubImporting.isNotBlank()) return
+        if (ws.characters.size >= 40) { message = "The workspace is full: 40 characters at most."; return }
+        chubImporting = card.path
+        scope.launch {
+            runCatching {
+                val got = repo.api.chubCharacter(card.path)
+                var char = withContext(Dispatchers.Default) { importedCardCharacter(got.card.toString(), card.name) }
+                // Saved before the portrait, so the upload has a character to belong to.
+                val latest = workspace ?: ws
+                val withChar = newConversation(latest.copy(characters = latest.characters + char), char)
+                workspace = repo.api.saveChatWorkspace(withChar)
+                if (got.avatar.isNotBlank()) {
+                    runCatching { repo.api.uploadChatImage(ChatImageUpload(char.id, "${char.name} avatar", got.avatar, listOf("portrait"))) }
+                        .onSuccess { image ->
+                            char = char.copy(avatarImageId = image.id)
+                            val now = workspace ?: withChar
+                            workspace = repo.api.saveChatWorkspace(now.copy(
+                                characters = now.characters.map { if (it.id == char.id) char else it },
+                                images = (now.images + image).distinctBy { it.id },
+                            ))
+                        }
+                }
+                characterId = char.id
+                (workspace?.let { conversations(it, char.id).firstOrNull() })?.let { conversationId = it.id }
+                var note = "${char.name} joined your friends from chub.ai."
+                if (got.expressions > 0) {
+                    runCatching { repo.api.chubExpressions(ChubExpressionsRequest(card.path, char.id)) }
+                        .onSuccess { pack ->
+                            expressionPacks = expressionPacks + (char.id to pack.expressions)
+                            note += " ${pack.saved.size} expressions came with them."
+                        }
+                        .onFailure { note += " Their expression pack didn't come (${it.message})." }
+                }
+                note
+            }.onSuccess { note ->
+                chubAdded = chubAdded + card.path
+                message = note
+            }.onFailure { message = "Couldn't add ${card.name}: ${it.message}" }
+            chubImporting = ""
         }
     }
 
@@ -979,6 +1040,11 @@ fun ChatScreen(
             dismissButton = { TextButton(onClick = { confirmDelete = null }) { Text("Cancel") } },
         )
     }
+    if (chubOpen) ChubBrowseDialog(
+        repo = repo, importing = chubImporting, added = chubAdded,
+        onPick = { importFromChub(it) }, onDismiss = { chubOpen = false; if (chubAdded.isNotEmpty()) inbox = false },
+    )
+
     if (addFriend) AlertDialog(
         onDismissRequest = { addFriend = false }, title = { Text("Add a friend") },
         text = { TextField(friendName, { friendName = it }, label = { Text("Name") }) },
@@ -1061,6 +1127,7 @@ fun ChatScreen(
             },
             onAddFriend = { addFriend = true },
             onImport = { cardImporter.launch("*/*") },
+            onChub = { chubOpen = true },
             onSettings = { settingsOpen = true },
             onDelete = { confirmDelete = it },
         )
@@ -1141,6 +1208,17 @@ fun ChatScreen(
                     status = status?.takeIf { it.enabled }?.model ?: "Local replies",
                     onOpenCall = { callOpen = true },
                 )
+            }
+            if (char.id != "libby" && !callOpen) {
+                // A card character's face: its expression pack, SillyTavern's sprites,
+                // by the label the server read off its last reply.
+                LaunchedEffect(char.id) {
+                    if (char.id !in expressionPacks) {
+                        runCatching { repo.api.expressions(char.id) }.onSuccess { expressionPacks = expressionPacks + (char.id to it.expressions) }
+                    }
+                }
+                val pack = expressionPacks[char.id].orEmpty()
+                if (pack.isNotEmpty()) CardExpressionBanner(repo, char, convo, pack, typing = busy && typingPhase == TypingPhase.TYPING)
             }
             if (char.id != "libby") {
                 Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1919,6 +1997,7 @@ private fun ChatInbox(
     onNewConversation: (String) -> Unit,
     onAddFriend: () -> Unit,
     onImport: () -> Unit,
+    onChub: () -> Unit,
     onSettings: () -> Unit,
     onDelete: (ChatConversation) -> Unit,
 ) {
@@ -1954,6 +2033,7 @@ private fun ChatInbox(
                 DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                     DropdownMenuItem(text = { Text("Add a friend") }, leadingIcon = { Icon(Icons.Filled.PersonAdd, null) }, onClick = { menuOpen = false; onAddFriend() })
                     DropdownMenuItem(text = { Text("Import a character card") }, leadingIcon = { Icon(Icons.Filled.Download, null) }, onClick = { menuOpen = false; onImport() })
+                    DropdownMenuItem(text = { Text("Find one on chub.ai") }, leadingIcon = { Icon(Icons.Filled.TravelExplore, null) }, onClick = { menuOpen = false; onChub() })
                 }
             }
         }
@@ -2941,6 +3021,51 @@ private fun expandCardMacros(text: String, charName: String, userName: String): 
     return cardMacro.replace(text) { m -> if (m.value.contains("char", true) || m.value.contains("bot", true)) char else user }
 }
 
+/**
+ * The sprite files to try for an expression, best first: its own, then neutral's —
+ * SillyTavern's fallback — and nothing without either. A label with several pictures
+ * shows one per reply, by [pick]. Mirrors expressionSprites in expression-sprites.ts.
+ */
+internal fun expressionSprites(pack: Map<String, List<String>>, label: String, pick: Int = 0): List<String> {
+    fun rotate(files: List<String>): List<String> {
+        if (files.isEmpty()) return files
+        val at = ((pick % files.size) + files.size) % files.size
+        return files.drop(at) + files.take(at)
+    }
+    val own = rotate(pack[label.trim().lowercase()].orEmpty())
+    val neutral = if (label == "neutral") emptyList() else rotate(pack["neutral"].orEmpty())
+    return own + neutral
+}
+
+/**
+ * A card character's bust along the top of the conversation, the way Libby's banner
+ * is hers: the sprite for the expression read off its last reply, neutral when the pack
+ * has none for it. Without a pack there is no banner.
+ */
+@Composable
+private fun CardExpressionBanner(repo: Repository, char: ChatCharacter, conversation: ChatConversation, pack: Map<String, List<String>>, typing: Boolean) {
+    val label = conversation.emotion.ifBlank { "neutral" }.lowercase()
+    val replies = conversation.messages.count { it.role == "assistant" }
+    val files = expressionSprites(pack, label, replies)
+    var tried by remember(label, replies, char.id) { mutableIntStateOf(0) }
+    val file = files.getOrNull(tried) ?: return
+    Box(Modifier.fillMaxWidth().height(124.dp).clipToBounds().background(ChatColors.side)) {
+        AsyncImage(
+            repo.expressionUrl(char.id, file), "${char.name}, $label", imageLoader = repo.imageLoader,
+            contentScale = ContentScale.FillWidth, alignment = Alignment.TopCenter,
+            onError = { tried++ },
+            modifier = Modifier.align(Alignment.TopEnd).padding(end = 10.dp, top = 4.dp).width(156.dp).fillMaxHeight(),
+        )
+        Column(Modifier.align(Alignment.BottomStart).padding(start = 16.dp, bottom = 12.dp, end = 180.dp)) {
+            Text(char.name, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold, fontSize = 16.sp, maxLines = 1)
+            Text(
+                (if (typing) "Typing… · " else "") + label.replace('_', ' ').replaceFirstChar(Char::uppercase),
+                color = ChatColors.muted, fontSize = 12.sp, maxLines = 1,
+            )
+        }
+    }
+}
+
 /** Reads either Character Card V2 JSON or SillyTavern's PNG `chara` tEXt chunk. */
 private fun importedChatCharacter(bytes: ByteArray): ChatCharacter {
     var jsonText = bytes.toString(Charsets.UTF_8)
@@ -2962,13 +3087,26 @@ private fun importedChatCharacter(bytes: ByteArray): ChatCharacter {
             offset += length + 12
         }
     }
+    return importedCardCharacter(jsonText, "Imported friend")
+}
+
+/** A card's JSON — V1, or V2/V3 with its fields under `data` — as a character. A card
+ *  from chub.ai arrives as this already (the server's chubV2Card). */
+private fun importedCardCharacter(jsonText: String, fallbackName: String): ChatCharacter {
     val root = Json.parseToJsonElement(jsonText).jsonObject
     val data = root["data"]?.jsonObject ?: root
-    fun value(name: String, fallback: String = "") = fitBytes(data[name]?.jsonPrimitive?.content ?: fallback, CARD_FIELD_BYTES)
+    fun value(name: String, fallback: String = "") =
+        fitBytes((data[name] as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { it.isString }?.content ?: fallback, CARD_FIELD_BYTES)
+    // Kept for the round trip, as the web keeps them: never shown, but a save that
+    // dropped them would take them from every other client too.
+    val greetings = (data["alternate_greetings"] as? kotlinx.serialization.json.JsonArray).orEmpty()
+        .mapNotNull { (it as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { p -> p.isString }?.content?.takeIf(String::isNotBlank) }
+        .map { fitBytes(it, CARD_FIELD_BYTES) }.take(16)
     return ChatCharacter(
-        id = chatID(), name = value("name", "Imported friend"), description = value("description"), personality = value("personality"),
+        id = chatID(), name = value("name", fallbackName).ifBlank { fallbackName }, description = value("description"), personality = value("personality"),
         scenario = value("scenario"), firstMessage = value("first_mes", value("firstMessage")), exampleDialogue = value("mes_example"),
         systemPrompt = value("system_prompt"), creatorNotes = value("creator_notes"), defaultMode = "roleplay",
+        altGreetings = greetings,
     )
 }
 

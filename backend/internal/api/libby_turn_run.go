@@ -48,6 +48,13 @@ type turnRun struct {
 	visible bool
 	calls   []map[string]any
 	rev     int64
+
+	// started is when the first round was sent, rounds what each cost; see timeRound.
+	started time.Time
+	rounds  []map[string]any
+	// fitted is the prompt as sent, for the expression read that follows a card
+	// character's reply (chat_expressions.go), which reuses it so the backend has it cached.
+	fitted []chatMessage
 }
 
 func (s *Server) newTurnRun(ctx context.Context, r *http.Request, cur settings.Settings, userID int64, isAdmin bool, ws chatWorkspace, req *libbyTurnRequest, model string, stream *turnStream) (*turnRun, error) {
@@ -88,14 +95,25 @@ func (t *turnRun) run() error {
 	// it reads in SillyTavern: one message, paragraphs and all. Held to Libby's texting
 	// — "one text, no blank lines", the rest cut — a roleplay reply lost everything past
 	// its second paragraph, mid-scene.
-	detailed := (detailAsked(v.latestUser) && task == taskCreative) || (!t.isLibby && v.in.Mode == "roleplay")
+	//
+	// A card character always does: SillyTavern answers in one message, whatever the
+	// mode, and that is what a card was written for.
+	detailed := (detailAsked(v.latestUser) && task == taskCreative) || !t.isLibby
 	texts := textsForTurn(task, v.latestUser, rollTexts())
 	if !detailed {
 		t.p.tail += "\n\n" + textCountDirective(texts)
 	}
-	tools := libbyToolset(t.p.tools)
+	// A card character gets no tools. Its whole set was a mood, a reaction, a thought and
+	// a quote — Libby's machinery, not a card's — and offering any tool put a backend
+	// whose template cannot render them into JSON mode, a grammar-constrained envelope
+	// around every reply. Without tools its reply is plain prose, as in SillyTavern, and
+	// its face is read off the reply afterwards (chat_expressions.go).
+	var tools []llmTool
+	if t.isLibby {
+		tools = libbyToolset(t.p.tools)
+	}
 	window := limit - t.p.shown*pictureTokens - toolsTokens(tools)
-	fitted, replyTokens, budget, err := fitChatTurn(t.p.head, t.p.sections, t.p.tail, t.p.history, window, preset.MaxTokens)
+	fitted, replyTokens, budget, err := fitChatTurnCached(t.p.head, t.p.sections, t.p.tail, t.p.history, window, preset.MaxTokens)
 	if err != nil {
 		s.log.Warn("libby context budget", "err", err, "limit", limit)
 		if budget.Note != "" {
@@ -122,11 +140,20 @@ func (t *turnRun) run() error {
 	if t.req.Debug {
 		debug = buildChatDebug(t.p.sections, budget.DroppedSections, budget.ClearedSections, fitted, t.p.signals)
 	}
-	mode := s.toolModeFor(t.ctx, cur.ChatToolMode, cur.ChatURL, t.model)
+	// No tools, nothing to ask the backend about: the probe is a request of its own.
+	mode := toolsNative
+	if len(tools) > 0 {
+		mode = s.toolModeFor(t.ctx, cur.ChatToolMode, cur.ChatURL, t.model)
+	}
+	if lateNoteRefused(cur.ChatURL, t.model) {
+		fitted = foldLateNote(fitted)
+	}
 	msgs := toLLMMessages(fitted, t.p.pictures)
 	t.stream.send("status", map[string]any{"phase": "typing"})
+	t.started = time.Now()
 
 	for round := 0; round < maxTurnRounds; round++ {
+		began := time.Now()
 		reply, used, err := s.completeTurn(t.ctx, payload, msgs, tools, mode)
 		mode = used
 		var refused *chatBackendStatusError
@@ -134,8 +161,24 @@ func (t *turnRun) run() error {
 			// The backend will not take pictures: answer from the tags and remember.
 			s.log.Info("libby eyes: backend refused pictures", "model", t.model, "status", refused.Status)
 			rememberBlind(cur.ChatURL, t.model)
-			msgs = toLLMMessages(withoutEyes(fitted), nil)
+			fitted = withoutEyes(fitted)
+			msgs = toLLMMessages(fitted, nil)
 			reply, mode, err = s.completeTurn(t.ctx, payload, msgs, tools, mode)
+		}
+		if err != nil && round == 0 && refusedLateNote(err) && hasLateNote(fitted) {
+			// A chat template that will not have a system message after the conversation
+			// starts: the old layout, everything in the first one, for this model from now on.
+			s.log.Info("libby: template refused the late note; folding it into the system prompt", "model", t.model, "err", err)
+			rememberLateNoteRefused(cur.ChatURL, t.model)
+			fitted = foldLateNote(fitted)
+			msgs = toLLMMessages(fitted, t.p.pictures)
+			if knownBlind(cur.ChatURL, t.model) {
+				msgs = toLLMMessages(fitted, nil)
+			}
+			reply, mode, err = s.completeTurn(t.ctx, payload, msgs, tools, mode)
+		}
+		if err == nil {
+			t.timeRound(round, began, reply)
 		}
 		if err != nil {
 			if round > 0 {
@@ -188,6 +231,7 @@ func (t *turnRun) run() error {
 		}
 		t.stream.send("status", map[string]any{"phase": "typing"})
 	}
+	t.fitted = fitted
 	t.settle()
 
 	done := map[string]any{
@@ -197,6 +241,7 @@ func (t *turnRun) run() error {
 			"toolMode": string(mode),
 		},
 		"context": budget,
+		"timing":  map[string]any{"ms": time.Since(t.started).Milliseconds(), "rounds": t.rounds},
 	}
 	if debug != nil {
 		done["debug"] = debug
@@ -355,11 +400,22 @@ func (t *turnRun) lastSpoken() string {
 func (t *turnRun) settle() {
 	s, v := t.s, t.v
 	said := strings.Join(t.said, "\n")
-	if !t.moodSet {
-		t.emotion = inferChatEmotion(v.latestUser, said, t.emotion, moodRunLength(v.books.moods, t.emotion))
-	}
-	if !t.heatSet {
-		t.intensity = clampInt(t.intensity+inferHeatDelta(v.latestUser, said), 1, 5)
+	switch {
+	case !t.isLibby:
+		// A card character's face is its expression pack's, read off what it just said;
+		// its heat is not a thing it has. See chat_expressions.go.
+		if said != "" {
+			if label, ok := s.readExpression(t.ctx, t.userID, v.character.ID, t.fitted, said, t.model); ok {
+				t.emotion = label
+			}
+		}
+	default:
+		if !t.moodSet {
+			t.emotion = inferChatEmotion(v.latestUser, said, t.emotion, moodRunLength(v.books.moods, t.emotion))
+		}
+		if !t.heatSet {
+			t.intensity = clampInt(t.intensity+inferHeatDelta(v.latestUser, said), 1, 5)
+		}
 	}
 	if t.activity != "" {
 		t.activity = withinLimits(allowedActivity(t.activity, t.intensity), t.p.limits)

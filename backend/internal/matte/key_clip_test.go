@@ -9,7 +9,7 @@ import (
 )
 
 // realClip is a second of her (an orange block) in front of colour, as ffmpeg encodes
-// it in H.264 4:2:0 — the noise and half-resolution colour of what Bria hands back.
+// it in H.264 4:2:0 — the noise and half-resolution colour of what a cut comes back as.
 func realClip(t *testing.T, colour string) []byte {
 	t.Helper()
 	ffmpeg, err := exec.LookPath("ffmpeg")
@@ -19,7 +19,7 @@ func realClip(t *testing.T, colour string) []byte {
 	if _, err := exec.LookPath("ffprobe"); err != nil {
 		t.Skip("needs ffprobe")
 	}
-	path := filepath.Join(t.TempDir(), "bria.mp4")
+	path := filepath.Join(t.TempDir(), "cut.mp4")
 	if out, err := exec.Command(ffmpeg, "-v", "error", "-f", "lavfi", "-i", "color=c="+colour+":size=96x64:rate=8", "-t", "1",
 		"-vf", "drawbox=x=32:y=16:w=32:h=40:color=0xC85A14:t=fill", "-c:v", "libx264", "-pix_fmt", "yuv420p", path).CombinedOutput(); err != nil {
 		t.Fatalf("making the clip: %v %s", err, out)
@@ -41,7 +41,7 @@ func decoded(t *testing.T, webm []byte, w, h int) []byte {
 	return out[:w*h*4]
 }
 
-func TestAClipOnBriasScreenIsKeyedClearRoundHerAndSolidInHer(t *testing.T) {
+func TestAClipOnACutsScreenIsKeyedClearRoundHerAndSolidInHer(t *testing.T) {
 	const w, h = 96, 64
 	cut, err := KeyClip(context.Background(), realClip(t, "0x00FF00"), ".mp4", ClipCut{}, nil)
 	if err != nil {

@@ -13,8 +13,8 @@ import (
 
 // Keying a clip that something else has already cut.
 //
-// Bria (imagegen/comfy_bria.go) takes her off her background and hands the clip back
-// in front of one flat colour of its own, in H.264, which has no alpha. Its verdict on
+// ComfyUI (imagegen/comfy_rmbg.go) takes her off her background and hands the clip back
+// in front of one flat colour asked of it, in H.264, which has no alpha. Its verdict on
 // where she is, is in that colour: every pixel of the backdrop is the one colour,
 // give or take the encoder's noise, and every pixel of her is something else. So no
 // model runs here. A frame's mask is read off how far each pixel is from the screen,

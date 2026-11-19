@@ -859,6 +859,18 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/chat/models/delete", s.requireAuth(s.requireAdmin(s.handleDeleteChatModel)))
 	mux.HandleFunc("PUT /api/chat/workspace", s.requireAuth(s.handlePutChatWorkspace))
 	mux.HandleFunc("POST /api/chat/images", s.requireAuth(s.handleUploadChatImage))
+	// A card character's expression pack, SillyTavern's sprites. See chat_expressions.go.
+	mux.HandleFunc("GET /api/chat/characters/{id}/expressions", s.requireAuth(s.handleListExpressions))
+	mux.HandleFunc("POST /api/chat/characters/{id}/expressions", s.requireAuth(s.handleUploadExpressions))
+	mux.HandleFunc("DELETE /api/chat/characters/{id}/expressions", s.requireAuth(s.handleDeleteExpression))
+	mux.HandleFunc("GET /api/chat/characters/{id}/expressions/{file}", s.requireAuth(s.handleGetExpression))
+	mux.HandleFunc("DELETE /api/chat/characters/{id}/expressions/{file}", s.requireAuth(s.handleDeleteExpression))
+	// Cards found on chub.ai, fetched by the server for clients that may not leave this
+	// origin. See chub.go.
+	mux.HandleFunc("GET /api/chub/search", s.requireAuth(s.handleChubSearch))
+	mux.HandleFunc("GET /api/chub/avatar", s.requireAuth(s.handleChubAvatar))
+	mux.HandleFunc("GET /api/chub/character", s.requireAuth(s.handleChubCharacter))
+	mux.HandleFunc("POST /api/chub/expressions", s.requireAuth(s.handleChubExpressions))
 	// Libby's card as it ships, so each of her fields can be put back. Read-only.
 	mux.HandleFunc("GET /api/chat/libby-default", s.requireAuth(s.handleLibbyDefaultCard))
 	mux.HandleFunc("GET /api/chat/images/{id}", s.requireAuth(s.handleGetChatImage))

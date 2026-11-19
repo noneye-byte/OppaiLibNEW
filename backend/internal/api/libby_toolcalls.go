@@ -96,6 +96,25 @@ type llmMessage struct {
 type llmReply struct {
 	Text  string
 	Calls []llmToolCall
+	// Usage and Timings are what the backend said the round cost, when it said: every
+	// OpenAI-shaped server reports usage, and llama.cpp's own server adds timings —
+	// among them cache_n, how much of the prompt it did not have to read again, which
+	// is the number that says whether the prompt cache is working.
+	Usage   llmUsage
+	Timings llmTimings
+}
+
+type llmUsage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+}
+
+type llmTimings struct {
+	CacheN      int     `json:"cache_n"`
+	PromptN     int     `json:"prompt_n"`
+	PromptMS    float64 `json:"prompt_ms"`
+	PredictedN  int     `json:"predicted_n"`
+	PredictedMS float64 `json:"predicted_ms"`
 }
 
 var (

@@ -598,11 +598,10 @@ export interface Settings {
   /** Leave the image generator's checkpoint on the card while a clip renders; off, it
       is unloaded first so ComfyUI has the whole card. */
   clipKeepImageModel?: boolean;
-  /** Clips' backgrounds are cut by Bria, a paid ComfyUI partner node, rather than on
-      this server; the Comfy.org API key pays for it and is write-only. */
-  clipCutBria?: boolean;
-  comfyOrgApiKey?: string;
-  comfyOrgApiKeySet?: boolean;
+  /** Clips' backgrounds are cut in ComfyUI, by the ComfyUI-RMBG nodes on the card,
+      rather than by this server's model; `clipCutModel` is which ("" for the default). */
+  clipCutComfy?: boolean;
+  clipCutModel?: string;
   /** The folders Civitai's video mode installs into, as the container sees them, one
       per kind. Each is used exactly as given; a blank one is not installed into. */
   comfyDiffusionDir?: string;
@@ -1107,6 +1106,51 @@ export interface ChatConversation {
 /** Which reference picture of her: in her usual clothes, or in nothing. */
 export type LibbyReferenceSlot = "clothed" | "nude";
 
+/** A card character's sprites: each label's file names, and SillyTavern's own labels
+    for the editor to lay out. */
+export interface ExpressionPack {
+  expressions: Record<string, string[]>;
+  labels: string[];
+}
+
+/** A chub.ai search. See chub.go. */
+export interface ChubQuery {
+  q: string;
+  page: number;
+  sort: string;
+  nsfw: boolean;
+  expressions: boolean;
+}
+
+/** One chub.ai card in a search; `avatar` is this server's proxy of its picture. */
+export interface ChubCard {
+  path: string;
+  name: string;
+  tagline: string;
+  topics: string[];
+  stars: number;
+  chats: number;
+  tokens: number;
+  nsfw: boolean;
+  avatar: string;
+}
+
+export interface ChubPage {
+  items: ChubCard[];
+  total: number;
+  page: number;
+  more: boolean;
+}
+
+export interface ChubCharacter {
+  path: string;
+  card: Record<string, unknown>;
+  /** Its art as a data URL, "" when chub has none. */
+  avatar: string;
+  /** How many expressions its pack has a picture for; 0 for no pack. */
+  expressions: number;
+}
+
 export interface ChatImage {
   id: string;
   characterId: string;
@@ -1582,11 +1626,11 @@ export interface ImageGenStatus {
       why not when it can't. */
   matte?: boolean;
   matteProblem?: string;
-  /** Whether a clip's background can be cut, and why not; Bria (through ComfyUI) or
-      this server's model, as Settings say. A picture's cutout is `matte`'s. */
+  /** Whether a clip's background can be cut, and why not; ComfyUI or this server's
+      model, as Settings say. A picture's cutout is `matte`'s. */
   clipCut?: boolean;
   clipCutProblem?: string;
-  clipCutBy?: "bria" | "server";
+  clipCutBy?: "comfy" | "server";
 }
 
 /** One thing a family needs beside a bare model, as things stand. */
@@ -3760,6 +3804,35 @@ export const api = {
   deleteChatImage: (id: string) =>
     request<{ status: string }>(`/api/chat/images/${encodeURIComponent(id)}`, { method: "DELETE" }),
   chatImageURL: (id: string) => `/api/chat/images/${encodeURIComponent(id)}`,
+  /** A card character's expression pack — SillyTavern's sprites, file names by label.
+      Libby has none: her face is her wardrobe. See chat_expressions.go. */
+  expressions: (characterId: string) =>
+    request<ExpressionPack>(`/api/chat/characters/${encodeURIComponent(characterId)}/expressions`),
+  /** Pictures named by expression, or a zip of them (a SillyTavern sprite pack). */
+  uploadExpressions: (characterId: string, files: File[]) => {
+    const fd = new FormData();
+    for (const file of files) fd.append("files", file, file.name);
+    return request<ExpressionPack & { saved: string[]; skipped: string[] }>(
+      `/api/chat/characters/${encodeURIComponent(characterId)}/expressions`, { method: "POST", body: fd }, 300_000);
+  },
+  /** One sprite by file name, or with none the whole pack. */
+  deleteExpression: (characterId: string, file?: string) =>
+    request<ExpressionPack>(`/api/chat/characters/${encodeURIComponent(characterId)}/expressions${file ? `/${encodeURIComponent(file)}` : ""}`, { method: "DELETE" }),
+  expressionURL: (characterId: string, file: string) =>
+    `/api/chat/characters/${encodeURIComponent(characterId)}/expressions/${encodeURIComponent(file)}`,
+  /** chub.ai's cards, fetched by the server: this origin may not leave itself. */
+  chubSearch: (query: ChubQuery) => {
+    const params = new URLSearchParams({ q: query.q, page: String(query.page), sort: query.sort,
+      nsfw: query.nsfw ? "1" : "0", expressions: query.expressions ? "1" : "0" });
+    return request<ChubPage>(`/api/chub/search?${params}`, {}, 60_000);
+  },
+  /** One card as a V2 card object, its art as a data URL, and how many expressions it has. */
+  chubCharacter: (path: string) =>
+    request<ChubCharacter>(`/api/chub/character?path=${encodeURIComponent(path)}`, {}, 90_000),
+  /** Files a chub card's expression pack into a card character's own. */
+  chubExpressions: (path: string, characterId: string) =>
+    request<ExpressionPack & { saved: string[]; skipped: string[] }>("/api/chub/expressions",
+      { method: "POST", body: JSON.stringify({ path, characterId }) }, 300_000),
   loraThumbURL: (name: string) => `/api/imagegen/lora-thumb?name=${encodeURIComponent(name)}`,
 
   // ── character library ──────────────────────────────────────────────────────

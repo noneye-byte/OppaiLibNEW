@@ -19,9 +19,10 @@ import {
   type LibbyAutoDecision, type LibbyAutoSettings, type LibbyAutoState, type LibbyBond, type LibbyContext,
   type DiscordPlace, type DiscordState, type LibbyIdentity, type LibbyJournalEntry, type LibbyMemory, type LibbyWant, type SharedLink,
   type StoredChatMessage, type User, type ChatReplyRef, type LibbyAttachment, type LibbyBackground, type LibbyLink, type Media,
-  type LibbyActivityDef, type LibbyOutfit, type LibbyActContext, type GenProgress, type LibbyStory,
+  type LibbyActivityDef, type LibbyOutfit, type LibbyActContext, type GenProgress, type LibbyStory, type ExpressionPack, type ChubCard,
   SEND_WEIGHTS,
 } from "../api.js";
+import { expressionSlots, expressionSprites, expressionTitle, packCoverage, type ExpressionFiles } from "../expression-sprites.js";
 import { iconStyles, motionStyles } from "../theme.js";
 import { formatBytes } from "../media-meta.js";
 import { markArrival } from "../motion.js";
@@ -45,7 +46,9 @@ import { SHARE_EVENT, takePendingShare } from "../chat-share.js";
 import { excerptOf } from "../chat-replies.js";
 import { libbyMotion } from "../libby-motion.js";
 import { profileUpdates } from "../ui-metrics.js";
-import { CARD_FIELD_BYTES, characterToCard, expandCardMacros, readCardFile } from "../character-card.js";
+import { CARD_FIELD_BYTES, characterToCard, expandCardMacros, parseCharacterCard, readCardFile, type ParsedCard } from "../character-card.js";
+// Registers <oppai-chub-browse>, "Add someone"'s search of chub.ai.
+import "./chub-browse.js";
 import {
   ActionApprovals, actionCardStyles, attachmentStyles, KIND_ICONS, linkChipStyles, recentlyAttached,
   renderActionCards, renderAttachments, renderGenProgress, renderLinkChips, requestOpenMedia,
@@ -64,7 +67,7 @@ const MODES = [
   { id: "horny", label: "horny", emotion: "mischievous", topic: "Explicit, leading, and sending pictures." },
 ] as const;
 
-type EditorTab = "character" | "world" | "mind" | "model" | "images" | "profile";
+type EditorTab = "character" | "expressions" | "world" | "mind" | "model" | "images" | "profile";
 
 /**
  * A picture attached to the composer but not yet sent. It is already uploaded and
@@ -83,6 +86,8 @@ interface EditorTabDef { id: EditorTab; label: string; icon: string; group: stri
 /** An imported friend is a character card, and that is the whole of them. */
 const FRIEND_TABS: EditorTabDef[] = [
   { id: "character", label: "Character card", icon: "badge", group: "Friend" },
+  // SillyTavern's expression sprites: the card's face, as Libby's wardrobe is hers.
+  { id: "expressions", label: "Expressions", icon: "mood", group: "Friend" },
   { id: "images", label: "Images", icon: "image", group: "Friend" },
   { id: "model", label: "Model & generation", icon: "memory", group: "Chat" },
   { id: "profile", label: "Your profile", icon: "person", group: "Chat" },
@@ -514,6 +519,17 @@ export class OppaiChat extends LitElement {
   @state() private chatSearch = "";
   /** The "new chat" screen is open in place of the list: who to start one with. */
   @state() private pickerOpen = false;
+  /** Card characters' expression packs by character id, fetched as each is opened.
+      See expression-sprites.ts. */
+  @state() private expressionPacks: Record<string, ExpressionFiles> = {};
+  /** SillyTavern's labels, as the server lists them, for the Expressions panel. */
+  @state() private expressionDefaults: string[] = [];
+  @state() private expressionsBusy = false;
+  /** chub.ai's search is open over the chat; see chub-browse.ts. */
+  @state() private chubOpen = false;
+  /** The chub card being imported, by path, and the ones imported this session. */
+  @state() private chubImporting = "";
+  @state() private chubAdded: ReadonlySet<string> = new Set();
   /** The character whose earlier conversations are shown under their row; "" for none. */
   @state() private earlierOpen = "";
   /**
@@ -2116,6 +2132,7 @@ export class OppaiChat extends LitElement {
   private activateCharacter(id: string) {
     this.characterID = id;
     this.mobileNavOpen = false;
+    if (id !== "libby") void this.loadExpressions(id);
     const conversation = this.conversationsFor(id)[0];
     if (conversation) this.activateConversation(conversation.id); else this.newConversation();
   }
@@ -2128,6 +2145,7 @@ export class OppaiChat extends LitElement {
     setIntensity(conversation.intensity); this.armIdle(); this.scheduleAuto(); void this.scrollToEnd(false);
     void this.sayWhatIsPending();
     if (conversation.characterId === "libby") void this.loadStories();
+    else void this.loadExpressions(conversation.characterId);
     // A conversation that went quiet a while ago is tidied as it is picked back up.
     if (Date.now() - conversation.updatedAt > COMPRESS_IDLE_MS && conversation.messages.length > COMPRESS_IDLE_AT) void this.compressConversation(id, true);
   }
@@ -3045,36 +3063,8 @@ export class OppaiChat extends LitElement {
           continue;
         }
         if (this.workspace.characters.length >= 40) { failed.push(`${file.name}: workspace is full`); break; }
-        const character: ChatCharacter = { ...parsed.character, id: newID() };
-        this.workspace.characters.push(character);
-        this.characterID = character.id;
+        const character = await this.addParsedCard(parsed, isPNG ? await this.readDataURL(file) : "", notes);
         added.push(character.name);
-        if (parsed.leftovers.alternateGreetings > 0) {
-          notes.push(`${character.name}: kept ${parsed.leftovers.alternateGreetings} alternate greeting${parsed.leftovers.alternateGreetings === 1 ? "" : "s"}`);
-        }
-        if (parsed.leftovers.trimmed.length) {
-          notes.push(`${character.name}: ${parsed.leftovers.trimmed.join(", ")} cut to ${CARD_FIELD_BYTES >> 10} KB, the most one field can hold`);
-        }
-        if (parsed.leftovers.characterBook) {
-          notes.push(`${character.name}: the card's lorebook was dropped — this app has nowhere to put one`);
-        }
-        // The card's own art becomes their portrait. Saved first so the upload has a
-        // character to belong to; saveWorkspace replaces the workspace wholesale, so
-        // the avatar id goes onto the stored copy rather than the local one.
-        if (isPNG) {
-          await this.saveWorkspace();
-          try {
-            const image = await api.uploadChatImage({
-              characterId: character.id, name: `${character.name} avatar`,
-              imageData: await this.readDataURL(file), tags: ["portrait"],
-            });
-            this.workspace.images.push(image);
-            const stored = this.liveCharacter(character.id);
-            if (stored) stored.avatarImageId = image.id;
-          } catch (error) {
-            notes.push(`${character.name}: card imported, but the portrait didn't upload (${(error as Error).message})`);
-          }
-        }
       } catch (error) {
         failed.push(`${file.name}: ${(error as Error).message}`);
       }
@@ -3087,6 +3077,79 @@ export class OppaiChat extends LitElement {
     ].filter(Boolean).join(" ");
     this.cardNote = summary ? { text: summary, bad: !added.length } : null;
     if (summary) this.say(summary, !added.length);
+  }
+
+  /**
+   * Adds one parsed card as a character and says what did not come across, into
+   * `notes`. `art` is a data URL of the card's picture, which becomes their portrait;
+   * "" for none. A card file and a card from chub.ai both come in here.
+   */
+  private async addParsedCard(parsed: ParsedCard, art: string, notes: string[]): Promise<ChatCharacter> {
+    const character: ChatCharacter = { ...parsed.character, id: newID() };
+    this.workspace.characters.push(character);
+    this.characterID = character.id;
+    if (parsed.leftovers.alternateGreetings > 0) {
+      notes.push(`${character.name}: kept ${parsed.leftovers.alternateGreetings} alternate greeting${parsed.leftovers.alternateGreetings === 1 ? "" : "s"}`);
+    }
+    if (parsed.leftovers.trimmed.length) {
+      notes.push(`${character.name}: ${parsed.leftovers.trimmed.join(", ")} cut to ${CARD_FIELD_BYTES >> 10} KB, the most one field can hold`);
+    }
+    if (parsed.leftovers.characterBook) {
+      notes.push(`${character.name}: the card's lorebook was dropped — this app has nowhere to put one`);
+    }
+    // The card's own art becomes their portrait. Saved first so the upload has a
+    // character to belong to; saveWorkspace replaces the workspace wholesale, so
+    // the avatar id goes onto the stored copy rather than the local one.
+    if (art) {
+      await this.saveWorkspace();
+      try {
+        const image = await api.uploadChatImage({
+          characterId: character.id, name: `${character.name} avatar`, imageData: art, tags: ["portrait"],
+        });
+        this.workspace.images.push(image);
+        const stored = this.liveCharacter(character.id);
+        if (stored) stored.avatarImageId = image.id;
+      } catch (error) {
+        notes.push(`${character.name}: card imported, but the portrait didn't upload (${(error as Error).message})`);
+      }
+    }
+    return character;
+  }
+
+  /**
+   * Imports a card found on chub.ai: the card through the same path as a card file,
+   * then its expression pack, fetched into its pack by the server. The search stays
+   * open, so several can be added in a row.
+   */
+  private async importFromChub(card: ChubCard) {
+    if (this.chubImporting) return;
+    if (this.workspace.characters.length >= 40) { this.say("The workspace is full: 40 characters at most.", true); return; }
+    this.chubImporting = card.path;
+    const notes: string[] = [];
+    try {
+      const got = await api.chubCharacter(card.path);
+      const parsed = parseCharacterCard(got.card, card.name);
+      const character = await this.addParsedCard(parsed, got.avatar, notes);
+      this.touchWorkspace();
+      this.newConversation(false);
+      if (got.expressions > 0) {
+        // Saved first, so the workspace names the character the pack is filed under.
+        await this.saveWorkspace();
+        try {
+          const pack = await api.chubExpressions(card.path, character.id);
+          this.expressionPacks = { ...this.expressionPacks, [character.id]: pack.expressions ?? {} };
+          notes.unshift(`${pack.saved.length} expression${pack.saved.length === 1 ? "" : "s"} came with ${character.name}`);
+        } catch (error) {
+          notes.push(`${character.name}: the expression pack didn't come (${(error as Error).message})`);
+        }
+      }
+      this.chubAdded = new Set([...this.chubAdded, card.path]);
+      this.say([`Added ${character.name} from chub.ai.`, ...notes].join(" "));
+    } catch (error) {
+      this.say(`Couldn't add ${card.name}: ${(error as Error).message}`, true);
+    } finally {
+      this.chubImporting = "";
+    }
   }
 
   private readDataURL(file: File): Promise<string> {
@@ -3232,11 +3295,24 @@ export class OppaiChat extends LitElement {
    * setting one changed the character everywhere at once. Somewhere that is supposed
    * to react to mood is the wrong place for a picture that cannot.
    *
-   * So this is the emotion-reactive wardrobe or nothing: today only Libby has one,
-   * which is why other characters currently have no stage art and cannot be called.
+   * So this is the emotion-reactive art or nothing: Libby's wardrobe for her, and for
+   * a card character its expression pack, SillyTavern's sprites, by the label the
+   * server read off its last reply. `pick` turns over a label's several pictures from
+   * one reply to the next (expressionSprites).
    */
-  private spriteFor(character: ChatCharacter, emotion: LibbyEmotion, intensity: number, activity?: string): string[] {
-    return character.id === "libby" ? libbyAssetCandidates(emotion, intensity, loadLibbyOutfit(), activity) : [];
+  private spriteFor(character: ChatCharacter, emotion: string, intensity: number, activity?: string, pick = 0): string[] {
+    if (character.id === "libby") return libbyAssetCandidates(normalizeEmotion(emotion), intensity, loadLibbyOutfit(), activity);
+    return expressionSprites(this.expressionPacks[character.id], emotion, pick).map((file) => api.expressionURL(character.id, file));
+  }
+
+  /** Fetches a card character's expression pack as it is opened. A character with
+      none still gets an entry, so the stage knows there is nothing to draw. */
+  private async loadExpressions(characterID: string) {
+    try {
+      const pack: ExpressionPack = await api.expressions(characterID);
+      this.expressionPacks = { ...this.expressionPacks, [characterID]: pack.expressions ?? {} };
+      if (pack.labels?.length) this.expressionDefaults = pack.labels;
+    } catch { /* No pack: the character is drawn without a stage, as before. */ }
   }
 
   // --- Video call -----------------------------------------------------------
@@ -3388,12 +3464,16 @@ export class OppaiChat extends LitElement {
    */
   private poseOf(character: ChatCharacter, conversation: ChatConversation) {
     if (character.id === "libby" && libbyHidden()) return null;
-    const emotion = normalizeEmotion(conversation.emotion), intensity = normalizeIntensity(conversation.intensity);
+    // Libby's moods are her twelve; a card character's are its pack's labels, kept raw.
+    const libby = character.id === "libby";
+    const emotion: string = libby ? normalizeEmotion(conversation.emotion) : (conversation.emotion || "neutral").toLowerCase();
+    const intensity = normalizeIntensity(conversation.intensity);
     // The dots follow the typing rhythm — they stop for a reading pause or a second
     // thought — but the portrait holds the typing art for the whole turn. See portraitPose.
     const typing = this.busy && this.typingPhase === "typing";
     const { activity, key } = portraitPose(this.busy, this.callGreeting ? "greeting" : conversation.activity || "", emotion, intensity, this.spoken, this.talking);
-    const assets = this.spriteFor(character, emotion, intensity, activity);
+    const replies = libby ? 0 : conversation.messages.filter((m) => m.role === "assistant").length;
+    const assets = this.spriteFor(character, emotion, intensity, activity, replies);
     // Nothing to stand on the stage: a character with no art gets no column at all
     // rather than an empty one. Their picture is set from the character card.
     if (!assets.length) return null;
@@ -3470,7 +3550,7 @@ export class OppaiChat extends LitElement {
             <span class="stage-status"><span class="status-dot ${online ? "online" : ""}"></span> ${status}</span>
           </div>
           <div class="stage-chips">
-            <span class="stage-chip" title="How she feels"><span class="material-symbols-rounded">mood</span>${EMOTION_LABELS[emotion] ?? emotion}</span>
+            <span class="stage-chip" title="How she feels"><span class="material-symbols-rounded">mood</span>${EMOTION_LABELS[emotion as LibbyEmotion] ?? expressionTitle(emotion)}</span>
             ${conversation.activity ? html`<span class="stage-chip doing" role="status" title=${`She is ${conversation.activity}`}><span class="material-symbols-rounded">directions_walk</span>${activityLabel(conversation.activity)}</span>` : nothing}
             ${place ? html`<span class="stage-chip" title="Where she is"><span class="material-symbols-rounded">location_on</span>${place.name}</span>` : nothing}
           </div>
@@ -3638,6 +3718,11 @@ export class OppaiChat extends LitElement {
         <span class="pick-avatar"><span class="material-symbols-rounded">person_add</span></span>
         <span class="pick-name">Write a new card</span>
         <span class="pick-sub">Start from a blank character</span>
+      </button>
+      <button class="pick add" @click=${() => (this.chubOpen = true)}>
+        <span class="pick-avatar"><span class="material-symbols-rounded">travel_explore</span></span>
+        <span class="pick-name">Find one on chub.ai</span>
+        <span class="pick-sub">Search SillyTavern cards, expression packs and all</span>
       </button>
       <label class="dropzone ${this.cardDrop ? "over" : ""}">
         <input type="file" accept=".json,.png,application/json,image/png" multiple @change=${this.importCard} />
@@ -3841,6 +3926,7 @@ export class OppaiChat extends LitElement {
           <button class="icon-btn" title="Close settings" aria-label="Close settings" @click=${() => (this.settingsOpen=false)}><span class="material-symbols-rounded">close</span></button>
         </div>
         ${active.id === "character" ? this.renderCharacterPanel(character) : nothing}
+        ${active.id === "expressions" && character.id !== "libby" ? this.renderExpressionsPanel(character) : nothing}
         ${active.id === "character" && character.id === "libby" ? this.libbySection("libby-general") : nothing}
         ${active.id === "world" ? this.renderWorldPanel() : nothing}
         ${active.id === "world" ? this.libbySection("libby-voice") : nothing}
@@ -4276,6 +4362,57 @@ export class OppaiChat extends LitElement {
         <label>Intensity <span class="range"><input type="range" min="1" max="5" step="1" .value=${String(conversation.intensity)} @input=${(event:Event) => this.updateConversation({intensity:Number((event.target as HTMLInputElement).value)})}/><output>${conversation.intensity}/5</output></span></label>
       </section>`}
     </div>`;
+  }
+
+  /**
+   * A card character's expression pack: SillyTavern's sprites, uploaded as the zip
+   * they are passed around as or picture by picture, laid out by label.
+   */
+  private renderExpressionsPanel(character: ChatCharacter) {
+    const pack = this.expressionPacks[character.id];
+    const defaults = this.expressionDefaults;
+    const { files, covered } = packCoverage(defaults, pack);
+    const upload = (event: Event) => {
+      const input = event.target as HTMLInputElement;
+      const chosen = [...(input.files ?? [])];
+      input.value = "";
+      if (chosen.length) void this.uploadExpressions(character, chosen);
+    };
+    const labelled = expressionSlots(defaults, pack).filter((label) => pack?.[label]?.length);
+    return html`<div class="panel">
+      <p class="empty">Expression sprites, as SillyTavern has them: one picture per expression, named after it — <code>joy.png</code>, <code>anger.png</code>, and <code>joy-1.png</code> for a second joy. Upload a sprite pack's zip or the pictures themselves. After each reply, ${character.name}'s expression is read from what they wrote, picked from the ones there is a picture for, and shown beside the chat. Neutral is shown for an expression without a picture.</p>
+      <div class="upload-row">
+        <span class="file-btn">${this.expressionsBusy ? "Uploading…" : "Upload sprites or a zip"}<input type="file" multiple accept=".zip,application/zip,image/png,image/jpeg,image/webp,image/gif" ?disabled=${this.expressionsBusy} @change=${upload}/></span>
+        ${files ? html`<button class="secondary" ?disabled=${this.expressionsBusy} @click=${() => void this.deleteExpressions(character)}>Remove all</button>` : nothing}
+      </div>
+      <h3 class="shelf">${files ? `${files} ${files === 1 ? "picture" : "pictures"}, ${covered} of ${defaults.length} expressions` : "No sprites yet"}<span>${pack?.neutral?.length ? "" : "Add a neutral one: it is shown for every expression without a picture of its own."}</span></h3>
+      <div class="image-grid">${labelled.flatMap((label) => (pack?.[label] ?? []).map((file) => html`<article class="image-card">
+        <img src=${api.expressionURL(character.id, file)} alt=${`${character.name}, ${label}`} loading="lazy"/>
+        <button class="remove" title="Delete ${file}" aria-label="Delete ${file}" @click=${() => void this.deleteExpressions(character, file)}>×</button>
+        <div class="card-body"><span class="card-name">${expressionTitle(label)}</span><span class="card-tags">${file}</span></div>
+      </article>`))}</div>
+      ${defaults.length ? html`<p class="empty">SillyTavern's expressions: ${defaults.map((label) => pack?.[label]?.length ? html`<strong>${label}</strong> ` : html`${label} `)}— the bold ones have a picture. A pack's own expressions, named any other word, count as well.</p>` : nothing}
+    </div>`;
+  }
+
+  private async uploadExpressions(character: ChatCharacter, files: File[]) {
+    this.expressionsBusy = true;
+    try {
+      const out = await api.uploadExpressions(character.id, files);
+      this.expressionPacks = { ...this.expressionPacks, [character.id]: out.expressions ?? {} };
+      const skipped = out.skipped ?? [];
+      const more = skipped.length > 4 ? ` and ${skipped.length - 4} more` : "";
+      this.say(`Added ${out.saved.length} ${out.saved.length === 1 ? "sprite" : "sprites"}${skipped.length ? `; skipped ${skipped.slice(0, 4).join(", ")}${more}` : ""}.`, !out.saved.length);
+    } catch (error) { this.say((error as Error).message, true); }
+    finally { this.expressionsBusy = false; }
+  }
+
+  private async deleteExpressions(character: ChatCharacter, file?: string) {
+    if (!file && !window.confirm(`Remove all of ${character.name}'s expression sprites?`)) return;
+    try {
+      const out = await api.deleteExpression(character.id, file);
+      this.expressionPacks = { ...this.expressionPacks, [character.id]: out.expressions ?? {} };
+    } catch (error) { this.say((error as Error).message, true); }
   }
 
   private renderImagesPanel(character: ChatCharacter) {
@@ -5078,7 +5215,8 @@ export class OppaiChat extends LitElement {
           { label:"Retry with a note…", icon:"edit_note", disabled:this.busy || !conversation?.messages.some((m) => m.role === "assistant"), run:() => void this.regenerateWithNote() },
           { label:this.callOpen ? "End video call" : "Video call", icon:this.callOpen ? "call_end" : "videocam", run:() => this.callOpen ? this.endCall() : this.startCall() },
           { label:"Share a photo", icon:"add_photo_alternate", disabled:this.busy, run:() => this.pickPhoto() },
-          { label:"Attach from the library", icon:"collections_bookmark", disabled:this.busy, run:() => this.openPicker() },
+          // The library is Libby's: a card character has no part in it.
+          ...(character?.id === "libby" ? [{ label:"Attach from the library", icon:"collections_bookmark", disabled:this.busy, run:() => this.openPicker() }] : []),
           { label:this.autopilot ? "Turn off autopilot" : "Let the AI continue on its own", icon:"smart_toy", run:() => this.toggleAutopilot() },
           { label:this.stageOpen ? "Hide portrait" : "Show portrait", icon:"wallpaper", run:() => (this.stageOpen = !this.stageOpen) },
           { label:this.speakOn ? "Stop reading aloud" : "Read replies aloud", icon:this.speakOn ? "volume_off" : "volume_up", run:() => this.toggleSpeak() },
@@ -5459,13 +5597,15 @@ export class OppaiChat extends LitElement {
           <div class="composer">
             <div class="box">
               <span class="attach-btn" title="Share a photo"><span class="material-symbols-rounded">add_photo_alternate</span><input type="file" accept="image/png,image/jpeg,image/webp,image/gif" aria-label="Share a photo" @change=${(event:Event)=>void this.attachPhoto(event)}/></span>
-              <button type="button" class="attach-btn" style="border:0;background:transparent" title="Attach from the library" aria-label="Attach from the library" @click=${()=>this.openPicker()}><span class="material-symbols-rounded">collections_bookmark</span></button>
+              ${character.id === "libby" ? html`<button type="button" class="attach-btn" style="border:0;background:transparent" title="Attach from the library" aria-label="Attach from the library" @click=${()=>this.openPicker()}><span class="material-symbols-rounded">collections_bookmark</span></button>` : nothing}
               <textarea rows="1" aria-label=${`Message ${character.name}`} placeholder=${this.busy?`${character.name} is replying — you can keep going…`:`Message ${character.name}…`} .value=${this.draft} @input=${(event:Event)=>{this.draft=(event.target as HTMLTextAreaElement).value;this.noticeLink();}} @keydown=${this.onKey}></textarea>
             </div>
             ${this.busy ? html`<button class="send stop" type="button" title="Stop the reply" aria-label="Stop the reply" @click=${() => void this.stopGeneration()}><span class="material-symbols-rounded">stop</span></button>` : nothing}
             <button class="send" type="submit" title="Send message" aria-label="Send message" ?disabled=${!this.draft.trim()&&!this.pendingPhoto&&!this.pendingItems.length}><span class="material-symbols-rounded">send</span></button>
           </div><div class="format-help"><span>"speech" · **action** · *emphasis* · ~~strike~~ · &#96;code&#96;</span><span class="send-help"></span></div></form>
-      </main>${stage}${this.renderPicker2()}${this.renderIncomingCall(character)}${this.renderCall(character,conversation)}${this.renderSnapViewer()}${this.renderPictureViewer()}${this.renderStoryViewer(character)}
+      </main>${stage}${this.renderPicker2()}${this.chubOpen ? html`<oppai-chub-browse .importing=${this.chubImporting} .added=${this.chubAdded}
+        @close=${() => (this.chubOpen = false)} @click=${() => (this.chubOpen = false)}
+        @chub-pick=${(event: CustomEvent<{ card: ChubCard }>) => void this.importFromChub(event.detail.card)}></oppai-chub-browse>` : nothing}${this.renderIncomingCall(character)}${this.renderCall(character,conversation)}${this.renderSnapViewer()}${this.renderPictureViewer()}${this.renderStoryViewer(character)}
     </div>`;
   }
 

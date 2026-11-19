@@ -1315,19 +1315,17 @@ export class OppaiLibrary extends LitElement {
              run: () => void this.removeFromOpenCollection(id) }]
         : []),
       menuDivider,
-      // The two ways to hand her a picture, one entry each and Libby's by name: she
-      // is who you are nearly always sending to, and "Share with…" then a list of
-      // one was two taps for the common case. Both disabled rather than hidden when
-      // there is nothing showable, so the entry not being there reads as "this
-      // build can't do it" instead of "not this item".
+      // The two ways to hand her a picture, one entry each and Libby's by name. Both
+      // disabled rather than hidden when there is nothing showable, so the entry not
+      // being there reads as "this build can't do it" instead of "not this item".
+      // There is no "Share with…" any more: the library is Libby's, and a card
+      // character is a SillyTavern card with no part in it.
       { label: "Show Libby now", icon: "send", disabled: shareable ? false : true,
         hint: "attach to a message",
         run: () => void this.share(item, { id: "libby", name: "Libby" } as ChatCharacter) },
       { label: "Save for Libby to send later", icon: "add_photo_alternate", disabled: shareable ? false : true,
         hint: "her gallery",
         run: () => void this.saveForLater(item) },
-      { label: "Share with…", icon: "ios_share", disabled: !shareable,
-        run: () => void this.openShareMenu(item, event.clientX, event.clientY) },
       // Who the picture is *of*, which is a different question from what is in it.
       // Only offered for stills: a video is not a portrait of anyone, and tagging one
       // as her would put her face on something she is not in for most of its length.
@@ -1375,34 +1373,6 @@ export class OppaiLibrary extends LitElement {
         menuDivider,
         { label: "No, that isn't her", icon: "close", run: () => void decide(false) },
       ],
-    });
-  }
-
-  /**
-   * Second step of "Share with…": the characters to choose from.
-   *
-   * The workspace is fetched here rather than kept loaded, so a library session that
-   * never shares anything never asks for it. The menu re-opens at the same point the
-   * first one did, which reads as the submenu it stands in for.
-   */
-  private async openShareMenu(item: Media, x: number, y: number) {
-    let characters: ChatCharacter[] = [];
-    try {
-      characters = (await api.chatWorkspace()).characters ?? [];
-    } catch (error) {
-      mascotSay((error as Error).message || "Couldn't load your chat characters.", "error");
-      return;
-    }
-    if (!characters.length) {
-      mascotSay("No chat characters yet — add one in Chat first.", "error");
-      return;
-    }
-    openMenu({
-      x, y, title: `Share "${item.title}" with`,
-      items: characters.map((character) => ({
-        label: character.name, icon: "person",
-        run: () => void this.share(item, character),
-      })),
     });
   }
 

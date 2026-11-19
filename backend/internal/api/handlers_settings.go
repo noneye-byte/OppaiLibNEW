@@ -97,9 +97,6 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 	if next.VisionAPIKey == "" && next.VisionAPIKeySet {
 		next.VisionAPIKey = current.VisionAPIKey
 	}
-	if next.ComfyOrgAPIKey == "" && next.ComfyOrgAPIKeySet {
-		next.ComfyOrgAPIKey = current.ComfyOrgAPIKey
-	}
 	next.Clamp()
 	if err := s.db.PutSettings(r.Context(), next.Map()); err != nil {
 		s.log.Error("settings: save failed", "err", err)

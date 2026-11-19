@@ -546,8 +546,8 @@ export class OppaiVideoStudio extends LitElement {
       says why not when it can't. */
   @property({ type: Boolean }) matte = false;
   @property() matteProblem = "";
-  /** What cuts a clip: the model on this server, or Bria through ComfyUI (Settings). */
-  @property() cutBy: "bria" | "server" = "server";
+  /** What cuts a clip: the model on this server, or ComfyUI's (Settings). */
+  @property() cutBy: "comfy" | "server" = "server";
   /** "sprites" draws the inspector alone, over `spriteForm`, for the Sprites studio's
       Motion tab: what every square of a wardrobe is animated with. */
   @property({ reflect: true }) variant: "studio" | "sprites" = "studio";
@@ -2343,8 +2343,8 @@ export class OppaiVideoStudio extends LitElement {
           <span class="material-symbols-rounded">open_in_full</span>Upscale</button>
         ${this.matte || this.matteProblem ? html`<button class="chip" ?disabled=${!this.matte || !!run.clip?.cutout}
           title=${!this.matte ? this.matteProblem : run.clip?.cutout ? "This one is already cut out"
-            : this.cutBy === "bria"
-              ? "Cut her out of the background with Bria, through ComfyUI (paid from Comfy.org credits) — a new take with transparency, beside this one"
+            : this.cutBy === "comfy"
+              ? "Cut her out of the background in ComfyUI, on the graphics card — a new take with transparency, beside this one"
               : "Cut her out of the background, frame by frame, on the server — a new take with transparency, beside this one"}
           @click=${() => this.cutOut(run)}><span class="material-symbols-rounded">background_replace</span>Remove background</button>` : nothing}
       ` : html`<span class="t-meta" style="flex:1">${!run.done ? `Started ${elapsed(Date.now() - run.startedAt)} ago` : run.error ? "Didn't finish" : ""}</span>`}

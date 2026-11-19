@@ -88,24 +88,29 @@ func TestAClipsBackgroundIsCutIntoATakeBesideIt(t *testing.T) {
 	}
 }
 
-func TestACutHandedToBriaWithoutAKeySaysSoAndIsNotRun(t *testing.T) {
+func TestACutHandedToComfyUIWithoutItsAddressOrWithAModelItLacksSaysSoAndIsNotRun(t *testing.T) {
 	s, token := newTestServer(t)
 	cur := s.settings.Get()
-	cur.LibbyClipURL = "http://127.0.0.1:1"
-	cur.ClipCutBria = true
+	cur.LibbyClipURL, cur.ClipCutComfy = "", true
 	s.settings.Set(cur)
 	rec := do(t, s.Handler(), token, http.MethodPost, "/api/imagegen/clip/matte", `{"id":"x"}`)
-	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "Comfy.org API key") {
-		t.Fatalf("no key: %d %s", rec.Code, rec.Body)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "ComfyUI needs its address") {
+		t.Fatalf("no address: %d %s", rec.Code, rec.Body)
 	}
-	// Bria needs no model on this server, so its problem is the only one said.
+	cur.LibbyClipURL, cur.ClipCutModel = "http://127.0.0.1:1", "u2net"
+	s.settings.Set(cur)
+	rec = do(t, s.Handler(), token, http.MethodPost, "/api/imagegen/clip/matte", `{"id":"x"}`)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "is not one of the models") {
+		t.Fatalf("unknown model: %d %s", rec.Code, rec.Body)
+	}
+	// ComfyUI needs no model on this server, so its problem is the only one said.
 	set := s.settings.Get()
-	if s.clipCutProblem(set) == s.matteProblem() || clipCutBy(set) != "bria" {
+	if s.clipCutProblem(set) == s.matteProblem() || clipCutBy(set) != "comfy" {
 		t.Fatalf("problem %q, by %q", s.clipCutProblem(set), clipCutBy(set))
 	}
 }
 
-func TestBriasCutComesBackOnItsScreenAndIsKeyedIntoATakeOnThePixelGrid(t *testing.T) {
+func TestComfyUIsCutComesBackOnItsScreenAndIsKeyedIntoATakeOnThePixelGrid(t *testing.T) {
 	ffmpeg, err := exec.LookPath("ffmpeg")
 	if err != nil {
 		t.Skip("needs ffmpeg")
@@ -113,7 +118,7 @@ func TestBriasCutComesBackOnItsScreenAndIsKeyedIntoATakeOnThePixelGrid(t *testin
 	if _, err := exec.LookPath("ffprobe"); err != nil {
 		t.Skip("needs ffprobe")
 	}
-	// Her clip, on a blue screen; and what Bria sends back, her on flat blue.
+	// Her clip, on a blue screen; and what ComfyUI sends back, her on flat blue.
 	dir := t.TempDir()
 	clip := func(name, colour string) []byte {
 		path := filepath.Join(dir, name)
@@ -124,10 +129,9 @@ func TestBriasCutComesBackOnItsScreenAndIsKeyedIntoATakeOnThePixelGrid(t *testin
 		data, _ := os.ReadFile(path)
 		return data
 	}
-	source, cutOut := clip("src.mp4", "0x1838E6"), clip("bria.mp4", "0x0000FF")
+	source, cutOut := clip("src.mp4", "0x1838E6"), clip("cut.mp4", "0x0000FF")
 	var mu sync.Mutex
 	var graph map[string]any
-	var extra map[string]any
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /upload/image", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, `{"name":"up.mp4","subfolder":""}`)
@@ -135,16 +139,15 @@ func TestBriasCutComesBackOnItsScreenAndIsKeyedIntoATakeOnThePixelGrid(t *testin
 	mux.HandleFunc("POST /prompt", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Prompt map[string]any `json:"prompt"`
-			Extra  map[string]any `json:"extra_data"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		mu.Lock()
-		graph, extra = body.Prompt, body.Extra
+		graph = body.Prompt
 		mu.Unlock()
 		_, _ = io.WriteString(w, `{"prompt_id":"p1"}`)
 	})
 	mux.HandleFunc("GET /history/p1", func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.WriteString(w, `{"p1":{"outputs":{"3":{"images":[{"filename":"bria.mp4","subfolder":"","type":"output"}]}},"status":{"status_str":"success"}}}`)
+		_, _ = io.WriteString(w, `{"p1":{"outputs":{"3":{"images":[{"filename":"cut.mp4","subfolder":"","type":"output"}]}},"status":{"status_str":"success"}}}`)
 	})
 	mux.HandleFunc("GET /view", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write(cutOut) })
 	comfy := httptest.NewServer(mux)
@@ -152,23 +155,27 @@ func TestBriasCutComesBackOnItsScreenAndIsKeyedIntoATakeOnThePixelGrid(t *testin
 
 	s, token := newTestServer(t)
 	cur := s.settings.Get()
-	cur.LibbyClipURL, cur.ClipCutBria, cur.ComfyOrgAPIKey = comfy.URL, true, "comfyui-key"
+	cur.LibbyClipURL, cur.ClipCutComfy = comfy.URL, true
 	s.settings.Set(cur)
 	id := s.genCache.put(&genPreview{data: source, mime: "video/mp4", prompt: "she waves", seed: 7})
 	out := postClip(t, s, token, "/api/imagegen/clip/matte", map[string]any{"id": id, "grid": map[string]any{"cols": 16, "rows": 12}})
-	if !strings.Contains(out.Clip.Recipe, "by Bria") || !strings.Contains(out.Clip.Recipe, "16×12 pixel grid") {
+	if !strings.Contains(out.Clip.Recipe, "by BiRefNet_toonout in ComfyUI") || !strings.Contains(out.Clip.Recipe, "16×12 pixel grid") {
 		t.Fatalf("cut clip: %+v", out.Clip)
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if extra["api_key_comfy_org"] != "comfyui-key" {
-		t.Fatalf("extra_data = %v", extra)
-	}
+	cutBy := 0
 	for _, raw := range graph {
 		n := raw.(map[string]any)
-		if n["class_type"] == "BriaRemoveVideoBackground" && n["inputs"].(map[string]any)["background_color"] != "Blue" {
-			t.Fatalf("a clip on blue was cut onto %v", n["inputs"])
+		if n["class_type"] == "BiRefNetRMBG" {
+			cutBy++
+			if n["inputs"].(map[string]any)["background_color"] != "#0000FF" {
+				t.Fatalf("a clip on blue was cut onto %v", n["inputs"])
+			}
 		}
+	}
+	if cutBy != 1 {
+		t.Fatalf("the default model's node was not in the graph: %v", graph)
 	}
 	p, _ := s.genCache.get(out.Clip.ID)
 	if p == nil || !bytes.HasPrefix(p.data, []byte{0x1a, 0x45, 0xdf, 0xa3}) {

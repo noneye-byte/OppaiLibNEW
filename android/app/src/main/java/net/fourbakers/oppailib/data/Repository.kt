@@ -165,6 +165,13 @@ class Repository(private val appContext: Context, val prefs: Prefs) {
     fun poseThumbUrl(id: String): String =
         "${baseUrl}api/imagegen/poses/${URLEncoder.encode(id, "UTF-8")}/thumb"
 
+    /** One of a card character's expression sprites. */
+    fun expressionUrl(characterId: String, file: String): String =
+        "${baseUrl}api/chat/characters/${URLEncoder.encode(characterId, "UTF-8")}/expressions/${URLEncoder.encode(file, "UTF-8")}"
+
+    /** A path the server gave, such as a chub.ai avatar's proxy, as a full URL. */
+    fun serverUrl(path: String): String = baseUrl + path.removePrefix("/")
+
     fun chatImageUrl(id: String): String =
         "${baseUrl}api/chat/images/${URLEncoder.encode(id, "UTF-8")}"
 

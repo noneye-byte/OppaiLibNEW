@@ -150,6 +150,15 @@ func Open(path string) (*DB, error) {
 	if err := migrateLoraFolders(sqldb); err != nil {
 		return nil, fmt.Errorf("move lora categories: %w", err)
 	}
+	// For one release (0.92.0) a clip's cut could be Bria's, paid for with a Comfy.org
+	// key. It is cut in ComfyUI on the card now: a switch that was on stays on for that,
+	// and the key — a credential for something nothing here uses — is not kept.
+	if _, err := sqldb.Exec(`UPDATE OR IGNORE settings SET key = 'clip.cut_comfy' WHERE key = 'clip.cut_bria'`); err != nil {
+		return nil, fmt.Errorf("move the clip cut setting: %w", err)
+	}
+	if _, err := sqldb.Exec(`DELETE FROM settings WHERE key IN ('clip.cut_bria', 'clip.comfy_org_api_key')`); err != nil {
+		return nil, fmt.Errorf("drop the Comfy.org key: %w", err)
+	}
 	return &DB{sql: sqldb, wal: wal}, nil
 }
 

@@ -6,10 +6,10 @@ import (
 	"testing"
 )
 
-// briaFrame is a frame as Bria hands one back: her (a square of hair with a patch of
+// cutFrame is a frame as ComfyUI hands a cut one back: her (a square of hair with a patch of
 // green eye in it) in front of a flat screen with an encoder's few levels of noise,
 // and a ring a pixel wide round her that is half her, half the screen.
-func briaFrame(w, h int, screen [3]byte) []byte {
+func cutFrame(w, h int, screen [3]byte) []byte {
 	hair, eye := [3]byte{200, 90, 20}, [3]byte{60, 160, 90}
 	rgb := make([]byte, w*h*3)
 	for y := 0; y < h; y++ {
@@ -49,10 +49,10 @@ func keyed(t *testing.T, w, h int, frames ...[]byte) []byte {
 	return out.Bytes()[len(out.Bytes())-w*h*4:]
 }
 
-func TestBriasScreenIsKeyedOutAndEverythingOfHersIsKept(t *testing.T) {
+func TestTheCutsScreenIsKeyedOutAndEverythingOfHersIsKept(t *testing.T) {
 	const w, h = 56, 56
 	for _, screen := range [][3]byte{{0, 255, 0}, {0, 0, 255}} {
-		frame := keyed(t, w, h, briaFrame(w, h, screen))
+		frame := keyed(t, w, h, cutFrame(w, h, screen))
 		px := func(x, y int) []byte { return frame[(y*w+x)*4 : (y*w+x)*4+4] }
 		if a := px(3, 3)[3]; a != 0 {
 			t.Fatalf("%v: the screen kept alpha %d", screen, a)
@@ -84,7 +84,7 @@ func TestAFrameWithNoScreenRoundItsEdgeCannotBeKeyed(t *testing.T) {
 func TestAFrameSheFillsKeepsTheLastFramesScreen(t *testing.T) {
 	const w, h = 56, 56
 	full := bytes.Repeat([]byte{200, 90, 20}, w*h)
-	frame := keyed(t, w, h, briaFrame(w, h, [3]byte{0, 255, 0}), full)
+	frame := keyed(t, w, h, cutFrame(w, h, [3]byte{0, 255, 0}), full)
 	if a := frame[(3*w+3)*4+3]; a != 255 {
 		t.Fatalf("her hair across the whole frame came out alpha %d", a)
 	}
@@ -93,11 +93,11 @@ func TestAFrameSheFillsKeepsTheLastFramesScreen(t *testing.T) {
 func TestAClipOnABlueScreenIsCutOntoBlueAndAnythingElseOntoGreen(t *testing.T) {
 	const w, h = 56, 56
 	for want, screen := range map[string][3]byte{"blue": {24, 56, 230}, "green": {16, 235, 24}} {
-		if got := screenName(briaFrame(w, h, screen), w, h); got != want {
+		if got := screenName(cutFrame(w, h, screen), w, h); got != want {
 			t.Errorf("a %s screen read as %s", want, got)
 		}
 	}
-	white := briaFrame(w, h, [3]byte{250, 250, 250})
+	white := cutFrame(w, h, [3]byte{250, 250, 250})
 	if got := screenName(white, w, h); got != "green" {
 		t.Errorf("a white backdrop read as %s", got)
 	}

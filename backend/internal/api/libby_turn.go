@@ -453,7 +453,9 @@ func newTurnView(ws chatWorkspace, conv chatConversation, userID int64, isAdmin 
 	v.books = readBookkeeping(conv.Messages)
 	messages := asChatMessages(conv.Messages)
 	if len(messages) > maxChatMessages {
-		messages = messages[len(messages)-maxChatMessages:]
+		// In steps, as the budget cuts (historyCutStep): a window that slid by one every
+		// turn moved the start of the prompt every turn, and the backend read it all again.
+		messages = messages[steppedCut(messages, len(messages)-maxChatMessages, 1):]
 	}
 	// A turn with no message to answer — her speaking first, a nudge — still needs a
 	// user line for the template, and it is the instruction, never stored.
@@ -514,7 +516,7 @@ func newTurnView(ws chatWorkspace, conv chatConversation, userID int64, isAdmin 
 	}
 	v.in.Intensity = clampInt(v.in.Intensity, 1, 5)
 	v.conv.Intensity = v.in.Intensity
-	if !supportedLibbyEmotions[v.conv.Emotion] {
+	if !validConversationEmotion(character.ID, v.conv.Emotion) {
 		v.conv.Emotion = "neutral"
 	}
 	return v, nil

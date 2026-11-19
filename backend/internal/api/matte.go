@@ -10,6 +10,7 @@ import (
 	"image/png"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -26,10 +27,11 @@ import (
 // a long one — so it runs as a clip's enlargement does, detached and followed by its
 // job, and lands beside the clip it came from as a take of its own.
 //
-// A clip can instead be cut by Bria, through ComfyUI, when Settings say so
-// (ClipCutBria): Bria puts her on a flat screen and the screen is keyed out here, so
-// the model is not needed for it, only ffmpeg. Which screen is the one she was drawn
-// on, green unless that was blue: a screen is chosen to be a colour she is not.
+// A clip can instead be cut in ComfyUI, on the card, when Settings say so
+// (ClipCutComfy): the ComfyUI-RMBG nodes put her on a flat screen and the screen is
+// keyed out here, so the model is not needed for it, only ffmpeg. Which screen is the
+// one she was drawn on, green unless that was blue: a screen is chosen to be a colour
+// she is not.
 
 // matteMaxBytes bounds a picture sent to be cut; a sprite square is a few megabytes.
 const matteMaxBytes = 40 << 20
@@ -105,22 +107,30 @@ type clipMatteReq struct {
 
 // clipCutProblem says why a clip cannot have its background cut, "" when it can.
 func (s *Server) clipCutProblem(set settings.Settings) string {
-	if !set.ClipCutBria {
+	if !set.ClipCutComfy {
 		return s.matteProblem()
 	}
-	switch {
-	case strings.TrimSpace(set.LibbyClipURL) == "":
-		return "cutting with Bria runs through ComfyUI — set its address under Image generation → Video"
-	case set.ComfyOrgAPIKey == "":
-		return imagegen.ErrBriaKey.Error()
+	if strings.TrimSpace(set.LibbyClipURL) == "" {
+		return "cutting clips in ComfyUI needs its address — set it under Image generation → Video"
+	}
+	if name := clipCutModel(set); !slices.ContainsFunc(imagegen.ClipCutModels, func(m imagegen.ClipCutModel) bool { return m.Name == name }) {
+		return fmt.Sprintf("%q is not one of the models a clip can be cut with — pick one under Image generation → Video", name)
 	}
 	return matte.ToolsProblem()
 }
 
+// clipCutModel is the ComfyUI model Settings cut clips with.
+func clipCutModel(set settings.Settings) string {
+	if set.ClipCutModel == "" {
+		return imagegen.DefaultClipCutModel
+	}
+	return set.ClipCutModel
+}
+
 // clipCutBy names what cuts a clip, for the studio to say so.
 func clipCutBy(set settings.Settings) string {
-	if set.ClipCutBria {
-		return "bria"
+	if set.ClipCutComfy {
+		return "comfy"
 	}
 	return "server"
 }
@@ -155,16 +165,22 @@ func (s *Server) handleClipMatte(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "only a video clip can have its background cut — a GIF or WebP is a picture")
 		return
 	}
-	// Bria runs on Comfy.org's servers and ComfyUI only passes the clip along, so
-	// neither way lends it the card.
-	s.serveLongJob(w, r, req.JobID, req.Detach, "background cut", nil, func(ctx context.Context, report func(imagegen.Progress)) (genResult, error) {
-		if set.ClipCutBria {
-			data, err := s.briaCut(ctx, set, src.data, ext, cut, report)
+	if set.ClipCutComfy {
+		// The cut is on the card, in ComfyUI. Her chat model steps off it as for any
+		// generation, but the image generator's checkpoint stays, unlike for a clip: the
+		// pack's models are a gigabyte or so, which fits beside it, and sending it away
+		// would cost the next picture a reload for nothing.
+		s.serveLongJob(w, r, req.JobID, req.Detach, "background cut", s.lendSwap, func(ctx context.Context, report func(imagegen.Progress)) (genResult, error) {
+			data, err := s.comfyCut(ctx, set, src.data, ext, cut, report)
 			if err != nil {
 				return genResult{}, err
 			}
-			return s.cutClip(ctx, req, src, data, "background removed by Bria"), nil
-		}
+			return s.cutClip(ctx, req, src, data, "background removed by "+clipCutModel(set)+" in ComfyUI"), nil
+		})
+		return
+	}
+	// The model here runs on this box's CPU, so the card is not lent.
+	s.serveLongJob(w, r, req.JobID, req.Detach, "background cut", nil, func(ctx context.Context, report func(imagegen.Progress)) (genResult, error) {
 		data, err := s.matte.CutClip(ctx, src.data, ext, cut, func(done float64) { report(imagegen.Progress{Percent: done}) })
 		if err != nil {
 			return genResult{}, err
@@ -173,18 +189,14 @@ func (s *Server) handleClipMatte(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// briaCut has Bria put her on the screen she was drawn on and keys it out. Bria's
-// half is the wait, so it has most of the bar.
-func (s *Server) briaCut(ctx context.Context, set settings.Settings, clip []byte, ext string, cut matte.ClipCut, report func(imagegen.Progress)) ([]byte, error) {
+// comfyCut has ComfyUI put her on the screen she was drawn on and keys it out.
+// ComfyUI's half is the wait, so it has most of the bar.
+func (s *Server) comfyCut(ctx context.Context, set settings.Settings, clip []byte, ext string, cut matte.ClipCut, report func(imagegen.Progress)) ([]byte, error) {
 	screen, err := matte.ClipScreen(ctx, clip, ext)
 	if err != nil {
 		return nil, err
 	}
-	colour := "Green"
-	if screen == "blue" {
-		colour = "Blue"
-	}
-	outs, err := s.imagegen.RunBriaCut(ctx, set.LibbyClipURL, set.ComfyOrgAPIKey, clip, ext, colour, func(p imagegen.Progress) {
+	outs, err := s.imagegen.RunClipCut(ctx, set.LibbyClipURL, clip, ext, clipCutModel(set), screen, func(p imagegen.Progress) {
 		report(imagegen.Progress{Percent: p.Percent * 0.8})
 	})
 	if err != nil {
@@ -193,7 +205,7 @@ func (s *Server) briaCut(ctx context.Context, set settings.Settings, clip []byte
 	out := outs[0]
 	outExt, ok := clipVideoExt(out.MIME)
 	if !ok {
-		return nil, fmt.Errorf("Bria's cut came back as %s, not a video", out.MIME)
+		return nil, fmt.Errorf("ComfyUI's cut came back as %s, not a video", out.MIME)
 	}
 	return matte.KeyClip(ctx, out.Data, outExt, cut, func(done float64) {
 		report(imagegen.Progress{Percent: 0.8 + done*0.2})

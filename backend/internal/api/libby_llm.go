@@ -166,7 +166,15 @@ func (s *Server) completeTurn(ctx context.Context, payload map[string]any, messa
 	for _, t := range tools {
 		known[t.Function.Name] = true
 	}
-	if mode == toolsNative && len(tools) > 0 {
+	if len(tools) == 0 {
+		// Nothing to call (a card character): plain prose, no envelope to ask for. JSON
+		// mode with no tools still wrapped the reply in one and constrained every token.
+		out := cloneMap(payload)
+		out["messages"] = messages
+		reply, err := s.postTurn(ctx, out, nil)
+		return reply, mode, err
+	}
+	if mode == toolsNative {
 		out := cloneMap(payload)
 		out["messages"] = messages
 		out["tools"] = tools
@@ -175,7 +183,10 @@ func (s *Server) completeTurn(ctx context.Context, payload map[string]any, messa
 		if err == nil {
 			return reply, toolsNative, nil
 		}
-		if !refusedTools(err) {
+		// A template refusing the message order is not one refusing tools, though both
+		// can come back as a Jinja error: the turn folds its late note and asks again in
+		// this mode, rather than this model being filed as one that cannot call tools.
+		if !refusedTools(err) || refusedLateNote(err) {
 			return llmReply{}, toolsNative, err
 		}
 		s.log.Info("libby: backend refused tools; using JSON mode", "model", model, "err", err)
@@ -210,18 +221,31 @@ func (s *Server) completeTurn(ctx context.Context, payload map[string]any, messa
 		return llmReply{}, toolsJSON, err
 	}
 	parsed := parseJSONTurn(reply.Text, known)
+	parsed.Usage, parsed.Timings = reply.Usage, reply.Timings
 	return parsed, toolsJSON, nil
 }
 
-// withJSONMode folds the JSON-mode instruction into the first system message and turns
+// withJSONMode folds the JSON-mode instruction into the last system message and turns
 // tool exchanges from earlier rounds into plain text, since a template without tool
 // support cannot render a tool message.
+//
+// The last, not the first: the instruction lists the turn's tools, which change with
+// the heat, the rooms she has and what was asked, and in the first message it sat ahead
+// of the whole conversation, which the backend then read again every time the list
+// moved. The last system message is the turn's late note (fitChatTurnCached), read
+// afresh anyway.
 func withJSONMode(messages []llmMessage, tools []llmTool) []llmMessage {
 	out := make([]llmMessage, 0, len(messages))
 	directive := jsonModeDirective(tools)
+	host := -1
+	for i, m := range messages {
+		if _, ok := m.Content.(string); ok && m.Role == "system" {
+			host = i
+		}
+	}
 	for i, m := range messages {
 		switch {
-		case i == 0 && m.Role == "system":
+		case i == host:
 			if text, ok := m.Content.(string); ok {
 				m.Content = text + directive
 			}
@@ -241,7 +265,7 @@ func withJSONMode(messages []llmMessage, tools []llmTool) []llmMessage {
 			out = append(out, m)
 		}
 	}
-	if len(out) == 0 || out[0].Role != "system" {
+	if host < 0 {
 		out = append([]llmMessage{{Role: "system", Content: strings.TrimSpace(directive)}}, out...)
 	}
 	return out
@@ -286,13 +310,15 @@ func (s *Server) postTurn(ctx context.Context, payload map[string]any, known map
 				ToolCalls []llmToolCall `json:"tool_calls"`
 			} `json:"message"`
 		} `json:"choices"`
+		Usage   llmUsage   `json:"usage"`
+		Timings llmTimings `json:"timings"`
 	}
 	if json.Unmarshal(raw, &out) != nil || len(out.Choices) == 0 {
 		return llmReply{}, errors.New("local LLM returned no message")
 	}
 	msg := out.Choices[0].Message
 	text := stripThinking(contentString(msg.Content))
-	reply := llmReply{Text: text}
+	reply := llmReply{Text: text, Usage: out.Usage, Timings: out.Timings}
 	for i, c := range msg.ToolCalls {
 		if c.Function.Name == "" {
 			continue

@@ -910,7 +910,7 @@ func validateChatWorkspace(ws *chatWorkspace) error {
 			c.Mode = "sweet"
 		}
 		c.Emotion = strings.ToLower(strings.TrimSpace(c.Emotion))
-		if !supportedLibbyEmotions[c.Emotion] {
+		if !validConversationEmotion(c.CharacterID, c.Emotion) {
 			c.Emotion = "neutral"
 		}
 		if c.Intensity < 1 {
@@ -987,7 +987,7 @@ func validateChatWorkspace(ws *chatWorkspace) error {
 				m.Heat = 0
 				// A snap is only ever hers; theirs is an ordinary photo.
 				m.Snap, m.Opened = false, false
-			} else if m.Mood = strings.ToLower(strings.TrimSpace(m.Mood)); !supportedLibbyEmotions[m.Mood] {
+			} else if m.Mood = strings.ToLower(strings.TrimSpace(m.Mood)); !validConversationEmotion(c.CharacterID, m.Mood) {
 				m.Mood = ""
 			}
 			if m.Heat < 0 || m.Heat > 5 {
@@ -1094,6 +1094,7 @@ func (s *Server) handlePutChatWorkspace(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, http.StatusInternalServerError, "couldn't save chat workspace")
 		return
 	}
+	s.pruneExpressions(u.ID, ws)
 	// Saving the card is the only moment her likeness can change, and recognition runs
 	// on the ingest path where there is no request and so no workspace to read from.
 	// See handlers_libby_identity.go.

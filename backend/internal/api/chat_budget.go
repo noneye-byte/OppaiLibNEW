@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -379,6 +380,11 @@ type promptSection struct {
 	// every section that is wanted, whatever its rank: a tight window spends its tokens
 	// on what the message is about. See chat_context_feed.go.
 	Deferred bool
+	// Late puts the section in the turn's late note rather than the system prompt, when
+	// the turn is laid out for the backend's prompt cache (fitChatTurnCached): it changes
+	// from one turn to the next, and anything that changes ahead of the conversation
+	// makes the backend read the whole conversation again.
+	Late bool
 }
 
 // Shed ranks. Spaced so a section can be slotted between two without renumbering, and
@@ -424,6 +430,24 @@ const (
 // not fit. The first is a loss the user can act on; the second is the budget clearing
 // context the turn had no use for, and is reported as housekeeping rather than as a cut.
 func assembleSystemPrompt(head string, optional []promptSection, tail string, budget int) (prompt string, dropped, cleared []string) {
+	kept, dropped, cleared := fitSections(optional, budget)
+	return joinSections(head, kept, tail), dropped, cleared
+}
+
+// joinSections writes head, the kept sections in authored order, then tail.
+func joinSections(head string, kept []promptSection, tail string) string {
+	var b strings.Builder
+	b.WriteString(head)
+	for _, section := range kept {
+		b.WriteString(section.Text)
+	}
+	b.WriteString(tail)
+	return b.String()
+}
+
+// fitSections is the walk assembleSystemPrompt describes, returning what was kept in
+// authored order.
+func fitSections(optional []promptSection, budget int) (kept []promptSection, dropped, cleared []string) {
 	ordered := make([]promptSection, len(optional))
 	copy(ordered, optional)
 	sort.SliceStable(ordered, func(a, b int) bool {
@@ -434,7 +458,7 @@ func assembleSystemPrompt(head string, optional []promptSection, tail string, bu
 	})
 
 	spent := 0
-	kept := make([]promptSection, 0, len(ordered))
+	kept = make([]promptSection, 0, len(ordered))
 	for _, section := range ordered {
 		if strings.TrimSpace(section.Text) == "" {
 			continue
@@ -455,15 +479,9 @@ func assembleSystemPrompt(head string, optional []promptSection, tail string, bu
 	// knows, then what is on screen, and shuffling that by rank would put the shared screen
 	// above her own identity.
 	sort.SliceStable(kept, func(a, b int) bool { return kept[a].Rank < kept[b].Rank })
-	var b strings.Builder
-	b.WriteString(head)
-	for _, section := range kept {
-		b.WriteString(section.Text)
-	}
-	b.WriteString(tail)
 	sort.Strings(dropped)
 	sort.Strings(cleared)
-	return b.String(), dropped, cleared
+	return kept, dropped, cleared
 }
 
 // chatBudgetReport is what the client is told about the fit.
@@ -558,6 +576,75 @@ const historyReserveFraction = 0.30
 // Anything below that is a request that cannot be served, and it fails with an explanation
 // rather than being sent for the backend to truncate from the front.
 func fitChatTurn(head string, optional []promptSection, tail string, history []chatMessage, limit, wantReply int) ([]chatMessage, int, chatBudgetReport, error) {
+	return fitChat(head, optional, tail, history, limit, wantReply, false)
+}
+
+// fitChatTurnCached is fitChatTurn laid out for the backend's prompt cache.
+//
+// llama.cpp — under text-generation-webui or on its own — keeps the last prompt it read
+// and reuses it up to the first token that differs, so a turn costs only what changed
+// since the one before. The prompt used to be one system message holding everything:
+// the card, then her mood and heat coming into the turn, the clock to the minute, the
+// library picked for this message, the bond's "it has been two hours". The first of
+// those to move — and one always did — sat ahead of the whole conversation, so every
+// turn read the conversation again from the top. On a V100 with a 24B model and a long
+// chat that was most of the wait before her first word.
+//
+// So the prompt is in two parts. The system message is what holds still: head, and the
+// sections not marked Late. The rest — the Late sections and the tail, the turn's own
+// instructions — is a late note, a second system message placed just before what they
+// have said since her last reply, where SillyTavern puts an author's note. Only that
+// note and the newest exchange are read afresh. It is not after their message:
+// text-generation-webui files a user message followed by a system one twice.
+//
+// The budget is fitChatTurn's; only where things are written differs.
+func fitChatTurnCached(head string, optional []promptSection, tail string, history []chatMessage, limit, wantReply int) ([]chatMessage, int, chatBudgetReport, error) {
+	return fitChat(head, optional, tail, history, limit, wantReply, true)
+}
+
+// historyCutStep is roughly how many messages at a time leave the front of a
+// conversation that no longer fits. One at a time moved the start of the conversation
+// every turn, and a prompt whose start moves is read again from the top; in steps, the
+// start holds still for several turns in a row.
+const historyCutStep = 10
+
+// steppedCut moves a cut at the front of history forward to the next message that may
+// start a prompt, keeping at least minKept messages.
+//
+// Which messages may start one is decided by the message, a hash of its id, rather
+// than by its index: a stored conversation is capped and loses its oldest message as
+// each new one arrives, so an index-based step would still move every turn once a
+// conversation was full. About one message in historyCutStep qualifies, and it goes on
+// qualifying however the slice around it shifts.
+func steppedCut(history []chatMessage, cut, minKept int) int {
+	if cut <= 0 {
+		return 0
+	}
+	for i := cut; i < len(history)-minKept && i < cut+3*historyCutStep; i++ {
+		key := history[i].ID
+		if key == "" {
+			key = history[i].Content
+		}
+		h := fnv.New32a()
+		h.Write([]byte(key))
+		if h.Sum32()%historyCutStep == 0 {
+			return i
+		}
+	}
+	return cut
+}
+
+// lateNoteAt is where the late note goes in a history: before the run of user messages
+// at its end, or at the end when it does not end with one.
+func lateNoteAt(history []chatMessage) int {
+	at := len(history)
+	for at > 0 && history[at-1].Role == "user" {
+		at--
+	}
+	return at
+}
+
+func fitChat(head string, optional []promptSection, tail string, history []chatMessage, limit, wantReply int, cached bool) ([]chatMessage, int, chatBudgetReport, error) {
 	report := chatBudgetReport{Limit: limit, ReplyTokens: wantReply, Estimated: true}
 	if strings.TrimSpace(head) == "" {
 		return nil, wantReply, report, fmt.Errorf("chat budget: the core system prompt is empty")
@@ -591,11 +678,29 @@ func fitChatTurn(head string, optional []promptSection, tail string, history []c
 	}
 	report.ReplyTokens = reply
 
-	systemPrompt, droppedSections, clearedSections := assembleSystemPrompt(head, optional, tail, spare-reply-historyFloor)
+	keptSections, droppedSections, clearedSections := fitSections(optional, spare-reply-historyFloor)
 	report.DroppedSections = droppedSections
 	report.ClearedSections = clearedSections
+	var systemPrompt, late string
+	if cached {
+		var early, later []promptSection
+		for _, section := range keptSections {
+			if section.Late {
+				later = append(later, section)
+			} else {
+				early = append(early, section)
+			}
+		}
+		systemPrompt = joinSections(head, early, "")
+		late = strings.TrimSpace(joinSections("", later, tail))
+	} else {
+		systemPrompt = joinSections(head, keptSections, tail)
+	}
 	system := chatMessage{Role: "system", Content: systemPrompt}
 	report.SystemTokens = estimateTokens(systemPrompt) + messageOverhead
+	if late != "" {
+		report.SystemTokens += estimateTokens(late) + messageOverhead
+	}
 
 	historyBudget := spare - reply - (report.SystemTokens - coreTokens)
 	// Walk backwards from the newest, keeping what fits. Newest-first is the whole point:
@@ -613,6 +718,13 @@ func fitChatTurn(head string, optional []promptSection, tail string, history []c
 	if kept > len(history) {
 		kept = len(history)
 	}
+	if cached {
+		cut := steppedCut(history, len(history)-kept, minKeptMessages)
+		for i := len(history) - kept; i < cut; i++ {
+			spent -= estimateTokens(history[i].Content) + messageOverhead
+		}
+		kept = len(history) - cut
+	}
 	dropped := history[:len(history)-kept]
 	out := make([]chatMessage, 0, kept+2)
 	out = append(out, system)
@@ -629,7 +741,15 @@ func fitChatTurn(head string, optional []promptSection, tail string, history []c
 			}
 		}
 	}
-	out = append(out, history[len(history)-kept:]...)
+	visible := history[len(history)-kept:]
+	if late == "" {
+		out = append(out, visible...)
+	} else {
+		at := lateNoteAt(visible)
+		out = append(out, visible[:at]...)
+		out = append(out, chatMessage{Role: "system", Content: late})
+		out = append(out, visible[at:]...)
+	}
 	report.PromptTokens = report.SystemTokens + spent
 
 	// One note, assembled from whatever actually gave way. Sections come first because they

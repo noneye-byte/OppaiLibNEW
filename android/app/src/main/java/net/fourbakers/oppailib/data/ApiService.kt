@@ -80,6 +80,24 @@ interface ApiService {
     @DELETE("api/chat/images/{id}")
     suspend fun deleteChatImage(@Path("id") id: String)
 
+    /** A card character's expression pack. See the server's chat_expressions.go. */
+    @GET("api/chat/characters/{id}/expressions")
+    suspend fun expressions(@Path("id") characterId: String): ExpressionPack
+
+    /** chub.ai's cards, fetched by the server. See chub.go. */
+    @GET("api/chub/search")
+    suspend fun chubSearch(
+        @Query("q") query: String, @Query("page") page: Int, @Query("sort") sort: String,
+        @Query("nsfw") nsfw: String, @Query("expressions") expressions: String,
+    ): ChubPage
+
+    @GET("api/chub/character")
+    suspend fun chubCharacter(@Query("path") path: String): ChubCharacter
+
+    /** Files a chub card's expression pack into a card character's own. */
+    @POST("api/chub/expressions")
+    suspend fun chubExpressions(@Body body: ChubExpressionsRequest): ExpressionPack
+
     @GET("api/imagegen/tags")
     suspend fun booruTags(@Query("q") query: String, @Query("limit") limit: Int = 8): TagSuggestions
 

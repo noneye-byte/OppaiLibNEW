@@ -193,7 +193,7 @@ func (s *Server) handleImageGenStatus(w http.ResponseWriter, r *http.Request) {
 	if p := s.matteProblem(); p != "" {
 		out["matteProblem"] = p
 	}
-	// A clip's cut is the model's too, unless Settings hand it to Bria.
+	// A clip's cut is the model's too, unless Settings hand it to ComfyUI.
 	out["clipCutBy"] = clipCutBy(set)
 	out["clipCut"] = s.clipCutProblem(set) == ""
 	if p := s.clipCutProblem(set); p != "" {

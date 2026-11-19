@@ -82,13 +82,19 @@ func (s *Server) buildTurnPrompt(ctx context.Context, cur settings.Settings, v *
 	}
 	userName := strings.TrimSpace(v.ws.Profile.DisplayName)
 	expand := func(text string) string { return expandCardMacros(text, character.Name, userName) }
+	// A card's own fields, and for Libby the ones that tie her to the place: a card
+	// character has no shelves and no habits around the house, as in SillyTavern.
+	routine, tastes := "", ""
+	if isLibby {
+		routine, tastes = expand(character.Routine), expand(character.Tastes)
+	}
 	cardFields := []struct{ label, value string }{
 		{"Description", expand(character.Description)},
 		{"What you look like (you know this about yourself)", expand(character.Appearance)},
 		{"Personality", expand(character.Personality)},
 		{"Kinks and turn-ons", expand(character.Kinks)},
-		{"What you are usually doing around the place", expand(character.Routine)},
-		{"Your taste in what is on the shelves", expand(character.Tastes)},
+		{"What you are usually doing around the place", routine},
+		{"Your taste in what is on the shelves", tastes},
 		{"Your own limits", expand(character.Limits)},
 		{"Scenario", expand(character.Scenario)},
 		{"Character instructions", expand(character.SystemPrompt)},
@@ -111,25 +117,41 @@ func (s *Server) buildTurnPrompt(ctx context.Context, cur settings.Settings, v *
 	if weight <= 0 {
 		weight = 1
 	}
-	head += fmt.Sprintf("\nTreat the character-card prompt strength as %.2f. You came into this turn looking %s at heat %d of 5; that is where the last one left you, not a setting to hold. Carry it in, then feel what you actually feel now.", weight, v.conv.Emotion, v.conv.Intensity)
-	head += s.wardrobeDirective(character, v.conv.Intensity, in.Outfit, v.conv.Wearing)
+	head += fmt.Sprintf("\nTreat the character-card prompt strength as %.2f.", weight)
+	// late is what this turn says that the last one did not: it goes to the late note,
+	// after the conversation, so the head stays the prefix the backend has cached (see
+	// fitChatTurnCached). Nothing that moves from turn to turn may be added to head.
+	var late strings.Builder
+	if isLibby {
+		fmt.Fprintf(&late, "\n\nYou came into this turn looking %s at heat %d of 5; that is where the last one left you, not a setting to hold. Carry it in, then feel what you actually feel now.", v.conv.Emotion, v.conv.Intensity)
+	}
+	late.WriteString(s.wardrobeDirective(character, v.conv.Intensity, in.Outfit, v.conv.Wearing))
 	if strings.TrimSpace(character.Kinks) != "" {
 		head += "\nYour kinks are what you actually want, not a list to recite or announce. " +
 			"Let them show in what you notice, what you steer towards, and what you ask for. " +
 			"Follow the user's lead on how explicit to be, and drop any of it the moment they take the conversation elsewhere."
 	}
 
+	// Sections are late unless added with addStable: most are chosen for the message —
+	// the library for what was asked, the journal when the past came up — or carry the
+	// time ("two hours since you last talked"). The few that hold still from turn to turn
+	// stay up front, cached with the card.
 	add := func(name string, rank int, text string) {
+		if strings.TrimSpace(text) != "" {
+			p.sections = append(p.sections, promptSection{Name: name, Rank: rank, Text: text, Late: true})
+		}
+	}
+	addStable := func(name string, rank int, text string) {
 		if strings.TrimSpace(text) != "" {
 			p.sections = append(p.sections, promptSection{Name: name, Rank: rank, Text: text})
 		}
 	}
 	addDeferred := func(name string, rank int, text string, wanted bool) {
 		if strings.TrimSpace(text) != "" {
-			p.sections = append(p.sections, promptSection{Name: name, Rank: rank, Text: text, Deferred: !wanted})
+			p.sections = append(p.sections, promptSection{Name: name, Rank: rank, Text: text, Deferred: !wanted, Late: true})
 		}
 	}
-	add("earlier in this conversation", rankSummary, summaryDirective(v.conv.Summary))
+	addStable("earlier in this conversation", rankSummary, summaryDirective(v.conv.Summary))
 
 	p.sentImgs, p.lastImg = recentlySentPhotos(v.books.sentImgs)
 	p.sentLib = recentlyAttached(v.books.sentMedia)
@@ -147,19 +169,22 @@ func (s *Server) buildTurnPrompt(ctx context.Context, cur settings.Settings, v *
 		journal, _ := s.readLibbyJournal(v.userID)
 		s.chatMu.Unlock()
 		p.taste = buildLibbyTaste(character.Kinks+" "+character.Tastes, wantTexts(wants))
-		add("what she remembers about you", rankMemoryList, memoryPromptBlock(store))
-		add("who she is", rankSelfFacts, selfPromptBlock(store))
-		add("her own wants", rankWantsList, wantsPromptBlock(wants))
+		addStable("what she remembers about you", rankMemoryList, memoryPromptBlock(store))
+		addStable("who she is", rankSelfFacts, selfPromptBlock(store))
+		addStable("her own wants", rankWantsList, wantsPromptBlock(wants))
 		add("your history together", rankBond, bondPromptBlock(bond, time.Now()))
 		addDeferred("her journal", rankJournal, journalPromptBlock(journal, time.Now()), signals.past || len(in.Messages) <= 2)
 		if chatTask(strings.ToLower(strings.TrimSpace(in.Task))) == taskAfterglow {
-			head += afterglowDirective(bond, time.Now())
+			late.WriteString(afterglowDirective(bond, time.Now()))
 		}
 		addDeferred("your other conversations", rankRecaps, conversationRecaps(v.ws, character.ID, v.conv.ID, time.Now()), signals.past || len(in.Messages) <= 2)
 		if signals.past {
 			add("what she does not remember", rankPastHonesty, pastHonestyDirective)
 		}
-		p.sections = append(p.sections, s.libraryFeed(ctx, signals, feedChoice{shown: p.sentLib, taste: p.taste, weights: v.ws.SendWeights, userID: v.userID})...)
+		for _, section := range s.libraryFeed(ctx, signals, feedChoice{shown: p.sentLib, taste: p.taste, weights: v.ws.SendWeights, userID: v.userID}) {
+			section.Late = true
+			p.sections = append(p.sections, section)
+		}
 		// What their ratings say they like in her pictures, for the shots she frames.
 		if liked := likedTags(v.ws.SendWeights, 8); len(liked) > 0 && cur.ImageGenEnabled {
 			addDeferred("what they love in your pictures", rankPhotoCatalogue, "\n\nIn the pictures of you they have loved: "+strings.Join(liked, ", ")+". Lean that way when you frame one, without copying it.", signals.photo || v.conv.Intensity >= 3)
@@ -170,25 +195,26 @@ func (s *Server) buildTurnPrompt(ctx context.Context, cur settings.Settings, v *
 		add("a scene she planned", rankActivity, scenePromptBlock(v.conv.Scene))
 	}
 
-	viewingUser := int64(0)
+	// The screen, a shared link and shared shelves are the library's, and a card
+	// character has no part in the library: only Libby is told about them.
+	viewing := ""
 	if isLibby {
-		viewingUser = v.userID
-	}
-	viewing := s.viewingDirective(ctx, in.Viewing, in.Mode, v.conv.Intensity, isLibby, viewingUser)
-	head += callPromptBlock(in.Call) + viewing
-	if in.Link != "" {
-		if link, previewed := s.cachedSharedLink(in.Link); previewed {
-			head += sharedLinkDirective(link)
+		viewing = s.viewingDirective(ctx, in.Viewing, in.Mode, v.conv.Intensity, isLibby, v.userID)
+		late.WriteString(callPromptBlock(in.Call) + viewing)
+		if in.Link != "" {
+			if link, previewed := s.cachedSharedLink(in.Link); previewed {
+				late.WriteString(sharedLinkDirective(link))
+			}
+		}
+		if len(in.SharedMediaIDs) > 0 {
+			late.WriteString(s.sharedItemsDirective(ctx, in.SharedMediaIDs, isLibby))
 		}
 	}
-	if len(in.SharedMediaIDs) > 0 {
-		head += s.sharedItemsDirective(ctx, in.SharedMediaIDs, isLibby)
-	}
 	describer := s.newHistoryDescriber(ctx, v.ws, in.Messages)
-	head += replyTargetDirective(in.Messages[len(in.Messages)-1].ReplyTo, in.Messages, describer)
+	late.WriteString(replyTargetDirective(in.Messages[len(in.Messages)-1].ReplyTo, in.Messages, describer))
 	inQuestion, inQuestionOK := pictureInQuestion(in.Messages)
 	if inQuestionOK {
-		head += pictureInQuestionDirective(inQuestion, describer)
+		late.WriteString(pictureInQuestionDirective(inQuestion, describer))
 	}
 
 	canCamera := isLibby && cur.ImageGenEnabled
@@ -215,9 +241,12 @@ func (s *Server) buildTurnPrompt(ctx context.Context, cur settings.Settings, v *
 	// Generating a picture for the library is the camera's job now, not an offer.
 	p.caps.Generate = false
 
+	// The tail is late too, and starts with what late gathered above. What stays the same
+	// every turn — how links are written, how she acts — goes up into head instead.
 	var tail strings.Builder
-	if isLibby || viewing != "" {
-		tail.WriteString("\n\n" + linkDirective)
+	tail.WriteString(late.String())
+	if isLibby {
+		head += "\n\n" + linkDirective + toolDirective
 	}
 	if isLibby {
 		addDeferred("what she is doing", rankActivity, "\n\n"+activityToolDirective(v.conv.Intensity, v.conv.Activity, p.limits), true)
@@ -235,10 +264,11 @@ func (s *Server) buildTurnPrompt(ctx context.Context, cur settings.Settings, v *
 		// Hers only: a card's scenario has its own clock, and a tavern keeper told it is
 		// Friday night in October has been pulled out of her world.
 		tail.WriteString(clockDirective(v.now))
+		// Her face and heat are hers: a card character's expression is read off the reply
+		// afterwards, the way SillyTavern's expressions are (chat_expressions.go).
+		tail.WriteString(moodPromptBlock(v.books.moods, v.conv.Emotion))
+		tail.WriteString(heatPromptBlock(v.books.heat, v.conv.Intensity))
 	}
-	tail.WriteString(moodPromptBlock(v.books.moods, v.conv.Emotion))
-	tail.WriteString(heatPromptBlock(v.books.heat, v.conv.Intensity))
-	tail.WriteString(toolDirective)
 
 	history := make([]chatMessage, 0, len(in.Messages))
 	annotated := false
@@ -248,7 +278,7 @@ func (s *Server) buildTurnPrompt(ctx context.Context, cur settings.Settings, v *
 		}
 		// A card's greeting is stored as the card wrote it, {{user}} and all, and a model
 		// shown its own first line with a slot in it fills the slot the same way next time.
-		history = append(history, chatMessage{Role: m.Role, Content: expand(historyContent(m, describer))})
+		history = append(history, chatMessage{Role: m.Role, Content: expand(historyContent(m, describer)), ID: m.ID})
 	}
 	if annotated {
 		tail.WriteString("\n\n" + historyNotesDirective)
@@ -260,7 +290,7 @@ func (s *Server) buildTurnPrompt(ctx context.Context, cur settings.Settings, v *
 		state := s.gatherServerState(ctx, cur, model, limit, resolveModelTier(cur.ChatModelTier, model), p.caps.Server, p.serverTurn)
 		p.caps.Models = state.Models
 		if p.serverTurn || len(state.alarms()) > 0 {
-			p.sections = append(p.sections, promptSection{Name: "how the server is doing", Text: state.render(p.serverTurn), Rank: rankServer})
+			add("how the server is doing", rankServer, state.render(p.serverTurn))
 		}
 	}
 
