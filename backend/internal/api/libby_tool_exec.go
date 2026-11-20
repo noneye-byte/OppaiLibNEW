@@ -66,12 +66,17 @@ func (t *turnRun) runTool(name string, args map[string]any) (result string, foll
 		return t.execVoiceNote(args), false
 	case toolOffer:
 		return t.execOffer(args), false
+	case toolSendSticker:
+		return t.execSendSticker(args)
 	case toolPlanScene:
 		if sc := planScene(args); sc != nil {
 			t.scene = sc
 			return fmt.Sprintf("Planned: %s, starting with %s.", sc.Title, sc.Beats[0]), false
 		}
 		return "A scene needs a title and at least two beats.", false
+	}
+	if isLibraryTool(name) {
+		return t.execLibraryTool(name, args)
 	}
 	return "There is no such tool.", false
 }

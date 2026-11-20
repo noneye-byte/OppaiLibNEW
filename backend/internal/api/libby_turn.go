@@ -115,9 +115,9 @@ func ephemeralConversation(ws *chatWorkspace, req *libbyTurnRequest) error {
 	return nil
 }
 
-// maxTurnRounds bounds the tool loop. Three is a picture and her reaction to it plus one
-// spare; past that a model is calling tools in circles.
-const maxTurnRounds = 3
+// maxTurnRounds bounds the tool loop. Four is a look at the shelves, a picture and her
+// reaction to it, plus one spare; past that a model is calling tools in circles.
+const maxTurnRounds = 4
 
 // turnStream writes events, or collects them for a JSON reply.
 type turnStream struct {

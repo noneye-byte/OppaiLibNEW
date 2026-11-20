@@ -207,6 +207,9 @@ function playBlob(blob: Blob, gen: number): Promise<void> {
     };
     audio.addEventListener("ended", finish, { once: true });
     audio.addEventListener("error", finish, { once: true });
+    // Her Live2D model listens for this to move her mouth with the sound
+    // (views/libby-live2d.ts). Nobody listening costs nothing.
+    window.dispatchEvent(new CustomEvent("oppai-libby-voice", { detail: { audio } }));
     audio.play().catch(() => {
       // Autoplay refused: the tab has had no gesture yet. Nothing to do but move on;
       // the next line after a click will play.

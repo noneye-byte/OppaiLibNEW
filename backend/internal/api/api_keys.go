@@ -68,6 +68,11 @@ var launchyKeyPath = regexp.MustCompile(`^/api/(media/\d+/thumb|media/\d+/saves(
 
 // keyScopeAllows reports whether a key of this scope may make the request.
 func keyScopeAllows(scope string, r *http.Request) bool {
+	if scope == scopeMCP {
+		// An MCP client's key opens the protocol endpoint and nothing else — not even the
+		// key list beside it.
+		return r.URL.Path == "/api/mcp"
+	}
 	if scope != scopeLaunchy {
 		return false
 	}
@@ -88,7 +93,11 @@ func (s *Server) serveWithKey(w http.ResponseWriter, r *http.Request, key string
 		return
 	}
 	if !keyScopeAllows(row.Scope, r) {
-		writeErr(w, http.StatusForbidden, "this key only opens Launchy's part of the server")
+		msg := "this key only opens Launchy's part of the server"
+		if row.Scope == scopeMCP {
+			msg = "this key only opens the MCP endpoint, /api/mcp"
+		}
+		writeErr(w, http.StatusForbidden, msg)
 		return
 	}
 	if err := s.db.TouchAPIKey(r.Context(), row.ID); err != nil {

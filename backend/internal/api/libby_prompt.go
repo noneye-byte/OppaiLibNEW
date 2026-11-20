@@ -181,7 +181,15 @@ func (s *Server) buildTurnPrompt(ctx context.Context, cur settings.Settings, v *
 		if signals.past {
 			add("what she does not remember", rankPastHonesty, pastHonestyDirective)
 		}
-		for _, section := range s.libraryFeed(ctx, signals, feedChoice{shown: p.sentLib, taste: p.taste, weights: v.ws.SendWeights, userID: v.userID}) {
+		feedSignals := signals
+		if libraryToolsOffered(toolLevelFor(limit)) {
+			// She looks things up herself (library_mcp.go), so the turn is not guessed at
+			// and fed: only the facts and what they had on a moment ago stay, with a line
+			// telling her to look.
+			feedSignals = pulledFeedSignals(signals)
+			addStable("how to read the shelves", rankLibraryFacts, libraryPullNote)
+		}
+		for _, section := range s.libraryFeed(ctx, feedSignals, feedChoice{shown: p.sentLib, taste: p.taste, weights: v.ws.SendWeights, userID: v.userID}) {
 			section.Late = true
 			p.sections = append(p.sections, section)
 		}
@@ -315,7 +323,10 @@ func (s *Server) buildTurnPrompt(ctx context.Context, cur settings.Settings, v *
 	if len(in.PhotoTags) > 0 {
 		tail.WriteString("\n\n" + photoDirective(in.PhotoTags, character))
 	}
-	if detailAsked(v.latestUser) {
+	// Libby is told the shape of her reply by the turn, which reads more than whether
+	// detail was asked for (chat_reply_shape.go); a card always writes one message, and
+	// asked for detail writes it out.
+	if !isLibby && detailAsked(v.latestUser) {
 		tail.WriteString("\n\n" + detailDirective)
 	}
 
@@ -354,6 +365,17 @@ func (s *Server) buildTurnPrompt(ctx context.Context, cur settings.Settings, v *
 	}
 	if canCamera && isLibby {
 		p.tools.loras = cur.LibbyCameraLoras
+	}
+	if isLibby {
+		p.tools.library = s.libbyLibraryToolset(p.tools.level)
+	}
+	if isLibby {
+		s.chatMu.Lock()
+		shelf, err := s.readLibbyStickers(v.userID)
+		s.chatMu.Unlock()
+		if err == nil {
+			p.tools.stickers, p.tools.stickerCount = stickerLabels(shelf.Items), len(shelf.Items)
+		}
 	}
 	// Offering is for turns about acting on the library or the server, as the offer
 	// directive always was; on the rest the tool is a couple of hundred tokens of nothing.

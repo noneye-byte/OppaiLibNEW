@@ -32,6 +32,10 @@ type toolsetOptions struct {
 	saved bool
 	// voice says a voice is available to send notes in.
 	voice bool
+	// stickers are the labels on her shelf of reaction images, sorted; stickerCount is
+	// how many there are. See libby_stickers.go.
+	stickers     []string
+	stickerCount int
 	// onCall says they have her on the call screen, which is what makes hanging up mean
 	// something and ringing mean nothing.
 	onCall bool
@@ -42,6 +46,9 @@ type toolsetOptions struct {
 	places []string
 	// offers are the action kinds on the table, in buildLibbyAction's verbs.
 	offers []string
+	// library is the library's MCP tools as offered this turn (library_mcp.go): how she
+	// reads the shelves instead of being fed them. Empty on a window too small for them.
+	library []llmTool
 	// scene says a planned scene is under way, which adds its beat to the state tool.
 	scene bool
 	// loras are the LoRAs she may add to a picture, each with its note on when.
@@ -89,11 +96,23 @@ func trimToolset(tools []llmTool, level int) []llmTool {
 	out := tools[:0]
 	for _, t := range tools {
 		name := t.Function.Name
-		if (level == toolsLean && !leanDropped[name]) || (level == toolsMinimal && minimalKept[name]) {
+		// The library's tools were chosen for the level when they were offered.
+		library := level == toolsLean && isLibraryTool(name)
+		if library || (level == toolsLean && !leanDropped[name]) || (level == toolsMinimal && minimalKept[name]) {
 			out = append(out, t)
 		}
 	}
 	return out
+}
+
+// isLibraryTool says a name is one of the library's MCP tools.
+func isLibraryTool(name string) bool {
+	for _, n := range libbyLibraryTools {
+		if n == name {
+			return true
+		}
+	}
+	return false
 }
 
 func tool(name, description string, properties map[string]any, required ...string) llmTool {
@@ -130,6 +149,7 @@ const (
 	toolVoiceNote     = "voice_note"
 	toolOffer         = "offer"
 	toolPlanScene     = "plan_scene"
+	toolSendSticker   = "send_reaction_image"
 	photoFramingsNote = "selfie, mirror selfie, close-up, upper body, full body, from behind, from above, from below, pov"
 )
 
@@ -223,8 +243,9 @@ func libbyToolset(o toolsetOptions) []llmTool {
 		tools = append(tools, tool(toolSendSaved, desc, map[string]any{"query": str("What it should show.")}, "query"))
 	}
 	if o.libby {
+		tools = append(tools, o.library...)
 		tools = append(tools, tool(toolSendLibrary,
-			"Hand them something from the library — a video, gif, picture, comic or game — as a card they can open. Name it by title when you know it, or describe it.",
+			"Hand them something from the library — a video, gif, picture, comic or game — as a card they can open. Name it by its title from a search, or describe it.",
 			map[string]any{
 				"query": str("Its title, or what it is."),
 				"kind":  enum("What kind of thing.", []string{"any", "video", "gif", "image", "comic", "game"}),
@@ -239,6 +260,18 @@ func libbyToolset(o toolsetOptions) []llmTool {
 		tools = append(tools, tool(toolRecall,
 			"Look back through what you remember and your other conversations with them, when they ask about something you are not sure of. If it finds nothing, say you don't remember.",
 			map[string]any{"query": str("What you are trying to remember.")}, "query"))
+	}
+
+	if o.libby && o.stickerCount > 0 {
+		desc := "Send one of your reaction images — a meme or gif, the way people drop one into a chat — when it says it better than words, or with them. " +
+			"Now and then, when the moment is made for one; not every message."
+		label := str("Which one, by its label.")
+		if len(o.stickers) <= stickerEnumMax {
+			label = enum("Which one.", o.stickers)
+		} else {
+			desc += " Yours include: " + strings.Join(o.stickers[:stickerEnumMax], ", ") + "."
+		}
+		tools = append(tools, tool(toolSendSticker, desc, map[string]any{"label": label}, "label"))
 	}
 
 	tools = append(tools, tool(toolReact,

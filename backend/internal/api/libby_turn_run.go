@@ -98,10 +98,24 @@ func (t *turnRun) run() error {
 	//
 	// A card character always does: SillyTavern answers in one message, whatever the
 	// mode, and that is what a card was written for.
-	detailed := (detailAsked(v.latestUser) && task == taskCreative) || !t.isLibby
+	//
+	// Libby's reply takes the shape the message calls for — texts, an answer, a beat of
+	// a scene, the scene written out — and only a run of texts is split and counted.
+	// See chat_reply_shape.go.
+	shape := shapeTexts
+	if t.isLibby {
+		shape = readReplyShape(shapeInput{
+			task: task, latest: v.latestUser, previous: v.prevUser, herLast: lastAssistantText(v.in.Messages),
+			mode: v.in.Mode, intensity: v.conv.Intensity,
+		})
+	}
+	detailed := shape.oneMessage() || !t.isLibby
 	texts := textsForTurn(task, v.latestUser, rollTexts())
-	if !detailed {
-		t.p.tail += "\n\n" + textCountDirective(texts)
+	if briefMessage(v.latestUser) {
+		texts = 1
+	}
+	if t.isLibby {
+		t.p.tail += "\n\n" + shapeDirective(shape, v.latestUser, texts)
 	}
 	// A card character gets no tools. Its whole set was a mood, a reaction, a thought and
 	// a quote — Libby's machinery, not a card's — and offering any tool put a backend
@@ -134,7 +148,7 @@ func (t *turnRun) run() error {
 	}
 	payload, overridden := samplingPayload(preset, t.model, limit, replyTokens, v.conv.Options, stops)
 	summary := samplingSummary(task, tier, preset, overridden)
-	s.log.Info("libby turn", "sampling", summary, "contextLimit", budget.Limit, "promptTokens", budget.PromptTokens, "tools", len(tools))
+	s.log.Info("libby turn", "shape", shape.String(), "sampling", summary, "contextLimit", budget.Limit, "promptTokens", budget.PromptTokens, "tools", len(tools))
 
 	var debug *chatDebug
 	if t.req.Debug {
@@ -255,7 +269,7 @@ func (t *turnRun) run() error {
 // she says, the way it would from a phone.
 func postSpeechTool(name string) bool {
 	switch name {
-	case toolTakePhoto, toolEditPhoto, toolMakeClip, toolSendSaved, toolSendLibrary, toolVoiceNote, toolOffer:
+	case toolTakePhoto, toolEditPhoto, toolMakeClip, toolSendSaved, toolSendLibrary, toolVoiceNote, toolOffer, toolSendSticker:
 		return true
 	}
 	return false
@@ -501,4 +515,19 @@ func (s *Server) makeRoom(ctx context.Context, place string, progress func(camer
 		return libbyBackgroundView{}, err
 	}
 	return s.libbyBackgroundView(&bg), nil
+}
+
+// lastAssistantText is her last message before the run of theirs being answered, "" when
+// she has said nothing yet.
+func lastAssistantText(messages []chatMessage) string {
+	i := len(messages) - 1
+	for i >= 0 && messages[i].Role == "user" {
+		i--
+	}
+	for ; i >= 0; i-- {
+		if messages[i].Role == "assistant" {
+			return messages[i].Content
+		}
+	}
+	return ""
 }

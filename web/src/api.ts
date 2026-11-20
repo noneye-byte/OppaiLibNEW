@@ -1017,9 +1017,30 @@ export interface StoredChatMessage extends ChatMessage {
   images?: string[];
   /** A voice note: the content is what she says, and it is played rather than read. */
   voice?: boolean;
+  /** A reaction image she sent from her shelf, by id. See LibbySticker. */
+  sticker?: string;
   /** The conversation revision the server wrote this message at; absent on yours.
       Sent back with the conversation so a save cannot erase what it never saw. */
   rev?: number;
+}
+
+/** One of her reaction images: a meme or gif the user put on her shelf, which she sends
+    by its label. GIFs and clips are kept byte for byte. See api/libby_stickers.go. */
+export interface LibbySticker {
+  id: string;
+  label: string;
+  tags?: string[];
+  mime: string;
+  size: number;
+  sent?: number;
+  createdAt: number;
+}
+
+/** Her Live2D model and whether the runtime that draws it is on the server. */
+export interface Live2DView {
+  model: import("./live2d-face.js").Live2DSettings | null;
+  core: boolean;
+  coreAdmin: boolean;
 }
 
 /** A scene she planned and is playing through, a beat at a time. */
@@ -3629,6 +3650,12 @@ export const api = {
   forgetLaunchyRemovals: () =>
     request<{ removed: number; declined: number }>("/api/launchy/removed", { method: "DELETE" }),
   revokeLaunchyKey: (id: number) => request<void>(`/api/launchy/keys/${id}`, { method: "DELETE" }),
+  /** Keys for MCP clients, and the tools /api/mcp serves. See api/library_mcp.go. */
+  mcpKeys: () => request<{ items: LaunchyKey[]; tools: string[] }>("/api/mcp/keys"),
+  /** Makes a key for an MCP client. The key is in this answer and nowhere else, ever. */
+  createMcpKey: (name: string) =>
+    request<{ key: string; id: number; name: string }>("/api/mcp/keys", { method: "POST", body: JSON.stringify({ name }) }),
+  revokeMcpKey: (id: number) => request<void>(`/api/mcp/keys/${id}`, { method: "DELETE" }),
 
   // HTML5 game builds. playInfo 404s for a game that is only a download, which is
   // how the viewer decides whether to offer a Play button at all.
@@ -3804,6 +3831,35 @@ export const api = {
   deleteChatImage: (id: string) =>
     request<{ status: string }>(`/api/chat/images/${encodeURIComponent(id)}`, { method: "DELETE" }),
   chatImageURL: (id: string) => `/api/chat/images/${encodeURIComponent(id)}`,
+  /** One character's gallery as a zip with a manifest of tags and recipes — "hers" (what
+      she sends as herself), "others" (what was shared with her) or "all". A plain
+      download, decrypted by the server straight into the response. */
+  chatImagesExportURL: (characterID: string, shelf: "hers" | "others" | "all" = "hers") =>
+    `/api/chat/images/export?${new URLSearchParams({ character: characterID, shelf })}`,
+  /** Her Live2D model, and whether Cubism Core is on the server. See api/libby_live2d.go. */
+  libbyLive2D: () => request<Live2DView>("/api/libby/live2d"),
+  /** Her model folder, zipped. Replaces any model she had. */
+  uploadLive2D: (zip: File) => request<Live2DView>("/api/libby/live2d", { method: "POST", body: zip }, 600_000),
+  updateLive2D: (change: Partial<import("./live2d-face.js").Live2DSettings>) =>
+    request<import("./live2d-face.js").Live2DSettings>("/api/libby/live2d", { method: "PATCH", body: JSON.stringify(change) }),
+  deleteLive2D: () => request<void>("/api/libby/live2d", { method: "DELETE" }),
+  /** Admin: puts Live2D's Cubism Core on the server, from a file or from Live2D's CDN. */
+  uploadLive2DCore: (file: File) => request<{ core: boolean }>("/api/libby/live2d/core", { method: "POST", body: file }, 60_000),
+  fetchLive2DCore: () => request<{ core: boolean }>("/api/libby/live2d/core/fetch", { method: "POST" }, 90_000),
+  /** Her shelf of reaction images. */
+  libbyStickers: () => request<{ items: LibbySticker[] }>("/api/libby/stickers"),
+  /** Puts one file on the shelf as it is — the body is the file. With no label the
+      server makes one from the file's name. */
+  uploadLibbySticker: (file: File, label = "") => {
+    const q = new URLSearchParams({ filename: file.name });
+    if (label.trim()) q.set("label", label.trim());
+    return request<LibbySticker>(`/api/libby/stickers?${q}`, { method: "POST", body: file }, 120_000);
+  },
+  updateLibbySticker: (id: string, change: { label?: string; tags?: string[] }) =>
+    request<LibbySticker>(`/api/libby/stickers/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(change) }),
+  deleteLibbySticker: (id: string) =>
+    request<void>(`/api/libby/stickers/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  libbyStickerURL: (id: string) => `/api/libby/stickers/${encodeURIComponent(id)}`,
   /** A card character's expression pack — SillyTavern's sprites, file names by label.
       Libby has none: her face is her wardrobe. See chat_expressions.go. */
   expressions: (characterId: string) =>

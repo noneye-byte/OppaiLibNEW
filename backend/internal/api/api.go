@@ -20,6 +20,7 @@ import (
 	"github.com/youruser/oppailib/internal/gamesites"
 	"github.com/youruser/oppailib/internal/imagegen"
 	"github.com/youruser/oppailib/internal/matte"
+	"github.com/youruser/oppailib/internal/mcp"
 	"github.com/youruser/oppailib/internal/obs"
 	"github.com/youruser/oppailib/internal/scraper"
 	"github.com/youruser/oppailib/internal/settings"
@@ -155,6 +156,11 @@ type Server struct {
 	docker *docker.Client
 	train     *trainRunner
 	trainOnce sync.Once
+
+	// The library's MCP tools, for outside clients at /api/mcp and for Libby's turn
+	// in-process. Built on first use. See library_mcp.go.
+	mcp     *mcp.Server
+	mcpOnce sync.Once
 
 	// Pictures being described by the vision model, one at a time. See
 	// vision_describe.go.
@@ -819,6 +825,11 @@ func (s *Server) Handler() http.Handler {
 	// See api_keys.go.
 	mux.HandleFunc("POST /api/launchy/pairing", s.requireAuth(s.handleLaunchyPairing))
 	mux.HandleFunc("POST /api/launchy/pair", s.handleLaunchyPair)
+	// The library as an MCP server, for any MCP client holding a key. See library_mcp.go.
+	mux.HandleFunc("/api/mcp", s.requireAuth(s.handleMCP))
+	mux.HandleFunc("POST /api/mcp/keys", s.requireAuth(s.handleCreateMCPKey))
+	mux.HandleFunc("GET /api/mcp/keys", s.requireAuth(s.handleListMCPKeys))
+	mux.HandleFunc("DELETE /api/mcp/keys/{id}", s.requireAuth(s.handleRevokeMCPKey))
 	mux.HandleFunc("GET /api/launchy/keys", s.requireAuth(s.handleListLaunchyKeys))
 	mux.HandleFunc("DELETE /api/launchy/keys/{id}", s.requireAuth(s.handleRevokeLaunchyKey))
 	mux.HandleFunc("DELETE /api/launchy/key", s.requireAuth(s.handleUnlinkLaunchy))
@@ -873,9 +884,26 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/chub/expressions", s.requireAuth(s.handleChubExpressions))
 	// Libby's card as it ships, so each of her fields can be put back. Read-only.
 	mux.HandleFunc("GET /api/chat/libby-default", s.requireAuth(s.handleLibbyDefaultCard))
+	// Her whole gallery as one zip, decrypted only into the response. See chat_images_export.go.
+	mux.HandleFunc("GET /api/chat/images/export", s.requireAuth(s.handleExportChatImages))
 	mux.HandleFunc("GET /api/chat/images/{id}", s.requireAuth(s.handleGetChatImage))
 	mux.HandleFunc("DELETE /api/chat/images/{id}", s.requireAuth(s.handleDeleteChatImage))
 	mux.HandleFunc("POST /api/libby/turn", s.requireAuth(s.handleLibbyTurn))
+	// Her as a Live2D model, and the runtime it needs. See libby_live2d.go.
+	mux.HandleFunc("GET /api/libby/live2d", s.requireAuth(s.handleGetLive2D))
+	mux.HandleFunc("POST /api/libby/live2d", s.requireAuth(s.handleUploadLive2D))
+	mux.HandleFunc("PATCH /api/libby/live2d", s.requireAuth(s.handlePatchLive2D))
+	mux.HandleFunc("DELETE /api/libby/live2d", s.requireAuth(s.handleDeleteLive2D))
+	mux.HandleFunc("GET /api/libby/live2d/files/{name...}", s.requireAuth(s.handleGetLive2DFile))
+	mux.HandleFunc("GET /api/libby/live2d/core.js", s.requireAuth(s.handleGetLive2DCore))
+	mux.HandleFunc("POST /api/libby/live2d/core", s.requireAuth(s.requireAdmin(s.handleUploadLive2DCore)))
+	mux.HandleFunc("POST /api/libby/live2d/core/fetch", s.requireAuth(s.requireAdmin(s.handleFetchLive2DCore)))
+	// Her shelf of reaction images — memes and gifs she sends. See libby_stickers.go.
+	mux.HandleFunc("GET /api/libby/stickers", s.requireAuth(s.handleListLibbyStickers))
+	mux.HandleFunc("POST /api/libby/stickers", s.requireAuth(s.handleUploadLibbySticker))
+	mux.HandleFunc("GET /api/libby/stickers/{id}", s.requireAuth(s.handleGetLibbySticker))
+	mux.HandleFunc("PATCH /api/libby/stickers/{id}", s.requireAuth(s.handlePatchLibbySticker))
+	mux.HandleFunc("DELETE /api/libby/stickers/{id}", s.requireAuth(s.handleDeleteLibbySticker))
 	mux.HandleFunc("POST /api/libby/photos/{id}/rate", s.requireAuth(s.handleRateLibbyPhoto))
 	mux.HandleFunc("POST /api/libby/photos/{id}/keep", s.requireAuth(s.handleKeepLibbyPhoto))
 	mux.HandleFunc("GET /api/libby/stories", s.requireAuth(s.handleListLibbyStories))

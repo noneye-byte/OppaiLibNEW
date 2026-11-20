@@ -787,6 +787,10 @@ data class StoredChatMessage(
     val images: List<String> = emptyList(),
     /** A voice note: the content is what she says, played rather than read. */
     val voice: Boolean = false,
+    /** A reaction image she sent from her shelf, by id. Carried through every save: the
+        workspace PUT takes the phone's copy of a message as it is, so a field this class
+        drops is gone for every client. */
+    val sticker: String = "",
     /** The conversation revision the server wrote this message at; 0 for yours. Carried
         so a save from the phone tells the server which of its messages it has seen. */
     val rev: Long = 0,

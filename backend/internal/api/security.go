@@ -11,6 +11,10 @@ import (
 // <script> or text/html response cannot execute. The rest is tuned to what the
 // built UI actually needs:
 //
+//   - script-src also allows 'wasm-unsafe-eval', which lets a script already running on
+//     this origin compile WebAssembly — and nothing else: JavaScript eval stays refused.
+//     Live2D's Cubism Core is WebAssembly carried inside its .js file, and without this
+//     her Live2D model cannot load (libby_live2d.go).
 //   - style-src allows 'unsafe-inline' (Lit/Material components set inline styles,
 //     and index.html declares its @font-face rules there); script has no such
 //     exception.
@@ -38,7 +42,7 @@ const contentSecurityPolicy = "default-src 'self'; " +
 	"base-uri 'self'; " +
 	"object-src 'none'; " +
 	"frame-ancestors 'none'; " +
-	"script-src 'self'; " +
+	"script-src 'self' 'wasm-unsafe-eval'; " +
 	"style-src 'self' 'unsafe-inline'; " +
 	"font-src 'self' data:; " +
 	"img-src 'self' data: blob:; " +

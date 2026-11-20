@@ -18,7 +18,7 @@ import {
   type ChatBackendInfo, type ChatDebug, type ChatModelInspection, type ChatModels, type ChatOptions, type ChatProfile, type ChatSampling, type ChatStatus, type ChatWorkspace,
   type LibbyAutoDecision, type LibbyAutoSettings, type LibbyAutoState, type LibbyBond, type LibbyContext,
   type DiscordPlace, type DiscordState, type LibbyIdentity, type LibbyJournalEntry, type LibbyMemory, type LibbyWant, type SharedLink,
-  type StoredChatMessage, type User, type ChatReplyRef, type LibbyAttachment, type LibbyBackground, type LibbyLink, type Media,
+  type StoredChatMessage, type User, type ChatReplyRef, type LibbyAttachment, type LibbyBackground, type LibbySticker, type LibbyLink, type Media,
   type LibbyActivityDef, type LibbyOutfit, type LibbyActContext, type GenProgress, type LibbyStory, type ExpressionPack, type ChubCard,
   SEND_WEIGHTS,
 } from "../api.js";
@@ -34,6 +34,13 @@ import {
 } from "../libby.js";
 // Registers <oppai-libby-backgrounds>, which her world panel embeds.
 import "./libby-backgrounds.js";
+// Registers <oppai-libby-stickers>, her reaction images tab.
+import "./libby-stickers.js";
+import type { Live2DSettings } from "../live2d-face.js";
+// Registers <oppai-libby-live2d> (her portrait as a Live2D model) and its settings tab.
+// Both are small: the runtime they draw with is loaded only when a model is shown.
+import "./libby-live2d.js";
+import "./libby-live2d-settings.js";
 // Registers <oppai-settings>: her server-side settings are drawn here, in her own
 // settings, one section per tab. Imported statically rather than lazily because a lazy
 // element upgrades after its property bindings are set, and `only` would be lost.
@@ -67,7 +74,7 @@ const MODES = [
   { id: "horny", label: "horny", emotion: "mischievous", topic: "Explicit, leading, and sending pictures." },
 ] as const;
 
-type EditorTab = "character" | "expressions" | "world" | "mind" | "model" | "images" | "profile";
+type EditorTab = "character" | "expressions" | "world" | "mind" | "model" | "images" | "reactions" | "live2d" | "profile";
 
 /**
  * A picture attached to the composer but not yet sent. It is already uploaded and
@@ -107,6 +114,8 @@ const LIBBY_TABS: EditorTabDef[] = [
   { id: "world", label: "Her world", icon: "public", group: "Libby" },
   { id: "mind", label: "Her mind", icon: "psychology", group: "Libby" },
   { id: "images", label: "Her pictures", icon: "image", group: "Libby" },
+  { id: "reactions", label: "Reaction images", icon: "mood", group: "Libby" },
+  { id: "live2d", label: "Live2D", icon: "face", group: "Libby" },
   { id: "model", label: "Model & generation", icon: "memory", group: "Chat" },
   { id: "profile", label: "Your profile", icon: "person", group: "Chat" },
 ];
@@ -587,6 +596,15 @@ export class OppaiChat extends LitElement {
       opens; refreshed when the picker is opened, since backgrounds are edited in the
       studio and this view has no other way to hear about it. */
   @state() private backgrounds: LibbyBackground[] = [];
+  /** Her reaction images by id, for drawing the ones she sends: a gif is an <img>, a
+      clip a <video>, and the message carries only the id. Read the first time one is
+      drawn and after the shelf changes. */
+  @state() private stickers: Map<string, LibbySticker> | null = null;
+  private stickersLoading = false;
+  /** Her Live2D model, when she has one and it can be drawn here; null otherwise. Read
+      once on open and again when her Live2D settings change. */
+  @state() private live2d: Live2DSettings | null = null;
+  private live2dAsked = false;
   /** Where she is when a conversation has not said: the background the user marked
       as the default in the outfit studio. Empty means the plain stage. */
   @state() private defaultBackground = "";
@@ -951,6 +969,8 @@ export class OppaiChat extends LitElement {
     .image-card .weight { display:flex; align-items:center; gap:5px; font-size:11px; color:var(--muted); }
     .shelf { margin:14px 0 8px; font-size:13px; font-weight:650; display:grid; gap:2px; }
     .shelf span { font-size:11px; font-weight:400; color:var(--muted); }
+    .shelf .shelf-export { justify-self:start; display:inline-flex; align-items:center; gap:4px; margin-top:4px; font-size:12px; }
+    .shelf .shelf-export span { font-size:16px; color:inherit; }
     .upload-row select.field { min-width:0; width:100%; }
     .image-card .weight select { font:inherit; font-size:11px; background:var(--surface,var(--input)); color:inherit; border:1px solid var(--line); border-radius:6px; padding:2px 4px; }
     .weights { margin-top:14px; }
@@ -1233,6 +1253,16 @@ export class OppaiChat extends LitElement {
     .state-chip i { font-style:normal; font-size:10px; font-weight:700; padding:0 5px; border-radius:999px; background:color-mix(in srgb,var(--accent) 22%,transparent); color:var(--accent); }
     .state-chip.default-art { opacity:.55; }
     .panel .link-btn { border:0; background:none; padding:0; color:var(--accent); font:inherit; cursor:pointer; text-decoration:underline; }
+    .panel oppai-libby-live2d-settings { --oppai-surface: var(--input); --oppai-surface-2: var(--side); --oppai-border: var(--line); --oppai-border-strong: var(--muted);
+      --oppai-text: var(--md-sys-color-on-surface); --oppai-text-dim: var(--md-sys-color-on-surface); --oppai-text-muted: var(--muted);
+      --oppai-primary: var(--accent); --oppai-on-primary: var(--on-accent); }
+    .stage-art oppai-libby-live2d { position:absolute; inset:0; }
+    .call-hold oppai-libby-live2d { width:100%; height:100%; }
+    .panel oppai-libby-stickers { --oppai-surface: var(--input); --oppai-surface-2: var(--side); --oppai-border: var(--line); --oppai-border-strong: var(--muted);
+      --oppai-text: var(--md-sys-color-on-surface); --oppai-text-dim: var(--md-sys-color-on-surface); --oppai-text-muted: var(--muted);
+      --oppai-primary: var(--accent); --oppai-on-primary: var(--on-accent); }
+    .sticker { display:block; margin-top:6px; max-width:min(220px,100%); max-height:220px; border-radius:12px; }
+    .sticker.gone { display:grid; place-items:center; width:120px; height:80px; background:var(--hover); color:var(--muted); font-size:12px; }
     .panel oppai-libby-backgrounds { --oppai-surface: var(--input); --oppai-surface-2: var(--side); --oppai-border: var(--line); --oppai-border-strong: var(--muted);
       --oppai-text: var(--md-sys-color-on-surface); --oppai-text-dim: var(--md-sys-color-on-surface); --oppai-text-muted: var(--muted);
       --oppai-primary: var(--accent); --oppai-on-primary: var(--on-accent); }
@@ -3368,6 +3398,44 @@ export class OppaiChat extends LitElement {
 
   /** The places she can be. Best-effort: an old server has none and the call simply
       shows its plain stage. */
+  private async loadLive2D() {
+    this.live2dAsked = true;
+    try {
+      const view = await api.libbyLive2D();
+      this.live2d = view.core && view.model?.enabled ? view.model : null;
+    } catch { this.live2d = null; }
+  }
+
+  /** Her Live2D model for this character, or null to draw her pictures. */
+  private live2dFor(character: ChatCharacter): Live2DSettings | null {
+    if (character.id !== "libby") return null;
+    if (!this.live2dAsked) void this.loadLive2D();
+    return this.live2d;
+  }
+
+  private async loadStickers() {
+    if (this.stickersLoading) return;
+    this.stickersLoading = true;
+    try {
+      const { items } = await api.libbyStickers();
+      this.stickers = new Map((items ?? []).map((item) => [item.id, item]));
+    } catch { this.stickers = new Map(); }
+    finally { this.stickersLoading = false; }
+  }
+
+  /** A reaction image she sent: drawn bare, the way a gif lands in any messenger. One
+      taken off the shelf since leaves a gap that says so rather than a broken image. */
+  private renderSticker(message: StoredChatMessage) {
+    if (!message.sticker) return nothing;
+    if (!this.stickers) { void this.loadStickers(); return nothing; }
+    const item = this.stickers.get(message.sticker);
+    if (!item) return html`<div class="sticker gone">Reaction removed</div>`;
+    const url = api.libbyStickerURL(item.id);
+    return item.mime.startsWith("video/")
+      ? html`<video class="sticker" src=${url} autoplay muted loop playsinline aria-label=${item.label}></video>`
+      : html`<img class="sticker" src=${url} alt=${item.label} title=${item.label} loading="lazy"/>`;
+  }
+
   private async loadBackgrounds() {
     try {
       const res = await api.libbyBackgrounds();
@@ -3407,10 +3475,11 @@ export class OppaiChat extends LitElement {
         <!-- Keyed on the pose: a mood change replaces the element instead of
              mutating src, so the fade-in replays and the fallback chain restarts
              from the top for the new emotion's art. -->
-        <span class="call-hold libby-breathe">${keyed(key, html`<img
+        ${this.live2dFor(character) ? html`<span class="call-hold"><oppai-libby-live2d .settings=${this.live2dFor(character)} emotion=${emotion}></oppai-libby-live2d></span>`
+          : html`<span class="call-hold libby-breathe">${keyed(key, html`<img
           class="call-sprite" src=${assets[0]} data-fallback-index="0"
           alt=${`${character.name} looking ${emotion}`}
-          @error=${(event:Event) => applyImageFallback(event.target as HTMLImageElement, assets)} />`)}</span>
+          @error=${(event:Event) => applyImageFallback(event.target as HTMLImageElement, assets)} />`)}</span>`}
         <div class="call-top">
           <span class="call-who">${this.avatar(character, "avatar")}<span><strong>${character.name}</strong><span><i class="call-live"></i>${typing ? "typing…" : this.busy ? "thinking…" : clock}</span></span></span>
           <span class="call-mood" title=${`Feeling ${emotion}`}>
@@ -3517,6 +3586,7 @@ export class OppaiChat extends LitElement {
     const lastLine = typing ? undefined : [...conversation.messages].reverse().find((m) => m.role === "assistant" && !m.thought && m.content.trim());
     const quote = lastLine ? excerptOf(plainSpeech(lastLine.content), 110) : "";
     const online = !!this.status?.enabled;
+    const live2d = this.live2dFor(character);
     return html`<aside class="stage" aria-label="${character.name} portrait">
       <div class="stage-grip ${this.stageDragging ? "dragging" : ""}" title="Drag to resize" @pointerdown=${this.stageDragStart}></div>
       <div class="stage-scene" @click=${() => { if (this.scenePickerOpen) this.scenePickerOpen = false; }}>
@@ -3530,10 +3600,11 @@ export class OppaiChat extends LitElement {
                so a mood change still replaces the element, restarting the artwork
                fallback chain for the new pose. Held still while she is replying: see
                portraitPose. -->
-          <span class="sprite-hold libby-breathe">${keyed(key, html`<img
+          ${live2d ? html`<oppai-libby-live2d .settings=${live2d} emotion=${emotion}></oppai-libby-live2d>`
+            : html`<span class="sprite-hold libby-breathe">${keyed(key, html`<img
             class="sprite ${this.busy ? "" : "libby-speak"}" src=${assets[0]} data-fallback-index="0"
             alt=${activity ? `${character.name} ${activity}, looking ${emotion}` : `${character.name} looking ${emotion}`}
-            @error=${(event:Event) => applyImageFallback(event.target as HTMLImageElement, assets)} />`)}</span>
+            @error=${(event:Event) => applyImageFallback(event.target as HTMLImageElement, assets)} />`)}</span>`}
         </div>
         ${typing ? html`<div class="stage-bubble" aria-hidden="true"><span class="dots"><i></i><i></i><i></i></span></div>`
           : quote ? html`<div class="stage-bubble quote" aria-hidden="true">${quote}</div>` : nothing}
@@ -3935,6 +4006,8 @@ export class OppaiChat extends LitElement {
         ${active.id === "model" ? this.renderModelPanel(conversation, character) : nothing}
         ${active.id === "images" ? this.renderImagesPanel(character) : nothing}
         ${active.id === "images" && character.id === "libby" ? this.libbySection("libby-pictures") : nothing}
+        ${active.id === "reactions" ? html`<oppai-libby-stickers embedded @changed=${() => void this.loadStickers()}></oppai-libby-stickers>` : nothing}
+        ${active.id === "live2d" ? html`<oppai-libby-live2d-settings @changed=${() => void this.loadLive2D()}></oppai-libby-live2d-settings>` : nothing}
         ${active.id === "profile" ? this.renderProfilePanel() : nothing}
       </div>
     </section>`;
@@ -4433,14 +4506,28 @@ export class OppaiChat extends LitElement {
         </select></label>
         <span class="file-btn">Upload and scan<input type="file" accept="image/png,image/jpeg,image/webp,image/gif" @change=${this.uploadImage}/></span>
       </div>
-      <h3 class="shelf">Pictures of ${character.name}<span>What she can send as a selfie.</span></h3>
+      <h3 class="shelf">Pictures of ${character.name}<span>What she can send as a selfie.</span>
+        ${hers.length ? html`<button class="secondary shelf-export" title=${`Download all ${hers.length} pictures of ${character.name} as a zip`}
+          @click=${() => this.exportImages(character, "hers", hers.length)}><span class="material-symbols-rounded" aria-hidden="true">download</span>Export ${hers.length}</button>` : nothing}</h3>
       <div class="image-grid">${hers.map((image) => this.renderImageCard(character, image))}</div>
       ${hers.length ? nothing : html`<div class="empty">No pictures of ${character.name} yet.</div>`}
       ${others.length ? html`
-        <h3 class="shelf">Someone or something else<span>Photos shared with her. She remembers these but never sends them as herself. Wrong shelf? Tap “That's her”.</span></h3>
+        <h3 class="shelf">Someone or something else<span>Photos shared with her. She remembers these but never sends them as herself. Wrong shelf? Tap “That's her”.</span>
+          <button class="secondary shelf-export" title="Download these ${others.length} as a zip" @click=${() => this.exportImages(character, "others", others.length)}><span class="material-symbols-rounded" aria-hidden="true">download</span>Export ${others.length}</button></h3>
         <div class="image-grid">${others.map((image) => this.renderImageCard(character, image))}</div>` : nothing}
       ${character.id === "libby" ? this.renderWeightsPanel(hers) : nothing}
     </div>`;
+  }
+
+  /** Saves a shelf of the gallery as one zip. A plain link rather than a fetch: the
+      server writes the archive as it decrypts each picture, and the browser saves it as
+      it arrives instead of the page holding a few hundred pictures at once. */
+  private exportImages(character: ChatCharacter, shelf: "hers" | "others", count: number) {
+    const a = document.createElement("a");
+    a.href = api.chatImagesExportURL(character.id, shelf);
+    a.download = "";
+    a.click();
+    this.say(`Exporting ${count} ${count === 1 ? "picture" : "pictures"} — the zip downloads as it's written, with their tags in manifest.json.`);
   }
 
   private renderImageCard(character: ChatCharacter, image: ChatImage) {
@@ -5320,10 +5407,11 @@ export class OppaiChat extends LitElement {
             <strong>${message.replyTo.role === "assistant" ? character.name : (this.workspace.profile.displayName || this.user?.username || "You")}</strong>
             <span>${message.replyTo.excerpt}</span></button>` : nothing}
           ${message.voice ? this.renderVoiceNote(message)
-            : message.content.trim() && !(isStageDirection(message.content) && (picturesOf(message).length || message.attachments?.length || message.actions?.length))
+            : message.content.trim() && !(isStageDirection(message.content) && (picturesOf(message).length || message.attachments?.length || message.actions?.length || message.sticker))
               ? html`<div class="text">${formatted(message.content, message.links, (id) => requestOpenMedia(this, id))}</div>` : nothing}
           ${message.snap ? this.renderSnapTile(message, name) : html`
             ${this.renderPictures(message, name, friend)}
+            ${this.renderSticker(message)}
             ${renderAttachments(message.attachments, (id, at) => requestOpenMedia(this, id, at), name)}`}
           ${renderLinkChips(message.links, (id) => requestOpenMedia(this, id))}
           ${renderActionCards(message.actions, this.approvals.stateOf, this.approvals.decide)}

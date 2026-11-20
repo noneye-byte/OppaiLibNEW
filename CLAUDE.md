@@ -58,8 +58,9 @@ ldflags, so there is nothing to edit there.
   `document.startViewTransition`, which calls it later. State the callback sets is not
   set when the call returns; loads that depend on it belong *inside* the callback.
 - **Android re-serializes the chat workspace on save.** A field added to the Go
-  `chatCharacter` must also be added to `android/.../data/Models.kt`, or the phone reads
-  it, drops it, and writes the object back without it.
+  `chatCharacter` (or a stored message — `sticker` is the latest) must also be added to
+  `android/.../data/Models.kt`, or the phone reads it, drops it, and writes the object
+  back without it.
 - **Her turns write the conversation, not the client.** `POST /api/libby/turn` stores
   your message and her replies itself and streams them; the workspace PUT merges by
   each conversation's `rev`. A client that saves without sending back the `rev` it was
@@ -70,6 +71,15 @@ ldflags, so there is nothing to edit there.
   system note just before the newest message (`fitChatTurnCached`). Anything that moves
   between turns written into `head` makes llama.cpp re-read the whole conversation every
   turn, which on her V100 was most of the wait.
+- **Live2D's Core is not ours to ship.** `live2dcubismcore.min.js` is Live2D Inc.'s; it
+  is added to a server by an admin (`/api/libby/live2d/core`) and must never be committed
+  or baked into the image. It is WebAssembly inside a script, which is the one reason the
+  CSP carries `'wasm-unsafe-eval'` — never widen that to `'unsafe-eval'`; PixiJS runs
+  eval-free through `@pixi/unsafe-eval`.
+- **One Cubism renderer, many canvases.** Cubism's WebGL shaders are a global compiled
+  for one context, and PixiJS caches textures by URL; two of her on screen (stage and
+  settings preview) need `ownShaders` and per-instance texture URLs in
+  `views/libby-live2d.ts`, or the first one drawn goes blank.
 - **`mediaColumns` and `briefColumns`** are the two column lists the media queries share.
   Adding a column to one scan means adding it to that constant, not to a single query.
 

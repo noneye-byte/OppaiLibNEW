@@ -85,7 +85,7 @@ func TestWebGameAssetSecurityHeaders(t *testing.T) {
 		t.Fatal("no CSP on a game asset")
 	}
 	// The app-wide policy would break every engine; this route must have replaced it.
-	if strings.Contains(csp, "script-src 'self';") {
+	if strings.Contains(csp, "script-src 'self' 'wasm-unsafe-eval';") {
 		t.Fatalf("app-wide CSP leaked onto a game asset: %q", csp)
 	}
 	// Our own UI must be able to frame it; nothing else may.

@@ -644,6 +644,17 @@ part a client has to send or read to keep up with her.
 | — | `ephemeral` turns | the same endpoint with `{ephemeral: true, characterId, mode, emotion, intensity, history:[{role, content}], cue?, viewing?}`: the browse-together drawer. She answers with her whole self and nothing is filed in a conversation |
 | POST | `/api/libby/photos/{id}/rate` | `{rating: "love"\|"like"\|"dislike"\|""}` on a picture of her → `{image, sendWeights}`. Each of the picture's tags is leaned (×1.18 love, ×1.07 like, ×0.82 dislike, bounded between rarely and often; changing a rating replaces it rather than stacking) |
 | POST | `/api/libby/photos/{id}/keep` | files the picture in the library as a picture of her → `{id}` |
+| GET | `/api/chat/images/export` | `?character=libby&shelf=hers\|others\|all` — one character's chat gallery as a zip (a plain download; the cookie is enough), each picture as it was uploaded or made, named `<name> <id>.<ext>`, with `manifest.json`: `[{file, name, tags, subject, createdAt, rating?, gen?}]`. Decrypted into the response only. `hers` (the default) is what she sends as herself; 404 for an empty shelf |
+| GET | `/api/libby/stickers` | her reaction images → `{items:[{id, label, tags?, mime, size, sent?, createdAt}]}` |
+| POST | `/api/libby/stickers` | `?label=&tags=a,b&filename=` with the file itself as the body (GIF, PNG, JPEG, WebP, MP4, WebM; up to 16 MB, typed by its bytes, kept byte for byte). With no `label`, the file name is the label (`happy_dance.gif` → `happy dance`). Up to 400 |
+| PATCH | `/api/libby/stickers/{id}` | `{label?, tags?}` |
+| GET/DELETE | `/api/libby/stickers/{id}` | the file, or take it off the shelf. A message that sent one keeps the id |
+| GET | `/api/libby/live2d` | → `{model, core, coreAdmin}`: her Live2D model's settings (`{name, enabled, expressions:[{name, file, label?}], idle?, motions, moods:{emotion: [expression]}, worn?, scale, x, y, files, size, texture, createdAt}`) or null, whether Cubism Core is on the server, and whether this user may add it |
+| POST | `/api/libby/live2d` | the model folder zipped, as the body (up to 200 MB; Cubism 3+, a `.model3.json`). Every file gets a plain served name and the model file is rewritten to name them; expressions and an idle loop that only a `.vtube.json` names are written in, the hotkey names kept as labels; her moods are guessed from the expressions' names. Replaces any model she had → as GET |
+| PATCH/DELETE | `/api/libby/live2d` | `{enabled?, moods?, worn?, scale?, x?, y?}` (at most three expressions a mood), or remove the model |
+| GET | `/api/libby/live2d/files/{name}` | one of the model's files by served name (`model.model3.json`, `model.moc3`, `tex0.png`, `exp/3.exp3.json`, …). Revalidated by ETag; a query string is ignored |
+| GET | `/api/libby/live2d/core.js` | Live2D's Cubism Core, as `text/javascript`, once provided; 404 before |
+| POST | `/api/libby/live2d/core` | admin: the body is `live2dcubismcore.min.js`; refused unless it carries Live2D's notice and defines `Live2DCubismCore`. `/core/fetch` instead fetches it from Live2D's CDN (502 when that cannot be reached) |
 | GET | `/api/libby/stories` | → `{stories:[{id, imageId, caption, at, seen}], unseen, enabled}` — the last day's |
 | POST | `/api/libby/stories` | has her post one now → the story. One picture and one model call |
 | POST | `/api/libby/stories/{id}/seen` | marks one seen |
@@ -676,8 +687,20 @@ the turn the model forgets it, and the state is left out of the tool's vocabular
 
 She is sent the OpenAI `tools` field and acts through tool calls: `set_state` (mood,
 heat, activity, place, wearing, scene beat), `take_photo`, `edit_photo`, `make_clip`,
-`send_saved_photo`, `send_from_library`, `remember`, `recall`, `react`, `think`,
-`reply_to`, `call`, `voice_note`, `plan_scene` and `offer`. Each is offered only when it
+`send_saved_photo`, `send_from_library`, `send_reaction_image` (one of her reaction
+images by label — a message with `sticker: <id>`), `remember`, `recall`, `react`, `think`,
+`reply_to`, `call`, `voice_note`, `plan_scene` and `offer`, and the library's MCP tools
+(`search_library`, `library_item`, `suggest_from_library`, `recent_additions`; see
+"The library over MCP"). With those offered, the library is no longer fed into her
+prompt by what the message seems to ask — only its size and what was open a moment ago
+are; she looks the rest up. The smallest windows (`toolsMinimal`) are fed as before.
+
+Each reply takes a shape read off the message (`chat_reply_shape.go`): one to three
+short texts for small talk (a message of a word or two is told it may be answered in
+kind, or with a reaction); one fuller message for a question that wants telling; a beat
+of the scene, in its register, when they are writing *what they do*; and the scene
+written out at length when detail is asked for inside one. Only texts are split into
+bubbles and cut at a count. The `libby turn` log line names the shape. Each is offered only when it
 can happen (no camera without a generator, no edit without a picture of hers to start
 from), and a smaller context window is offered fewer (`toolLevelFor`). A backend that
 refuses `tools` is asked again in JSON mode — one object, `{messages, actions}`,
@@ -734,6 +757,24 @@ the messages it writes, and a `PUT /api/chat/workspace` carrying an older `rev` 
 server's messages it never saw (while one it saw and dropped stays dropped) and the
 state the turn settled. A save never removes an image record; pictures are deleted
 through `DELETE /api/chat/images/{id}`.
+
+## The library over MCP
+
+The library's read-only tools are a Model Context Protocol server, the same registry
+Libby's turn calls in-process (`backend/internal/mcp`, `api/library_mcp.go`).
+
+| Method | Path | Notes |
+|--------|------|-------|
+| POST | `/api/mcp` | Streamable HTTP, JSON replies (protocol `2025-06-18`, also `2025-03-26` and `2024-11-05`; a batch is answered): `initialize`, `ping`, `tools/list`, `tools/call`. Takes only `Authorization: Bearer <MCP key>` — a browser session is refused (403), as is a request whose `Origin` is not this host. GET is 405: there is no server stream |
+| POST | `/api/mcp/keys` | (session) `{name}` → `{key, id, name}`; the key is shown this once |
+| GET | `/api/mcp/keys` | (session) → `{items:[{id, name, hint, createdAt, lastUsedAt?}], tools}` |
+| DELETE | `/api/mcp/keys/{id}` | (session) revoke one |
+
+An MCP key opens `/api/mcp` and nothing else. Tools: `search_library {query, kind?,
+limit?}`, `library_item {item}` (a title or `#id`: tags, the vision model's description,
+length, rating, notes, progress, bookmarks), `suggest_from_library {kind?}`,
+`recent_additions {limit?}`, `library_overview`, `what_was_watching`. Each answers in
+text and, except the last, with `structuredContent`.
 
 ## The graphics card
 

@@ -185,6 +185,9 @@ type storedChatMessage struct {
 	// Voice marks a message she sent as a voice note: the content is what she says, and
 	// a client plays it rather than only showing it.
 	Voice bool `json:"voice,omitempty"`
+	// Sticker is the reaction image she sent as this message, by its id on her shelf.
+	// See libby_stickers.go.
+	Sticker string `json:"sticker,omitempty"`
 	// Rev is the conversation revision the server wrote this message at, 0 for one a
 	// client wrote. It is what lets a client's save tell "I deleted this" from "I never
 	// saw this". See mergeServerTurns.

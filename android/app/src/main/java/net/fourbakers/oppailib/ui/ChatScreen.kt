@@ -2575,9 +2575,12 @@ private fun ChatMessageRow(
         // it, and whatever came with it in a bubble of its own beneath. Inside a bubble it
         // read as a picture *of* a message, and a set of them was a grey box of thumbnails.
         val pictures = !entry.snap && entry.pictures().isNotEmpty()
+        // A reaction gif is drawn bare like a picture, and its placeholder words are not
+        // shown: they are for an older client and for her, reading the history back.
+        val sticker = entry.sticker.isNotBlank()
         val words = !entry.voice && entry.content.isNotBlank() &&
-            !(isStageDirection(entry.content) && (entry.pictures().isNotEmpty() || entry.attachments.isNotEmpty() || entry.actions.isNotEmpty()))
-        val bubble = !pictures || words || entry.voice || entry.snap || entry.replyTo != null ||
+            !(isStageDirection(entry.content) && (entry.pictures().isNotEmpty() || sticker || entry.attachments.isNotEmpty() || entry.actions.isNotEmpty()))
+        val bubble = !(pictures || sticker) || words || entry.voice || entry.snap || entry.replyTo != null ||
             entry.attachments.isNotEmpty() || entry.links.isNotEmpty() || entry.actions.isNotEmpty()
         Box {
         Column(horizontalAlignment = if (friend) Alignment.Start else Alignment.End, verticalArrangement = Arrangement.spacedBy(3.dp)) {
@@ -2585,6 +2588,7 @@ private fun ChatMessageRow(
             repo, ws, entry, friend, if (friend) char.name else ws.profile.displayName.ifBlank { "you" }, onRate, onKeep,
             onOpen = onOpenPicture, onHold = { onHold(entry) },
         )
+        if (sticker) ChatSticker(repo, entry.sticker)
         if (!bubble && last) ChatStamp(entry.at, friend, ChatColors.muted, Modifier.padding(horizontal = 4.dp))
         if (bubble) Column(
             Modifier.widthIn(max = 320.dp).clip(shape)
@@ -3216,6 +3220,27 @@ private fun ChatPictures(
     }
 }
 
+/**
+ * One of her reaction images. The message carries only its id, so it is tried as a picture
+ * first — Coil plays a GIF — and played as a muted looping clip when it turns out to be an
+ * MP4 or WebM, which is what most reaction "gifs" saved off the web really are.
+ */
+@Composable
+private fun ChatSticker(repo: Repository, id: String) {
+    var asClip by remember(id) { mutableStateOf(false) }
+    val shape = RoundedCornerShape(12.dp)
+    if (asClip) {
+        ChatClip(repo, id, Modifier.size(180.dp).clip(shape), url = repo.libbyStickerUrl(id))
+    } else {
+        AsyncImage(
+            repo.libbyStickerUrl(id), "Reaction image",
+            imageLoader = repo.imageLoader, contentScale = ContentScale.Fit,
+            onError = { asClip = true },
+            modifier = Modifier.widthIn(max = 200.dp).heightIn(max = 200.dp).clip(shape),
+        )
+    }
+}
+
 @Composable
 private fun ChatRating(record: ChatImage, onRate: (ChatImage, String) -> Unit, onKeep: (ChatImage) -> Unit) {
     Row(Modifier.padding(top = 3.dp), horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -3265,14 +3290,14 @@ private fun ChatVoiceNote(entry: StoredChatMessage, ink: Color, onPlay: () -> Un
     the way the viewer plays the library. */
 @androidx.annotation.OptIn(UnstableApi::class)
 @Composable
-private fun ChatClip(repo: Repository, id: String, modifier: Modifier) {
+private fun ChatClip(repo: Repository, id: String, modifier: Modifier, url: String = repo.chatImageUrl(id)) {
     val context = LocalContext.current
-    val player = remember(id) {
+    val player = remember(id, url) {
         val http = DefaultHttpDataSource.Factory().apply {
             repo.prefs.token?.let { setDefaultRequestProperties(mapOf("Authorization" to "Bearer $it")) }
         }
         ExoPlayer.Builder(context).setMediaSourceFactory(DefaultMediaSourceFactory(http)).build().apply {
-            setMediaItem(MediaItem.fromUri(repo.chatImageUrl(id)))
+            setMediaItem(MediaItem.fromUri(url))
             repeatMode = Player.REPEAT_MODE_ONE
             volume = 0f
             prepare()

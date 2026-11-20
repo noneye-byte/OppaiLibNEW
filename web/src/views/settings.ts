@@ -23,6 +23,8 @@ import { setIncognito } from "../incognito.js";
 import { LIBBY_PROGRESSION_MULTIPLIERS, getProgressionMultiplier, setProgressionMultiplier } from "../libby-meter.js";
 // Registers <oppai-launchy-panel>, the Launchy panel.
 import "./launchy-panel.js";
+// Registers <oppai-mcp-panel>, keys for MCP clients.
+import "./mcp-panel.js";
 import "./model-transfer.js";
 import { generatorName } from "../model-manage.js";
 import { CLIP_CUT_MODELS, clipCutModelHelp } from "../clip-cut-models.js";
@@ -35,7 +37,7 @@ import {
 export type LibbySection = "libby-general" | "libby-model" | "libby-voice" | "libby-pictures";
 
 type SettingsTab =
-  | "appearance" | "account" | "library" | "scraping" | "ai" | "imagegen" | "android" | "launchy"
+  | "appearance" | "account" | "library" | "scraping" | "ai" | "imagegen" | "android" | "launchy" | "mcp"
   | "storage" | "privacy" | "diagnostics" | "about";
 
 /**
@@ -60,6 +62,8 @@ const SETTINGS_TABS: { id: SettingsTab; label: string; icon: string; group: stri
   // Not a server setting: linking is per user (the key is yours), and the panel is
   // mostly the PC's live state, which everyone signed in may look at and act on.
   { id: "launchy", label: "Launchy", icon: "sports_esports", group: "Apps" },
+  // Per user, like Launchy: a key is yours, and opens the library's MCP tools only.
+  { id: "mcp", label: "MCP clients", icon: "key", group: "Apps" },
   // Not admin-only: "why did my upload fail" is a question the person uploading
   // needs answered, and the paths here are already in the read-only server info.
   { id: "storage", label: "Storage", icon: "hard_drive", group: "Server" },
@@ -1061,6 +1065,7 @@ export class OppaiSettings extends LitElement {
       case "library": return this.renderLibrary();
       case "android": return this.renderAndroid();
       case "launchy": return html`<oppai-launchy-panel></oppai-launchy-panel>`;
+      case "mcp": return html`<oppai-mcp-panel></oppai-mcp-panel>`;
       case "account": return this.renderAccount();
       case "storage": return this.renderStorage();
       case "diagnostics": return this.renderDiagnostics();

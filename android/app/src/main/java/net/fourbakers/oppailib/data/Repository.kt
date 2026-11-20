@@ -175,6 +175,10 @@ class Repository(private val appContext: Context, val prefs: Prefs) {
     fun chatImageUrl(id: String): String =
         "${baseUrl}api/chat/images/${URLEncoder.encode(id, "UTF-8")}"
 
+    /** One of her reaction images, served as it was uploaded: a GIF, a picture or a clip. */
+    fun libbyStickerUrl(id: String): String =
+        "${baseUrl}api/libby/stickers/${URLEncoder.encode(id, "UTF-8")}"
+
     /** An InvokeAI gallery image's thumbnail, streamed through the server. */
     fun galleryThumbUrl(name: String): String =
         "${baseUrl}api/imagegen/gallery/image/${URLEncoder.encode(name, "UTF-8")}/thumb"
