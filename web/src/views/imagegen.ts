@@ -697,6 +697,10 @@ export class OppaiImageGen extends LitElement {
    * by the library, which is how "Edit in the studio" on a picture of Libby lands.
    */
   @property({ type: Number }) editMedia = 0;
+  /** The mode the shell's navigation asked for, which has Image and Video as items of
+      their own. An object, new per request, so asking for the mode last asked for still
+      lands after this element's own switch has moved away from it. */
+  @property({ attribute: false }) startMode: { mode: "image" | "video" } | null = null;
   @state() private editing: { id: number; title: string; tags: string[] } | null = null;
   /**
    * The picture the next run starts from — a result on the canvas, a gallery picture
@@ -2184,7 +2188,18 @@ export class OppaiImageGen extends LitElement {
     return null;
   }
 
+  protected willUpdate(changed: PropertyValues) {
+    // Before the render, so the studio opens on the mode asked for rather than drawing
+    // the other one for a frame first.
+    if (changed.has("startMode") && this.startMode && !this.studio) this.mode = this.startMode.mode;
+  }
+
   protected updated(changed: PropertyValues) {
+    // The shell lights Image or Video in its nav from this, whichever switch changed
+    // the mode — the nav's or the header's own.
+    if (!this.studio && (changed.has("mode") || changed.has("startMode"))) {
+      this.dispatchEvent(new CustomEvent("create-mode", { detail: { mode: this.mode }, bubbles: true, composed: true }));
+    }
     // A picture handed in by the library to edit, loaded once per id.
     if (changed.has("editMedia") && this.editMedia > 0 && this.editing?.id !== this.editMedia) {
       void this.loadFromMedia(this.editMedia);

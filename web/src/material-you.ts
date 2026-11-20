@@ -58,6 +58,8 @@ export const YOU_SEEDS: { name: string; hex: string }[] = [
   { name: "Olive", hex: "#9e9d24" },
   { name: "Amber", hex: "#ffb300" },
   { name: "Brown", hex: "#795548" },
+  // The palette OppaiLib wore before the darkroom one, kept for anyone who misses it.
+  { name: "Original orange", hex: "#ffb77c" },
 ];
 
 /** A seed as the picker stores it, or null for anything that is not a #rrggbb colour. */

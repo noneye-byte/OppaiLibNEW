@@ -1,12 +1,22 @@
 import { css } from "lit";
 
-// Material 3 design tokens for the OppaiLib Media Server UI: a warm
-// orange/tan scheme. @material/web components read the --md-sys-color-*
-// custom properties; the hand-authored shell (library.ts, viewer.ts, …) reads
-// the parallel --oppai-* tokens. Both are defined for a full dark scheme and a
-// full light override under [data-theme="light"]. Because CSS custom
-// properties inherit through shadow boundaries, these values reach every
-// component's shadow root — themes just work.
+// Design tokens for the OppaiLib UI: the "darkroom" palette.
+//
+// A photo library is judged by its pictures, and a tinted page tints them: the old
+// orange/tan surfaces put a brown cast on every thumbnail beside them, which is the
+// one thing a gallery's chrome must not do. So the surfaces are near-neutral ink (a
+// whisper of warmth, never enough to read as a colour) and the warmth lives in one
+// coral-apricot accent — a darkroom's safelight, used for where you are and what to
+// press, and nowhere else.
+//
+// @material/web components read the --md-sys-color-* custom properties; the
+// hand-authored views read the parallel --oppai-* tokens. Both are defined for a full
+// dark scheme and a full light override under [data-theme="light"]. Custom properties
+// inherit through shadow boundaries, so these values reach every component's shadow
+// root. Material You (material-you.ts) writes the same names in a later stylesheet,
+// which is why nothing here may be renamed: a token it does not know about would keep
+// this palette's value under someone else's colours. The few tokens below that it
+// does not write are derived from ones it does, with color-mix, so they follow it.
 //
 // NOTE: a COMPLETE --md-sys-color-* set is intentional. Material Web filled
 // fields fall back to their light-theme defaults for any token you leave
@@ -16,56 +26,56 @@ export const globalStyles = `
   :root {
     color-scheme: dark;
 
-    /* ── M3 tokens · dark (orange/tan) ───────────────────────────── */
-    --md-sys-color-primary: #FFB77C;
-    --md-sys-color-on-primary: #4E2600;
-    --md-sys-color-primary-container: #6F3A0C;
-    --md-sys-color-on-primary-container: #FFDCC2;
-    --md-sys-color-secondary: #E4C0A4;
-    --md-sys-color-on-secondary: #422B18;
-    --md-sys-color-secondary-container: #5B412C;
-    --md-sys-color-on-secondary-container: #FFDCC2;
-    --md-sys-color-tertiary: #D2C78C;
-    --md-sys-color-on-tertiary: #383010;
+    /* ── M3 tokens · dark ────────────────────────────────────────── */
+    --md-sys-color-primary: #FFAA8C;
+    --md-sys-color-on-primary: #561F0C;
+    --md-sys-color-primary-container: #5E2A18;
+    --md-sys-color-on-primary-container: #FFDBCF;
+    --md-sys-color-secondary: #E2BFB4;
+    --md-sys-color-on-secondary: #422B23;
+    --md-sys-color-secondary-container: #3B2D29;
+    --md-sys-color-on-secondary-container: #FFDBCF;
+    --md-sys-color-tertiary: #E3C58C;
+    --md-sys-color-on-tertiary: #3F2E04;
 
-    --md-sys-color-surface: #191410;
-    --md-sys-color-surface-dim: #191410;
-    --md-sys-color-surface-bright: #413A34;
-    --md-sys-color-surface-container-lowest: #130F0B;
-    --md-sys-color-surface-container-low: #211B15;
-    --md-sys-color-surface-container: #251F19;
-    --md-sys-color-surface-container-high: #302A23;
-    --md-sys-color-surface-container-highest: #3B342D;
+    --md-sys-color-surface: #0F0E10;
+    --md-sys-color-surface-dim: #0F0E10;
+    --md-sys-color-surface-bright: #363338;
+    --md-sys-color-surface-container-lowest: #0A090B;
+    --md-sys-color-surface-container-low: #141315;
+    --md-sys-color-surface-container: #19181B;
+    --md-sys-color-surface-container-high: #222024;
+    --md-sys-color-surface-container-highest: #2C2A2F;
 
-    --md-sys-color-on-surface: #EFE0D5;
-    --md-sys-color-on-surface-variant: #D7C3B4;
-    --md-sys-color-outline: #9F8C7E;
-    --md-sys-color-outline-variant: #52453A;
+    --md-sys-color-on-surface: #F2EDEF;
+    --md-sys-color-on-surface-variant: #C9C1C6;
+    --md-sys-color-outline: #8E868C;
+    --md-sys-color-outline-variant: #3A373D;
     --md-sys-color-error: #FFB4AB;
     --md-sys-color-on-error: #690005;
-    --md-sys-color-background: #191410;
-    --md-sys-color-on-background: #EFE0D5;
+    --md-sys-color-background: #0F0E10;
+    --md-sys-color-on-background: #F2EDEF;
     --md-icon-font: 'Material Symbols Rounded';
 
     /* ── Raw shell palette (parallel to the M3 tokens above) ─────── */
-    --oppai-bg: #191410;
-    --oppai-nav: #211B15;
-    --oppai-nav-hover: #2C2620;
-    --oppai-surface: #251F19;
-    --oppai-surface-2: #302A23;
-    --oppai-accent: #5B412C;
-    --oppai-on-accent: #FFDCC2;
-    --oppai-primary: #FFB77C;
-    --oppai-primary-bright: #FFD3B0;
-    --oppai-primary-container: #6F3A0C;
-    --oppai-on-primary: #4E2600;
-    --oppai-text: #EFE0D5;
-    --oppai-text-dim: #D7C3B4;
-    --oppai-text-muted: #A8917F;
-    --oppai-border: #2C2620;
-    --oppai-border-strong: #52453A;
-    --oppai-fav: #FFB4AB;
-    --oppai-scrim: rgba(0, 0, 0, 0.55);
+    --oppai-bg: #0F0E10;
+    --oppai-nav: #131214;
+    --oppai-nav-hover: #1D1B1F;
+    --oppai-surface: #19181B;
+    --oppai-surface-2: #222024;
+    --oppai-accent: #3B2D29;
+    --oppai-on-accent: #FFDBCF;
+    --oppai-primary: #FFAA8C;
+    --oppai-primary-bright: #FFCDBB;
+    --oppai-primary-container: #5E2A18;
+    --oppai-on-primary: #561F0C;
+    --oppai-text: #F2EDEF;
+    --oppai-text-dim: #C9C1C6;
+    --oppai-text-muted: #8E868C;
+    --oppai-border: #232125;
+    --oppai-border-strong: #3A373D;
+    --oppai-fav: #FF8FA3;
+    --oppai-scrim: rgba(4, 3, 5, 0.66);
 
     /* Motion — Material 3 easing sets */
     --oppai-ease-emphasized: cubic-bezier(0.2, 0, 0, 1);
@@ -79,53 +89,82 @@ export const globalStyles = `
   :root[data-theme="light"] {
     color-scheme: light;
 
-    /* ── M3 tokens · light (orange/tan) ──────────────────────────── */
-    --md-sys-color-primary: #8F4C00;
+    /* ── M3 tokens · light ───────────────────────────────────────── */
+    --md-sys-color-primary: #A23F22;
     --md-sys-color-on-primary: #FFFFFF;
-    --md-sys-color-primary-container: #FFDCC2;
-    --md-sys-color-on-primary-container: #2E1500;
-    --md-sys-color-secondary: #755847;
+    --md-sys-color-primary-container: #FFDBCF;
+    --md-sys-color-on-primary-container: #3A0B00;
+    --md-sys-color-secondary: #77574C;
     --md-sys-color-on-secondary: #FFFFFF;
-    --md-sys-color-secondary-container: #FFDCC2;
-    --md-sys-color-on-secondary-container: #2A1707;
-    --md-sys-color-tertiary: #6A5F30;
+    --md-sys-color-secondary-container: #FCE3DA;
+    --md-sys-color-on-secondary-container: #2C160E;
+    --md-sys-color-tertiary: #6D5C2F;
 
-    --md-sys-color-surface: #FFF8F4;
-    --md-sys-color-surface-dim: #E8D7CC;
-    --md-sys-color-surface-bright: #FFF8F4;
+    --md-sys-color-surface: #FAF8F8;
+    --md-sys-color-surface-dim: #E2DEDF;
+    --md-sys-color-surface-bright: #FAF8F8;
     --md-sys-color-surface-container-lowest: #FFFFFF;
-    --md-sys-color-surface-container-low: #FEF1E8;
-    --md-sys-color-surface-container: #F8EBE1;
-    --md-sys-color-surface-container-high: #F2E5DB;
-    --md-sys-color-surface-container-highest: #ECE0D6;
+    --md-sys-color-surface-container-low: #F4F1F2;
+    --md-sys-color-surface-container: #EFEBEC;
+    --md-sys-color-surface-container-high: #E8E4E6;
+    --md-sys-color-surface-container-highest: #E2DEE0;
 
-    --md-sys-color-on-surface: #211A14;
-    --md-sys-color-on-surface-variant: #52453A;
-    --md-sys-color-outline: #857567;
-    --md-sys-color-outline-variant: #D8C3B4;
+    --md-sys-color-on-surface: #1C1A1D;
+    --md-sys-color-on-surface-variant: #4C464B;
+    --md-sys-color-outline: #7E777C;
+    --md-sys-color-outline-variant: #D3CDD1;
     --md-sys-color-error: #BA1A1A;
-    --md-sys-color-background: #FFF8F4;
-    --md-sys-color-on-background: #211A14;
+    --md-sys-color-background: #FAF8F8;
+    --md-sys-color-on-background: #1C1A1D;
 
     /* ── Raw shell palette · light ───────────────────────────────── */
-    --oppai-bg: #FFF8F4;
-    --oppai-nav: #FEF1E8;
-    --oppai-nav-hover: #F2E5DB;
-    --oppai-surface: #F8EBE1;
-    --oppai-surface-2: #F2E5DB;
-    --oppai-accent: #FFDCC2;
-    --oppai-on-accent: #2A1707;
-    --oppai-primary: #8F4C00;
-    --oppai-primary-bright: #8F4C00;
-    --oppai-primary-container: #FFDCC2;
+    --oppai-bg: #FAF8F8;
+    --oppai-nav: #F3F0F1;
+    --oppai-nav-hover: #E8E4E6;
+    --oppai-surface: #F1EEEF;
+    --oppai-surface-2: #E9E5E7;
+    --oppai-accent: #FCE3DA;
+    --oppai-on-accent: #2C160E;
+    --oppai-primary: #A23F22;
+    --oppai-primary-bright: #A23F22;
+    --oppai-primary-container: #FFDBCF;
     --oppai-on-primary: #FFFFFF;
-    --oppai-text: #211A14;
-    --oppai-text-dim: #52453A;
-    --oppai-text-muted: #857567;
-    --oppai-border: #EADBCF;
-    --oppai-border-strong: #D8C3B4;
-    --oppai-fav: #BA1A1A;
-    --oppai-scrim: rgba(60, 40, 24, 0.32);
+    --oppai-text: #1C1A1D;
+    --oppai-text-dim: #4C464B;
+    --oppai-text-muted: #7E777C;
+    --oppai-border: #E6E1E3;
+    --oppai-border-strong: #D3CDD1;
+    --oppai-fav: #C9184A;
+    --oppai-scrim: rgba(28, 20, 24, 0.36);
+  }
+
+  /* ── Derived tokens ─────────────────────────────────────────────────
+     Names the views had been reading with an inline fallback each, so the same
+     "error" was five different reds across the app, and names the redesign adds.
+     All are mixed from the tokens above rather than given colours of their own, so a
+     Material You palette (which writes only those) carries them along. They sit in
+     their own :root rule after both schemes; a var() in a custom property resolves
+     against whichever scheme won, so one definition serves dark and light. */
+  :root {
+    --oppai-error: var(--md-sys-color-error);
+    --oppai-danger: var(--md-sys-color-error);
+    --oppai-success: color-mix(in srgb, #4CC38A 78%, var(--oppai-text));
+    --oppai-warning: color-mix(in srgb, #F2B84B 82%, var(--oppai-text));
+    --oppai-outline: var(--oppai-border-strong);
+    --oppai-on-primary-container: var(--md-sys-color-on-primary-container);
+    --oppai-hover: var(--oppai-nav-hover);
+    --oppai-surface-1: var(--oppai-surface);
+    --oppai-surface-3: color-mix(in srgb, var(--oppai-surface-2) 84%, var(--oppai-text));
+    /* Where you are: the selected row, tab or chip. A tint of the accent rather than a
+       container fill, so it reads as "lit" on any surface it lands on. */
+    --oppai-selected: color-mix(in srgb, var(--oppai-primary) 15%, transparent);
+    --oppai-selected-strong: color-mix(in srgb, var(--oppai-primary) 24%, transparent);
+    /* Frosted bars over content: the top bar and the phone's bottom bar. */
+    --oppai-glass: color-mix(in srgb, var(--oppai-bg) 78%, transparent);
+    --oppai-shadow-pop: 0 18px 48px rgba(0, 0, 0, 0.42), 0 2px 6px rgba(0, 0, 0, 0.2);
+    --oppai-radius-sm: 8px;
+    --oppai-radius-md: 12px;
+    --oppai-radius-lg: 20px;
   }
 
   * { box-sizing: border-box; }

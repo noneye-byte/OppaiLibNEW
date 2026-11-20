@@ -1167,14 +1167,14 @@ export class OppaiSettings extends LitElement {
       ${seed === hex ? html`<span class="material-symbols-rounded check">check</span>` : nothing}
     </button>`;
     return html`
-      ${swatch("OppaiLib (the original orange)", null, ["#FFB77C", "#E4C0A4", "#D2C78C"])}
+      ${swatch("OppaiLib (darkroom: ink and coral)", null, ["#FFAA8C", "#E2BFB4", "#2C2A2F"])}
       ${YOU_SEEDS.map((s) => swatch(s.name, s.hex, youPreview(s.hex, style)))}
       ${accent ? swatch("Your system's accent colour", accent, youPreview(accent, style)) : nothing}
       ${seed && !known.has(seed) ? swatch("Your colour", seed, youPreview(seed, style)) : nothing}
       <label class="swatch custom" title="Pick any colour">
         <span class="dot"></span>
         <span class="material-symbols-rounded check">colorize</span>
-        <input type="color" aria-label="Pick any colour" .value=${seed ?? "#ffb77c"}
+        <input type="color" aria-label="Pick any colour" .value=${seed ?? "#ffaa8c"}
           @change=${(e: Event) => this.pickYou({ seed: (e.target as HTMLInputElement).value.toLowerCase(), style })} />
       </label>`;
   }

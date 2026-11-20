@@ -1,4 +1,4 @@
-import{a as L,as as R,e as l,m as h,aI as C,x as _,aJ as M,aK as O,aC as U,A as n,b as a,aL as f,aM as m,l as k,aN as D,aH as y,aO as g,U as G,af as I,aP as N,aQ as F,z as A,q as B,i as W,v,u as c,t as j}from"./index-BVQgqUqk.js";import{a as V,c as T,b}from"./launchy-xyl1VS8H.js";const S="oppai.slideshow",$={dwellSec:8,shuffle:!1},K=2,q=120;function H(){try{const e=localStorage.getItem(S);if(!e)return{...$};const t=JSON.parse(e);return E(t)}catch{return{...$}}}function Y(e){const t=E(e);try{localStorage.setItem(S,JSON.stringify(t))}catch{}return t}function E(e){const t=Number(e.dwellSec);return{dwellSec:Number.isFinite(t)?Math.min(q,Math.max(K,Math.round(t))):$.dwellSec,shuffle:!!e.shuffle}}function J(e,t,i,s=Math.random){const o=e.filter(u=>u!==t);if(o.length===0)return null;if(i)return o[Math.floor(s()*o.length)]??null;const p=e.indexOf(t);return p<0?e[0]??null:e[p+1]??null}const Q=45e3,X=9e3,Z=640,z="oppai_watch_with_libby";function ee(e){return!e.on||!e.playing||e.inFlight?!1:e.now-e.last>=Q}function te(e,t,i=Z){if(e<=0||t<=0)return{width:i,height:Math.round(i*9/16)};const s=Math.min(1,i/Math.max(e,t));return{width:Math.max(1,Math.round(e*s)),height:Math.max(1,Math.round(t*s))}}function ie(){try{return localStorage.getItem(z)==="1"}catch{return!1}}function se(e){try{localStorage.setItem(z,e?"1":"0")}catch{}}var ae=Object.defineProperty,oe=Object.getOwnPropertyDescriptor,d=(e,t,i,s)=>{for(var o=s>1?void 0:s?oe(t,i):t,p=e.length-1,u;p>=0;p--)(u=e[p])&&(o=(s?u(t,i,o):u(o))||o);return s&&o&&ae(t,i,o),o};let r=class extends L{constructor(){super(...arguments),this.favorite=!1,this.queue=[],this.startAt=0,this.full=null,this.bookmarks=[],this.marking=!1,this.slideshow=H(),this.slideshowOn=!1,this.slideTimer=0,this.activeTag=null,this.tagging=!1,this.editing=!1,this.saving=!1,this.editTitle="",this.editNotes="",this.editDescription="",this.describing=!1,this.editKind="image",this.editTags=[],this.newTag="",this.screenshot="",this.watchWith=ie(),this.watchLine="",this.watchLast=Date.now(),this.watchInFlight=!1,this.watchLineTimer=0,this.userGallery=[],this.galleryUploading=!1,this.saves=[],this.saveUploading=!1,this.saveError="",this.play=null,this.playing=!1,this.launchy=null,this.launching="",this.pcBusy="",this.checking=!1,this.sources=null,this.sourcesLoading=!1,this.posterFrames=[],this.posterLoading=!1,this.posterSaving=-1,this.posterChosen=-1,this.posterError="",this.posterVersion=0,this.comic=null,this.page=1,this.fit=R(),this.lastReported=0,this.onVideoReady=async e=>{const t=e.target,i=this.media.id;if(this.lastReported=0,this.startAt>0){t.currentTime=this.startAt,this.startAt=0;return}try{const s=await l.getProgress(i);if(this.media.id!==i||s.position<r.PROGRESS_FLOOR)return;const o=t.duration||s.duration;if(o>0&&s.position>o*r.PROGRESS_DONE)return;t.currentTime=s.position,h("Picking up where you left off.")}catch{}},this.onVideoTime=e=>{const t=e.target,i=t.currentTime;ee({on:this.watchWith,playing:!t.paused,inFlight:this.watchInFlight,now:Date.now(),last:this.watchLast})&&this.showHerTheScreen(t),!(Math.abs(i-this.lastReported)<r.PROGRESS_INTERVAL)&&(this.lastReported=i,this.saveProgress(i,t.duration))},this.flushProgress=e=>{const t=e.target;this.lastReported=t.currentTime,this.saveProgress(t.currentTime,t.duration)},this.onVideoEnded=()=>{this.lastReported=0,l.clearProgress(this.media.id).catch(()=>{}),this.slideshowOn&&this.advanceSlide()},this.onKey=e=>{var s;if(C(e))return;const t=this.full??this.media;if(t.kind==="comic"){this.onComicKey(e);return}if(t.kind!=="video")return;const i=this.videoEl();if(i)switch(e.key){case" ":case"k":e.preventDefault(),i.paused?i.play():i.pause();break;case"j":i.currentTime=Math.max(0,i.currentTime-10);break;case"l":i.currentTime=Math.min(i.duration||1/0,i.currentTime+10);break;case"m":i.muted=!i.muted;break;case"b":this.markMoment();break;case"f":e.preventDefault(),document.fullscreenElement?document.exitFullscreen():(s=i.requestFullscreen)==null||s.call(i);break}},this.cancelEdit=()=>{this.editing=!1}}connectedCallback(){super.connectedCallback(),_(this,"viewer"),this.loadItem(),window.addEventListener("keydown",this.onKey)}disconnectedCallback(){super.disconnectedCallback(),window.clearTimeout(this.watchLineTimer),window.removeEventListener("keydown",this.onKey),this.clearMediaSession(),this.stopSlideshow()}playback(){const e=this.videoEl();return e?{position:e.currentTime,duration:Number.isFinite(e.duration)?e.duration:0,paused:e.paused}:null}updated(e){if(e.has("media")){const t=e.get("media");t&&t.id!==this.media.id&&(this.editing=!1,this.activeTag=null,this.loadItem())}(e.has("media")||e.has("queue"))&&this.centerCurrentInQueue(),this.setupMediaSession(),e.has("media")&&this.slideshowOn&&this.armSlide()}centerCurrentInQueue(){const e=this.renderRoot.querySelector(".upnext .strip"),t=e==null?void 0:e.querySelector(".strip-item.on");!e||!t||(e.scrollLeft=Math.max(0,t.offsetLeft-(e.clientWidth-t.offsetWidth)/2))}loadItem(){const e=this.media;this.full=e,l.getMedia(e.id).then(t=>this.full=t).catch(()=>this.full=e),this.comic=null,e.kind==="comic"&&this.loadComic(e.id),this.bookmarks=[],(e.kind==="video"||e.kind==="gif")&&l.bookmarks(e.id).then(t=>{this.media.id===e.id&&(this.bookmarks=t.bookmarks)}).catch(()=>{}),this.userGallery=[],this.saves=[],this.saveError="",this.play=null,this.playing=!1,this.sources=null,this.launching="",e.kind==="game"&&(this.loadGameGallery(e.id),this.loadSaves(e.id),this.probePlayable(e.id),l.launchyStatus().then(t=>this.launchy=t).catch(()=>this.launchy=null))}async checkRemote(e){this.checking=!0;try{const t=await l.checkGameRemote(e);t.error?h(t.error,"error"):h(t.changed?`A newer version is out: ${t.remote.latestVersion}.`:"You have the latest version."),this.full&&this.full.id===e&&(this.full={...this.full,remote:t.remote}),this.dispatchEvent(new CustomEvent("changed",{bubbles:!0,composed:!0}))}catch(t){h(t.message,"error")}finally{this.checking=!1}}async acknowledgeRemote(e){try{const t=await l.acknowledgeGameRemote(e);this.full&&this.full.id===e&&(this.full={...this.full,remote:t}),this.dispatchEvent(new CustomEvent("changed",{bubbles:!0,composed:!0}))}catch(t){h(t.message,"error")}}async loadSources(e){this.sourcesLoading=!0;try{this.sources=await l.gameSources(e)}catch(t){h(t.message,"error")}finally{this.sourcesLoading=!1}}async launchOnPC(e){try{const t=await l.launchyLaunch(e);this.launching=t.id;const i=Date.now();for(;this.launching===t.id&&Date.now()-i<3e4;){await new Promise(o=>setTimeout(o,1500));const s=await l.launchyLaunchStatus(t.id);if(s.status==="done"){h("Launchy started it.");break}if(s.status==="failed"){h(s.error||"Launchy could not start it.","error");break}}}catch(t){h(t.message,"error")}finally{this.launching="",l.launchyStatus().then(t=>this.launchy=t).catch(()=>{})}}async pcRequest(e,t,i){this.pcBusy=e;try{const s=await l.launchyRequest(t),o=await V(l.launchyRequestStatus,s.id);o.status==="done"?h(o.message||i):h(o.error||"Launchy could not do that.","error"),t.action==="backup-saves"&&o.status==="done"&&this.loadSaves(t.gameId??0)}catch(s){h(s.message,"error")}finally{this.pcBusy===e&&(this.pcBusy=""),l.launchyStatus().then(s=>this.launchy=s).catch(()=>{})}}async loadSaves(e){try{const t=await l.gameSaves(e);this.media.id===e&&(this.saves=t.items)}catch{this.media.id===e&&(this.saves=[])}}async probePlayable(e){try{const t=await l.gamePlayInfo(e);this.media.id===e&&(this.play=t.playable?t:null)}catch{this.media.id===e&&(this.play=null)}}async uploadSave(e,t){const i=e.target,s=[...i.files??[]];if(i.value="",!(!s.length||this.saveUploading)){this.saveUploading=!0,this.saveError="";try{for(const o of s){const p=await l.uploadGameSave(t,o);this.saves=[p,...this.saves]}}catch(o){this.saveError=o instanceof Error?o.message:"Couldn't upload that save."}finally{this.saveUploading=!1}}}async deleteSave(e,t){try{await l.deleteGameSave(e,t),this.saves=this.saves.filter(i=>i.id!==t)}catch(i){this.saveError=i instanceof Error?i.message:"Couldn't delete that save."}}async loadGameGallery(e){try{const t=await l.gameGallery(e);this.media.id===e&&(this.userGallery=t.items)}catch{this.userGallery=[]}}async uploadGameGallery(e,t){const i=e.target,s=[...i.files??[]];if(i.value="",!(!s.length||this.galleryUploading)){this.galleryUploading=!0;try{for(const o of s)this.userGallery=[...this.userGallery,await l.uploadGameGallery(t,o)]}finally{this.galleryUploading=!1}}}async removeGameGallery(e,t){await l.removeGameGallery(e,t),this.userGallery=this.userGallery.filter(i=>i.id!==t)}async loadComic(e){try{const t=await l.comicInfo(e);if(this.media.id!==e)return;if(this.comic=t,t.readable&&t.pages>0){this.page=Math.min(Math.max(M(e),1),t.pages),this.preloadPage(e,this.page+1);try{const i=await l.getProgress(e),s=Math.round(i.position);this.media.id===e&&s>=1&&s<=t.pages&&s!==this.page&&(this.page=s,this.preloadPage(e,s+1))}catch{}}}catch(t){if(this.media.id!==e)return;this.comic={readable:!1,pages:0,reason:t.message}}}preloadPage(e,t){var i;!((i=this.comic)!=null&&i.readable)||t<1||t>this.comic.pages||(new Image().src=l.pageURL(e,t))}goPage(e){var s,o;if(!((s=this.comic)!=null&&s.readable))return;const t=this.full??this.media,i=Math.min(Math.max(e,1),this.comic.pages);i!==this.page&&(this.page=i,O(t.id,i),l.setProgress(t.id,i).catch(()=>{}),this.preloadPage(t.id,i+1),this.fit==="width"&&((o=this.renderRoot.querySelector(".reader-stage"))==null||o.scrollIntoView({block:"start"})))}setFit(e){this.fit=e,U(e)}toggleSlideshow(){this.slideshowOn?this.stopSlideshow():(this.slideshowOn=!0,this.armSlide(),h(this.slideshow.shuffle?"Shuffling through.":"Playing through, in order."))}stopSlideshow(){window.clearTimeout(this.slideTimer),this.slideTimer=0,this.slideshowOn=!1}setSlideshow(e){this.slideshow=Y({...this.slideshow,...e}),this.slideshowOn&&this.armSlide()}armSlide(){window.clearTimeout(this.slideTimer),this.slideTimer=0,(this.full??this.media).kind!=="video"&&(this.slideTimer=window.setTimeout(()=>this.advanceSlide(),this.slideshow.dwellSec*1e3))}advanceSlide(){if(!this.slideshowOn)return;const e=J(this.queue.map(t=>t.id),this.media.id,this.slideshow.shuffle);if(e==null){this.stopSlideshow(),h("That's the end of the run.");return}this.jumpTo(e)}renderSlideshowBar(){const e=this.full??this.media;return e.kind==="comic"||e.kind==="game"||this.queue.length<2?n:a`
+import{a as L,aB as R,e as l,m as h,aR as C,y as _,aS as O,aT as M,aL as U,A as n,b as a,aU as g,aV as m,l as k,aW as D,aQ as y,aX as G,aY as f,a2 as F,ao as I,aZ as N,a_ as A,q as B,r as W,i as j,w as v,v as p,t as V}from"./index-C3FJuNV3.js";import{a as K,c as T,b}from"./launchy-xyl1VS8H.js";const S="oppai.slideshow",$={dwellSec:8,shuffle:!1},q=2,H=120;function Y(){try{const e=localStorage.getItem(S);if(!e)return{...$};const t=JSON.parse(e);return E(t)}catch{return{...$}}}function J(e){const t=E(e);try{localStorage.setItem(S,JSON.stringify(t))}catch{}return t}function E(e){const t=Number(e.dwellSec);return{dwellSec:Number.isFinite(t)?Math.min(H,Math.max(q,Math.round(t))):$.dwellSec,shuffle:!!e.shuffle}}function X(e,t,i,s=Math.random){const o=e.filter(u=>u!==t);if(o.length===0)return null;if(i)return o[Math.floor(s()*o.length)]??null;const c=e.indexOf(t);return c<0?e[0]??null:e[c+1]??null}const Q=45e3,Z=9e3,ee=640,z="oppai_watch_with_libby";function te(e){return!e.on||!e.playing||e.inFlight?!1:e.now-e.last>=Q}function ie(e,t,i=ee){if(e<=0||t<=0)return{width:i,height:Math.round(i*9/16)};const s=Math.min(1,i/Math.max(e,t));return{width:Math.max(1,Math.round(e*s)),height:Math.max(1,Math.round(t*s))}}function se(){try{return localStorage.getItem(z)==="1"}catch{return!1}}function ae(e){try{localStorage.setItem(z,e?"1":"0")}catch{}}var oe=Object.defineProperty,re=Object.getOwnPropertyDescriptor,d=(e,t,i,s)=>{for(var o=s>1?void 0:s?re(t,i):t,c=e.length-1,u;c>=0;c--)(u=e[c])&&(o=(s?u(t,i,o):u(o))||o);return s&&o&&oe(t,i,o),o};let r=class extends L{constructor(){super(...arguments),this.favorite=!1,this.queue=[],this.startAt=0,this.full=null,this.bookmarks=[],this.marking=!1,this.slideshow=Y(),this.slideshowOn=!1,this.slideTimer=0,this.activeTag=null,this.tagging=!1,this.editing=!1,this.saving=!1,this.editTitle="",this.editNotes="",this.editDescription="",this.describing=!1,this.editKind="image",this.editTags=[],this.newTag="",this.screenshot="",this.watchWith=se(),this.watchLine="",this.watchLast=Date.now(),this.watchInFlight=!1,this.watchLineTimer=0,this.userGallery=[],this.galleryUploading=!1,this.saves=[],this.saveUploading=!1,this.saveError="",this.play=null,this.playing=!1,this.launchy=null,this.launching="",this.pcBusy="",this.checking=!1,this.sources=null,this.sourcesLoading=!1,this.posterFrames=[],this.posterLoading=!1,this.posterSaving=-1,this.posterChosen=-1,this.posterError="",this.posterVersion=0,this.comic=null,this.page=1,this.fit=R(),this.lastReported=0,this.onVideoReady=async e=>{const t=e.target,i=this.media.id;if(this.lastReported=0,this.startAt>0){t.currentTime=this.startAt,this.startAt=0;return}try{const s=await l.getProgress(i);if(this.media.id!==i||s.position<r.PROGRESS_FLOOR)return;const o=t.duration||s.duration;if(o>0&&s.position>o*r.PROGRESS_DONE)return;t.currentTime=s.position,h("Picking up where you left off.")}catch{}},this.onVideoTime=e=>{const t=e.target,i=t.currentTime;te({on:this.watchWith,playing:!t.paused,inFlight:this.watchInFlight,now:Date.now(),last:this.watchLast})&&this.showHerTheScreen(t),!(Math.abs(i-this.lastReported)<r.PROGRESS_INTERVAL)&&(this.lastReported=i,this.saveProgress(i,t.duration))},this.flushProgress=e=>{const t=e.target;this.lastReported=t.currentTime,this.saveProgress(t.currentTime,t.duration)},this.onVideoEnded=()=>{this.lastReported=0,l.clearProgress(this.media.id).catch(()=>{}),this.slideshowOn&&this.advanceSlide()},this.onKey=e=>{var s;if(C(e))return;const t=this.full??this.media;if(t.kind==="comic"){this.onComicKey(e);return}if(t.kind!=="video")return;const i=this.videoEl();if(i)switch(e.key){case" ":case"k":e.preventDefault(),i.paused?i.play():i.pause();break;case"j":i.currentTime=Math.max(0,i.currentTime-10);break;case"l":i.currentTime=Math.min(i.duration||1/0,i.currentTime+10);break;case"m":i.muted=!i.muted;break;case"b":this.markMoment();break;case"f":e.preventDefault(),document.fullscreenElement?document.exitFullscreen():(s=i.requestFullscreen)==null||s.call(i);break}},this.cancelEdit=()=>{this.editing=!1}}connectedCallback(){super.connectedCallback(),_(this,"viewer"),this.loadItem(),window.addEventListener("keydown",this.onKey)}disconnectedCallback(){super.disconnectedCallback(),window.clearTimeout(this.watchLineTimer),window.removeEventListener("keydown",this.onKey),this.clearMediaSession(),this.stopSlideshow()}playback(){const e=this.videoEl();return e?{position:e.currentTime,duration:Number.isFinite(e.duration)?e.duration:0,paused:e.paused}:null}updated(e){if(e.has("media")){const t=e.get("media");t&&t.id!==this.media.id&&(this.editing=!1,this.activeTag=null,this.loadItem())}(e.has("media")||e.has("queue"))&&this.centerCurrentInQueue(),this.setupMediaSession(),e.has("media")&&this.slideshowOn&&this.armSlide()}centerCurrentInQueue(){const e=this.renderRoot.querySelector(".upnext .strip"),t=e==null?void 0:e.querySelector(".strip-item.on");!e||!t||(e.scrollLeft=Math.max(0,t.offsetLeft-(e.clientWidth-t.offsetWidth)/2))}loadItem(){const e=this.media;this.full=e,l.getMedia(e.id).then(t=>this.full=t).catch(()=>this.full=e),this.comic=null,e.kind==="comic"&&this.loadComic(e.id),this.bookmarks=[],(e.kind==="video"||e.kind==="gif")&&l.bookmarks(e.id).then(t=>{this.media.id===e.id&&(this.bookmarks=t.bookmarks)}).catch(()=>{}),this.userGallery=[],this.saves=[],this.saveError="",this.play=null,this.playing=!1,this.sources=null,this.launching="",e.kind==="game"&&(this.loadGameGallery(e.id),this.loadSaves(e.id),this.probePlayable(e.id),l.launchyStatus().then(t=>this.launchy=t).catch(()=>this.launchy=null))}async checkRemote(e){this.checking=!0;try{const t=await l.checkGameRemote(e);t.error?h(t.error,"error"):h(t.changed?`A newer version is out: ${t.remote.latestVersion}.`:"You have the latest version."),this.full&&this.full.id===e&&(this.full={...this.full,remote:t.remote}),this.dispatchEvent(new CustomEvent("changed",{bubbles:!0,composed:!0}))}catch(t){h(t.message,"error")}finally{this.checking=!1}}async acknowledgeRemote(e){try{const t=await l.acknowledgeGameRemote(e);this.full&&this.full.id===e&&(this.full={...this.full,remote:t}),this.dispatchEvent(new CustomEvent("changed",{bubbles:!0,composed:!0}))}catch(t){h(t.message,"error")}}async loadSources(e){this.sourcesLoading=!0;try{this.sources=await l.gameSources(e)}catch(t){h(t.message,"error")}finally{this.sourcesLoading=!1}}async launchOnPC(e){try{const t=await l.launchyLaunch(e);this.launching=t.id;const i=Date.now();for(;this.launching===t.id&&Date.now()-i<3e4;){await new Promise(o=>setTimeout(o,1500));const s=await l.launchyLaunchStatus(t.id);if(s.status==="done"){h("Launchy started it.");break}if(s.status==="failed"){h(s.error||"Launchy could not start it.","error");break}}}catch(t){h(t.message,"error")}finally{this.launching="",l.launchyStatus().then(t=>this.launchy=t).catch(()=>{})}}async pcRequest(e,t,i){this.pcBusy=e;try{const s=await l.launchyRequest(t),o=await K(l.launchyRequestStatus,s.id);o.status==="done"?h(o.message||i):h(o.error||"Launchy could not do that.","error"),t.action==="backup-saves"&&o.status==="done"&&this.loadSaves(t.gameId??0)}catch(s){h(s.message,"error")}finally{this.pcBusy===e&&(this.pcBusy=""),l.launchyStatus().then(s=>this.launchy=s).catch(()=>{})}}async loadSaves(e){try{const t=await l.gameSaves(e);this.media.id===e&&(this.saves=t.items)}catch{this.media.id===e&&(this.saves=[])}}async probePlayable(e){try{const t=await l.gamePlayInfo(e);this.media.id===e&&(this.play=t.playable?t:null)}catch{this.media.id===e&&(this.play=null)}}async uploadSave(e,t){const i=e.target,s=[...i.files??[]];if(i.value="",!(!s.length||this.saveUploading)){this.saveUploading=!0,this.saveError="";try{for(const o of s){const c=await l.uploadGameSave(t,o);this.saves=[c,...this.saves]}}catch(o){this.saveError=o instanceof Error?o.message:"Couldn't upload that save."}finally{this.saveUploading=!1}}}async deleteSave(e,t){try{await l.deleteGameSave(e,t),this.saves=this.saves.filter(i=>i.id!==t)}catch(i){this.saveError=i instanceof Error?i.message:"Couldn't delete that save."}}async loadGameGallery(e){try{const t=await l.gameGallery(e);this.media.id===e&&(this.userGallery=t.items)}catch{this.userGallery=[]}}async uploadGameGallery(e,t){const i=e.target,s=[...i.files??[]];if(i.value="",!(!s.length||this.galleryUploading)){this.galleryUploading=!0;try{for(const o of s)this.userGallery=[...this.userGallery,await l.uploadGameGallery(t,o)]}finally{this.galleryUploading=!1}}}async removeGameGallery(e,t){await l.removeGameGallery(e,t),this.userGallery=this.userGallery.filter(i=>i.id!==t)}async loadComic(e){try{const t=await l.comicInfo(e);if(this.media.id!==e)return;if(this.comic=t,t.readable&&t.pages>0){this.page=Math.min(Math.max(O(e),1),t.pages),this.preloadPage(e,this.page+1);try{const i=await l.getProgress(e),s=Math.round(i.position);this.media.id===e&&s>=1&&s<=t.pages&&s!==this.page&&(this.page=s,this.preloadPage(e,s+1))}catch{}}}catch(t){if(this.media.id!==e)return;this.comic={readable:!1,pages:0,reason:t.message}}}preloadPage(e,t){var i;!((i=this.comic)!=null&&i.readable)||t<1||t>this.comic.pages||(new Image().src=l.pageURL(e,t))}goPage(e){var s,o;if(!((s=this.comic)!=null&&s.readable))return;const t=this.full??this.media,i=Math.min(Math.max(e,1),this.comic.pages);i!==this.page&&(this.page=i,M(t.id,i),l.setProgress(t.id,i).catch(()=>{}),this.preloadPage(t.id,i+1),this.fit==="width"&&((o=this.renderRoot.querySelector(".reader-stage"))==null||o.scrollIntoView({block:"start"})))}setFit(e){this.fit=e,U(e)}toggleSlideshow(){this.slideshowOn?this.stopSlideshow():(this.slideshowOn=!0,this.armSlide(),h(this.slideshow.shuffle?"Shuffling through.":"Playing through, in order."))}stopSlideshow(){window.clearTimeout(this.slideTimer),this.slideTimer=0,this.slideshowOn=!1}setSlideshow(e){this.slideshow=J({...this.slideshow,...e}),this.slideshowOn&&this.armSlide()}armSlide(){window.clearTimeout(this.slideTimer),this.slideTimer=0,(this.full??this.media).kind!=="video"&&(this.slideTimer=window.setTimeout(()=>this.advanceSlide(),this.slideshow.dwellSec*1e3))}advanceSlide(){if(!this.slideshowOn)return;const e=X(this.queue.map(t=>t.id),this.media.id,this.slideshow.shuffle);if(e==null){this.stopSlideshow(),h("That's the end of the run.");return}this.jumpTo(e)}renderSlideshowBar(){const e=this.full??this.media;return e.kind==="comic"||e.kind==="game"||this.queue.length<2?n:a`
       <div class="slidebar ${this.slideshowOn?"on":""}">
         <button class="icon-round" title=${this.slideshowOn?"Stop the slideshow":"Play through from here"} @click=${()=>this.toggleSlideshow()}>
           <span class="material-symbols-rounded" style="font-size:22px;">${this.slideshowOn?"pause":"play_arrow"}</span>
@@ -14,14 +14,14 @@ import{a as L,as as R,e as l,m as h,aI as C,x as _,aJ as M,aK as O,aC as U,A as 
         </label>
         ${this.slideshowOn?a`<span class="slide-note">videos play through, then the next one comes on</span>`:n}
       </div>
-    `}async markMoment(){var o;const e=this.videoEl(),t=this.full??this.media,i=e?e.currentTime:0,s=(o=window.prompt(`Bookmark ${f(i)} of “${t.title}” as…`,""))==null?void 0:o.trim();if(s!==void 0){this.marking=!0;try{const p=await l.addBookmark(t.id,i,s);this.media.id===t.id&&(this.bookmarks=[...this.bookmarks,p].sort((u,P)=>u.position-P.position)),h(`Marked ${f(i)}.`)}catch(p){h(p.message,"error")}finally{this.marking=!1}}}async dropBookmark(e){try{await l.deleteBookmark(e.id),this.bookmarks=this.bookmarks.filter(t=>t.id!==e.id)}catch(t){h(t.message,"error")}}renderBookmarks(e){return e.kind!=="video"||this.bookmarks.length===0?n:a`
+    `}async markMoment(){var o;const e=this.videoEl(),t=this.full??this.media,i=e?e.currentTime:0,s=(o=window.prompt(`Bookmark ${g(i)} of “${t.title}” as…`,""))==null?void 0:o.trim();if(s!==void 0){this.marking=!0;try{const c=await l.addBookmark(t.id,i,s);this.media.id===t.id&&(this.bookmarks=[...this.bookmarks,c].sort((u,P)=>u.position-P.position)),h(`Marked ${g(i)}.`)}catch(c){h(c.message,"error")}finally{this.marking=!1}}}async dropBookmark(e){try{await l.deleteBookmark(e.id),this.bookmarks=this.bookmarks.filter(t=>t.id!==e.id)}catch(t){h(t.message,"error")}}renderBookmarks(e){return e.kind!=="video"||this.bookmarks.length===0?n:a`
       <div class="section-label">Moments</div>
       <div class="moments">
         ${this.bookmarks.map(t=>a`
           <div class="moment">
-            <button class="moment-open" title="Jump to ${f(t.position)}" @click=${()=>this.seekTo(t.position)}>
+            <button class="moment-open" title="Jump to ${g(t.position)}" @click=${()=>this.seekTo(t.position)}>
               <img src=${l.bookmarkThumbURL(t.id)} alt="" loading="lazy" @error=${i=>i.target.style.visibility="hidden"} />
-              <span class="moment-time">${f(t.position)}</span>
+              <span class="moment-time">${g(t.position)}</span>
               ${t.label?a`<span class="moment-label">${t.label}</span>`:n}
             </button>
             <button class="moment-drop" title="Remove this bookmark" @click=${()=>void this.dropBookmark(t)}>
@@ -29,7 +29,7 @@ import{a as L,as as R,e as l,m as h,aI as C,x as _,aJ as M,aK as O,aC as U,A as 
             </button>
           </div>`)}
       </div>
-    `}saveProgress(e,t){const i=this.media.id;if(e<r.PROGRESS_FLOOR||t>0&&e>t*r.PROGRESS_DONE){l.clearProgress(i).catch(()=>{});return}l.setProgress(i,e).catch(()=>{})}videoEl(){var e;return((e=this.renderRoot)==null?void 0:e.querySelector("video"))??null}onComicKey(e){var t;if((t=this.comic)!=null&&t.readable)switch(e.key){case"ArrowRight":case"PageDown":case" ":e.preventDefault(),this.goPage(this.page+1);break;case"ArrowLeft":case"PageUp":e.preventDefault(),this.goPage(this.page-1);break;case"Home":e.preventDefault(),this.goPage(1);break;case"End":e.preventDefault(),this.goPage(this.comic.pages);break}}emitNavigate(e){this.dispatchEvent(new CustomEvent("navigate",{detail:{dir:e},bubbles:!0,composed:!0}))}setupMediaSession(){const e=this.full??this.media;if(e.kind!=="video"||!("mediaSession"in navigator))return;const t=this.videoEl();if(!t)return;const i=navigator.mediaSession;try{i.metadata=new MediaMetadata({title:e.title,artist:"OppaiLib"})}catch{}const s=(o,p)=>{try{i.setActionHandler(o,p)}catch{}};s("play",()=>void t.play()),s("pause",()=>t.pause()),s("seekbackward",o=>{t.currentTime=Math.max(0,t.currentTime-(o.seekOffset??10))}),s("seekforward",o=>{t.currentTime=Math.min(t.duration||1/0,t.currentTime+(o.seekOffset??10))}),s("seekto",o=>{o.seekTime!=null&&(t.currentTime=o.seekTime)}),s("previoustrack",()=>this.emitNavigate(-1)),s("nexttrack",()=>this.emitNavigate(1))}clearMediaSession(){if(!("mediaSession"in navigator))return;const e=navigator.mediaSession,t=["play","pause","seekbackward","seekforward","seekto","previoustrack","nexttrack"];for(const i of t)try{e.setActionHandler(i,null)}catch{}e.metadata=null}toggleFav(){this.dispatchEvent(new CustomEvent("toggle-favorite",{bubbles:!0,composed:!0}))}async describe(){this.describing=!0;try{const e=await l.describe(this.media.id);this.full&&(this.full={...this.full,description:e.description}),this.dispatchEvent(new CustomEvent("changed",{bubbles:!0,composed:!0})),h("Described.","success")}catch(e){console.error("describe",e),h(`Describing failed: ${e.message}`,"error")}finally{this.describing=!1}}async retag(){this.tagging=!0;try{const e=await l.autotag(this.media.id);this.full&&(this.full={...this.full,tags:e.tags}),this.activeTag=null,this.dispatchEvent(new CustomEvent("changed",{bubbles:!0,composed:!0})),h(e.tags.length?`Tags refreshed — ${e.tags.length} found.`:"Tagging finished, but nothing cleared your confidence threshold.","success")}catch(e){console.error("autotag",e),h(`Auto-tagging failed: ${e.message}`,"error")}finally{this.tagging=!1}}hasTimeline(e){var i;const t=this.full??this.media;return t.kind==="video"&&!!t.duration&&!!((i=e.moments)!=null&&i.length)}toggleTagTimeline(e){this.hasTimeline(e)&&(this.activeTag=this.activeTag===e.id?null:e.id)}seekTo(e){const t=this.videoEl();t&&(t.currentTime=e,t.play())}renderTimeline(e){var s;if(e.kind!=="video"||!e.duration)return n;const t=(e.tags??[]).find(o=>o.id===this.activeTag);if(!((s=t==null?void 0:t.moments)!=null&&s.length))return n;const i=e.duration;return a`
+    `}saveProgress(e,t){const i=this.media.id;if(e<r.PROGRESS_FLOOR||t>0&&e>t*r.PROGRESS_DONE){l.clearProgress(i).catch(()=>{});return}l.setProgress(i,e).catch(()=>{})}videoEl(){var e;return((e=this.renderRoot)==null?void 0:e.querySelector("video"))??null}onComicKey(e){var t;if((t=this.comic)!=null&&t.readable)switch(e.key){case"ArrowRight":case"PageDown":case" ":e.preventDefault(),this.goPage(this.page+1);break;case"ArrowLeft":case"PageUp":e.preventDefault(),this.goPage(this.page-1);break;case"Home":e.preventDefault(),this.goPage(1);break;case"End":e.preventDefault(),this.goPage(this.comic.pages);break}}emitNavigate(e){this.dispatchEvent(new CustomEvent("navigate",{detail:{dir:e},bubbles:!0,composed:!0}))}setupMediaSession(){const e=this.full??this.media;if(e.kind!=="video"||!("mediaSession"in navigator))return;const t=this.videoEl();if(!t)return;const i=navigator.mediaSession;try{i.metadata=new MediaMetadata({title:e.title,artist:"OppaiLib"})}catch{}const s=(o,c)=>{try{i.setActionHandler(o,c)}catch{}};s("play",()=>void t.play()),s("pause",()=>t.pause()),s("seekbackward",o=>{t.currentTime=Math.max(0,t.currentTime-(o.seekOffset??10))}),s("seekforward",o=>{t.currentTime=Math.min(t.duration||1/0,t.currentTime+(o.seekOffset??10))}),s("seekto",o=>{o.seekTime!=null&&(t.currentTime=o.seekTime)}),s("previoustrack",()=>this.emitNavigate(-1)),s("nexttrack",()=>this.emitNavigate(1))}clearMediaSession(){if(!("mediaSession"in navigator))return;const e=navigator.mediaSession,t=["play","pause","seekbackward","seekforward","seekto","previoustrack","nexttrack"];for(const i of t)try{e.setActionHandler(i,null)}catch{}e.metadata=null}toggleFav(){this.dispatchEvent(new CustomEvent("toggle-favorite",{bubbles:!0,composed:!0}))}async describe(){this.describing=!0;try{const e=await l.describe(this.media.id);this.full&&(this.full={...this.full,description:e.description}),this.dispatchEvent(new CustomEvent("changed",{bubbles:!0,composed:!0})),h("Described.","success")}catch(e){console.error("describe",e),h(`Describing failed: ${e.message}`,"error")}finally{this.describing=!1}}async retag(){this.tagging=!0;try{const e=await l.autotag(this.media.id);this.full&&(this.full={...this.full,tags:e.tags}),this.activeTag=null,this.dispatchEvent(new CustomEvent("changed",{bubbles:!0,composed:!0})),h(e.tags.length?`Tags refreshed — ${e.tags.length} found.`:"Tagging finished, but nothing cleared your confidence threshold.","success")}catch(e){console.error("autotag",e),h(`Auto-tagging failed: ${e.message}`,"error")}finally{this.tagging=!1}}hasTimeline(e){var i;const t=this.full??this.media;return t.kind==="video"&&!!t.duration&&!!((i=e.moments)!=null&&i.length)}toggleTagTimeline(e){this.hasTimeline(e)&&(this.activeTag=this.activeTag===e.id?null:e.id)}seekTo(e){const t=this.videoEl();t&&(t.currentTime=e,t.play())}renderTimeline(e){var s;if(e.kind!=="video"||!e.duration)return n;const t=(e.tags??[]).find(o=>o.id===this.activeTag);if(!((s=t==null?void 0:t.moments)!=null&&s.length))return n;const i=e.duration;return a`
       <div class="timeline">
         <div class="rail">
           ${t.moments.map(o=>a`<button
@@ -143,8 +143,8 @@ import{a as L,as as R,e as l,m as h,aI as C,x as _,aJ as M,aK as O,aC as U,A as 
       class="material-symbols-rounded fill-icon"
       style="font-size:22px; color:${this.favorite?"var(--oppai-fav)":"var(--oppai-text)"};"
       >${this.favorite?"favorite":"favorite_border"}</span
-    >`}render(){const e=this.full??this.media,t=l.streamURL(e.id);return a`
-      <div class="wrap">
+    >`}render(){const e=this.full??this.media,t=l.streamURL(e.id),i=e.kind==="image"||e.kind==="gif"||e.kind==="video";return a`
+      <div class="wrap ${i?"split":""}">
         ${this.renderStage(e,t)}
         ${this.renderSlideshowBar()}
         ${e.kind==="video"||e.kind==="image"?this.renderUpNext(e):n}
@@ -161,21 +161,21 @@ import{a as L,as as R,e as l,m as h,aI as C,x as _,aJ as M,aK as O,aC as U,A as 
         <div class="strip">
           ${t.map((s,o)=>a`
               <button
-                class="strip-item ${s.id===e.id?"on":""}"
+                class="strip-item ${s.id===e.id?"on":""} ${s.kind==="image"?"portrait":""}"
                 title=${s.title}
                 aria-current=${s.id===e.id}
                 @click=${()=>this.jumpTo(s.id)}
               >
-                ${s.hasThumb?a`<img src=${l.thumbURL(s.id)} loading="lazy" alt=${s.title} />`:a`<span class="strip-blank" style="background:${g(s)};"></span>`}
+                ${G(s)?a`<img src=${l.thumbURL(s.id)} loading="lazy" alt=${s.title} />`:a`<span class="strip-blank" style="background:${f(s)};"></span>`}
                 ${s.kind==="video"?a`<span class="strip-play material-symbols-rounded">play_circle</span>`:n}
                 ${o===i+1?a`<span class="strip-next">Next</span>`:n}
               </button>
             `)}
         </div>
       </div>
-    `}async showHerTheScreen(e){this.watchInFlight=!0,this.watchLast=Date.now();const t=this.media.id;try{const i=te(e.videoWidth,e.videoHeight),s=document.createElement("canvas");s.width=i.width,s.height=i.height;const o=s.getContext("2d");if(!o)return;o.drawImage(e,0,0,i.width,i.height);const p=s.toDataURL("image/jpeg",.72),u=await l.libbyWatch({mediaId:t,position:e.currentTime,frame:p});if(!u.message||this.media.id!==t)return;this.watchLine=u.message.content,window.clearTimeout(this.watchLineTimer),this.watchLineTimer=window.setTimeout(()=>this.watchLine="",X),u.conversationId&&window.dispatchEvent(new CustomEvent(G,{detail:{conversationId:u.conversationId,message:u.message,rev:u.rev}}))}catch{}finally{this.watchInFlight=!1}}toggleWatchWith(){this.watchWith=!this.watchWith,se(this.watchWith),this.watchLast=Date.now(),this.watchLine=this.watchWith?"ooh, what are we watching?":"",window.clearTimeout(this.watchLineTimer),this.watchWith&&(this.watchLineTimer=window.setTimeout(()=>this.watchLine="",3500))}jumpTo(e){e!==this.media.id&&this.dispatchEvent(new CustomEvent("jump",{detail:{id:e},bubbles:!0,composed:!0}))}renderStage(e,t){switch(e.kind){case"video":const i=e.width&&e.height?e.width/e.height:1.7777777777777777;return a`<div
+    `}async showHerTheScreen(e){this.watchInFlight=!0,this.watchLast=Date.now();const t=this.media.id;try{const i=ie(e.videoWidth,e.videoHeight),s=document.createElement("canvas");s.width=i.width,s.height=i.height;const o=s.getContext("2d");if(!o)return;o.drawImage(e,0,0,i.width,i.height);const c=s.toDataURL("image/jpeg",.72),u=await l.libbyWatch({mediaId:t,position:e.currentTime,frame:c});if(!u.message||this.media.id!==t)return;this.watchLine=u.message.content,window.clearTimeout(this.watchLineTimer),this.watchLineTimer=window.setTimeout(()=>this.watchLine="",Z),u.conversationId&&window.dispatchEvent(new CustomEvent(F,{detail:{conversationId:u.conversationId,message:u.message,rev:u.rev}}))}catch{}finally{this.watchInFlight=!1}}toggleWatchWith(){this.watchWith=!this.watchWith,ae(this.watchWith),this.watchLast=Date.now(),this.watchLine=this.watchWith?"ooh, what are we watching?":"",window.clearTimeout(this.watchLineTimer),this.watchWith&&(this.watchLineTimer=window.setTimeout(()=>this.watchLine="",3500))}jumpTo(e){e!==this.media.id&&this.dispatchEvent(new CustomEvent("jump",{detail:{id:e},bubbles:!0,composed:!0}))}renderStage(e,t){switch(e.kind){case"video":const i=e.width&&e.height?e.width/e.height:1.7777777777777777;return a`<div
           class="stage video-stage"
-          style="aspect-ratio:${i}; width:100%; max-width:${76*i}vh; background:${g(e)};"
+          style="aspect-ratio:${i}; width:100%; max-width:calc(${i.toFixed(4)} * var(--stage-h));"
         >
           <video
             src=${t}
@@ -194,7 +194,7 @@ import{a as L,as as R,e as l,m as h,aI as C,x as _,aJ as M,aK as O,aC as U,A as 
           <img src=${t} alt=${e.title} />
         </div>`;case"comic":return this.renderComic(e);case"game":return this.renderGame(e,t);default:return n}}renderComic(e){return a`
       <div class="reader">
-        ${this.comic===null?a`<div class="reader-fallback" style="background:${g(e)};">
+        ${this.comic===null?a`<div class="reader-fallback" style="background:${f(e)};">
               <span class="mono" style="color:#fff;">OPENING…</span>
             </div>`:this.comic.readable?this.renderReader(e,this.comic):this.renderComicFallback(e,this.comic)}
       </div>
@@ -250,7 +250,7 @@ import{a as L,as as R,e as l,m as h,aI as C,x as _,aJ as M,aK as O,aC as U,A as 
         </button>
       </div>
     `}renderComicFallback(e,t){return a`
-      <div class="reader-fallback" style="background:${g(e)};">
+      <div class="reader-fallback" style="background:${f(e)};">
         <span class="material-symbols-rounded" style="font-size:40px; color:#fff;">auto_stories</span>
         <span class="mono" style="color:#fff;">CAN'T READ IN APP</span>
         <span style="font-size:12px; color:rgba(255,255,255,0.75);">
@@ -262,7 +262,7 @@ import{a as L,as as R,e as l,m as h,aI as C,x as _,aJ as M,aK as O,aC as U,A as 
       </div>
     `}renderGame(e,t){var s,o;const i=e.download?this.hostOf(e.download):"";return a`
       <div class="game">
-        <div class="game-cover" style="background:${g(e)};">
+        <div class="game-cover" style="background:${f(e)};">
           ${e.hasThumb?a`<img
                 src=${l.thumbURL(e.id)}
                 alt=${e.title}
@@ -314,28 +314,28 @@ import{a as L,as as R,e as l,m as h,aI as C,x as _,aJ as M,aK as O,aC as U,A as 
                 ${this.renderTags(e)}
                 ${this.renderSaves(e)}
                 ${e.gallery&&e.gallery.length?a`<div class="shots">
-                      ${e.gallery.map(p=>a`<button
+                      ${e.gallery.map(c=>a`<button
                         class="shot"
                         title="Open full-size screenshot"
-                        @click=${()=>this.screenshot=l.proxyURL(p)}
-                      ><img loading="lazy" src=${l.proxyURL(p)} alt="screenshot" /></button>`)}
+                        @click=${()=>this.screenshot=l.proxyURL(c)}
+                      ><img loading="lazy" src=${l.proxyURL(c)} alt="screenshot" /></button>`)}
                     </div>`:n}
                 <div class="section-label">User gallery</div>
                 <div class="shots">
-                  ${this.userGallery.map(p=>a`<div class="shot user-shot">
-                    ${p.kind==="video"?a`<video controls preload="metadata" src=${l.streamURL(p.id)}></video>`:a`<button class="shot" title="Open full-size upload"
-                          @click=${()=>this.screenshot=l.streamURL(p.id)}>
-                          <img loading="lazy" src=${l.thumbURL(p.id)} alt=${p.title} />
+                  ${this.userGallery.map(c=>a`<div class="shot user-shot">
+                    ${c.kind==="video"?a`<video controls preload="metadata" src=${l.streamURL(c.id)}></video>`:a`<button class="shot" title="Open full-size upload"
+                          @click=${()=>this.screenshot=l.streamURL(c.id)}>
+                          <img loading="lazy" src=${l.thumbURL(c.id)} alt=${c.title} />
                         </button>`}
                     <button class="remove-shot" title="Remove from game gallery"
-                      @click=${()=>void this.removeGameGallery(e.id,p.id)}>×</button>
+                      @click=${()=>void this.removeGameGallery(e.id,c.id)}>×</button>
                   </div>`)}
                 </div>
                 <label class="btn-outline gallery-upload">
                   <span class="material-symbols-rounded">add_photo_alternate</span>
                   ${this.galleryUploading?"Uploading…":"Add photos or videos"}
                   <input type="file" accept="image/*,video/*" multiple hidden ?disabled=${this.galleryUploading}
-                    @change=${p=>void this.uploadGameGallery(p,e.id)} />
+                    @change=${c=>void this.uploadGameGallery(c,e.id)} />
                 </label>
                 ${e.source?a`<div class="meta-note">
                       Source:
@@ -479,7 +479,7 @@ import{a as L,as as R,e as l,m as h,aI as C,x as _,aJ as M,aK as O,aC as U,A as 
         </div>
         ${this.editing?this.renderEdit():a`
               <div class="chips">
-                <span class="chip chip-accent">${F(e)||t.label}</span>
+                <span class="chip chip-accent">${A(e)||t.label}</span>
                 <span class="chip chip-muted">${t.typeLabel}</span>
               </div>
               ${this.renderTags(e)}
@@ -500,22 +500,55 @@ import{a as L,as as R,e as l,m as h,aI as C,x as _,aJ as M,aK as O,aC as U,A as 
       ${i&&this.activeTag==null?a`<div class="meta-note" style="margin-top:10px;">
             Tap a ✨ tag to see where it appears in this video.
           </div>`:n}
-    `}renderTagChip(e){const t=x(e),i=t<1,s=i?`${Math.max(1,Math.round(t*100))}%`:"",o=`${e.category}${e.source?" · "+e.source:""}${i?` · in about ${s} of the sampled frames`:""}`;if(!this.hasTimeline(e))return a`<span class="chip chip-muted" title=${o}>${e.name}${i?a`<span class="chip-share">${s}</span>`:n}</span>`;const p=this.activeTag===e.id,u=e.moments.length;return a`<button
-      class="chip ${p?"on":"chip-muted"}"
+    `}renderTagChip(e){const t=x(e),i=t<1,s=i?`${Math.max(1,Math.round(t*100))}%`:"",o=`${e.category}${e.source?" · "+e.source:""}${i?` · in about ${s} of the sampled frames`:""}`;if(!this.hasTimeline(e))return a`<span class="chip chip-muted" title=${o}>${e.name}${i?a`<span class="chip-share">${s}</span>`:n}</span>`;const c=this.activeTag===e.id,u=e.moments.length;return a`<button
+      class="chip ${c?"on":"chip-muted"}"
       title="${o} · seen at ${u} point${u===1?"":"s"}"
-      aria-pressed=${p}
+      aria-pressed=${c}
       @click=${()=>this.toggleTagTimeline(e)}
     >
       <span class="material-symbols-rounded" style="font-size:14px;">auto_awesome</span>
       ${e.name}${i?a`<span class="chip-share">${s}</span>`:n}
-    </button>`}};r.styles=[A,B,W`
+    </button>`}};r.styles=[B,W,j`
+      /* A container, so the details go beside the picture by the width the viewer
+         actually has — which depends on whether the sidebar is open or folded — not
+         by the window's. */
       :host {
         display: block;
+        container-type: inline-size;
+        --stage-h: min(78vh, calc(100dvh - 300px));
+        /* The stage stays dark in the light theme too: a picture is judged against
+           black, and a white wall around it changes how every one of them looks. */
+        --stage-bg: color-mix(in srgb, var(--oppai-bg) 45%, #050406);
       }
       .wrap {
-        max-width: 1100px;
+        max-width: 1560px;
         margin: 0 auto;
         animation: oppai-fade-in-up 0.4s var(--oppai-ease-emphasized) both;
+      }
+      @container (min-width: 980px) {
+        .wrap.split {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) 340px;
+          column-gap: 24px;
+          align-items: start;
+        }
+        .wrap.split > * { grid-column: 1; }
+        .wrap.split > .meta {
+          grid-column: 2;
+          grid-row: 1 / span 8;
+          position: sticky;
+          top: 0;
+          margin-top: 0;
+          max-height: calc(100dvh - 116px);
+          overflow-y: auto;
+          padding: 18px;
+          border-radius: 16px;
+          background: var(--oppai-surface);
+          border: 1px solid var(--oppai-border);
+        }
+        .wrap.split .meta-head { flex-wrap: wrap; gap: 8px; }
+        .wrap.split .meta-title { flex-basis: 100%; font-size: 21px; margin-bottom: 6px; }
+        .wrap.split .desc { max-width: none; }
       }
       .round-btn,
       .icon-round,
@@ -551,7 +584,7 @@ import{a as L,as as R,e as l,m as h,aI as C,x as _,aJ as M,aK as O,aC as U,A as 
         object-fit: contain;
         background: #000;
       }
-      .video-stage { margin-inline: auto; max-height: 76vh; position: relative; }
+      .video-stage { margin-inline: auto; max-height: var(--stage-h); position: relative; background: #000; }
       /* What she said while watching, over the bottom of the picture like a caption. */
       .watch-line { position: absolute; left: 50%; bottom: 64px; transform: translateX(-50%); max-width: min(80%, 560px);
         padding: 8px 14px; border-radius: 16px; background: rgba(0,0,0,.72); color: #fff; font-size: 14px; line-height: 1.35;
@@ -563,15 +596,21 @@ import{a as L,as as R,e as l,m as h,aI as C,x as _,aJ as M,aK as O,aC as U,A as 
          to it, so nothing is letterboxed and no filler bars are drawn. */
       .stage-fit {
         display: flex;
+        align-items: center;
         justify-content: center;
+        height: var(--stage-h);
+        min-height: 280px;
+        padding: 14px;
+        border-radius: 16px;
+        background: var(--stage-bg);
       }
+      /* Contained, not drawn at its own size: a small picture was a postage stamp in
+         the corner of a big screen, and this is a screen for looking at pictures. */
       .stage-fit img {
         display: block;
-        width: auto;
-        height: auto;
-        max-width: 100%;
-        max-height: 76vh;
-        border-radius: 20px;
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
         /* A hold opens the app's menu on the picture (long-press.ts); the
            browser's own save-image callout would sit on top of it. */
         -webkit-touch-callout: none;
@@ -777,16 +816,17 @@ import{a as L,as as R,e as l,m as h,aI as C,x as _,aJ as M,aK as O,aC as U,A as 
       }
       .meta-title {
         font-size: 24px;
-        font-weight: 500;
+        font-weight: 700;
+        letter-spacing: -0.01em;
         margin: 0;
         flex: 1;
       }
       .icon-round {
-        width: 44px;
-        height: 44px;
-        border-radius: 22px;
+        width: 40px;
+        height: 40px;
+        border-radius: 12px;
         background: var(--oppai-surface-2);
-        border: none;
+        border: 1px solid var(--oppai-border-strong);
         display: flex;
         align-items: center;
         justify-content: center;
@@ -805,8 +845,8 @@ import{a as L,as as R,e as l,m as h,aI as C,x as _,aJ as M,aK as O,aC as U,A as 
         border-radius: 14px;
       }
       .chip-accent {
-        background: var(--oppai-accent);
-        color: var(--oppai-on-accent);
+        background: var(--oppai-selected);
+        color: var(--oppai-primary-bright);
       }
       .chip-muted {
         background: var(--oppai-surface-2);
@@ -1111,7 +1151,7 @@ import{a as L,as as R,e as l,m as h,aI as C,x as _,aJ as M,aK as O,aC as U,A as 
          hover, into the very gap you were aiming through. Hence both the clearance
          and the lift being a scale rather than a translate. */
       .upnext {
-        margin-top: 32px;
+        margin-top: 24px;
       }
       .upnext-label {
         font-size: 12px;
@@ -1132,10 +1172,10 @@ import{a as L,as as R,e as l,m as h,aI as C,x as _,aJ as M,aK as O,aC as U,A as 
       .strip-item {
         position: relative;
         flex: 0 0 auto;
-        width: 140px;
+        height: 84px;
         aspect-ratio: 16 / 10;
         border: 2px solid transparent;
-        border-radius: 12px;
+        border-radius: 10px;
         overflow: hidden;
         padding: 0;
         background: var(--oppai-surface-2);
@@ -1146,9 +1186,12 @@ import{a as L,as as R,e as l,m as h,aI as C,x as _,aJ as M,aK as O,aC as U,A as 
       .strip-item:hover {
         transform: scale(1.03);
       }
+      .strip-item.portrait { aspect-ratio: 4 / 5; }
       .strip-item.on {
-        border-color: var(--oppai-accent);
+        border-color: var(--oppai-primary);
       }
+      .strip-item:not(.on) img { opacity: 0.72; transition: opacity 0.15s ease; }
+      .strip-item:hover img { opacity: 1; }
       .strip-item img,
       .strip-blank {
         display: block;
@@ -1172,14 +1215,20 @@ import{a as L,as as R,e as l,m as h,aI as C,x as _,aJ as M,aK as O,aC as U,A as 
         font-size: 10px;
         font-weight: 700;
         letter-spacing: 0.3px;
-        background: var(--oppai-accent);
-        color: var(--oppai-on-accent);
+        background: var(--oppai-primary);
+        color: var(--oppai-on-primary);
         padding: 1px 6px;
         border-radius: 6px;
       }
       /* A phone held sideways has room for the film, not a second filmstrip. The
          queue remains intact for arrow/swipe navigation and returns in portrait;
          only its visual chrome is suppressed. */
+      /* On a phone the picture is as wide as the screen and as tall as it is, rather
+         than centred in a tall black box that is mostly letterbox. */
+      @media (max-width: 700px) {
+        .stage-fit { height: auto; min-height: 0; padding: 0; background: none; }
+        .stage-fit img { height: auto; max-height: 72vh; border-radius: 12px; }
+      }
       @media (orientation: landscape) and (max-height: 600px) {
         .upnext { display: none; }
         .video-stage { max-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom)); }
@@ -1281,4 +1330,4 @@ import{a as L,as as R,e as l,m as h,aI as C,x as _,aJ as M,aK as O,aC as U,A as 
         color:#fff; background:rgba(0,0,0,.75);
       }
       .play-note { color:var(--oppai-text-dim); font-size:12px; margin-top:6px; max-width:640px; }
-    `];r.PROGRESS_INTERVAL=10;r.PROGRESS_FLOOR=15;r.PROGRESS_DONE=.97;d([v({attribute:!1})],r.prototype,"media",2);d([v({type:Boolean})],r.prototype,"favorite",2);d([v({attribute:!1})],r.prototype,"queue",2);d([v({type:Number})],r.prototype,"startAt",2);d([c()],r.prototype,"full",2);d([c()],r.prototype,"bookmarks",2);d([c()],r.prototype,"marking",2);d([c()],r.prototype,"slideshow",2);d([c()],r.prototype,"slideshowOn",2);d([c()],r.prototype,"activeTag",2);d([c()],r.prototype,"tagging",2);d([c()],r.prototype,"editing",2);d([c()],r.prototype,"saving",2);d([c()],r.prototype,"editTitle",2);d([c()],r.prototype,"editNotes",2);d([c()],r.prototype,"editDescription",2);d([c()],r.prototype,"describing",2);d([c()],r.prototype,"editKind",2);d([c()],r.prototype,"editTags",2);d([c()],r.prototype,"newTag",2);d([c()],r.prototype,"screenshot",2);d([c()],r.prototype,"watchWith",2);d([c()],r.prototype,"watchLine",2);d([c()],r.prototype,"userGallery",2);d([c()],r.prototype,"galleryUploading",2);d([c()],r.prototype,"saves",2);d([c()],r.prototype,"saveUploading",2);d([c()],r.prototype,"saveError",2);d([c()],r.prototype,"play",2);d([c()],r.prototype,"playing",2);d([c()],r.prototype,"launchy",2);d([c()],r.prototype,"launching",2);d([c()],r.prototype,"pcBusy",2);d([c()],r.prototype,"checking",2);d([c()],r.prototype,"sources",2);d([c()],r.prototype,"sourcesLoading",2);d([c()],r.prototype,"posterFrames",2);d([c()],r.prototype,"posterLoading",2);d([c()],r.prototype,"posterSaving",2);d([c()],r.prototype,"posterChosen",2);d([c()],r.prototype,"posterError",2);d([c()],r.prototype,"posterVersion",2);d([c()],r.prototype,"comic",2);d([c()],r.prototype,"page",2);d([c()],r.prototype,"fit",2);r=d([j("oppai-viewer")],r);function x(e){return e.weight&&e.weight>0?Math.min(1,e.weight):1}function w(e){return e?new Date(e*1e3).toLocaleString(void 0,{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"}):""}export{r as OppaiViewer,N as studioEditable};
+    `];r.PROGRESS_INTERVAL=10;r.PROGRESS_FLOOR=15;r.PROGRESS_DONE=.97;d([v({attribute:!1})],r.prototype,"media",2);d([v({type:Boolean})],r.prototype,"favorite",2);d([v({attribute:!1})],r.prototype,"queue",2);d([v({type:Number})],r.prototype,"startAt",2);d([p()],r.prototype,"full",2);d([p()],r.prototype,"bookmarks",2);d([p()],r.prototype,"marking",2);d([p()],r.prototype,"slideshow",2);d([p()],r.prototype,"slideshowOn",2);d([p()],r.prototype,"activeTag",2);d([p()],r.prototype,"tagging",2);d([p()],r.prototype,"editing",2);d([p()],r.prototype,"saving",2);d([p()],r.prototype,"editTitle",2);d([p()],r.prototype,"editNotes",2);d([p()],r.prototype,"editDescription",2);d([p()],r.prototype,"describing",2);d([p()],r.prototype,"editKind",2);d([p()],r.prototype,"editTags",2);d([p()],r.prototype,"newTag",2);d([p()],r.prototype,"screenshot",2);d([p()],r.prototype,"watchWith",2);d([p()],r.prototype,"watchLine",2);d([p()],r.prototype,"userGallery",2);d([p()],r.prototype,"galleryUploading",2);d([p()],r.prototype,"saves",2);d([p()],r.prototype,"saveUploading",2);d([p()],r.prototype,"saveError",2);d([p()],r.prototype,"play",2);d([p()],r.prototype,"playing",2);d([p()],r.prototype,"launchy",2);d([p()],r.prototype,"launching",2);d([p()],r.prototype,"pcBusy",2);d([p()],r.prototype,"checking",2);d([p()],r.prototype,"sources",2);d([p()],r.prototype,"sourcesLoading",2);d([p()],r.prototype,"posterFrames",2);d([p()],r.prototype,"posterLoading",2);d([p()],r.prototype,"posterSaving",2);d([p()],r.prototype,"posterChosen",2);d([p()],r.prototype,"posterError",2);d([p()],r.prototype,"posterVersion",2);d([p()],r.prototype,"comic",2);d([p()],r.prototype,"page",2);d([p()],r.prototype,"fit",2);r=d([V("oppai-viewer")],r);function x(e){return e.weight&&e.weight>0?Math.min(1,e.weight):1}function w(e){return e?new Date(e*1e3).toLocaleString(void 0,{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"}):""}export{r as OppaiViewer,N as studioEditable};

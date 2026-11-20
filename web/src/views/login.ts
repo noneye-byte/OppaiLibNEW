@@ -5,7 +5,7 @@ import { LitElement, html, css, nothing } from "lit";
 import { customElement, state, query } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import { api, mascotSay, setToken, type User } from "../api.js";
-import { motionStyles } from "../theme.js";
+import { iconStyles, motionStyles } from "../theme.js";
 import { logoSVG } from "../logo.js";
 import { ambientIntensity, applyImageFallback, inferErrorEmotion, libbyAssetCandidates,
   libbyHidden, normalizeEmotion, type LibbyEmotion } from "../libby.js";
@@ -44,6 +44,9 @@ export class OppaiLogin extends LitElement {
   private libbyTimer?: number;
 
   static styles = [
+    // The passkey button's glyph needs these: without them it rendered as the word
+    // "passkey" in Roboto, printed over the button's own label.
+    iconStyles,
     motionStyles,
     libbyMotion,
     css`

@@ -26,6 +26,7 @@ import {
   KIND_ORDER,
   type ComicFit,
   swatchFor,
+  hasThumbnail,
   statFor,
   isTypingTarget,
   formatTimecode,
@@ -144,13 +145,46 @@ export class OppaiViewer extends LitElement {
     iconStyles,
     motionStyles,
     css`
+      /* A container, so the details go beside the picture by the width the viewer
+         actually has — which depends on whether the sidebar is open or folded — not
+         by the window's. */
       :host {
         display: block;
+        container-type: inline-size;
+        --stage-h: min(78vh, calc(100dvh - 300px));
+        /* The stage stays dark in the light theme too: a picture is judged against
+           black, and a white wall around it changes how every one of them looks. */
+        --stage-bg: color-mix(in srgb, var(--oppai-bg) 45%, #050406);
       }
       .wrap {
-        max-width: 1100px;
+        max-width: 1560px;
         margin: 0 auto;
         animation: oppai-fade-in-up 0.4s var(--oppai-ease-emphasized) both;
+      }
+      @container (min-width: 980px) {
+        .wrap.split {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) 340px;
+          column-gap: 24px;
+          align-items: start;
+        }
+        .wrap.split > * { grid-column: 1; }
+        .wrap.split > .meta {
+          grid-column: 2;
+          grid-row: 1 / span 8;
+          position: sticky;
+          top: 0;
+          margin-top: 0;
+          max-height: calc(100dvh - 116px);
+          overflow-y: auto;
+          padding: 18px;
+          border-radius: 16px;
+          background: var(--oppai-surface);
+          border: 1px solid var(--oppai-border);
+        }
+        .wrap.split .meta-head { flex-wrap: wrap; gap: 8px; }
+        .wrap.split .meta-title { flex-basis: 100%; font-size: 21px; margin-bottom: 6px; }
+        .wrap.split .desc { max-width: none; }
       }
       .round-btn,
       .icon-round,
@@ -186,7 +220,7 @@ export class OppaiViewer extends LitElement {
         object-fit: contain;
         background: #000;
       }
-      .video-stage { margin-inline: auto; max-height: 76vh; position: relative; }
+      .video-stage { margin-inline: auto; max-height: var(--stage-h); position: relative; background: #000; }
       /* What she said while watching, over the bottom of the picture like a caption. */
       .watch-line { position: absolute; left: 50%; bottom: 64px; transform: translateX(-50%); max-width: min(80%, 560px);
         padding: 8px 14px; border-radius: 16px; background: rgba(0,0,0,.72); color: #fff; font-size: 14px; line-height: 1.35;
@@ -198,15 +232,21 @@ export class OppaiViewer extends LitElement {
          to it, so nothing is letterboxed and no filler bars are drawn. */
       .stage-fit {
         display: flex;
+        align-items: center;
         justify-content: center;
+        height: var(--stage-h);
+        min-height: 280px;
+        padding: 14px;
+        border-radius: 16px;
+        background: var(--stage-bg);
       }
+      /* Contained, not drawn at its own size: a small picture was a postage stamp in
+         the corner of a big screen, and this is a screen for looking at pictures. */
       .stage-fit img {
         display: block;
-        width: auto;
-        height: auto;
-        max-width: 100%;
-        max-height: 76vh;
-        border-radius: 20px;
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
         /* A hold opens the app's menu on the picture (long-press.ts); the
            browser's own save-image callout would sit on top of it. */
         -webkit-touch-callout: none;
@@ -412,16 +452,17 @@ export class OppaiViewer extends LitElement {
       }
       .meta-title {
         font-size: 24px;
-        font-weight: 500;
+        font-weight: 700;
+        letter-spacing: -0.01em;
         margin: 0;
         flex: 1;
       }
       .icon-round {
-        width: 44px;
-        height: 44px;
-        border-radius: 22px;
+        width: 40px;
+        height: 40px;
+        border-radius: 12px;
         background: var(--oppai-surface-2);
-        border: none;
+        border: 1px solid var(--oppai-border-strong);
         display: flex;
         align-items: center;
         justify-content: center;
@@ -440,8 +481,8 @@ export class OppaiViewer extends LitElement {
         border-radius: 14px;
       }
       .chip-accent {
-        background: var(--oppai-accent);
-        color: var(--oppai-on-accent);
+        background: var(--oppai-selected);
+        color: var(--oppai-primary-bright);
       }
       .chip-muted {
         background: var(--oppai-surface-2);
@@ -746,7 +787,7 @@ export class OppaiViewer extends LitElement {
          hover, into the very gap you were aiming through. Hence both the clearance
          and the lift being a scale rather than a translate. */
       .upnext {
-        margin-top: 32px;
+        margin-top: 24px;
       }
       .upnext-label {
         font-size: 12px;
@@ -767,10 +808,10 @@ export class OppaiViewer extends LitElement {
       .strip-item {
         position: relative;
         flex: 0 0 auto;
-        width: 140px;
+        height: 84px;
         aspect-ratio: 16 / 10;
         border: 2px solid transparent;
-        border-radius: 12px;
+        border-radius: 10px;
         overflow: hidden;
         padding: 0;
         background: var(--oppai-surface-2);
@@ -781,9 +822,12 @@ export class OppaiViewer extends LitElement {
       .strip-item:hover {
         transform: scale(1.03);
       }
+      .strip-item.portrait { aspect-ratio: 4 / 5; }
       .strip-item.on {
-        border-color: var(--oppai-accent);
+        border-color: var(--oppai-primary);
       }
+      .strip-item:not(.on) img { opacity: 0.72; transition: opacity 0.15s ease; }
+      .strip-item:hover img { opacity: 1; }
       .strip-item img,
       .strip-blank {
         display: block;
@@ -807,14 +851,20 @@ export class OppaiViewer extends LitElement {
         font-size: 10px;
         font-weight: 700;
         letter-spacing: 0.3px;
-        background: var(--oppai-accent);
-        color: var(--oppai-on-accent);
+        background: var(--oppai-primary);
+        color: var(--oppai-on-primary);
         padding: 1px 6px;
         border-radius: 6px;
       }
       /* A phone held sideways has room for the film, not a second filmstrip. The
          queue remains intact for arrow/swipe navigation and returns in portrait;
          only its visual chrome is suppressed. */
+      /* On a phone the picture is as wide as the screen and as tall as it is, rather
+         than centred in a tall black box that is mostly letterbox. */
+      @media (max-width: 700px) {
+        .stage-fit { height: auto; min-height: 0; padding: 0; background: none; }
+        .stage-fit img { height: auto; max-height: 72vh; border-radius: 12px; }
+      }
       @media (orientation: landscape) and (max-height: 600px) {
         .upnext { display: none; }
         .video-stage { max-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom)); }
@@ -1867,8 +1917,11 @@ export class OppaiViewer extends LitElement {
   render() {
     const m = this.full ?? this.media;
     const url = api.streamURL(m.id);
+    // Pictures and clips are looked at, so their details go beside them; a comic is
+    // read and a game is launched, and those keep their own single-column layouts.
+    const split = m.kind === "image" || m.kind === "gif" || m.kind === "video";
     return html`
-      <div class="wrap">
+      <div class="wrap ${split ? "split" : ""}">
         ${this.renderStage(m, url)}
         ${this.renderSlideshowBar()}
         ${m.kind === "video" || m.kind === "image" ? this.renderUpNext(m) : nothing}
@@ -1904,12 +1957,12 @@ export class OppaiViewer extends LitElement {
           ${media.map(
             (x, n) => html`
               <button
-                class="strip-item ${x.id === current.id ? "on" : ""}"
+                class="strip-item ${x.id === current.id ? "on" : ""} ${x.kind === "image" ? "portrait" : ""}"
                 title=${x.title}
                 aria-current=${x.id === current.id}
                 @click=${() => this.jumpTo(x.id)}
               >
-                ${x.hasThumb
+                ${hasThumbnail(x)
                   ? html`<img src=${api.thumbURL(x.id)} loading="lazy" alt=${x.title} />`
                   : html`<span class="strip-blank" style="background:${swatchFor(x)};"></span>`}
                 ${x.kind === "video"
@@ -1974,7 +2027,7 @@ export class OppaiViewer extends LitElement {
         const aspect = m.width && m.height ? m.width / m.height : 16 / 9;
         return html`<div
           class="stage video-stage"
-          style="aspect-ratio:${aspect}; width:100%; max-width:${76 * aspect}vh; background:${swatchFor(m)};"
+          style="aspect-ratio:${aspect}; width:100%; max-width:calc(${aspect.toFixed(4)} * var(--stage-h));"
         >
           <video
             src=${url}

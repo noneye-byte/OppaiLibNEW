@@ -34,7 +34,11 @@ var dist embed.FS
 // request would take the whole app down over a marketing detail.
 var incognitoShell = strings.NewReplacer(
 	"<title>OppaiLib</title>", "<title>Nextcloud</title>",
-	`<meta name="theme-color" content="#191410" />`,
+	// Must be index.html's theme-color exactly. It is also the anchor the incognito
+	// meta below is hung from, so a palette change that moves the colour in
+	// index.html without moving it here does not just leave the tab orange: the SPA
+	// never learns it is disguised. TestIncognitoShell is what notices.
+	`<meta name="theme-color" content="#0F0E10" />`,
 	`<meta name="theme-color" content="#0082c9" />`+"\n"+
 		// The SPA reads this to know it is wearing the disguise, before it has a
 		// session or has asked the server anything. A meta tag rather than an

@@ -25,6 +25,12 @@ import {
   activeFilterCount, buildQuery, filterScope, filtersApply, NO_FILTERS, type LibraryFilters,
 } from "../library-filters.js";
 import { libbyReact, type LibbyItemFacts } from "../libby-voice.js";
+import { DEFAULT_LIBBY_PFP, libbyHidden } from "../libby.js";
+import {
+  compactCount, DENSITY_LABEL, DENSITY_MIN, DENSITY_PHONE_COLUMNS, isLibrarySection, loadDensity, loadNavWidth,
+  navIsRail, nextDensity, phoneTabFor, saveDensity, saveNavWidth, type Density, type NavWidth, type PhoneTab,
+} from "../shell-prefs.js";
+import { loadLayout } from "../studio-session.js";
 import { isIncognito } from "../incognito.js";
 import { iconStyles, motionStyles, loadTheme, saveTheme, applyTheme } from "../theme.js";
 import { logoSVG } from "../logo.js";
@@ -129,12 +135,6 @@ type Section =
   | "settings"
   | Kind;
 
-interface NavSection {
-  id: Section;
-  label: string;
-  icon: string;
-}
-
 type GameFace = "library" | "itch" | "f95" | "updates";
 
 const GAME_FACES: { id: GameFace; label: string; icon: string }[] = [
@@ -144,25 +144,8 @@ const GAME_FACES: { id: GameFace; label: string; icon: string }[] = [
   { id: "updates", label: "Updates", icon: "update" },
 ];
 
-const NAV_SECTIONS: NavSection[] = [
-  { id: "home", label: "Home", icon: "home" },
-  ...KIND_ORDER.map((k) => ({ id: k, label: KIND_META[k].label, icon: KIND_META[k].icon })),
-  { id: "favorites", label: "Favorites", icon: "favorite" },
-  // A named, ordered list of items — the one thing a tag cannot express, since a tag
-  // says what something is and says it about everything it is on equally.
-  { id: "collections", label: "Collections", icon: "bookmarks" },
-  // Remote catalogues. Not part of the library — nothing here is imported until the
-  // user saves it — but it's how things get *into* the library, so it sits with them.
-  { id: "browse", label: "Browse", icon: "explore" },
-  // Image generation. Like Browse, nothing is in the library until saved; it's another
-  // way things get *into* it, so it sits alongside.
-  //
-  // The Sprite studio ("studio") is a section with no item of its own: it is Create's
-  // third mode, reached from the switch in Create's header, and an item for it beside
-  // Create was a second door to the same room. Create stays lit while it is open.
-  { id: "imagegen", label: "Create", icon: "auto_awesome" },
-  { id: "chat", label: "Chat", icon: "chat_bubble" },
-];
+/** Image and Video are one studio element in two modes; the nav names both. */
+type CreateMode = "image" | "video";
 
 // Search itself lives on the server now — see media_search.go. It matches the same
 // fields this file used to (title, notes, tag names, tag categories) and ANDs the
@@ -243,6 +226,23 @@ export class OppaiLibrary extends LitElement {
   /** Watches the end of the grid, to ask for the next page before it is reached. */
   private moreObserver?: IntersectionObserver;
   @state() private section: Section = "home";
+  /** Grid tile size, per device. */
+  @state() private density: Density = loadDensity();
+  /** The sidebar width the user chose, or null for the shell's own (see navIsRail). */
+  @state() private navPref: NavWidth | null = loadNavWidth();
+  /** Too narrow for the open sidebar beside a grid. */
+  @state() private narrow = window.matchMedia("(max-width: 1180px)").matches;
+  /** Which of the studio's modes the Create items light; the studio reports its own. */
+  @state() private createMode: CreateMode = loadLayout().mode;
+  /** A mode the nav asked the studio for, not yet taken up. See go(). */
+  @state() private createRequest: { mode: CreateMode } | null = null;
+  /** The phone's More sheet. */
+  @state() private moreOpen = false;
+  /** Where the phone's Library and Create tabs go back to. */
+  private lastLibrary: Section = "home";
+  private lastCreate: Section = "imagegen";
+  private narrowQuery = window.matchMedia("(max-width: 1180px)");
+  private onNarrow = (e: MediaQueryListEvent) => (this.narrow = e.matches);
   @state() private selectedId: number | null = null;
   /** A library picture handed to the Create screen to be redone. See studioEditable. */
   @state() private editMediaId = 0;
@@ -288,126 +288,253 @@ export class OppaiLibrary extends LitElement {
         overflow: hidden;
         position: relative;
         font-family: "Roboto", system-ui, sans-serif;
+        --side-w: 248px;
       }
       button {
         font-family: inherit;
       }
+      .also-title, .also-sub { display: block; }
       input::placeholder {
         color: var(--oppai-text-muted);
       }
 
-      /* Nav rail */
-      nav {
-        width: 96px;
+      /* ── The sidebar ────────────────────────────────────────────────────
+         Grouped in the order the app is for: the library first, then the people you
+         talk to, then the studios. Open, it names everything and counts the library;
+         as a rail it is the same list as icons, its group headings drawn as rules so
+         the three groups still read as three. */
+      nav.side {
+        width: var(--side-w);
         flex-shrink: 0;
         height: 100%;
         box-sizing: border-box;
         overflow: hidden;
         background: var(--oppai-nav);
-        border-right: 1px solid var(--oppai-surface-2);
+        border-right: 1px solid var(--oppai-border);
         display: flex;
         flex-direction: column;
-        align-items: center;
-        padding: 20px 0 max(16px, env(safe-area-inset-bottom));
-        gap: 20px;
+        padding: 14px 12px max(12px, env(safe-area-inset-bottom));
+        gap: 12px;
+        transition: width 0.22s var(--oppai-ease-emphasized), padding 0.22s var(--oppai-ease-emphasized);
       }
-      nav .logo, nav .add-btn, nav .nav-utility { flex-shrink: 0; }
+      nav.side.rail {
+        --side-w: 72px;
+        padding-inline: 10px;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        height: 40px;
+        padding: 0 6px;
+        flex-shrink: 0;
+      }
+      .rail .brand { justify-content: center; padding: 0; }
       /* The mark, inlined so it takes currentColor and follows the theme. */
       .logo {
-        width: 44px;
-        height: 44px;
+        width: 32px;
+        height: 32px;
         padding: 0;
         border: none;
         background: none;
         cursor: pointer;
+        flex-shrink: 0;
         color: var(--oppai-primary);
         transition: transform 0.22s var(--oppai-ease-spring), color 0.2s ease;
       }
-      .logo:hover {
-        transform: scale(1.08);
-        color: var(--oppai-primary-bright);
+      .logo:hover { transform: scale(1.08); color: var(--oppai-primary-bright); }
+      .logo svg { width: 100%; height: 100%; display: block; }
+      .wordmark {
+        font-size: 17px;
+        font-weight: 700;
+        letter-spacing: -0.01em;
+        white-space: nowrap;
       }
-      .logo svg {
-        width: 100%;
-        height: 100%;
-        display: block;
-      }
+      .rail .wordmark { display: none; }
       .add-btn {
-        width: 56px;
-        height: 56px;
-        border-radius: 16px;
-        background: var(--oppai-primary-container);
+        height: 44px;
+        flex-shrink: 0;
+        border-radius: 12px;
         border: none;
-        color: var(--oppai-primary-bright);
+        background: var(--oppai-primary);
+        color: var(--oppai-on-primary);
         display: flex;
         align-items: center;
         justify-content: center;
+        gap: 8px;
+        font-size: 14px;
+        font-weight: 600;
         cursor: pointer;
-        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
-        transition: transform 0.2s var(--oppai-ease-spring), filter 0.15s ease,
-          box-shadow 0.2s ease;
+        box-shadow: 0 6px 18px color-mix(in srgb, var(--oppai-primary) 20%, transparent);
+        transition: filter 0.15s ease, transform 0.2s var(--oppai-ease-spring);
       }
-      .add-btn:hover {
-        filter: brightness(1.1);
-        transform: translateY(-2px) rotate(90deg);
-        box-shadow: 0 6px 16px rgba(0, 0, 0, 0.45);
-      }
-      .add-btn:active {
-        transform: scale(0.94) rotate(90deg);
-      }
-      .add-btn span {
-        transition: transform 0.2s var(--oppai-ease-spring);
-      }
+      .add-btn:hover { filter: brightness(1.06); transform: translateY(-1px); }
+      .add-btn:active { transform: scale(0.97); }
+      .add-btn .material-symbols-rounded { font-size: 22px; }
+      .rail .add-label { display: none; }
       .nav-list {
-        display: flex;
-        flex-direction: column;
-        gap: 6px;
-        width: 100%;
+        flex: 1;
         min-height: 0;
         overflow-y: auto;
         overscroll-behavior: contain;
         scrollbar-width: none;
-        align-items: center;
-      }
-      .nav-list::-webkit-scrollbar { display: none; }
-      .nav-item {
-        background: none;
-        border: none;
-        cursor: pointer;
         display: flex;
         flex-direction: column;
-        align-items: center;
-        gap: 4px;
-        padding: 0;
-        width: 64px;
+        gap: 16px;
+        margin: 2px -4px 0;
+        padding: 0 4px;
       }
-      .nav-pill {
-        width: 56px;
-        height: 32px;
-        border-radius: 16px;
+      .nav-list::-webkit-scrollbar { display: none; }
+      /* None of these may shrink. In a scrolling flex column a child that can shrink
+         does, rather than overflow: the rail crushed Video to a row of dots and lost
+         Sprites off the bottom before anything scrolled. */
+      .nav-group { display: flex; flex-direction: column; gap: 1px; flex-shrink: 0; }
+      .nav-heading {
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--oppai-text-muted);
+        padding: 2px 10px 6px;
+        white-space: nowrap;
+      }
+      .rail .nav-heading {
+        height: 1px;
+        padding: 0;
+        margin: 0 12px 8px;
+        background: var(--oppai-border-strong);
+        color: transparent;
+        overflow: hidden;
+      }
+      .rail .nav-group:first-child .nav-heading { display: none; }
+      .nav-item {
+        position: relative;
+        flex-shrink: 0;
         display: flex;
         align-items: center;
-        justify-content: center;
-        transition: background 0.22s var(--oppai-ease-emphasized),
-          transform 0.22s var(--oppai-ease-spring);
-      }
-      .nav-item:hover .nav-pill {
-        background: var(--oppai-nav-hover);
-      }
-      .nav-item:active .nav-pill {
-        transform: scale(0.9);
-      }
-      .nav-pill span {
-        transition: color 0.2s ease;
-      }
-      .nav-label {
-        transition: color 0.2s ease;
-      }
-      .nav-label {
-        font-size: 11px;
+        gap: 12px;
+        width: 100%;
+        height: 38px;
+        padding: 0 10px;
+        border: none;
+        border-radius: 10px;
+        background: none;
+        color: var(--oppai-text-dim);
+        font-size: 14px;
         font-weight: 500;
-        letter-spacing: 0.2px;
+        text-align: left;
+        cursor: pointer;
+        transition: background 0.15s ease, color 0.15s ease;
       }
+      .nav-item:hover { background: var(--oppai-nav-hover); color: var(--oppai-text); }
+      .nav-item:active { transform: scale(0.98); }
+      .nav-item.on { background: var(--oppai-selected); color: var(--oppai-text); font-weight: 600; }
+      .nav-item.on::before {
+        content: "";
+        position: absolute;
+        left: -12px;
+        top: 9px;
+        bottom: 9px;
+        width: 3px;
+        border-radius: 0 3px 3px 0;
+        background: var(--oppai-primary);
+      }
+      .rail .nav-item.on::before { left: -10px; }
+      .nav-item .material-symbols-rounded { font-size: 21px; flex-shrink: 0; }
+      .nav-item.on .material-symbols-rounded { color: var(--oppai-primary); }
+      .nav-label { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .nav-count {
+        font-size: 12px;
+        color: var(--oppai-text-muted);
+        font-variant-numeric: tabular-nums;
+      }
+      .nav-item.on .nav-count { color: inherit; opacity: 0.75; }
+      .nav-avatar {
+        width: 22px;
+        height: 22px;
+        flex-shrink: 0;
+        border-radius: 50%;
+        object-fit: cover;
+        object-position: top;
+        background: var(--oppai-surface-2);
+      }
+      .nav-item.on .nav-avatar { box-shadow: 0 0 0 2px var(--oppai-primary); }
+      .rail .nav-item { justify-content: center; padding: 0; height: 40px; }
+      .rail .nav-label, .rail .nav-count { display: none; }
+
+      .side-foot {
+        flex-shrink: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        padding-top: 10px;
+        border-top: 1px solid var(--oppai-border);
+      }
+      /* What the vault holds, and that it is locked. The lock is the brand promise, so
+         it is said quietly in the one place that is always on screen. */
+      .vault {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 4px 10px;
+        color: var(--oppai-text-muted);
+        font-size: 12px;
+        line-height: 1.35;
+      }
+      .vault .material-symbols-rounded { font-size: 18px; color: var(--oppai-primary); flex-shrink: 0; }
+      .vault strong { display: block; color: var(--oppai-text-dim); font-weight: 600; font-size: 12.5px; }
+      .rail .vault { display: none; }
+      .foot-row { display: flex; align-items: center; gap: 4px; }
+      .rail .foot-row { flex-direction: column; gap: 6px; }
+      .foot-btn {
+        width: 36px;
+        height: 36px;
+        flex-shrink: 0;
+        border-radius: 10px;
+        border: none;
+        background: none;
+        color: var(--oppai-text-dim);
+        display: grid;
+        place-items: center;
+        cursor: pointer;
+        transition: background 0.15s ease, color 0.15s ease;
+      }
+      .foot-btn:hover { background: var(--oppai-nav-hover); color: var(--oppai-text); }
+      .foot-btn.on { background: var(--oppai-selected); color: var(--oppai-primary-bright); }
+      .foot-btn .material-symbols-rounded { font-size: 20px; }
+      .account {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        height: 40px;
+        padding: 0 6px;
+        border: none;
+        border-radius: 10px;
+        background: none;
+        color: var(--oppai-text);
+        text-align: left;
+        cursor: pointer;
+      }
+      .account:hover { background: var(--oppai-nav-hover); }
+      .avatar {
+        width: 30px;
+        height: 30px;
+        flex-shrink: 0;
+        border-radius: 50%;
+        background: var(--oppai-accent);
+        color: var(--oppai-on-accent);
+        display: grid;
+        place-items: center;
+        font-size: 12px;
+        font-weight: 700;
+      }
+      .account-text { min-width: 0; display: grid; }
+      .account-name { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .account-sub { font-size: 11px; color: var(--oppai-text-muted); }
+      .rail .account { flex: none; width: 40px; padding: 0; justify-content: center; }
+      .rail .account-text { display: none; }
       .icon-btn {
         border: none;
         display: flex;
@@ -416,65 +543,127 @@ export class OppaiLibrary extends LitElement {
         cursor: pointer;
       }
 
-      /* Layout */
+      /* ── The main column ─────────────────────────────────────────────── */
       .main-col {
         flex: 1;
         min-width: 0;
         display: flex;
         flex-direction: column;
         height: 100%;
+        position: relative;
       }
-      header {
-        height: 72px;
+      /* The top bar is the library's: a title, the search and the grid's tools. The
+         workspaces (Chat, the studios, Settings) bring headers of their own, and a
+         library search box over a conversation was a second header saying nothing. */
+      header.top {
+        height: 64px;
         flex-shrink: 0;
         display: flex;
         align-items: center;
-        gap: 16px;
+        gap: 14px;
         padding: 0 28px;
         border-bottom: 1px solid var(--oppai-border);
       }
+      .h-titles { display: flex; align-items: baseline; gap: 10px; min-width: 0; flex-shrink: 1; }
       .h-title {
         font-size: 20px;
-        font-weight: 500;
+        font-weight: 600;
+        letter-spacing: -0.01em;
         margin: 0;
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
-        max-width: 280px;
-        flex-shrink: 0;
+        max-width: 340px;
       }
+      .h-count { font-size: 13px; color: var(--oppai-text-muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+      .back-btn {
+        width: 38px;
+        height: 38px;
+        flex-shrink: 0;
+        border-radius: 10px;
+        background: none;
+        color: var(--oppai-text);
+      }
+      .back-btn:hover { background: var(--oppai-surface); }
       .searchbox {
         flex: 1;
-        max-width: 520px;
-        height: 44px;
-        background: var(--oppai-surface-2);
-        border-radius: 22px;
+        max-width: 560px;
+        margin: 0 auto;
+        height: 40px;
+        background: var(--oppai-surface);
+        border: 1px solid var(--oppai-border);
+        border-radius: 12px;
         display: flex;
         align-items: center;
         gap: 10px;
-        padding: 0 16px;
+        padding: 0 8px 0 12px;
+        transition: border-color 0.15s ease, background 0.15s ease;
       }
+      .searchbox:focus-within {
+        border-color: color-mix(in srgb, var(--oppai-primary) 55%, transparent);
+        background: var(--oppai-surface-2);
+      }
+      .searchbox > .material-symbols-rounded { font-size: 20px; color: var(--oppai-text-muted); }
       .searchbox input {
         flex: 1;
+        min-width: 0;
         background: none;
         border: none;
         outline: none;
         color: var(--oppai-text);
+        font: inherit;
         font-size: 14px;
       }
-      .filters-btn {
-        background: none;
+      .searchbox input::-webkit-search-cancel-button { display: none; }
+      .searchbox kbd {
+        font: 600 11px ui-monospace, "Cascadia Mono", monospace;
+        color: var(--oppai-text-muted);
         border: 1px solid var(--oppai-border-strong);
-        border-radius: 20px;
-        height: 40px;
-        padding: 0 14px;
+        border-radius: 5px;
+        padding: 1px 6px;
+      }
+      .searchbox:focus-within kbd { display: none; }
+      .search-clear { background: none; color: var(--oppai-text-dim); width: 28px; height: 28px; border-radius: 8px; }
+      .search-clear:hover { background: var(--oppai-surface); }
+      .h-spacer { flex: 1; }
+      .tools { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+      .tool {
+        height: 36px;
+        padding: 0 12px;
+        border-radius: 10px;
+        border: 1px solid var(--oppai-border-strong);
+        background: none;
+        color: var(--oppai-text-dim);
         display: flex;
         align-items: center;
         gap: 6px;
-        color: var(--oppai-text-dim);
+        font: inherit;
+        font-size: 13px;
+        font-weight: 500;
         cursor: pointer;
         flex-shrink: 0;
+        transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
       }
+      .tool:hover { color: var(--oppai-text); background: var(--oppai-surface); }
+      .tool.icon { width: 36px; padding: 0; justify-content: center; }
+      .tool .material-symbols-rounded { font-size: 19px; }
+      .tool.on {
+        background: var(--oppai-selected);
+        color: var(--oppai-primary-bright);
+        border-color: transparent;
+      }
+      .phone-only { display: none !important; }
+      /* The library's places, as a chip row: the phone's answer to the sidebar. */
+      .scope {
+        display: none;
+        gap: 6px;
+        overflow-x: auto;
+        scrollbar-width: none;
+        margin: 0 -14px;
+        padding: 0 14px 2px;
+      }
+      .scope::-webkit-scrollbar { display: none; }
+      .scope .chip { flex-shrink: 0; }
       /* The Filters menu hangs off its button, under the header, so it never pushes
          the grid around while it is open. */
       .filters-wrap { position: relative; flex-shrink: 0; }
@@ -487,31 +676,31 @@ export class OppaiLibrary extends LitElement {
         position: absolute; right: 0; top: 46px; z-index: 30;
         width: min(340px, calc(100vw - 32px));
         background: var(--oppai-surface-2); color: var(--oppai-text);
-        border: 1px solid var(--oppai-border); border-radius: 16px;
-        box-shadow: 0 14px 44px rgba(0, 0, 0, .38);
+        border: 1px solid var(--oppai-border-strong); border-radius: 16px;
+        box-shadow: var(--oppai-shadow-pop);
         padding: 12px 14px 10px;
         animation: fpop .16s var(--oppai-ease-spring, ease-out);
       }
       @keyframes fpop { from { opacity: 0; transform: translateY(-6px); } }
       @media (prefers-reduced-motion: reduce) { .filters-pop { animation: none; } }
       .frow-label {
-        font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
-        color: var(--oppai-text-muted); margin: 8px 0 6px;
+        font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
+        color: var(--oppai-text-muted); margin: 10px 0 6px;
       }
       .frow-label:first-child { margin-top: 0; }
       .frow { display: flex; flex-wrap: wrap; gap: 6px; }
       .fchip {
-        height: 32px; padding: 0 12px; border-radius: 16px; font: inherit; font-size: 13px;
+        height: 32px; padding: 0 12px; border-radius: 999px; font: inherit; font-size: 13px;
         display: inline-flex; align-items: center; gap: 5px; cursor: pointer;
         background: transparent; color: var(--oppai-text-dim);
         border: 1px solid var(--oppai-border-strong);
       }
       .fchip.on {
-        background: var(--oppai-accent); color: var(--oppai-on-accent); border-color: var(--oppai-accent);
+        background: var(--oppai-text); color: var(--oppai-bg); border-color: var(--oppai-text);
       }
       .ffoot {
         display: flex; align-items: center; justify-content: space-between;
-        margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--oppai-border);
+        margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--oppai-border-strong);
         font-size: 12px; color: var(--oppai-text-muted);
       }
       .flink {
@@ -521,189 +710,339 @@ export class OppaiLibrary extends LitElement {
       .flink:disabled { color: var(--oppai-text-muted); cursor: default; }
       main {
         flex: 1;
+        min-height: 0;
         overflow-y: auto;
-        padding: 28px 32px 60px;
+        padding: 24px 28px 64px;
       }
-      /* Chat is a full-bleed client, not a card inside the library shell: it
-         owns its own scrolling regions, so the shell's padding and scrollbar
-         would produce a nested-scroller feel and a visible inset frame. */
+      /* Chat and the studios are full-bleed clients, not cards inside the library
+         shell: they own their own scrolling regions, so the shell's padding and
+         scrollbar would produce a nested-scroller feel and a visible inset frame. */
       main.flush {
         padding: 0;
         overflow: hidden;
-        min-height: 0;
       }
 
-      /* Home */
-      .greeting {
-        font-size: 28px;
-        font-weight: 400;
-        margin: 0 0 4px;
-      }
-      .greeting-sub {
-        font-size: 14px;
-        color: var(--oppai-text-dim);
-        margin: 0 0 24px;
-      }
-      /* The hero: one item at full width, art beside its details. Collapses to art
-         over details on a phone, where side-by-side would leave neither room. */
+      /* ── Home ───────────────────────────────────────────────────────────
+         The hero is the thing you were in the middle of, shown the way a gallery
+         hangs one picture: the picture itself framed on the right, its own colours
+         blurred out to fill the wall behind it, and what it is on the left. */
       .hero {
-        display: grid;
-        grid-template-columns: minmax(0, 300px) minmax(0, 1fr);
-        gap: 20px;
-        align-items: center;
-        margin-bottom: 14px;
-        padding: 16px;
-        border: 1px solid var(--oppai-border);
-        border-radius: 20px;
-        background: var(--oppai-surface-2);
-      }
-      .hero-art {
-        display: grid;
-        place-items: center;
-        width: 100%;
-        aspect-ratio: 16 / 10;
-        padding: 0;
-        border: 0;
-        border-radius: 14px;
+        position: relative;
+        isolation: isolate;
         overflow: hidden;
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 28px;
+        min-height: 300px;
+        padding: 28px 32px;
+        border-radius: var(--oppai-radius-lg);
         background: var(--oppai-surface);
-        cursor: pointer;
+        border: 1px solid var(--oppai-border);
+        margin-bottom: 12px;
       }
-      .hero-art img { width: 100%; height: 100%; object-fit: cover; display: block; }
-      .hero-icon { font-size: 52px; color: var(--oppai-text-muted); }
-      .hero-body { display: grid; gap: 8px; min-width: 0; }
+      .hero-wall {
+        position: absolute;
+        inset: -60px;
+        z-index: -2;
+        width: calc(100% + 120px);
+        height: calc(100% + 120px);
+        object-fit: cover;
+        filter: blur(48px) saturate(1.3);
+        opacity: 0.5;
+      }
+      .hero::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        z-index: -1;
+        background:
+          linear-gradient(90deg, color-mix(in srgb, var(--oppai-bg) 86%, transparent) 0%,
+            color-mix(in srgb, var(--oppai-bg) 50%, transparent) 60%, transparent 100%),
+          linear-gradient(0deg, color-mix(in srgb, var(--oppai-bg) 45%, transparent), transparent 70%);
+      }
+      .hero.veiled .hero-wall { opacity: 0.25; }
+      .hero-body { display: grid; gap: 10px; min-width: 0; max-width: 560px; }
       .hero-eyebrow {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
         color: var(--oppai-primary-bright);
         font-size: 11.5px;
         font-weight: 700;
-        letter-spacing: 0.08em;
+        letter-spacing: 0.1em;
         text-transform: uppercase;
       }
       .hero-title {
         margin: 0;
-        font-size: 25px;
-        font-weight: 500;
-        line-height: 1.2;
+        font-size: 34px;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+        line-height: 1.1;
         overflow-wrap: anywhere;
       }
       .hero-tags { display: flex; flex-wrap: wrap; gap: 6px; }
       .hero-tags span {
-        padding: 3px 9px;
-        border: 1px solid var(--oppai-border-strong);
+        padding: 3px 10px;
         border-radius: 999px;
+        background: color-mix(in srgb, var(--oppai-text) 9%, transparent);
         color: var(--oppai-text-dim);
-        font-size: 11.5px;
+        font-size: 12px;
       }
-      .hero-acts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+      .hero-acts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
       .hero-open, .hero-more {
         display: inline-flex;
         align-items: center;
-        gap: 5px;
-        padding: 9px 18px;
-        border: 1px solid var(--oppai-border-strong);
-        border-radius: 999px;
-        background: transparent;
-        color: var(--oppai-text-dim);
+        gap: 6px;
+        height: 42px;
+        padding: 0 20px;
+        border: 1px solid color-mix(in srgb, var(--oppai-text) 22%, transparent);
+        border-radius: 12px;
+        background: color-mix(in srgb, var(--oppai-bg) 30%, transparent);
+        color: var(--oppai-text);
         cursor: pointer;
         font: inherit;
-        font-size: 13.5px;
+        font-size: 14px;
         font-weight: 600;
+        backdrop-filter: blur(8px);
       }
       .hero-open {
         background: var(--oppai-primary);
         border-color: var(--oppai-primary);
         color: var(--oppai-on-primary);
       }
-      .hero-more:hover { color: var(--oppai-text); }
-      .hero-open .material-symbols-rounded { font-size: 19px; }
-      /* The counts. Two of them are links to the screens they describe; the other two
-         are facts with nowhere to go, so they are not buttons. */
-      .stats {
+      .hero-open:hover { filter: brightness(1.06); }
+      .hero-more:hover { background: color-mix(in srgb, var(--oppai-text) 10%, transparent); }
+      .hero-open .material-symbols-rounded { font-size: 20px; }
+      .hero-art {
+        flex-shrink: 0;
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
-        gap: 10px;
-        margin-bottom: 34px;
-      }
-      .stat {
-        display: grid;
-        gap: 1px;
-        padding: 12px 14px;
-        border: 1px solid var(--oppai-border);
+        place-items: center;
+        height: 244px;
+        max-width: 42%;
+        aspect-ratio: var(--ratio, 0.8);
+        padding: 0;
+        border: 0;
         border-radius: 14px;
+        overflow: hidden;
         background: var(--oppai-surface-2);
+        box-shadow: var(--oppai-shadow-pop);
+        cursor: pointer;
+        transition: transform 0.3s var(--oppai-ease-emphasized);
+      }
+      .hero-art:hover { transform: translateY(-3px) rotate(-0.4deg); }
+      .hero-art img { width: 100%; height: 100%; object-fit: cover; display: block; }
+      .hero-icon { font-size: 52px; color: var(--oppai-text-muted); }
+      .hero.veiled .hero-art img { filter: blur(22px) saturate(.6); transform: scale(1.15); }
+      /* The counts, said as a line rather than four cards: they are facts about the
+         library, not places to go — the two that are places are links. */
+      .vault-strip {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 6px 22px;
+        padding: 6px 4px 0;
+        margin-bottom: 26px;
+        color: var(--oppai-text-muted);
+        font-size: 13px;
+      }
+      .vs-item {
+        display: inline-flex;
+        align-items: baseline;
+        gap: 5px;
+        padding: 0;
+        border: none;
+        background: none;
         color: inherit;
-        text-align: left;
         font: inherit;
       }
-      button.stat { cursor: pointer; }
-      button.stat:hover { border-color: var(--oppai-border-strong); }
-      .stat strong { font-size: 19px; font-weight: 600; }
-      .stat span { color: var(--oppai-text-muted); font-size: 11.5px; }
+      button.vs-item { cursor: pointer; }
+      button.vs-item:hover strong { color: var(--oppai-primary-bright); }
+      .vs-item strong { color: var(--oppai-text); font-weight: 600; font-size: 15px; font-variant-numeric: tabular-nums; }
+      .vs-lock { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
+      .vs-lock .material-symbols-rounded { font-size: 16px; color: var(--oppai-primary); }
+      /* The other two things the app is for, one card each and no bigger than that:
+         the library leads, and these are the doors beside it. */
+      .also {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+        gap: 12px;
+        margin-bottom: 34px;
+      }
+      .also-card {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        min-width: 0;
+        min-height: 80px;
+        padding: 14px 16px;
+        border-radius: 16px;
+        background: var(--oppai-surface);
+        border: 1px solid var(--oppai-border);
+        color: inherit;
+        font: inherit;
+        text-align: left;
+      }
+      button.also-card { cursor: pointer; transition: background 0.15s ease, border-color 0.15s ease; }
+      button.also-card:hover { background: var(--oppai-surface-2); border-color: var(--oppai-border-strong); }
+      .also-face {
+        width: 50px;
+        height: 50px;
+        flex-shrink: 0;
+        border-radius: 50%;
+        object-fit: cover;
+        object-position: top;
+        background: var(--oppai-surface-2);
+        box-shadow: 0 0 0 2px var(--oppai-surface), 0 0 0 4px color-mix(in srgb, var(--oppai-primary) 65%, transparent);
+      }
+      .also-icon {
+        width: 50px;
+        height: 50px;
+        flex-shrink: 0;
+        border-radius: 14px;
+        display: grid;
+        place-items: center;
+        background: var(--oppai-selected);
+        color: var(--oppai-primary-bright);
+      }
+      .also-icon .material-symbols-rounded { font-size: 26px; }
+      .also-copy { min-width: 0; flex: 1; }
+      .also-title { font-size: 15px; font-weight: 600; }
+      .also-sub { font-size: 12.5px; color: var(--oppai-text-muted); margin-top: 2px; }
+      .also-go { color: var(--oppai-text-muted); }
+      .also-acts { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+      .also-btn {
+        height: 34px;
+        padding: 0 12px;
+        border-radius: 10px;
+        border: 1px solid var(--oppai-border-strong);
+        background: none;
+        color: var(--oppai-text-dim);
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font: inherit;
+        font-size: 13px;
+        font-weight: 500;
+        cursor: pointer;
+      }
+      .also-btn:hover { color: var(--oppai-text); background: var(--oppai-surface-2); }
+      .also-btn .material-symbols-rounded { font-size: 18px; }
+      .greeting {
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--oppai-text-muted);
+        margin: 0 0 10px 4px;
+      }
+      .empty-home {
+        display: grid;
+        justify-items: center;
+        gap: 10px;
+        padding: 80px 20px;
+        text-align: center;
+        color: var(--oppai-text-muted);
+      }
+      .empty-home h2 { margin: 0; color: var(--oppai-text); font-size: 24px; font-weight: 700; letter-spacing: -0.01em; }
+      .empty-home .material-symbols-rounded { font-size: 44px; color: var(--oppai-primary); }
+      .empty-home .hero-open { margin-top: 8px; }
       .row-sub {
         color: var(--oppai-text-muted);
-        font-size: 12px;
+        font-size: 12.5px;
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
-      @media (max-width: 760px) {
-        .hero { grid-template-columns: minmax(0, 1fr); gap: 14px; padding: 12px; }
-        .hero-title { font-size: 21px; }
+      @media (max-width: 900px) {
+        .hero { flex-direction: column-reverse; align-items: stretch; min-height: 0; padding: 18px; gap: 18px; }
+        .hero-art { height: auto; max-width: none; aspect-ratio: 16 / 10; }
+        .hero-art img { object-position: 50% 25%; }
+        .hero-title { font-size: 26px; }
       }
       .row {
-        margin-bottom: 36px;
+        margin-bottom: 34px;
       }
       .row-head {
         display: flex;
-        align-items: center;
+        align-items: baseline;
         gap: 10px;
-        margin-bottom: 14px;
+        margin-bottom: 12px;
       }
       .row-title {
-        font-size: 18px;
-        font-weight: 500;
+        font-size: 17px;
+        font-weight: 600;
+        letter-spacing: -0.005em;
         margin: 0;
-        flex: 1;
+        white-space: nowrap;
+      }
+      .row-face {
+        width: 22px;
+        height: 22px;
+        border-radius: 50%;
+        object-fit: cover;
+        object-position: top;
+        align-self: center;
       }
       .see-all {
+        margin-left: auto;
         background: none;
         border: none;
         color: var(--oppai-primary-bright);
+        font: inherit;
         font-size: 13px;
         font-weight: 600;
         cursor: pointer;
         display: flex;
         align-items: center;
         gap: 2px;
+        flex-shrink: 0;
       }
       .row-scroll {
         display: flex;
-        gap: 16px;
+        gap: 14px;
         overflow-x: auto;
         padding-bottom: 8px;
+        scroll-snap-type: x proximity;
+        scrollbar-width: thin;
       }
+      .row-scroll > * { scroll-snap-align: start; }
 
-      /* Grid */
+      /* ── The grid ────────────────────────────────────────────────────── */
+      .grid-bar {
+        display: flex;
+        align-items: flex-start;
+        gap: 12px;
+        margin-bottom: 18px;
+      }
+      .grid-bar .chips { flex: 1; min-width: 0; margin: 0; }
+      .grid-tools { display: flex; align-items: center; gap: 8px; margin-left: auto; flex-shrink: 0; }
+      .grid-tools .sort { margin-left: 0; }
       .grid-head {
         display: flex;
-        align-items: baseline;
+        align-items: center;
         gap: 12px;
-        margin-bottom: 6px;
+        margin-bottom: 18px;
+        flex-wrap: wrap;
       }
       .grid-title {
-        font-size: 26px;
-        font-weight: 400;
+        font-size: 20px;
+        font-weight: 600;
         margin: 0;
       }
       .grid-count {
         font-size: 13px;
         color: var(--oppai-text-muted);
       }
-      /* The sort control sits at the far end of the grid heading, so the heading reads
-         "what this is, how much of it, in what order". */
+      /* The sort control sits at the far end of the chip row, so the row reads "narrow
+         it down, then order it". */
       .sort {
         margin-left: auto;
         display: flex;
         align-items: center;
         gap: 8px;
         font-size: 13px;
+        flex-shrink: 0;
       }
       .sort-label {
         color: var(--oppai-text-muted);
@@ -711,7 +1050,7 @@ export class OppaiLibrary extends LitElement {
       .sort select {
         height: 34px;
         padding: 0 8px;
-        border-radius: 8px;
+        border-radius: 10px;
         border: 1px solid var(--oppai-border-strong);
         background: var(--oppai-surface);
         color: var(--oppai-text);
@@ -731,7 +1070,7 @@ export class OppaiLibrary extends LitElement {
       .more-btn {
         height: 40px;
         padding: 0 20px;
-        border-radius: 20px;
+        border-radius: 12px;
         border: 1px solid var(--oppai-border-strong);
         background: var(--oppai-surface);
         color: var(--oppai-text);
@@ -745,29 +1084,44 @@ export class OppaiLibrary extends LitElement {
       }
       .chips {
         display: flex;
-        gap: 8px;
-        margin: 18px 0 24px;
+        gap: 6px;
+        margin: 0 0 18px;
         flex-wrap: wrap;
       }
-      /* The Games section's face strip sits tight under the title, above the tag chips. */
+      /* The Games section's face strip sits above the tag chips. */
       .chips.game-faces {
-        margin: 6px 0 14px;
+        margin: 0 0 14px;
       }
       .chip {
-        height: 36px;
-        padding: 0 16px;
-        border-radius: 18px;
+        height: 32px;
+        padding: 0 13px;
+        border-radius: 999px;
+        border: 1px solid var(--oppai-border-strong);
+        background: none;
+        color: var(--oppai-text-dim);
+        font: inherit;
         font-size: 13px;
         font-weight: 500;
         cursor: pointer;
         display: flex;
         align-items: center;
         gap: 6px;
+        white-space: nowrap;
+        transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+      }
+      .chip:hover { color: var(--oppai-text); border-color: var(--oppai-text-muted); }
+      .chip .material-symbols-rounded { font-size: 17px; }
+      /* A picked chip is inverted rather than tinted: on a wall of thumbnails, a tint is
+         one more colour among many, and the inverse is the one thing that stands out. */
+      .chip[aria-pressed="true"] {
+        background: var(--oppai-text);
+        color: var(--oppai-bg);
+        border-color: var(--oppai-text);
       }
       .grid {
         display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-        gap: 22px;
+        grid-template-columns: repeat(auto-fill, minmax(var(--tile-min, 210px), 1fr));
+        gap: 20px 14px;
       }
       .empty {
         text-align: center;
@@ -783,29 +1137,43 @@ export class OppaiLibrary extends LitElement {
         -webkit-touch-callout: none;
         -webkit-user-select: none;
         user-select: none;
+        min-width: 0;
       }
+      .row-scroll .tile { flex-shrink: 0; width: 184px; }
       /* A focused tile has to be visible as such, now that one can be reached by
          keyboard. focus-visible rather than focus, so a mouse click does not leave a
          ring behind it. */
       .tile:focus {
         outline: none;
       }
-      .tile:focus-visible {
+      .tile:focus-visible .tile-media {
         outline: 2px solid var(--oppai-primary);
         outline-offset: 3px;
-        border-radius: 18px;
       }
       .tile-media {
         position: relative;
-        border-radius: 16px;
+        width: 100%;
+        border-radius: var(--oppai-radius-md);
         overflow: hidden;
         transition: transform 0.28s var(--oppai-ease-emphasized),
           box-shadow 0.28s var(--oppai-ease-emphasized);
         will-change: transform;
       }
+      /* A shade along the bottom edge, so the badge reads over a white picture and the
+         heart over a bright one, without darkening the picture at rest. */
+      .tile-media::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(180deg, rgba(0, 0, 0, 0.32) 0%, transparent 28%, transparent 70%, rgba(0, 0, 0, 0.38) 100%);
+        opacity: 0;
+        transition: opacity 0.2s ease;
+        pointer-events: none;
+      }
+      .tile:hover .tile-media::after { opacity: 1; }
       .tile:hover .tile-media {
-        transform: translateY(-4px) scale(1.02);
-        box-shadow: 0 12px 28px rgba(0, 0, 0, 0.4);
+        transform: translateY(-3px);
+        box-shadow: 0 12px 28px rgba(0, 0, 0, 0.36);
       }
       .tile:active .tile-media {
         transform: translateY(-1px) scale(0.99);
@@ -816,36 +1184,35 @@ export class OppaiLibrary extends LitElement {
         width: 100%;
         height: 100%;
         object-fit: cover;
-        transition: transform 0.4s var(--oppai-ease-emphasized);
+        transition: transform 0.5s var(--oppai-ease-emphasized);
       }
       .tile:hover .tile-media img {
-        transform: scale(1.06);
+        transform: scale(1.04);
       }
       .moment-tile {
         position: relative;
         flex: 0 0 auto;
-        width: 200px;
+        width: 232px;
         padding: 0;
-        border: 1px solid var(--oppai-border, rgba(255,255,255,.1));
-        border-radius: 14px;
+        border: 0;
+        border-radius: var(--oppai-radius-md);
         overflow: hidden;
-        background: var(--oppai-surface-2);
+        background: var(--oppai-surface);
         color: inherit;
         font: inherit;
         text-align: left;
         cursor: pointer;
       }
-      .moment-tile img { display: block; width: 200px; height: 112px; object-fit: cover; background: #000; }
+      .moment-tile img { display: block; width: 232px; height: 130px; object-fit: cover; background: #000; }
       .moment-tile.veiled img { filter: blur(22px) saturate(.6); }
-      .moment-caption { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; }
-      .moment-caption strong { font-size: 13px; }
+      .moment-caption { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px 10px; }
+      .moment-caption strong { font-size: 13px; font-variant-numeric: tabular-nums; color: var(--oppai-primary-bright); }
       .moment-caption span {
         font-size: 12px; color: var(--oppai-text-muted);
         overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
       }
       /* The safe toggle: a rated-explicit tile is a blur until it is switched off. */
-      .tile.veiled .tile-media img,
-      .hero-art.veiled img {
+      .tile.veiled .tile-media img {
         filter: blur(22px) saturate(.6);
         transform: scale(1.15);
       }
@@ -859,7 +1226,7 @@ export class OppaiLibrary extends LitElement {
         justify-content: center;
         flex-direction: column;
         gap: 6px;
-        opacity: 0.55;
+        opacity: 0.6;
       }
       .type-label {
         font: 600 10px ui-monospace, monospace;
@@ -870,45 +1237,50 @@ export class OppaiLibrary extends LitElement {
         position: absolute;
         top: 8px;
         right: 8px;
+        z-index: 1;
         width: 32px;
         height: 32px;
-        border-radius: 16px;
-        background: rgba(0, 0, 0, 0.4);
+        border-radius: 10px;
+        background: rgba(0, 0, 0, 0.42);
         border: none;
         display: flex;
         align-items: center;
         justify-content: center;
         cursor: pointer;
         opacity: 0;
-        transform: scale(0.8);
+        transform: scale(0.85);
         transition: opacity 0.2s ease, transform 0.2s var(--oppai-ease-spring),
           background 0.2s ease;
-        backdrop-filter: blur(2px);
+        backdrop-filter: blur(6px);
       }
       .tile:hover .fav-btn,
+      .tile:focus-visible .fav-btn,
       .fav-btn.is-fav {
         opacity: 1;
         transform: scale(1);
       }
       .fav-btn:hover {
-        background: rgba(0, 0, 0, 0.6);
+        background: rgba(0, 0, 0, 0.62);
       }
       .fav-btn:active .material-symbols-rounded {
         animation: oppai-pop 0.35s var(--oppai-ease-spring);
       }
       .tile-stat {
         position: absolute;
-        bottom: 6px;
-        right: 8px;
+        z-index: 1;
+        bottom: 7px;
+        right: 7px;
         font-size: 11px;
         font-weight: 600;
+        font-variant-numeric: tabular-nums;
         color: #fff;
-        background: rgba(0, 0, 0, 0.5);
-        padding: 2px 6px;
+        background: rgba(0, 0, 0, 0.52);
+        padding: 2px 7px;
         border-radius: 6px;
+        backdrop-filter: blur(6px);
       }
       .tile-meta {
-        padding: 10px 2px 0;
+        padding: 8px 2px 0;
       }
       .tile-title {
         font-size: 13px;
@@ -921,8 +1293,126 @@ export class OppaiLibrary extends LitElement {
       .tile-tag {
         font-size: 12px;
         color: var(--oppai-text-muted);
-        margin-top: 2px;
+        margin-top: 1px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
+
+      /* ── The phone's bottom bar and its More sheet ──────────────────────
+         In the column's flow rather than fixed over it, so every screen above it —
+         the chat's composer, the studio's dock — ends where the bar begins without
+         each one having to know how tall it is. */
+      .phone-bar {
+        display: none;
+        flex-shrink: 0;
+        align-items: center;
+        justify-content: space-around;
+        height: calc(64px + env(safe-area-inset-bottom));
+        padding: 0 max(6px, env(safe-area-inset-right)) env(safe-area-inset-bottom) max(6px, env(safe-area-inset-left));
+        background: var(--oppai-nav);
+        border-top: 1px solid var(--oppai-border);
+      }
+      .pb-item {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 3px;
+        padding: 6px 0;
+        border: none;
+        background: none;
+        color: var(--oppai-text-muted);
+        font: inherit;
+        font-size: 11px;
+        font-weight: 500;
+        cursor: pointer;
+      }
+      .pb-pill {
+        width: 54px;
+        height: 30px;
+        border-radius: 15px;
+        display: grid;
+        place-items: center;
+        transition: background 0.2s var(--oppai-ease-emphasized);
+      }
+      .pb-pill .material-symbols-rounded { font-size: 22px; }
+      .pb-pill img { width: 24px; height: 24px; border-radius: 50%; object-fit: cover; object-position: top; }
+      .pb-item.on { color: var(--oppai-text); }
+      .pb-item.on .pb-pill { background: var(--oppai-selected); color: var(--oppai-primary-bright); }
+      .pb-add {
+        flex: none;
+        width: 50px;
+        height: 50px;
+        margin: 0 4px;
+        border-radius: 16px;
+        border: none;
+        background: var(--oppai-primary);
+        color: var(--oppai-on-primary);
+        display: grid;
+        place-items: center;
+        cursor: pointer;
+        box-shadow: 0 6px 18px color-mix(in srgb, var(--oppai-primary) 28%, transparent);
+      }
+      .pb-add .material-symbols-rounded { font-size: 28px; }
+      /* Above Libby's drawer (60), whose tab otherwise sat over the sheet's rows, and
+         below the upload manager (150) and the menu (400). */
+      .sheet-scrim {
+        position: absolute;
+        inset: 0;
+        z-index: 80;
+        background: var(--oppai-scrim);
+        display: flex;
+        align-items: flex-end;
+        animation: oppai-fade-in 0.18s var(--oppai-ease-standard) both;
+      }
+      .sheet {
+        width: 100%;
+        max-height: 80%;
+        overflow-y: auto;
+        padding: 8px 12px calc(16px + env(safe-area-inset-bottom));
+        border-radius: 24px 24px 0 0;
+        background: var(--oppai-surface);
+        box-shadow: var(--oppai-shadow-pop);
+        animation: oppai-fade-in-up 0.26s var(--oppai-ease-emphasized) both;
+      }
+      .sheet-grip {
+        width: 36px;
+        height: 4px;
+        margin: 4px auto 10px;
+        border-radius: 2px;
+        background: var(--oppai-border-strong);
+      }
+      .sheet-who {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 6px 8px 14px;
+        border-bottom: 1px solid var(--oppai-border);
+        margin-bottom: 6px;
+      }
+      .sheet-item {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        width: 100%;
+        height: 50px;
+        padding: 0 10px;
+        border: none;
+        border-radius: 12px;
+        background: none;
+        color: var(--oppai-text);
+        font: inherit;
+        font-size: 15px;
+        text-align: left;
+        cursor: pointer;
+      }
+      .sheet-item:hover { background: var(--oppai-surface-2); }
+      .sheet-item .material-symbols-rounded { font-size: 22px; color: var(--oppai-text-dim); }
+      .sheet-item.on .material-symbols-rounded { color: var(--oppai-primary-bright); }
+      .sheet-item .sheet-note { margin-left: auto; font-size: 12px; color: var(--oppai-text-muted); }
+      .sheet-item.danger, .sheet-item.danger .material-symbols-rounded { color: var(--oppai-error); }
 
       /* Upload dialog */
       .scrim {
@@ -1043,10 +1533,14 @@ export class OppaiLibrary extends LitElement {
         display: flex;
         align-items: center;
         gap: 8px;
-        padding: 10px 12px 10px 18px;
-        border-radius: 28px;
+        max-width: calc(100% - 32px);
+        overflow-x: auto;
+        scrollbar-width: none;
+        padding: 8px 10px 8px 18px;
+        border-radius: 16px;
+        border: 1px solid var(--oppai-border-strong);
         background: var(--oppai-surface-2);
-        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+        box-shadow: var(--oppai-shadow-pop);
         animation: oppai-scale-in 0.28s var(--oppai-ease-spring) both;
       }
       .bulk-count {
@@ -1056,6 +1550,8 @@ export class OppaiLibrary extends LitElement {
         white-space: nowrap;
       }
       .bulk-btn {
+        white-space: nowrap;
+        flex-shrink: 0;
         height: 40px;
         padding: 0 14px;
         border-radius: 20px;
@@ -1108,9 +1604,11 @@ export class OppaiLibrary extends LitElement {
         border-color: var(--oppai-primary);
       }
 
-      /* Phone navigation is a real bottom bar, not the desktop rail squeezed into a
-         short viewport. The destinations scroll horizontally while Add, Settings,
-         and the account remain reachable at the edges. Dynamic viewport units follow
+      /* Phone navigation is a real bottom bar, not the desktop sidebar squeezed into a
+         short viewport. It was one: eleven destinations in a sideways scroll, of which a
+         phone showed Home, Photos and GIFs — Chat, the second thing the app is for, was
+         off the edge. Now the bar holds the four places and Add, and the library's own
+         places are the chip row under its search. Dynamic viewport units follow
          collapsing browser chrome; safe-area padding keeps the bar above home
          indicators, notches, and rounded landscape corners. */
       @media (max-width: 700px) {
@@ -1119,52 +1617,45 @@ export class OppaiLibrary extends LitElement {
           height: 100dvh;
           min-height: -webkit-fill-available;
         }
-        nav {
-          order: 2;
-          width: 100%;
+        nav.side { display: none; }
+        .phone-bar { display: flex; }
+        .phone-only { display: flex !important; }
+        .desk-only { display: none !important; }
+        .main-col { min-height: 0; height: auto; flex: 1; }
+        header.top {
           height: auto;
-          flex: 0 0 auto;
-          flex-direction: row;
-          align-items: center;
-          gap: 4px;
-          padding:
-            6px max(8px, env(safe-area-inset-right))
-            calc(6px + env(safe-area-inset-bottom))
-            max(8px, env(safe-area-inset-left));
-          border-right: 0;
-          border-top: 1px solid var(--oppai-surface-2);
+          flex-wrap: wrap;
+          gap: 10px 8px;
+          padding: calc(env(safe-area-inset-top) + 10px) max(14px, env(safe-area-inset-right)) 10px max(14px, env(safe-area-inset-left));
         }
-        nav .logo, .nav-spacer { display: none; }
-        .add-btn { width: 44px; height: 44px; border-radius: 14px; flex: 0 0 44px; }
-        .nav-list {
-          min-width: 0;
-          flex: 1 1 auto;
-          width: auto;
-          flex-direction: row;
-          justify-content: flex-start;
-          gap: 2px;
-          overflow-x: auto;
-          overflow-y: hidden;
-          overscroll-behavior-x: contain;
-          scrollbar-width: none;
-          scroll-snap-type: x proximity;
-        }
-        .nav-item { width: 58px; flex: 0 0 58px; scroll-snap-align: nearest; }
-        .nav-pill { width: 48px; height: 28px; }
-        .nav-label { font-size: 10px; }
-        .nav-utility { flex: 0 0 auto; }
-        .main-col { order: 1; min-height: 0; height: auto; }
-        header {
-          height: calc(60px + env(safe-area-inset-top));
-          padding: env(safe-area-inset-top) max(14px, env(safe-area-inset-right)) 0 max(14px, env(safe-area-inset-left));
-          gap: 10px;
-        }
-        .h-title { max-width: 38vw; font-size: 17px; }
+        header.top.viewing { flex-wrap: nowrap; }
+        /* The chip row says where you are, so the title would only say it again. */
+        header.top:not(.viewing) .h-titles { display: none; }
+        .h-title { font-size: 17px; max-width: 60vw; }
+        .searchbox { margin: 0; max-width: none; height: 42px; min-width: 0; }
+        .tools { gap: 4px; }
+        .searchbox kbd { display: none; }
+        .tool-label { display: none; }
+        .tool { width: 42px; height: 42px; padding: 0; justify-content: center; }
+        .tool .fbadge { position: absolute; top: -4px; right: -4px; }
+        .filters-wrap .tool { position: relative; }
+        .scope { display: flex; flex-basis: 100%; }
         main {
-          padding: 20px max(16px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+          padding: 14px max(14px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left));
         }
         main.flush { padding: 0; }
-        .grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 14px; }
+        .grid { grid-template-columns: repeat(var(--tile-cols, 2), minmax(0, 1fr)); gap: 14px 8px; }
+        .grid.cols-3 .tile-meta { display: none; }
+        .row-scroll .tile { width: 150px; }
+        .hero-title { font-size: 23px; }
+        .vs-lock { margin-left: 0; flex-basis: 100%; }
+        .also { grid-template-columns: minmax(0, 1fr); }
+        .also-card.create { flex-wrap: wrap; }
+        .also-card.create .also-acts { flex-basis: 100%; justify-content: flex-start; }
+        .grid-bar { flex-direction: column-reverse; align-items: stretch; gap: 10px; }
+        .grid-bar .chips { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin: 0 -14px; padding: 0 14px; }
+        .grid-tools { margin-left: 0; justify-content: space-between; }
+        .grid-tools .sort-label { display: none; }
         .download-area { right: max(10px, env(safe-area-inset-right)); bottom: calc(76px + env(safe-area-inset-bottom)); }
         .bulk-bar { bottom: calc(76px + env(safe-area-inset-bottom)); max-width: calc(100vw - 20px); overflow-x: auto; }
       }
@@ -1209,10 +1700,12 @@ export class OppaiLibrary extends LitElement {
     // few shell labels that describe its public identity.
     window.addEventListener("oppai-incognito", this.onIncognito);
     window.addEventListener("popstate", this.onPopState);
+    this.narrowQuery.addEventListener("change", this.onNarrow);
   }
   disconnectedCallback() {
     super.disconnectedCallback();
     window.removeEventListener("popstate", this.onPopState);
+    this.narrowQuery.removeEventListener("change", this.onNarrow);
     this.removeEventListener("contextmenu", this.onContextMenu);
     this.detachLongPress?.();
     this.removeEventListener(OPEN_MEDIA_EVENT, this.onOpenMedia);
@@ -1472,6 +1965,15 @@ export class OppaiLibrary extends LitElement {
         this.logout();
         return;
     }
+    if (e.key === "/" && this.selectedId == null && isLibrarySection(this.section) && this.section !== "browse"
+      && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      const box = this.renderRoot.querySelector<HTMLInputElement>(".searchbox input");
+      if (box) {
+        e.preventDefault();
+        box.focus();
+        return;
+      }
+    }
     if (this.selectedId == null || this.uploadOpen) return;
     const reading = this.knownItem(this.selectedId)?.kind === "comic";
     switch (e.key) {
@@ -1662,6 +2164,14 @@ export class OppaiLibrary extends LitElement {
       elements behind one header. */
   private onStudioMode = (e: CustomEvent<{ section: "imagegen" | "studio" }>) => this.selectSection(e.detail.section);
 
+  /** The studio saying which of Image and Video it is showing, so the nav lights the
+      right one whichever switch changed it. Hearing it also means a request from the
+      nav has been taken up, and must not be re-applied to the next studio built. */
+  private onCreateMode = (e: CustomEvent<{ mode: CreateMode }>) => {
+    this.createMode = e.detail.mode;
+    this.createRequest = null;
+  };
+
   /** The Video studio's setup card, sending someone to where ComfyUI is set up. */
   private openImageGenSettings = () => {
     this.selectSection("settings");
@@ -1669,6 +2179,8 @@ export class OppaiLibrary extends LitElement {
   };
 
   private selectSection(id: Section) {
+    if (isLibrarySection(id)) this.lastLibrary = id;
+    else if (id === "imagegen" || id === "studio") this.lastCreate = id;
     if (id === this.section) return;
     this.settingsTab = "";
     // A picture being edited belongs to one visit to Create; coming back later
@@ -2314,10 +2826,33 @@ export class OppaiLibrary extends LitElement {
     else if (isHome) headerTitle = "Library";
     else headerTitle = KIND_META[this.section as Kind]?.label ?? "Library";
 
+    // The library's screens and the viewer have the top bar; the workspaces do not.
+    const libraryScreen = !isViewer && !isSettings && !isImageGen && !isStudio && !isChat;
+    const gridScreen = isGrid || isFavorites || isSearch || (isCollections && !!this.openCollection);
+    // The server's count of everything matching, not the length of what has loaded.
+    let count = "";
+    if (gridScreen && !(isGrid && this.section === "game" && this.gameFace !== "library")) {
+      const n = isCollections && this.openCollection ? this.openCollection.count : this.total;
+      count = this.loading && !this.items.length
+        ? ""
+        : n === this.items.length || isCollections
+          ? `${n.toLocaleString()} ${n === 1 ? "item" : "items"}`
+          : `${this.items.length.toLocaleString()} of ${n.toLocaleString()}`;
+    } else if (isCollections) {
+      count = this.collections.length ? this.collections.length.toLocaleString() : "";
+    }
+
     return html`
       ${this.renderNav()}
       <div class="main-col">
-        ${this.renderHeader(headerTitle, hasSearch, isViewer, isSettings)}
+        ${isViewer || libraryScreen
+          ? this.renderHeader(headerTitle, isViewer ? "" : count, {
+              isViewer,
+              search: !isBrowse,
+              grid: gridScreen,
+              select: gridScreen || isHome,
+            })
+          : nothing}
         <main class=${isChat || isImageGen || isStudio ? "flush" : ""}>
           ${isHome ? this.renderHome() : nothing}
           ${isSettings
@@ -2339,7 +2874,8 @@ export class OppaiLibrary extends LitElement {
             : nothing}
           ${isImageGen
             ? this.ready("imagegen")
-              ? html`<oppai-imagegen .editMedia=${this.editMediaId} @imported=${() => this.refresh()}
+              ? html`<oppai-imagegen .editMedia=${this.editMediaId} .startMode=${this.createRequest}
+                  @create-mode=${this.onCreateMode} @imported=${() => this.refresh()}
                   @open-chat=${() => this.selectSection("chat")} @studio-mode=${this.onStudioMode}
                   @open-settings=${this.openImageGenSettings}></oppai-imagegen>`
               : this.renderViewLoading()
@@ -2386,7 +2922,12 @@ export class OppaiLibrary extends LitElement {
             ? html`<div class="empty">Item not found.</div>`
             : nothing}
         </main>
+        <!-- In the main column, not the shell: centred on the whole window it ran under
+             the sidebar's half and off the right edge. -->
+        ${this.renderBulkBar()}
+        ${this.renderPhoneBar()}
       </div>
+      ${this.renderMoreSheet()}
       <!-- Libby, available from anywhere rather than only on the screen named after
            her. She is told what is on screen so she can react to it; the Chat and
            screen suppresses her, since it already is the conversation. Together is no
@@ -2406,7 +2947,6 @@ export class OppaiLibrary extends LitElement {
         ?suppressed=${isChat}
       ></oppai-libby-drawer>
       ${this.renderUpload()}
-      ${this.renderBulkBar()}
       ${this.renderDownloads()}
       ${this.ready("scrape")
         ? html`<oppai-scrape-dialog @imported=${() => this.refresh()}></oppai-scrape-dialog>`
@@ -2475,145 +3015,310 @@ export class OppaiLibrary extends LitElement {
     `;
   }
 
+  /** Whether her picture may be on screen: not while she is hidden, and not under the
+   *  safe view, which takes her off screen with everything else that would give the
+   *  app away. */
+  private get libbyShown(): boolean {
+    return !libbyHidden() && !this.safe;
+  }
+
+  /** Whether the sidebar is folded to a rail right now. See navIsRail. */
+  private get navRail(): boolean {
+    return navIsRail(this.navPref, this.section, this.narrow);
+  }
+
+  /**
+   * Goes somewhere from the navigation.
+   *
+   * The one entrance every nav control uses, so they all agree on two things the bare
+   * selectSection does not do: a studio mode named by the item (Image and Video are one
+   * element), and a viewer open over the section you are already in, which the item
+   * for that section should close rather than do nothing about.
+   */
+  private go(id: Section, mode?: CreateMode) {
+    this.moreOpen = false;
+    if (mode) {
+      this.createMode = mode;
+      // A new object per request, so asking for Image again after the studio's own
+      // switch went to Video still lands: the property changes even when the mode
+      // asked for is the one last asked for.
+      this.createRequest = { mode };
+    }
+    if (id === this.section && this.selectedId != null) {
+      this.closeItem();
+      return;
+    }
+    this.selectSection(id);
+  }
+
+  private toggleNavWidth = () => {
+    this.navPref = this.navRail ? "full" : "rail";
+    saveNavWidth(this.navPref);
+  };
+
+  private cycleDensity = () => {
+    this.density = nextDensity(this.density);
+    saveDensity(this.density);
+  };
+
+  /** The account button's menu: who is signed in, and the ways out. */
+  private openAccountMenu = (e: MouseEvent) => {
+    openMenu({
+      x: e.clientX,
+      y: e.clientY,
+      title: this.user?.username ?? "",
+      items: [
+        { label: "Settings", icon: "settings", run: () => this.go("settings") },
+        {
+          label: this.safe ? "Turn safe view off" : "Turn safe view on",
+          icon: this.safe ? "visibility" : "visibility_off",
+          hint: "`",
+          run: () => this.toggleSafe(),
+        },
+        menuDivider,
+        { label: "Sign out", icon: "logout", hint: "~", run: () => this.logout() },
+      ],
+    });
+  };
+
   private renderNav() {
-    const initials = (this.user?.username ?? "?").slice(0, 2).toUpperCase();
-    const settingsActive = this.section === "settings" && this.selectedId == null;
+    const rail = this.navRail;
+    const viewing = this.selectedId != null;
+    const byKind = this.stats?.byKind ?? {};
+    const item = (id: Section, label: string, icon: string, opts: { count?: number; mode?: CreateMode; face?: boolean } = {}) => {
+      const active = !viewing && this.section === id && (!opts.mode || this.createMode === opts.mode);
+      return html`<button
+        class="nav-item ${active ? "on" : ""}"
+        aria-current=${active ? "page" : nothing}
+        title=${rail ? label : nothing}
+        @click=${() => this.go(id, opts.mode)}
+      >
+        ${opts.face && this.libbyShown
+          ? html`<img class="nav-avatar" src=${DEFAULT_LIBBY_PFP} alt="" />`
+          : html`<span aria-hidden="true" class="material-symbols-rounded ${active ? "fill-icon" : ""}">${icon}</span>`}
+        <span class="nav-label">${label}</span>
+        ${opts.count ? html`<span class="nav-count">${compactCount(opts.count)}</span>` : nothing}
+      </button>`;
+    };
+    const name = this.user?.username ?? "?";
+    const settingsActive = this.section === "settings" && !viewing;
     return html`
-      <nav>
-        <button class="logo" title=${isIncognito() ? "Home" : "OppaiLib"}
-          @click=${() => this.selectSection("home")}>
-          ${logoSVG}
-        </button>
-        <button class="add-btn" title="Add media" @click=${this.toggleUpload}>
-          <span aria-hidden="true" class="material-symbols-rounded" style="font-size:26px;">add</span>
+      <nav class="side ${rail ? "rail" : ""}" aria-label="Sections">
+        <div class="brand">
+          <button class="logo" title=${isIncognito() ? "Home" : "OppaiLib"} aria-label="Home"
+            @click=${() => this.go("home")}>${logoSVG}</button>
+          <span class="wordmark">${isIncognito() ? "Library" : "OppaiLib"}</span>
+        </div>
+        <button class="add-btn" title="Add media" aria-label="Add media" @click=${this.toggleUpload}>
+          <span aria-hidden="true" class="material-symbols-rounded">add</span><span class="add-label">Add media</span>
         </button>
 
         <div class="nav-list">
-          ${NAV_SECTIONS.map((n) => {
-            const section = this.section === "studio" ? "imagegen" : this.section;
-            const active = section === n.id && this.selectedId == null;
-            return html`
-              <button
-                class="nav-item"
-                aria-current=${active ? "page" : nothing}
-                @click=${() => this.selectSection(n.id)}
-              >
-                <span
-                  class="nav-pill"
-                  style="background:${active ? "var(--oppai-primary-container)" : "transparent"};"
-                >
-                  <span
-                    aria-hidden="true" class="material-symbols-rounded ${active ? "fill-icon" : ""}"
-                    style="font-size:22px; color:${active ? "var(--oppai-primary-bright)" : "var(--oppai-text-dim)"};"
-                    >${n.icon}</span
-                  >
-                </span>
-                <span class="nav-label" style="color:${active ? "var(--oppai-text)" : "var(--oppai-text-muted)"};"
-                  >${n.label}</span
-                >
-              </button>
-            `;
-          })}
+          <div class="nav-group" role="group" aria-label="Library">
+            <div class="nav-heading" aria-hidden="true">Library</div>
+            ${item("home", "Overview", "home")}
+            ${KIND_ORDER.map((k) => item(k, KIND_META[k].label, KIND_META[k].icon, { count: byKind[k] }))}
+            ${item("favorites", "Favorites", "favorite", { count: this.stats?.favorites })}
+            ${item("collections", "Collections", "bookmarks", { count: this.collections.length })}
+            ${item("browse", "Browse sources", "explore")}
+          </div>
+          <div class="nav-group" role="group" aria-label="Chat">
+            <div class="nav-heading" aria-hidden="true">Chat</div>
+            ${item("chat", "Libby & chats", "forum", { face: true })}
+          </div>
+          <div class="nav-group" role="group" aria-label="Create">
+            <div class="nav-heading" aria-hidden="true">Create</div>
+            ${item("imagegen", "Image", "image", { mode: "image" })}
+            ${item("imagegen", "Video", "movie", { mode: "video" })}
+            ${item("studio", "Sprites", "face_retouching_natural")}
+          </div>
         </div>
 
-        <div class="nav-spacer" style="flex:1;"></div>
-
-        <button
-          class="icon-btn nav-utility"
-          title=${this.safe ? "Safe view is on — press ` to show everything" : "Safe view: veil explicit tiles (`), or ~ to lock"}
-          aria-pressed=${this.safe ? "true" : "false"}
-          @click=${() => this.toggleSafe()}
-          style="width:48px; height:48px; border-radius:24px; background:${this.safe
-            ? "var(--oppai-primary-container)"
-            : "var(--oppai-surface-2)"}; color:${this.safe
-            ? "var(--oppai-primary-bright)"
-            : "var(--oppai-text-dim)"};"
-        >
-          <span aria-hidden="true" class="material-symbols-rounded" style="font-size:22px;"
-            >${this.safe ? "visibility_off" : "visibility"}</span
-          >
-        </button>
-        <button
-          class="icon-btn nav-utility"
-          title="Settings"
-          @click=${() => this.selectSection("settings")}
-          style="width:48px; height:48px; border-radius:24px; background:${settingsActive
-            ? "var(--oppai-primary-container)"
-            : "var(--oppai-surface-2)"}; color:${settingsActive
-            ? "var(--oppai-primary-bright)"
-            : "var(--oppai-text-dim)"};"
-        >
-          <span aria-hidden="true" class="material-symbols-rounded ${settingsActive ? "fill-icon" : ""}" style="font-size:22px;"
-            >settings</span
-          >
-        </button>
-        <button
-          class="icon-btn nav-utility"
-          title="Sign out (${this.user?.username})"
-          @click=${this.logout}
-          style="width:40px; height:40px; border-radius:20px; background:var(--oppai-accent); color:var(--oppai-on-accent); font-size:13px; font-weight:600;"
-        >
-          ${initials}
-        </button>
+        <div class="side-foot">
+          <div class="vault" title="Encrypted at rest with AES-256-GCM. The key lives only in the server's memory.">
+            <span aria-hidden="true" class="material-symbols-rounded fill-icon">lock</span>
+            <span class="vault-text">
+              <strong>Encrypted vault</strong>
+              ${this.stats
+                ? `${formatBytes(this.stats.bytes)} · ${this.stats.total.toLocaleString()} ${this.stats.total === 1 ? "item" : "items"}`
+                : "Unlocked"}
+            </span>
+          </div>
+          <div class="foot-row">
+            <button class="account" title=${`Signed in as ${name}`} @click=${this.openAccountMenu}>
+              <span class="avatar" aria-hidden="true">${name.slice(0, 2).toUpperCase()}</span>
+              <span class="account-text">
+                <span class="account-name">${name}</span>
+                <span class="account-sub">${this.user?.isAdmin ? "Admin" : "Signed in"}</span>
+              </span>
+            </button>
+            <button
+              class="foot-btn ${this.safe ? "on" : ""}"
+              title=${this.safe ? "Safe view is on — press ` to show everything" : "Safe view: veil explicit tiles (`), or ~ to lock"}
+              aria-label="Safe view"
+              aria-pressed=${this.safe ? "true" : "false"}
+              @click=${() => this.toggleSafe()}
+            >
+              <span aria-hidden="true" class="material-symbols-rounded">${this.safe ? "visibility_off" : "visibility"}</span>
+            </button>
+            <button class="foot-btn ${settingsActive ? "on" : ""}" title="Settings" aria-label="Settings"
+              aria-current=${settingsActive ? "page" : nothing} @click=${() => this.go("settings")}>
+              <span aria-hidden="true" class="material-symbols-rounded ${settingsActive ? "fill-icon" : ""}">settings</span>
+            </button>
+            <button class="foot-btn" title=${rail ? "Open the sidebar" : "Fold the sidebar to icons"}
+              aria-label=${rail ? "Open the sidebar" : "Fold the sidebar"} @click=${this.toggleNavWidth}>
+              <span aria-hidden="true" class="material-symbols-rounded">${rail ? "left_panel_open" : "left_panel_close"}</span>
+            </button>
+          </div>
+        </div>
       </nav>
     `;
   }
 
-  private renderHeader(title: string, hasSearch: boolean, isViewer: boolean, isSettings = false) {
+  /** The phone's bar: Library, Chat, Add, Create, More. Hidden while an item is open,
+   *  which on a phone is a screen of its own with its own way back. */
+  private renderPhoneBar() {
+    if (this.selectedId != null) return nothing;
+    const tab = phoneTabFor(this.section);
+    const b = (id: PhoneTab, label: string, icon: string, run: () => void, face = false) => html`<button
+      class="pb-item ${tab === id ? "on" : ""}" aria-current=${tab === id ? "page" : nothing} @click=${run}>
+      <span class="pb-pill">${face && this.libbyShown
+        ? html`<img src=${DEFAULT_LIBBY_PFP} alt="" />`
+        : html`<span aria-hidden="true" class="material-symbols-rounded ${tab === id ? "fill-icon" : ""}">${icon}</span>`}</span>
+      ${label}
+    </button>`;
+    return html`<div class="phone-bar" role="navigation" aria-label="Sections">
+      ${b("library", "Library", "photo_library", () => this.go(isLibrarySection(this.section) ? "home" : this.lastLibrary))}
+      ${b("chat", "Chat", "forum", () => this.go("chat"), true)}
+      <button class="pb-add" aria-label="Add media" title="Add media" @click=${this.toggleUpload}>
+        <span aria-hidden="true" class="material-symbols-rounded">add</span>
+      </button>
+      ${b("create", "Create", "auto_awesome", () => this.go(this.lastCreate))}
+      ${b("more", "More", "menu", () => (this.moreOpen = true))}
+    </div>`;
+  }
+
+  /** The phone's More sheet: what the sidebar's footer holds on a desktop, and the
+   *  studios by name, since Sprites would otherwise be two taps behind Create. */
+  private renderMoreSheet() {
+    if (!this.moreOpen) return nothing;
+    const close = () => (this.moreOpen = false);
+    const name = this.user?.username ?? "?";
+    const row = (icon: string, label: string, run: () => void, opts: { on?: boolean; note?: string } = {}) => html`<button
+      class="sheet-item ${opts.on ? "on" : ""}" @click=${() => { close(); run(); }}>
+      <span aria-hidden="true" class="material-symbols-rounded">${icon}</span>${label}
+      ${opts.note ? html`<span class="sheet-note">${opts.note}</span>` : nothing}
+    </button>`;
+    return html`<div class="sheet-scrim" @click=${(e: Event) => { if (e.target === e.currentTarget) close(); }}>
+      <div class="sheet" role="dialog" aria-label="More" @keydown=${(e: KeyboardEvent) => { if (e.key === "Escape") close(); }}>
+        <div class="sheet-grip" aria-hidden="true"></div>
+        <div class="sheet-who">
+          <span class="avatar" aria-hidden="true">${name.slice(0, 2).toUpperCase()}</span>
+          <span class="account-text">
+            <span class="account-name">${name}</span>
+            <span class="account-sub">Encrypted vault${this.stats ? ` · ${formatBytes(this.stats.bytes)}` : ""}</span>
+          </span>
+        </div>
+        ${row("image", "Image studio", () => this.go("imagegen", "image"))}
+        ${row("movie", "Video studio", () => this.go("imagegen", "video"))}
+        ${row("face_retouching_natural", "Sprites", () => this.go("studio"))}
+        ${row(this.safe ? "visibility_off" : "visibility", "Safe view", () => this.toggleSafe(), { on: this.safe, note: this.safe ? "On" : "Off" })}
+        ${row("settings", "Settings", () => this.go("settings"))}
+        ${row("logout", "Sign out", () => this.logout())}
+      </div>
+    </div>`;
+  }
+
+  /**
+   * The library's top bar: where you are, the search, and the grid's tools.
+   *
+   * Only the library has one. Chat and the studios open with headers of their own, and
+   * the shell's search box over them searched something that was not on screen.
+   */
+  /** The tile-size button, beside the sort: both are about how the grid is shown. */
+  private renderDensity() {
+    return html`<button class="tool icon" aria-label="Tile size"
+      title=${`${DENSITY_LABEL[this.density]} — switch to ${DENSITY_LABEL[nextDensity(this.density)].toLowerCase()}`}
+      @click=${this.cycleDensity}>
+      <span aria-hidden="true" class="material-symbols-rounded"
+        >${this.density === "s" ? "apps" : this.density === "m" ? "grid_view" : "photo_size_select_large"}</span>
+    </button>`;
+  }
+
+  private renderHeader(title: string, count: string, opts: { isViewer: boolean; search: boolean; grid: boolean; select: boolean }) {
+    const hasSearch = this.search.trim().length > 0;
     return html`
-      <header>
-        ${isViewer
-          ? html`<button
-              class="icon-btn"
-              title="Back"
-              @click=${this.closeItem}
-              style="width:40px; height:40px; border-radius:20px; background:none; color:var(--oppai-text); flex-shrink:0;"
-            >
+      <header class="top ${opts.isViewer ? "viewing" : ""}">
+        ${opts.isViewer
+          ? html`<button class="icon-btn back-btn" title="Back" aria-label="Back" @click=${this.closeItem}>
               <span aria-hidden="true" class="material-symbols-rounded" style="font-size:24px;">arrow_back</span>
             </button>`
           : nothing}
-
-        <h1 class="h-title">${title}</h1>
-
-        <div class="searchbox">
-          <span aria-hidden="true" class="material-symbols-rounded" style="font-size:20px; color:var(--oppai-text-dim);">search</span>
-          <input
-            type="search"
-            aria-label="Search the library"
-            .value=${this.search}
-            @input=${this.onSearchInput}
-            placeholder="Search titles, tags, notes..."
-          />
-          ${hasSearch
-            ? html`<button
-                class="icon-btn"
-                aria-label="Clear the search"
-                title="Clear the search"
-                @click=${this.clearSearch}
-                style="background:none; color:var(--oppai-text-dim);"
-              >
-                <span aria-hidden="true" class="material-symbols-rounded" style="font-size:18px;">close</span>
-              </button>`
-            : nothing}
+        <div class="h-titles">
+          <h1 class="h-title">${title}</h1>
+          ${count ? html`<span class="h-count">${count}</span>` : nothing}
         </div>
 
-        <div style="flex:1;"></div>
+        ${!opts.isViewer && opts.search
+          ? html`<div class="searchbox">
+              <span aria-hidden="true" class="material-symbols-rounded">search</span>
+              <input
+                type="search"
+                aria-label="Search the library"
+                .value=${this.search}
+                @input=${this.onSearchInput}
+                placeholder="Search titles, tags, notes…"
+              />
+              ${hasSearch
+                ? html`<button class="icon-btn search-clear" aria-label="Clear the search" title="Clear the search"
+                    @click=${this.clearSearch}>
+                    <span aria-hidden="true" class="material-symbols-rounded" style="font-size:18px;">close</span>
+                  </button>`
+                : html`<kbd aria-hidden="true" title="Press / to search">/</kbd>`}
+            </div>`
+          : html`<span class="h-spacer"></span>`}
 
-        ${!isViewer && !isSettings
-          ? html`<button
-              class="filters-btn header-toggle ${this.selectMode ? "on" : ""}"
-              title="Select multiple"
-              @click=${this.toggleSelectMode}
-            >
-              <span aria-hidden="true" class="material-symbols-rounded" style="font-size:18px;"
-                >${this.selectMode ? "check_circle" : "check_box_outline_blank"}</span
+        ${!opts.isViewer
+          ? html`<div class="tools">
+              <button
+                class="tool icon phone-only ${this.safe ? "on" : ""}"
+                aria-label="Safe view"
+                aria-pressed=${this.safe ? "true" : "false"}
+                title="Safe view"
+                @click=${() => this.toggleSafe()}
               >
-              <span style="font-size:13px; font-weight:500;">Select</span>
-            </button>`
+                <span aria-hidden="true" class="material-symbols-rounded">${this.safe ? "visibility_off" : "visibility"}</span>
+              </button>
+              ${opts.select
+                ? html`<button class="tool ${this.selectMode ? "on" : ""}" title="Select multiple"
+                    aria-pressed=${this.selectMode ? "true" : "false"} @click=${this.toggleSelectMode}>
+                    <span aria-hidden="true" class="material-symbols-rounded"
+                      >${this.selectMode ? "check_circle" : "check_box_outline_blank"}</span>
+                    <span class="tool-label">Select</span>
+                  </button>`
+                : nothing}
+              ${filtersApply(this.section, this.search) ? this.renderFilters() : nothing}
+            </div>
+            ${this.renderScope()}`
           : nothing}
-        ${!isViewer && filtersApply(this.section, this.search) ? this.renderFilters() : nothing}
       </header>
     `;
+  }
+
+  /** The library's places as chips, for the phone, where there is no sidebar to hold
+   *  them. Drawn on every size and shown only on a phone by the stylesheet. */
+  private renderScope() {
+    const chip = (id: Section, label: string) => {
+      const on = this.section === id;
+      return html`<button class="chip" aria-pressed=${on ? "true" : "false"} @click=${() => this.go(id)}>${label}</button>`;
+    };
+    return html`<div class="scope" role="group" aria-label="Library">
+      ${chip("home", "Overview")}
+      ${KIND_ORDER.map((k) => chip(k, KIND_META[k].label))}
+      ${chip("favorites", "Favorites")}
+      ${chip("collections", "Collections")}
+      ${chip("browse", "Browse")}
+    </div>`;
   }
 
   /**
@@ -2633,14 +3338,14 @@ export class OppaiLibrary extends LitElement {
     ];
     return html`<div class="filters-wrap">
       <button
-        class="filters-btn header-toggle ${active ? "on" : ""}"
+        class="tool ${active || this.filtersOpen ? "on" : ""}"
         aria-haspopup="dialog"
         aria-expanded=${this.filtersOpen ? "true" : "false"}
         title="Filter the grid"
         @click=${this.toggleFilters}
       >
-        <span aria-hidden="true" class="material-symbols-rounded" style="font-size:18px;">tune</span>
-        <span style="font-size:13px; font-weight:500;">Filters</span>
+        <span aria-hidden="true" class="material-symbols-rounded">tune</span>
+        <span class="tool-label">Filters</span>
         ${active ? html`<span class="fbadge">${active}</span>` : nothing}
       </button>
       ${this.filtersOpen
@@ -2685,38 +3390,31 @@ export class OppaiLibrary extends LitElement {
   /**
    * Home, as a dashboard rather than a list of lists.
    *
-   * What it used to be: a greeting and one horizontal row per kind, each showing the
-   * twelve newest of that kind. Which meant Home answered exactly one question — what
-   * did I import most recently — and answered it five times in a row. Everything a
-   * person actually opens this app for (carry on with that thing; what have I got;
-   * show me the good stuff) needed the sidebar.
-   *
-   * So it leads with one item at full width, then the two rows that are about *you*
-   * rather than about the import date — what you were in the middle of, and what
-   * you've starred — and only then the per-kind rows that were the whole page before.
-   * A strip of counts sits under the hero because "1,204 items, 38 GB" is the other
-   * thing a library page is for and nothing in this app said it.
+   * It leads with the one thing you were in the middle of, hung like a picture on a
+   * wall made of its own colours, then a line of what the vault holds, then — one card
+   * each and no larger — the other two things the app is for: her, and the studios.
+   * Only then the rows: what you were partway through, what she suggests, what you have
+   * starred, the moments you marked, what is new, and each kind.
    *
    * Every section renders only when it has something in it: a new install shows the
    * hero and Recently added and nothing else, rather than four empty headings.
    */
   private renderHome() {
     const hour = new Date().getHours();
-    const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
+    const greeting = hour < 5 ? "Up late" : hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
 
     if (!this.home) {
-      return html`<div class="empty">Loading your library…</div>`;
+      return html`<div class="empty" aria-busy="true">Opening the vault…</div>`;
     }
     if ((this.stats?.total ?? this.home.newest.length) === 0) {
-      return html`<div>
-        <h2 class="greeting">${greeting}</h2>
-        <p class="greeting-sub">Your library is empty — add media or import from a URL.</p>
-        <div class="empty">
-          <span aria-hidden="true" class="material-symbols-rounded" style="font-size:40px; display:block; margin-bottom:12px;"
-            >library_add</span
-          >
-          <div style="font-size:14px;">Nothing here yet.</div>
-        </div>
+      return html`<div class="empty-home anim-rise">
+        <span aria-hidden="true" class="material-symbols-rounded fill-icon">lock</span>
+        <h2>The vault is empty</h2>
+        <div>Everything you add is encrypted before it reaches the disk.</div>
+        <button class="hero-open" @click=${this.toggleUpload}>
+          <span aria-hidden="true" class="material-symbols-rounded">add</span>Add media
+        </button>
+        <button class="link-btn" @click=${this.openScrape}>or import from a URL</button>
       </div>`;
     }
 
@@ -2733,96 +3431,139 @@ export class OppaiLibrary extends LitElement {
     // the only other thing we can honestly claim to know you want.
     const hero = continueRow[0] ?? newest[0];
     const favorites = this.home.favorites;
-    // Counted by the server. This was worked out from the library in browser memory,
-    // and "added this week" compared a millisecond clock against the server's seconds,
-    // so it always read zero.
-    const addedThisWeek = this.stats?.thisWeek ?? 0;
 
     const kindRows = KIND_ORDER.map((k) => ({
       kind: k,
       label: KIND_META[k].label,
-      icon: KIND_META[k].icon,
       items: this.itemsForKind(k),
     })).filter((r) => r.items.length > 0);
 
     const row = (
       title: string,
-      icon: string,
       items: Media[],
       seeAll: (() => void) | null,
       delay: number,
       sub?: string,
+      face = false,
     ) => items.length === 0 ? nothing : html`
       <section class="row anim-rise" style="animation-delay:${delay}ms;">
         <div class="row-head">
-          <span aria-hidden="true" class="material-symbols-rounded" style="font-size:22px; color:var(--oppai-primary-bright);">${icon}</span>
+          ${face && this.libbyShown ? html`<img class="row-face" src=${DEFAULT_LIBBY_PFP} alt="" />` : nothing}
           <h3 class="row-title">${title}</h3>
           ${sub ? html`<span class="row-sub">${sub}</span>` : nothing}
           ${seeAll ? html`<button class="see-all" @click=${seeAll}>
             See all<span aria-hidden="true" class="material-symbols-rounded" style="font-size:16px;">chevron_right</span>
           </button>` : nothing}
         </div>
-        <div class="row-scroll">${items.map((m) => this.renderTile(m, "200px", undefined, items))}</div>
+        <div class="row-scroll">${items.map((m) => this.renderTile(m, undefined, items))}</div>
       </section>`;
 
     return html`
       <div>
-        <h2 class="greeting anim-rise">${greeting}</h2>
-        <p class="greeting-sub anim-rise" style="animation-delay:40ms;">
-          ${continueRow.length ? "Pick up where you left off" : "Here's what's new across your library"}
-        </p>
+        <p class="greeting anim-rise">${greeting}${continueRow.length ? " — pick up where you left off" : " — here's what's new"}</p>
+        ${hero ? this.renderHero(hero, continueRow.length ? continueRow : newest, continueRow.length > 0) : nothing}
+        ${this.renderVaultStrip()}
+        ${this.renderAlso()}
 
-        ${hero ? html`
-          <section class="hero anim-rise" style="animation-delay:70ms;">
-            <button class="hero-art ${this.safe && isExplicit(hero.tags) ? "veiled" : ""}" @click=${() => this.openItem(hero.id, newest)}
-              aria-label=${`Open ${hero.title}`}>
-              ${hero.hasThumb
-                ? html`<img src=${api.thumbURL(hero.id)} alt="" loading="lazy" />`
-                : html`<span aria-hidden="true" class="material-symbols-rounded hero-icon">${KIND_META[hero.kind].icon}</span>`}
-            </button>
-            <div class="hero-body">
-              <span class="hero-eyebrow">
-                ${continueRow.length ? "Continue" : "Latest addition"} · ${KIND_META[hero.kind].label}
-              </span>
-              <h3 class="hero-title">${hero.title}</h3>
-              ${hero.tags?.length
-                ? html`<div class="hero-tags">${hero.tags.slice(0, 6).map((t) => html`<span>${t.name}</span>`)}</div>`
-                : nothing}
-              <div class="hero-acts">
-                <button class="hero-open" @click=${() => this.openItem(hero.id, newest)}>
-                  <span aria-hidden="true" class="material-symbols-rounded">play_arrow</span>
-                  ${continueRow.length ? "Carry on" : "Open"}
-                </button>
-                <button class="hero-more" @click=${() => this.selectSection(hero.kind)}>
-                  More ${KIND_META[hero.kind].label.toLowerCase()}
-                </button>
-              </div>
-            </div>
-          </section>
-
-          <!-- Every figure here is counted by the server (GET /api/media/stats).
-               They used to be derived from the library in browser memory, which is
-               why the dashboard could not draw until all of it had arrived. -->
-          <div class="stats anim-rise" style="animation-delay:90ms;">
-            <button class="stat" @click=${() => this.selectSection("home")}>
-              <strong>${(this.stats?.total ?? 0).toLocaleString()}</strong><span>items</span></button>
-            <button class="stat" @click=${() => this.selectSection("favorites")}>
-              <strong>${(this.stats?.favorites ?? 0).toLocaleString()}</strong><span>favourites</span></button>
-            <div class="stat">
-              <strong>${formatBytes(this.stats?.bytes ?? 0)}</strong><span>stored</span></div>
-            <div class="stat">
-              <strong>${addedThisWeek.toLocaleString()}</strong><span>added this week</span></div>
-          </div>` : nothing}
-
-        ${row("Libby Suggested", "auto_awesome", this.home.suggested, null, 120,
-          suggestionLine(this.home.because, this.safe))}
-        ${row("Favourites", "star", favorites, () => this.selectSection("favorites"), 170)}
+        ${row("Keep going", continueRow.slice(1), null, 110)}
+        ${row("Libby suggests", this.home.suggested, null, 130, suggestionLine(this.home.because, this.safe), true)}
+        ${row("Favourites", favorites, () => this.go("favorites"), 170)}
         ${this.renderMoments(this.home.moments)}
-        ${row("Recently added", "new_releases", newest.slice(0, 12), null, 220)}
+        ${row("Recently added", newest.slice(0, 12), null, 220)}
 
-        ${kindRows.map((r, i) => row(r.label, r.icon, r.items, () => this.selectSection(r.kind), 270 + i * 60))}
+        ${kindRows.map((r, i) => row(r.label, r.items, () => this.go(r.kind), 270 + i * 60))}
       </div>
     `;
+  }
+
+  /** The hero: the picture framed on the right, its own colours as the wall. */
+  private renderHero(hero: Media, list: Media[], continuing: boolean) {
+    const veiled = this.safe && isExplicit(hero.tags);
+    // hasThumbnail, not hasThumb: a photo is its own thumbnail and the server never
+    // sets hasThumb for one, so the hero showed a placeholder icon for every picture.
+    const thumb = hasThumbnail(hero) ? api.thumbURL(hero.id) : "";
+    const ratio = hero.width && hero.height
+      ? Math.min(1.78, Math.max(0.66, hero.width / hero.height))
+      : hero.kind === "video" ? 16 / 9 : 4 / 5;
+    const kind = KIND_META[hero.kind];
+    return html`
+      <section class="hero anim-rise ${veiled ? "veiled" : ""}" style="animation-delay:40ms;">
+        ${thumb ? html`<img class="hero-wall" src=${thumb} alt="" aria-hidden="true" />` : nothing}
+        <div class="hero-body">
+          <span class="hero-eyebrow">${continuing ? "Continue" : "Latest addition"} · ${kind.label}</span>
+          <h2 class="hero-title">${hero.title}</h2>
+          ${hero.tags?.length
+            ? html`<div class="hero-tags">${hero.tags.slice(0, 6).map((t) => html`<span>${t.name}</span>`)}</div>`
+            : nothing}
+          <div class="hero-acts">
+            <button class="hero-open" @click=${() => this.openItem(hero.id, list)}>
+              <span aria-hidden="true" class="material-symbols-rounded">${hero.kind === "video" || hero.kind === "gif" ? "play_arrow" : "open_in_full"}</span>
+              ${continuing ? "Carry on" : "Open"}
+            </button>
+            <button class="hero-more" @click=${() => this.go(hero.kind)}>
+              More ${kind.label.toLowerCase()}
+            </button>
+          </div>
+        </div>
+        <button class="hero-art" style=${`--ratio:${ratio.toFixed(3)};`} @click=${() => this.openItem(hero.id, list)}
+          aria-label=${`Open ${hero.title}`}>
+          ${thumb
+            ? html`<img src=${thumb} alt="" />`
+            : html`<span aria-hidden="true" class="material-symbols-rounded hero-icon">${kind.icon}</span>`}
+        </button>
+      </section>`;
+  }
+
+  /** What the vault holds, as one line. Every figure is the server's
+   *  (GET /api/media/stats); they used to be counted from the library in browser
+   *  memory, which is why the dashboard could not draw until all of it had arrived. */
+  private renderVaultStrip() {
+    const s = this.stats;
+    if (!s) return nothing;
+    return html`<div class="vault-strip anim-rise" style="animation-delay:70ms;">
+      <span class="vs-item"><strong>${s.total.toLocaleString()}</strong>${s.total === 1 ? "item" : "items"}</span>
+      <button class="vs-item" @click=${() => this.go("favorites")}>
+        <strong>${s.favorites.toLocaleString()}</strong>${s.favorites === 1 ? "favourite" : "favourites"}</button>
+      <span class="vs-item"><strong>${formatBytes(s.bytes)}</strong>stored</span>
+      <span class="vs-item"><strong>${s.thisWeek.toLocaleString()}</strong>added this week</span>
+      <span class="vs-lock" title="The key lives only in the server's memory; the disk holds ciphertext.">
+        <span aria-hidden="true" class="material-symbols-rounded fill-icon">lock</span>Encrypted at rest · AES-256-GCM
+      </span>
+    </div>`;
+  }
+
+  /** The doors to the other two things the app is for. */
+  private renderAlso() {
+    const shown = this.libbyShown;
+    return html`<div class="also anim-rise" style="animation-delay:90ms;">
+      <button class="also-card" @click=${() => this.go("chat")}>
+        ${shown
+          ? html`<img class="also-face" src=${DEFAULT_LIBBY_PFP} alt="" />`
+          : html`<span class="also-icon"><span aria-hidden="true" class="material-symbols-rounded">forum</span></span>`}
+        <span class="also-copy">
+          <span class="also-title">${shown ? "Talk to Libby" : "Chat"}</span>
+          <span class="also-sub">${shown
+            ? "She can search the library, open things for you and send pictures back"
+            : "Your conversations and characters"}</span>
+        </span>
+        <span aria-hidden="true" class="material-symbols-rounded also-go">chevron_right</span>
+      </button>
+      <div class="also-card create">
+        <span class="also-icon"><span aria-hidden="true" class="material-symbols-rounded">auto_awesome</span></span>
+        <span class="also-copy">
+          <span class="also-title">Create</span>
+          <span class="also-sub">Pictures, clips and her sprites</span>
+        </span>
+        <span class="also-acts">
+          <button class="also-btn" @click=${() => this.go("imagegen", "image")}>
+            <span aria-hidden="true" class="material-symbols-rounded">image</span>Image</button>
+          <button class="also-btn" @click=${() => this.go("imagegen", "video")}>
+            <span aria-hidden="true" class="material-symbols-rounded">movie</span>Video</button>
+          <button class="also-btn" @click=${() => this.go("studio")}>
+            <span aria-hidden="true" class="material-symbols-rounded">face_retouching_natural</span>Sprites</button>
+        </span>
+      </div>
+    </div>`;
   }
 
   /**
@@ -2835,7 +3576,6 @@ export class OppaiLibrary extends LitElement {
     return html`
       <section class="row anim-rise" style="animation-delay:200ms;">
         <div class="row-head">
-          <span aria-hidden="true" class="material-symbols-rounded" style="font-size:22px; color:var(--oppai-primary-bright);">bookmarks</span>
           <h3 class="row-title">Moments</h3>
           <span class="row-sub">The parts you marked · press B in a video to add one</span>
         </div>
@@ -2870,12 +3610,6 @@ export class OppaiLibrary extends LitElement {
         ? "Search results"
         : (KIND_META[kind as Kind]?.label ?? "");
     const gridItems = this.items;
-    // The server's count of everything matching, not the length of what has loaded.
-    const count = this.loading
-      ? "Loading…"
-      : this.total === gridItems.length
-        ? `${this.total.toLocaleString()} ${this.total === 1 ? "item" : "items"}`
-        : `${gridItems.length.toLocaleString()} of ${this.total.toLocaleString()}`;
 
     const activeChip = kind ? (this.filters[kind] ?? "All") : "All";
     const chips = kind
@@ -2889,9 +3623,6 @@ export class OppaiLibrary extends LitElement {
     if (kind === "game" && this.gameFace !== "library") {
       return html`
         <div>
-          <div class="grid-head">
-            <h2 class="grid-title">${title}</h2>
-          </div>
           ${faces}
           ${this.ready("gamebrowse")
             ? html`<oppai-game-browse .site=${this.gameFace} @imported=${() => this.refresh()}></oppai-game-browse>`
@@ -2902,32 +3633,19 @@ export class OppaiLibrary extends LitElement {
 
     return html`
       <div>
-        <div class="grid-head">
-          <h2 class="grid-title">${title}</h2>
-          <span class="grid-count">${count}</span>
-          ${this.renderSort()}
-        </div>
         ${faces}
-
-        ${chips.length > 1
-          ? html`<div class="chips" role="group" aria-label="Filter by tag">
-              ${chips.map(
-                (c) => html`<button
-                  class="chip"
-                  aria-pressed=${c.active ? "true" : "false"}
-                  @click=${() => this.setFilter(this.section, c.label)}
-                  style="background:${c.active ? "var(--oppai-accent)" : "transparent"}; color:${c.active
-                    ? "var(--oppai-on-accent)"
-                    : "var(--oppai-text-dim)"}; border:1px solid ${c.active ? "var(--oppai-accent)" : "var(--oppai-border-strong)"};"
-                >
-                  ${c.active
-                    ? html`<span aria-hidden="true" class="material-symbols-rounded" style="font-size:16px;">check</span>`
-                    : nothing}
+        <div class="grid-bar">
+          ${chips.length > 1
+            ? html`<div class="chips" role="group" aria-label="Filter by tag">
+                ${chips.map((c) => html`<button class="chip" aria-pressed=${c.active ? "true" : "false"}
+                  @click=${() => this.setFilter(this.section, c.label)}>
+                  ${c.active ? html`<span aria-hidden="true" class="material-symbols-rounded">check</span>` : nothing}
                   ${c.label}
-                </button>`,
-              )}
-            </div>`
-          : html`<div style="height:24px;"></div>`}
+                </button>`)}
+              </div>`
+            : html`<span class="h-spacer"></span>`}
+          <div class="grid-tools">${this.renderSort()}${this.renderDensity()}</div>
+        </div>
 
         ${gridItems.length === 0
           ? this.loading
@@ -2943,12 +3661,13 @@ export class OppaiLibrary extends LitElement {
                 </div>
               </div>`
           : html`<div
-                class="grid"
+                class="grid cols-${DENSITY_PHONE_COLUMNS[this.density]}"
+                style=${this.gridStyle}
                 role="list"
                 aria-label=${title}
                 aria-busy=${this.loading ? "true" : "false"}
               >
-                ${gridItems.map((m, i) => this.renderTile(m, "100%", i, gridItems))}
+                ${gridItems.map((m, i) => this.renderTile(m, i, gridItems))}
               </div>
               ${this.renderMore()}`}
       </div>
@@ -2965,11 +3684,8 @@ export class OppaiLibrary extends LitElement {
         aria-selected=${this.gameFace === f.id ? "true" : "false"}
         aria-pressed=${this.gameFace === f.id ? "true" : "false"}
         @click=${() => this.pickGameFace(f.id)}
-        style="background:${this.gameFace === f.id ? "var(--oppai-accent)" : "transparent"}; color:${this.gameFace === f.id
-          ? "var(--oppai-on-accent)"
-          : "var(--oppai-text-dim)"}; border:1px solid ${this.gameFace === f.id ? "var(--oppai-accent)" : "var(--oppai-border-strong)"};"
       >
-        <span aria-hidden="true" class="material-symbols-rounded" style="font-size:16px;">${f.icon}</span>
+        <span aria-hidden="true" class="material-symbols-rounded">${f.icon}</span>
         ${f.label}
       </button>`)}
     </div>`;
@@ -3052,10 +3768,6 @@ export class OppaiLibrary extends LitElement {
               <span aria-hidden="true" class="material-symbols-rounded" style="font-size:16px;">chevron_left</span>All
               collections
             </button>
-            <h2 class="grid-title">${open.name}</h2>
-            <span class="grid-count">
-              ${open.count.toLocaleString()} ${open.count === 1 ? "item" : "items"}
-            </span>
             <button class="see-all" @click=${() => void this.renameOpenCollection(open)}>Rename</button>
             <button class="see-all" @click=${() => void this.deleteCollection(open)}>Delete</button>
           </div>
@@ -3065,8 +3777,8 @@ export class OppaiLibrary extends LitElement {
                   ? "Loading…"
                   : "Nothing on this collection yet — add items from a tile's menu."}
               </div>`
-            : html`<div class="grid" role="list" aria-label=${open.name}>
-                ${this.items.map((m, i) => this.renderTile(m, "100%", i, this.items))}
+            : html`<div class="grid cols-${DENSITY_PHONE_COLUMNS[this.density]}" style=${this.gridStyle} role="list" aria-label=${open.name}>
+                ${this.items.map((m, i) => this.renderTile(m, i, this.items))}
               </div>`}
         </div>
       `;
@@ -3074,9 +3786,7 @@ export class OppaiLibrary extends LitElement {
     return html`
       <div>
         <div class="grid-head">
-          <h2 class="grid-title">Collections</h2>
-          <span class="grid-count">${this.collections.length.toLocaleString()}</span>
-          <button class="see-all" @click=${() => void this.newCollection()}>
+          <button class="see-all" style="margin-left:0" @click=${() => void this.newCollection()}>
             <span aria-hidden="true" class="material-symbols-rounded" style="font-size:16px;">add</span>New
           </button>
         </div>
@@ -3092,7 +3802,7 @@ export class OppaiLibrary extends LitElement {
                 read through, a set to work along.
               </div>
             </div>`
-          : html`<div class="grid" role="list" aria-label="Collections">
+          : html`<div class="grid cols-${DENSITY_PHONE_COLUMNS[this.density]}" style=${this.gridStyle} role="list" aria-label="Collections">
               ${this.collections.map(
                 (c) => html`<div
                   class="tile"
@@ -3142,7 +3852,13 @@ export class OppaiLibrary extends LitElement {
     `;
   }
 
-  private renderTile(m: Media, width: string, index?: number, list?: Media[]) {
+  /** The grid's column sizing for the chosen density, as custom properties the
+   *  stylesheet reads: a minimum width on a wide screen, a column count on a phone. */
+  private get gridStyle(): string {
+    return `--tile-min:${DENSITY_MIN[this.density]}px; --tile-cols:${DENSITY_PHONE_COLUMNS[this.density]};`;
+  }
+
+  private renderTile(m: Media, index?: number, list?: Media[]) {
     const meta = KIND_META[m.kind];
     const fav = this.favorites.has(m.id);
     const stat = statFor(m);
@@ -3170,7 +3886,7 @@ export class OppaiLibrary extends LitElement {
           if (this.selectMode) this.toggleSelected(m.id);
           else this.openItem(m.id, list);
         }}
-        style="flex-shrink:0; width:${width}; ${delay}"
+        style=${delay}
       >
         <div
           class="tile-media"
@@ -3203,7 +3919,9 @@ export class OppaiLibrary extends LitElement {
                   >${fav ? "favorite" : "favorite_border"}</span
                 >
               </button>`}
-          ${stat ? html`<span class="tile-stat">${stat}</span>` : nothing}
+          ${/* A photo's badge was its size in kilobytes, on every tile, which is noise in
+               a photo library. Time and page counts are what a badge is for. */
+            stat && m.kind !== "image" ? html`<span class="tile-stat">${stat}</span>` : nothing}
         </div>
         <div class="tile-meta">
           <div class="tile-title">${m.title}</div>

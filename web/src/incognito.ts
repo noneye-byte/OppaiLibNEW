@@ -51,7 +51,7 @@ export function setIncognito(on: boolean): void {
 /** The tab's identity under each mode. */
 const IDENTITY = {
   incognito: { title: "Nextcloud", icon: "/cloud-icon.svg", theme: "#0082c9", manifest: "/cloud.webmanifest" },
-  plain: { title: "OppaiLib", icon: "/icon.svg", theme: "#191410", manifest: "/manifest.webmanifest" },
+  plain: { title: "OppaiLib", icon: "/icon.svg", theme: "#0F0E10", manifest: "/manifest.webmanifest" },
 } as const;
 
 /**

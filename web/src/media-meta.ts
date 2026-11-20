@@ -32,7 +32,9 @@ export interface KindMeta {
 }
 
 export const KIND_META: Record<Kind, KindMeta> = {
-  image: { label: "Photos", typeLabel: "PHOTO", icon: "photo_library", aspect: "4 / 3" },
+  // Portrait: most of what a library like this holds is a person standing up, and a
+  // landscape crop cut off heads and feet in every tile.
+  image: { label: "Photos", typeLabel: "PHOTO", icon: "photo_library", aspect: "4 / 5" },
   gif: { label: "GIFs", typeLabel: "GIF", icon: "animation", aspect: "1 / 1" },
   video: { label: "Videos", typeLabel: "VIDEO", icon: "movie", aspect: "16 / 9" },
   game: { label: "Games", typeLabel: "GAME", icon: "sports_esports", aspect: "3 / 4" },
@@ -42,14 +44,15 @@ export const KIND_META: Record<Kind, KindMeta> = {
 // Order used by the nav rail and the home dashboard.
 export const KIND_ORDER: Kind[] = ["image", "gif", "video", "game", "comic"];
 
-// Deterministic placeholder gradients — warm orange/tan family to match the
-// Material 3 theme (hues span amber → orange → terracotta → brown).
+// Deterministic placeholder gradients for an item with no picture yet. Low-chroma
+// dusk tones (plum → rose → ember → slate) so a row of placeholders reads as
+// "waiting for art" beside real thumbnails rather than as a row of brown cards.
 const SWATCHES = [
-  "linear-gradient(135deg, oklch(34% 0.06 60), oklch(22% 0.05 55))",
-  "linear-gradient(135deg, oklch(33% 0.07 45), oklch(21% 0.05 40))",
-  "linear-gradient(135deg, oklch(32% 0.07 30), oklch(20% 0.05 25))",
-  "linear-gradient(135deg, oklch(34% 0.055 75), oklch(22% 0.045 70))",
-  "linear-gradient(135deg, oklch(32% 0.06 20), oklch(20% 0.05 15))",
+  "linear-gradient(135deg, oklch(30% 0.045 340), oklch(19% 0.03 330))",
+  "linear-gradient(135deg, oklch(31% 0.05 15), oklch(19% 0.035 5))",
+  "linear-gradient(135deg, oklch(31% 0.05 40), oklch(19% 0.035 30))",
+  "linear-gradient(135deg, oklch(29% 0.035 290), oklch(18% 0.025 280))",
+  "linear-gradient(135deg, oklch(29% 0.03 250), oklch(18% 0.02 245))",
 ];
 
 export function swatchFor(m: Media): string {
