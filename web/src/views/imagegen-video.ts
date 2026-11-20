@@ -1,6 +1,7 @@
 import { LitElement, html, css, nothing } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { iconStyles, motionStyles } from "../theme.js";
+import { studioDarkroom } from "./studio-darkroom.js";
 import {
   api, type CivitaiModel, type ClipModels, type ClipParams, type ClipUpscaleParams, type ClipWorkflow, type ComfyDefaults, type ComfyFileKind,
   type ComfyModels, type ComfyNote, type GenClip, type GenerateResult,
@@ -603,7 +604,7 @@ export class OppaiVideoStudio extends LitElement {
       .rail-tab:hover { color: var(--oppai-text); }
       .rail-tab:hover .rail-icon { background: var(--oppai-surface-2); }
       .rail-tab.on { color: var(--oppai-text); }
-      .rail-tab.on .rail-icon { background: var(--oppai-primary-container); color: var(--oppai-on-primary-container, var(--oppai-text)); }
+      .rail-tab.on .rail-icon { background: var(--oppai-selected); color: var(--oppai-primary-bright); }
       .rail-badge {
         position: absolute; top: 0; right: 6px; min-width: 16px; height: 16px; padding: 0 4px; box-sizing: border-box; border-radius: 8px;
         background: var(--oppai-primary); color: var(--oppai-on-primary); font-size: 9.5px; font-weight: 800; line-height: 16px; text-align: center;
@@ -654,7 +655,7 @@ export class OppaiVideoStudio extends LitElement {
         transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
       }
       .chip:hover { border-color: var(--oppai-text-muted); color: var(--oppai-text); }
-      .chip.on { background: var(--oppai-primary-container); border-color: transparent; color: var(--oppai-on-primary-container, var(--oppai-text)); }
+      .chip.on { background: var(--oppai-selected); border-color: transparent; color: var(--oppai-primary-bright); }
       .chip .material-symbols-rounded { font-size: 16px; }
       .chip.primary { background: var(--oppai-primary); color: var(--oppai-on-primary); border-color: transparent; font-weight: 650; }
       .chip.danger { color: var(--oppai-error, #f2b8b5); border-color: color-mix(in srgb, var(--oppai-error, #f2b8b5) 45%, transparent); }
@@ -670,7 +671,7 @@ export class OppaiVideoStudio extends LitElement {
         font: inherit; cursor: pointer; transition: background 0.12s ease, border-color 0.12s ease;
       }
       .showcase:hover { border-color: var(--oppai-text-muted); color: var(--oppai-text); }
-      .showcase.on { border-style: solid; border-color: transparent; background: var(--oppai-primary-container); color: var(--oppai-on-primary-container, var(--oppai-text)); }
+      .showcase.on { border-style: solid; border-color: transparent; background: var(--oppai-selected); color: var(--oppai-primary-bright); }
       .showcase > .material-symbols-rounded { font-size: 22px; color: var(--oppai-primary); }
       .showcase .sc-copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
       .showcase b { font-size: 12.5px; }
@@ -804,7 +805,7 @@ export class OppaiVideoStudio extends LitElement {
       .seg { display: inline-flex; border: 1px solid var(--oppai-border-strong); border-radius: 12px; overflow: hidden; }
       .seg button { min-width: 34px; height: 30px; border: none; background: none; color: var(--oppai-text-dim); font-size: 12px; font-weight: 650; cursor: pointer; padding: 0 8px; }
       .seg button + button { border-left: 1px solid var(--oppai-border); }
-      .seg button.on { background: var(--oppai-primary-container); color: var(--oppai-on-primary-container, var(--oppai-text)); }
+      .seg button.on { background: var(--oppai-selected); color: var(--oppai-primary-bright); }
       .switch { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--oppai-text-dim); cursor: pointer; margin-top: 10px; }
       .switch input { accent-color: var(--oppai-primary); width: 16px; height: 16px; }
       .switch:has(input:disabled) { opacity: 0.5; cursor: default; }
@@ -812,8 +813,8 @@ export class OppaiVideoStudio extends LitElement {
       .make {
         flex: none; display: flex; align-items: center; justify-content: center; gap: 8px; height: 44px; padding: 0 22px; border-radius: 22px;
         border: none; color: var(--oppai-on-primary); font-size: 14.5px; font-weight: 700; cursor: pointer;
-        background: linear-gradient(135deg, var(--oppai-primary), color-mix(in srgb, var(--oppai-primary) 62%, #c58af9));
-        box-shadow: 0 8px 22px color-mix(in srgb, var(--oppai-primary) 30%, transparent);
+        background: var(--oppai-primary);
+        box-shadow: 0 6px 18px color-mix(in srgb, var(--oppai-primary) 22%, transparent);
         transition: transform 0.16s var(--oppai-ease-spring), filter 0.16s ease;
       }
       .make:hover:not(:disabled) { transform: translateY(-1px); filter: brightness(1.06); }
@@ -874,7 +875,7 @@ export class OppaiVideoStudio extends LitElement {
       @media (prefers-reduced-motion: reduce) { .hero-frame img { animation: none; } }
       .steps { display: grid; gap: 8px; text-align: left; width: 100%; margin-top: 4px; }
       .steps div { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-radius: 12px; background: var(--oppai-surface); border: 1px solid var(--oppai-border); }
-      .steps b { flex: none; width: 22px; height: 22px; border-radius: 11px; display: grid; place-items: center; font-size: 11px; background: var(--oppai-primary-container); color: var(--oppai-text); }
+      .steps > div > b { flex: none; width: 22px; height: 22px; border-radius: 11px; display: grid; place-items: center; font-size: 11px; background: var(--oppai-primary-container); color: var(--oppai-text); }
 
       /* ── transport ── */
       .transport {
@@ -1054,6 +1055,7 @@ export class OppaiVideoStudio extends LitElement {
         .dlg-grid label:first-child { grid-column: 1 / -1; }
       }
     `,
+    studioDarkroom,
   ];
 
   connectedCallback() {

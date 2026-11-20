@@ -28,8 +28,8 @@ export const studioStyles = css`
     background: color-mix(in srgb, var(--oppai-text) 6%, transparent); transition: background 0.12s ease, border-color 0.12s ease;
   }
   .btn:hover:not(:disabled) { background: color-mix(in srgb, var(--oppai-text) 11%, transparent); }
-  .btn.primary { border-color: transparent; background: linear-gradient(135deg, var(--oppai-primary), color-mix(in srgb, var(--oppai-primary) 70%, #c58af9)); }
-  .btn.primary:hover:not(:disabled) { background: linear-gradient(135deg, var(--oppai-primary), color-mix(in srgb, var(--oppai-primary) 70%, #c58af9)); filter: brightness(1.07); }
+  .btn.primary { border-color: transparent; background: var(--oppai-primary); }
+  .btn.primary:hover:not(:disabled) { background: var(--oppai-primary); filter: brightness(1.07); }
   .btn.danger { color: var(--oppai-error, #f2b8b5); }
   .toast { bottom: auto; top: 142px; }
   .icon-btn {
@@ -41,8 +41,8 @@ export const studioStyles = css`
 
   /* ── the header ── */
   .studio-head {
-    position: relative; z-index: 20; flex: 0 0 auto; height: 58px; display: flex; align-items: center; gap: 8px;
-    padding: 8px 12px; box-sizing: border-box; background: var(--oppai-surface); border-bottom: 1px solid var(--oppai-border-strong);
+    position: relative; z-index: 20; flex: 0 0 auto; height: 64px; display: flex; align-items: center; gap: 10px;
+    padding: 0 16px; box-sizing: border-box; background: var(--oppai-bg); border-bottom: 1px solid var(--oppai-border);
   }
   .mode-switch { display: inline-flex; gap: 2px; padding: 3px; border-radius: 14px; background: var(--oppai-bg); border: 1px solid var(--oppai-border); flex: none; }
   .mode {
@@ -53,16 +53,15 @@ export const studioStyles = css`
   .mode .material-symbols-rounded { font-size: 19px; }
   .mode:hover { color: var(--oppai-text); }
   .mode.on {
-    background: linear-gradient(135deg, var(--oppai-primary), color-mix(in srgb, var(--oppai-primary) 70%, #c58af9));
-    color: var(--oppai-on-primary); box-shadow: 0 4px 14px color-mix(in srgb, var(--oppai-primary) 28%, transparent);
+    background: var(--oppai-selected); color: var(--oppai-text);
   }
   .mode-badge {
     min-width: 17px; height: 17px; padding: 0 5px; box-sizing: border-box; border-radius: 9px; font-size: 10px; font-weight: 800; line-height: 17px;
     text-align: center; background: var(--oppai-primary); color: var(--oppai-on-primary);
   }
-  .mode.on .mode-badge { background: var(--oppai-on-primary); color: var(--oppai-primary); }
+  .mode.on .mode-badge { background: var(--oppai-primary); color: var(--oppai-on-primary); }
   .mode-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--oppai-primary); animation: studio-pulse 1.2s ease-in-out infinite; }
-  .mode.on .mode-dot { background: var(--oppai-on-primary); }
+  .mode.on .mode-dot { background: var(--oppai-primary); }
   @keyframes studio-pulse { 50% { opacity: 0.35; transform: scale(0.8); } }
   .sub-switch { display: inline-flex; gap: 2px; margin-left: 6px; flex: none; }
   .sub-switch button {
@@ -193,7 +192,7 @@ export const studioStyles = css`
   .rail-tab:hover { color: var(--oppai-text); }
   .rail-tab:hover .rail-icon { background: var(--oppai-surface-2); }
   .rail-tab.on { color: var(--oppai-text); }
-  .rail-tab.on .rail-icon { background: var(--oppai-primary-container); color: var(--oppai-on-primary-container, var(--oppai-text)); }
+  .rail-tab.on .rail-icon { background: var(--oppai-selected); color: var(--oppai-primary-bright); }
   .rail-badge {
     position: absolute; top: 0; right: 6px; min-width: 16px; height: 16px; padding: 0 4px; box-sizing: border-box; border-radius: 8px;
     background: var(--oppai-primary); color: var(--oppai-on-primary); font-size: 9.5px; font-weight: 800; line-height: 16px; text-align: center;
@@ -294,7 +293,7 @@ export const studioStyles = css`
     border-radius: 999px; background: transparent; color: var(--oppai-text-dim); font: inherit; font-size: 14px; font-weight: 600; cursor: pointer;
   }
   .people-cycle .material-symbols-rounded { font-size: 18px; }
-  .people-cycle.on { background: var(--oppai-primary-container); color: var(--oppai-text); border-color: transparent; }
+  .people-cycle.on { background: var(--oppai-selected); color: var(--oppai-primary-bright); border-color: transparent; }
   .people-seg > .material-symbols-rounded { font-size: 17px; color: var(--oppai-text-dim); padding: 0 4px 0 6px; }
 
   /* The stage column. */
@@ -383,7 +382,7 @@ export const studioStyles = css`
   .canvas-empty.welcome strong { font-size: 18px; color: var(--oppai-text); }
   .welcome-glyph {
     width: 64px; height: 64px; border-radius: 20px; display: grid; place-items: center; margin-bottom: 2px;
-    background: linear-gradient(135deg, color-mix(in srgb, var(--oppai-primary) 26%, var(--oppai-surface)), color-mix(in srgb, #c58af9 18%, var(--oppai-surface)));
+    background: var(--oppai-selected);
     color: var(--oppai-primary-bright, var(--oppai-primary));
   }
   .canvas-empty .welcome-glyph .material-symbols-rounded { font-size: 32px; }
@@ -602,7 +601,7 @@ export const studioStyles = css`
   }
   .count-seg button + button { border-left: 1px solid var(--oppai-border); }
   .count-seg button:hover:not(:disabled) { background: var(--oppai-surface); }
-  .count-seg button.on { background: var(--oppai-primary-container); color: var(--oppai-on-primary-container, var(--oppai-text)); }
+  .count-seg button.on { background: var(--oppai-selected); color: var(--oppai-primary-bright); }
   .count-seg button:disabled { cursor: default; opacity: 0.5; }
   .prompt-summary { min-width: 0; flex: 0 1 auto; color: var(--oppai-text-muted); font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   @container (max-width: 860px) {
@@ -626,8 +625,8 @@ export const studioStyles = css`
   .composer .generate {
     width: auto; min-width: 160px; height: 46px; margin: 0 0 0 auto; padding: 0 24px; border: none; border-radius: 23px; flex: none;
     font-size: 15px; font-weight: 700; letter-spacing: 0.2px; color: var(--oppai-on-primary); display: flex; align-items: center; justify-content: center; gap: 8px; cursor: pointer;
-    background: linear-gradient(135deg, var(--oppai-primary), color-mix(in srgb, var(--oppai-primary) 62%, #c58af9));
-    box-shadow: 0 8px 22px color-mix(in srgb, var(--oppai-primary) 34%, transparent);
+    background: var(--oppai-primary);
+    box-shadow: 0 6px 18px color-mix(in srgb, var(--oppai-primary) 22%, transparent);
     transition: transform 0.16s var(--oppai-ease-spring), box-shadow 0.16s ease, filter 0.16s ease;
   }
   .composer .generate:hover:not(:disabled) { transform: translateY(-1px); filter: brightness(1.06); }
@@ -769,7 +768,7 @@ export const studioStyles = css`
   .studio-toolbar .toolbar-clear { width: 34px; height: 34px; padding: 0; justify-content: center; border-radius: 17px; border: 1px dashed var(--oppai-border-strong); }
   .sheet-tabs { display: inline-flex; gap: 2px; padding: 3px; border-radius: 12px; background: var(--oppai-bg); border: 1px solid var(--oppai-border); }
   .sheet-tab { border: 0; border-radius: 9px; padding: 5px 11px; background: transparent; color: var(--oppai-text-muted); font: inherit; font-size: 12px; font-weight: 650; cursor: pointer; }
-  .sheet-tab.on { background: var(--oppai-primary-container); color: var(--oppai-on-primary-container, var(--oppai-text)); }
+  .sheet-tab.on { background: var(--oppai-selected); color: var(--oppai-primary-bright); }
   .sheet-tab-count { font-weight: 500; opacity: 0.8; font-variant-numeric: tabular-nums; }
   .board-filters { display: inline-flex; gap: 4px; flex-wrap: wrap; }
   .bf {
@@ -925,7 +924,7 @@ export const studioStyles = css`
   .seg { display: inline-flex; border: 1px solid var(--oppai-border-strong); border-radius: 10px; overflow: hidden; flex: none; }
   .seg button { height: 28px; padding: 0 10px; border: none; background: none; color: var(--oppai-text-dim); font: inherit; font-size: 11.5px; font-weight: 650; cursor: pointer; }
   .seg button + button { border-left: 1px solid var(--oppai-border); }
-  .seg button.on { background: var(--oppai-primary-container); color: var(--oppai-on-primary-container, var(--oppai-text)); }
+  .seg button.on { background: var(--oppai-selected); color: var(--oppai-primary-bright); }
   .focus-scroll { padding: 12px; display: flex; flex-direction: column; gap: 12px; }
   /* What the picture shows: a four-way switch under it, the motion steps with a dot for
      whether they are there (green) or of an older picture (a ring). */
@@ -935,7 +934,7 @@ export const studioStyles = css`
     background: transparent; color: var(--oppai-text-muted); font: inherit; font-size: 12px; font-weight: 650; cursor: pointer; white-space: nowrap;
   }
   .fv:hover:not(:disabled) { color: var(--oppai-text); background: var(--oppai-surface-2); }
-  .fv.on { background: var(--oppai-primary-container); color: var(--oppai-on-primary-container, var(--oppai-text)); }
+  .fv.on { background: var(--oppai-selected); color: var(--oppai-primary-bright); }
   .fv:disabled { opacity: 0.4; cursor: default; }
   .fv i { width: 6px; height: 6px; border-radius: 50%; flex: none; background: var(--oppai-border-strong); box-sizing: border-box; }
   .fv.ready i { background: #6ef7a5; }

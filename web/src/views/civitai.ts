@@ -3,10 +3,13 @@ import { LitElement, html, css, nothing } from "lit";
 import { property, customElement, state } from "lit/decorators.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { iconStyles, motionStyles } from "../theme.js";
+import { pageStyles } from "./page-styles.js";
 import {
   api,
   type CivitaiCategory,
   type CivitaiCollection,
+  type CivitaiComment,
+  type CivitaiCommentEntity,
   type CivitaiImage,
   type CivitaiInstalled,
   type CivitaiMe,
@@ -20,15 +23,20 @@ import {
 import { mergeCivitaiPosts, postDate } from "../civitai-posts.js";
 import { comfyFolderOf } from "../clip-models.js";
 import { promptSettingsFrom, type PromptSettings } from "../civitai-prompt.js";
+import { civitaiSized, compactNumber, mergeComments, mergeImages, neighbours, postPictures, reactionsOf, timeAgo } from "../civitai-browse.js";
 
 /**
  * A full-screen browser over the Civitai catalogue (reached via the civitai.red
  * mirror, proxied by the server).
  *
  * Three pages. Browse searches the catalogue with the site's own filters and opens
- * a model's page: its description, versions, files, trigger words and the gallery
- * of pictures people posted with it, each with the prompt that made it — "use this
- * prompt" hands that to the studio. Account is the person the API key belongs to,
+ * a model's page, laid out the way the site's is: its versions, a showcase beside what
+ * to install, the creator's description, the discussion under it, and the gallery of
+ * every picture people posted with it. A picture opens over the page on a dark stage
+ * with the rest of its post, who posted it, its reactions, the prompt and resources
+ * that made it ("use in the studio" hands that over) and its comments; the poster's
+ * name opens everything they posted. Comments are the site's own tRPC, read with the
+ * user's key (civitai_comments.go). Account is the person the API key belongs to,
  * laid out like their profile on the site: models, posts, images and collections,
  * newest first. Installed is the studio's own models seen from the catalogue's
  * side — matched by file hash, with the cover, description and trigger words a
@@ -58,6 +66,20 @@ import { promptSettingsFrom, type PromptSettings } from "../civitai-prompt.js";
 type Tab = "browse" | "account" | "installed";
 export type CivitaiMode = "pictures" | "video";
 type AccountTab = "models" | "posts" | "images" | "collections";
+type ThreadSort = "newest" | "oldest" | "reactions";
+
+/** One comment section as loaded so far. */
+interface Thread {
+  items: CivitaiComment[];
+  cursor: string;
+  loading: boolean;
+  error: string;
+  /** Civitai answered that comments need a signed-in account (no key is set). */
+  needsKey: boolean;
+  /** Where the section is on the site. */
+  page: string;
+  sort: ThreadSort;
+}
 
 const TYPES: { id: string; label: string }[] = [
   { id: "", label: "All" },
@@ -158,12 +180,26 @@ export class OppaiCivitai extends LitElement {
   @state() private versionId = 0;
   @state() private shownImage = "";
   @state() private zoomed = "";
-  @state() private galleryOpen = false;
   @state() private gallery: CivitaiImage[] = [];
   @state() private galleryCursor = "";
   @state() private galleryLoading = false;
   @state() private gallerySort = "";
-  @state() private picked: CivitaiImage | null = null;
+  /** The about text is folded when it runs long. */
+  @state() private descOpen = false;
+  /** Where the results were scrolled to when a page was opened over them. */
+  private browseScroll = 0;
+
+  // ── a picture, opened ──
+  /** The picture opened over the page, and the list its arrows step through. */
+  @state() private viewing: { image: CivitaiImage; list: CivitaiImage[] } | null = null;
+  /** Each post's pictures, by post id, once asked for ([] while loading). */
+  @state() private postPics: Record<number, CivitaiImage[]> = {};
+  /** Which comments the opened picture shows: its own, or its post's. */
+  @state() private viewTab: "picture" | "post" = "picture";
+  /** Comment sections by "entity:id". */
+  @state() private threads: Record<string, Thread> = {};
+  /** Someone's pictures, opened from their name under a picture. */
+  @state() private person: { username: string; items: CivitaiImage[]; cursor: string; loading: boolean } | null = null;
   @state() private copied = false;
   /** Civitai shares the prompt behind a picture only with an API key. When a page
    *  of pictures came back with none and no key is set, the gallery says why. */
@@ -228,6 +264,7 @@ export class OppaiCivitai extends LitElement {
   static styles = [
     iconStyles,
     motionStyles,
+    pageStyles,
     css`
       :host {
         position: fixed;
@@ -236,384 +273,399 @@ export class OppaiCivitai extends LitElement {
            "Find more on Civitai" is clicked from. */
         z-index: 95;
         display: block;
-        background: var(--oppai-bg, #141218);
+        background: var(--oppai-bg);
         color: var(--oppai-text);
         overflow-y: auto;
+        overscroll-behavior: contain;
+        scrollbar-gutter: stable;
       }
-      .wrap {
-        max-width: 1240px;
-        margin: 0 auto;
-        padding: 18px 16px 60px;
+      /* The bar stays while the page scrolls under it, as the library's does. */
+      .page-top { position: sticky; top: 0; z-index: 6; }
+      .body { max-width: 1480px; margin: 0 auto; padding: 20px 28px 80px; box-sizing: border-box; }
+      @media (max-width: 980px) {
+        .page-top { height: auto; flex-wrap: wrap; padding: 10px 14px; row-gap: 8px; }
+        .body { padding: 14px 14px 72px; }
       }
-      .topbar {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        flex-wrap: wrap;
-        position: sticky;
-        top: 0;
-        background: var(--oppai-bg, #141218);
-        padding: 8px 0 12px;
-        z-index: 2;
+      @media (max-width: 560px) {
+        .page-top .seg > button { padding: 0 9px; }
+        .page-top .seg-label { display: none; }
       }
-      .topbar h2 {
-        margin: 0;
-        font-size: 17px;
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
-      }
-      .tabs { display: flex; gap: 4px; margin-left: 8px; }
-      .tabs button {
-        border: none; background: none; color: var(--oppai-text-dim); font: inherit; font-size: 13px;
-        padding: 8px 12px; border-radius: 10px; cursor: pointer;
-      }
-      .tabs button.on { background: var(--oppai-surface-2); color: var(--oppai-text); font-weight: 600; }
-      .close {
-        margin-left: auto;
-        border: none;
-        background: var(--oppai-surface-2);
-        color: var(--oppai-text);
-        border-radius: 10px;
-        font: inherit;
-        padding: 8px 14px;
-        cursor: pointer;
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-      }
-      .controls {
-        display: flex;
-        gap: 8px;
-        flex-wrap: wrap;
-        align-items: center;
-        margin-bottom: 10px;
-      }
-      input[type="search"], input[type="text"] {
-        flex: 1;
-        min-width: 200px;
-        background: var(--oppai-surface);
-        border: 1px solid var(--oppai-border-strong);
-        border-radius: 12px;
-        color: var(--oppai-text);
-        font: inherit;
-        font-size: 14px;
-        padding: 9px 12px;
-        outline: none;
-      }
-      input:focus { border-color: var(--oppai-primary); }
-      .chip {
-        border: 1px solid var(--oppai-border-strong);
-        background: transparent;
-        color: var(--oppai-text-dim);
-        border-radius: 999px;
-        font: inherit;
-        font-size: 13px;
-        padding: 6px 13px;
-        cursor: pointer;
-        display: inline-flex;
-        align-items: center;
-        gap: 5px;
-      }
-      .chip.on {
-        background: var(--oppai-accent);
-        color: var(--oppai-on-accent);
-        border-color: var(--oppai-accent);
-      }
-      .chip.small { font-size: 12px; padding: 4px 10px; }
-      select {
-        background: var(--oppai-surface);
-        border: 1px solid var(--oppai-border-strong);
-        border-radius: 10px;
-        color: var(--oppai-text);
-        font: inherit;
-        font-size: 13px;
-        padding: 7px 10px;
-      }
+
+      /* The install log, folded under a chip. */
       .jobs {
-        background: var(--oppai-surface-2);
-        border-radius: 12px;
-        padding: 10px 12px;
-        margin-bottom: 14px;
-        font-size: 12px;
-        display: flex;
-        flex-direction: column;
-        gap: 6px;
+        max-width: 1480px; margin: 12px auto 0; padding: 0 28px; box-sizing: border-box;
+        display: flex; flex-direction: column; gap: 6px; font-size: 12px;
       }
-      .job { display: flex; gap: 8px; align-items: center; color: var(--oppai-text-dim); }
-      .job .st { font-weight: 600; }
-      .job .st.error { color: var(--oppai-error, #f2b8b5); }
-      .job .st.completed { color: var(--oppai-primary-bright); }
+      .jobs > div { background: var(--oppai-surface); border: 1px solid var(--oppai-border); border-radius: 12px; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
+      .job { display: flex; gap: 8px; align-items: center; color: var(--oppai-text-dim); min-width: 0; }
+      .job .st { font-weight: 600; flex-shrink: 0; }
+      .job .st.error { color: var(--oppai-error); }
+      .job .st.completed { color: var(--oppai-success); }
+      .job .src { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .jobs-chip { position: relative; }
+      .jobs-chip .dot {
+        position: absolute; top: -3px; right: -3px; width: 8px; height: 8px; border-radius: 50%;
+        background: var(--oppai-primary); animation: pulse 1.2s ease-in-out infinite;
+      }
+      @keyframes pulse { 50% { opacity: .3; } }
+
+      /* ── browse ───────────────────────────────────────────────────────── */
+      .filters { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+      .filters .searchbox { flex: 1 1 280px; max-width: 520px; }
+      .filters select.tool { max-width: 220px; }
+      .types { margin-bottom: 18px; }
       .grid {
         display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-        gap: 14px;
+        grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+        gap: 22px 14px;
       }
-      .card {
-        border: none;
-        padding: 0;
-        text-align: left;
-        background: var(--oppai-surface-2);
-        border-radius: 14px;
-        overflow: hidden;
-        cursor: pointer;
-        color: var(--oppai-text);
-        font: inherit;
-        transition: transform 0.18s var(--oppai-ease-spring);
-        position: relative;
+      @media (max-width: 560px) { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 10px; } }
+      /* A model as the library draws a picture: the art, then its name under it. */
+      .mtile {
+        display: flex; flex-direction: column; gap: 8px; min-width: 0; padding: 0; border: none; background: none;
+        color: var(--oppai-text); font: inherit; text-align: left; cursor: pointer;
       }
-      .card:hover { transform: translateY(-2px); }
-      .card img,
-      .card video,
-      .card .noimg {
-        width: 100%;
-        aspect-ratio: 3 / 4;
-        object-fit: cover;
-        display: block;
-        background: var(--oppai-surface);
+      .mtile .art {
+        position: relative; aspect-ratio: 3 / 4; border-radius: var(--oppai-radius-md); overflow: hidden;
+        background: var(--oppai-surface); transition: transform 0.22s var(--oppai-ease-spring), box-shadow 0.22s ease;
       }
-      .card .noimg { display: grid; place-items: center; color: var(--oppai-text-muted); }
-      /* A showcase clip: its first frame until pointed at, then it plays. */
-      .clip-mark {
-        position: absolute; left: 8px; top: 8px; width: 24px; height: 24px; border-radius: 12px; display: grid; place-items: center;
-        background: rgba(0, 0, 0, 0.6); color: #fff; pointer-events: none;
+      .mtile:hover .art { transform: translateY(-3px); box-shadow: var(--oppai-shadow-pop); }
+      .mtile:focus-visible .art { outline: 2px solid var(--oppai-primary); outline-offset: 2px; }
+      .art img, .art video, .art .noimg { width: 100%; height: 100%; object-fit: cover; display: block; }
+      .art .noimg { display: grid; place-items: center; color: var(--oppai-text-muted); }
+      .mtile .name {
+        font-size: 13.5px; font-weight: 600; line-height: 1.3; overflow: hidden; text-overflow: ellipsis;
+        display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; padding: 0 2px;
       }
-      .clip-mark .material-symbols-rounded { font-size: 16px; }
-      .card .meta { padding: 8px 10px 10px; }
-      .card .name {
-        font-size: 13px;
-        font-weight: 600;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        display: -webkit-box;
-        -webkit-line-clamp: 2;
-        -webkit-box-orient: vertical;
-      }
-      .card .sub {
-        font-size: 11px;
-        color: var(--oppai-text-muted);
-        margin-top: 3px;
-        display: flex;
-        gap: 8px;
-        flex-wrap: wrap;
-      }
+      .mtile .sub { font-size: 12px; color: var(--oppai-text-muted); display: flex; gap: 8px; flex-wrap: wrap; padding: 0 2px; margin-top: -4px; }
+      .badges { position: absolute; left: 8px; top: 8px; right: 8px; display: flex; gap: 5px; pointer-events: none; }
       .badge {
-        position: absolute; top: 8px; left: 8px;
-        background: rgba(0, 0, 0, .62); color: #fff; font-size: 11px; font-weight: 600;
+        background: rgba(0, 0, 0, .55); color: #fff; font-size: 11px; font-weight: 600;
         border-radius: 999px; padding: 3px 8px; display: inline-flex; align-items: center; gap: 4px;
-        backdrop-filter: blur(4px);
+        backdrop-filter: blur(6px);
       }
-      .badge.right { left: auto; right: 8px; }
+      .badge .material-symbols-rounded { font-size: 13px; }
+      .badge.right { margin-left: auto; }
       .badge.ok { background: var(--oppai-primary); color: var(--oppai-on-primary); }
+      .clip-mark {
+        position: absolute; right: 8px; bottom: 8px; width: 26px; height: 26px; border-radius: 13px; display: grid; place-items: center;
+        background: rgba(0, 0, 0, 0.55); color: #fff; pointer-events: none; backdrop-filter: blur(6px);
+      }
+      .clip-mark .material-symbols-rounded { font-size: 17px; }
       .more {
-        margin-top: 16px;
-        width: 100%;
-        border: 1px dashed var(--oppai-border-strong);
-        background: none;
-        color: var(--oppai-text-dim);
-        border-radius: 12px;
-        font: inherit;
-        font-size: 14px;
-        padding: 12px;
-        cursor: pointer;
+        display: flex; margin: 26px auto 0; height: 40px; padding: 0 22px; border-radius: 12px; align-items: center; gap: 8px;
+        border: 1px solid var(--oppai-border-strong); background: none; color: var(--oppai-text-dim); font: inherit; font-size: 13.5px; cursor: pointer;
       }
-      .note { color: var(--oppai-text-muted); font-size: 13px; padding: 30px 0; text-align: center; }
-      .err { color: var(--oppai-error, #f2b8b5); font-size: 13px; margin-bottom: 12px; }
+      .more:hover { color: var(--oppai-text); background: var(--oppai-surface); }
+      .sentinel { height: 1px; }
+      .note { color: var(--oppai-text-muted); font-size: 13px; padding: 30px 0; text-align: center; line-height: 1.5; }
+      .note.slim { padding: 12px 0; text-align: left; }
+      .err { color: var(--oppai-error); font-size: 13px; margin-bottom: 12px; }
+      /* The install log's and the account pages' own buttons, as tools. */
       .ghost {
-        border: 1px solid var(--oppai-border-strong); background: none; color: var(--oppai-text);
-        border-radius: 10px; font: inherit; font-size: 13px; padding: 7px 12px; cursor: pointer;
-        display: inline-flex; align-items: center; gap: 6px;
+        height: 34px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--oppai-border-strong); background: none;
+        color: var(--oppai-text-dim); font: inherit; font-size: 13px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+        text-decoration: none; white-space: nowrap; transition: background 0.15s ease, color 0.15s ease;
       }
-      .ghost:disabled { opacity: .55; cursor: default; }
-      .primary {
-        border: none; border-radius: 12px; background: var(--oppai-primary); color: var(--oppai-on-primary);
-        font: inherit; font-size: 14px; font-weight: 600; padding: 12px 18px; cursor: pointer;
-        display: inline-flex; align-items: center; gap: 8px;
+      .ghost:hover:not(:disabled) { color: var(--oppai-text); background: var(--oppai-surface); }
+      .ghost:disabled { opacity: .5; cursor: default; }
+      .ghost.on { background: var(--oppai-selected); color: var(--oppai-primary-bright); border-color: transparent; }
+      .ghost.danger { color: var(--oppai-error); }
+      .controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
+      input[type="search"], input[type="text"] {
+        background: var(--oppai-surface); border: 1px solid var(--oppai-border); border-radius: 12px; color: var(--oppai-text);
+        font: inherit; font-size: 14px; padding: 9px 12px; outline: none;
       }
-      .primary:disabled { opacity: 0.6; cursor: default; }
+      .controls > input { flex: 1; min-width: 200px; }
+      .searchbox input { padding: 0; border: none; background: none; border-radius: 0; }
+      input:focus { border-color: color-mix(in srgb, var(--oppai-primary) 55%, transparent); }
+      .crumb {
+        display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px 0 6px; margin: 0 0 14px -6px; border: none;
+        border-radius: 10px; background: none; color: var(--oppai-text-dim); font: inherit; font-size: 13px; cursor: pointer;
+      }
+      .crumb:hover { background: var(--oppai-surface); color: var(--oppai-text); }
+      .crumb .material-symbols-rounded { font-size: 19px; }
 
-      /* The model page. */
-      .overlay {
-        position: fixed;
-        inset: 0;
-        background: rgba(0, 0, 0, 0.65);
-        z-index: 80;
-        display: grid;
-        place-items: center;
-        padding: 18px;
+      /* ── the model page ──────────────────────────────────────────────── */
+      .mp-head { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
+      .mp-head h1 { margin: 0; font-size: 28px; font-weight: 650; letter-spacing: -0.015em; line-height: 1.15; }
+      .mp-meta { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; font-size: 13px; color: var(--oppai-text-dim); }
+      .stat { display: inline-flex; align-items: center; gap: 5px; font-variant-numeric: tabular-nums; }
+      .stat .material-symbols-rounded { font-size: 17px; color: var(--oppai-text-muted); }
+      .creator {
+        display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 12px 0 4px; border-radius: 999px; cursor: pointer;
+        border: 1px solid var(--oppai-border); background: var(--oppai-surface); color: var(--oppai-text); font: inherit; font-size: 13px; font-weight: 600;
       }
-      .detail {
-        background: var(--oppai-surface-2);
-        border-radius: 18px;
-        width: min(1000px, 100%);
-        max-height: 92vh;
-        overflow-y: auto;
-        padding: 18px;
-        display: grid;
-        grid-template-columns: minmax(0, 340px) minmax(0, 1fr);
-        gap: 18px;
+      .creator:hover { border-color: var(--oppai-border-strong); background: var(--oppai-surface-2); }
+      .creator img, .face {
+        width: 24px; height: 24px; border-radius: 50%; object-fit: cover; flex: none; display: grid; place-items: center;
+        background: var(--oppai-surface-3); color: var(--oppai-text); font-size: 11px; font-weight: 700; text-transform: uppercase;
       }
-      @media (max-width: 760px) {
-        .detail { grid-template-columns: minmax(0, 1fr); }
+      .versions { margin-bottom: 18px; }
+      .mp-grid { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 28px; align-items: start; }
+      @media (max-width: 980px) { .mp-grid { grid-template-columns: minmax(0, 1fr); } }
+      .showcase {
+        position: relative; height: min(68vh, 760px); min-height: 320px; border-radius: var(--oppai-radius-lg); overflow: hidden;
+        background: #050405; display: grid; place-items: center;
       }
-      .detail .big {
-        width: 100%;
-        border-radius: 12px;
-        background: var(--oppai-surface);
-        aspect-ratio: 3 / 4;
-        object-fit: cover;
-        cursor: zoom-in;
+      /* Filled and contained rather than max-sized: a percentage max-height on a grid
+         item resolves against a track sized by its content, which is no limit at all. */
+      .showcase > img, .showcase > video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; display: block; cursor: zoom-in; }
+      .showcase .nav {
+        position: absolute; top: 50%; width: 42px; height: 42px; margin-top: -21px; border-radius: 21px; border: none; cursor: pointer;
+        background: rgba(0, 0, 0, .5); color: #fff; display: grid; place-items: center; backdrop-filter: blur(6px);
+        opacity: 0; transition: opacity 0.15s ease;
       }
-      .thumbs { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
-      .thumbs img {
-        width: 52px; height: 68px; object-fit: cover; border-radius: 8px; cursor: pointer; opacity: 0.7;
-      }
-      .thumbs img.on { opacity: 1; outline: 2px solid var(--oppai-accent); }
-      .detail h3 { margin: 0 0 4px; font-size: 18px; }
-      .detail .sub { font-size: 12px; color: var(--oppai-text-muted); margin-bottom: 10px; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
-      .creator { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; color: var(--oppai-text-dim); border: none; background: none; font: inherit; font-size: 12px; padding: 0; }
-      .creator img { width: 20px; height: 20px; border-radius: 50%; object-fit: cover; }
-      .vlabel { font-size: 12px; font-weight: 600; color: var(--oppai-text-dim); margin: 12px 0 6px; }
-      .versions, .tags { display: flex; flex-wrap: wrap; gap: 6px; }
-      .words {
-        font-size: 12px; color: var(--oppai-text-dim); background: var(--oppai-surface);
-        border-radius: 10px; padding: 8px 10px; word-break: break-word;
-        display: flex; align-items: flex-start; gap: 8px; justify-content: space-between;
-      }
+      .showcase:hover .nav, .showcase .nav:focus-visible { opacity: 1; }
+      .showcase .nav:disabled { display: none; }
+      .showcase .nav.prev { left: 12px; }
+      .showcase .nav.next { right: 12px; }
+      .showcase .count { position: absolute; right: 12px; top: 12px; }
+      .thumbs { display: flex; gap: 8px; margin-top: 10px; overflow-x: auto; scrollbar-width: thin; padding-bottom: 4px; }
+      .thumbs button { flex: none; width: 64px; height: 84px; padding: 0; border: 2px solid transparent; border-radius: 10px; overflow: hidden; background: var(--oppai-surface); cursor: pointer; opacity: .65; transition: opacity .15s ease; }
+      .thumbs button:hover { opacity: 1; }
+      .thumbs button.on { opacity: 1; border-color: var(--oppai-primary); }
+      .thumbs img { width: 100%; height: 100%; object-fit: cover; display: block; }
+      .block { margin-top: 30px; }
       .desc {
-        font-size: 13px; line-height: 1.5; color: var(--oppai-text-dim);
-        max-height: 260px; overflow-y: auto; padding-right: 6px; word-break: break-word;
+        font-size: 14px; line-height: 1.65; color: var(--oppai-text-dim); word-break: break-word; position: relative;
       }
-      .desc.open { max-height: none; }
-      .desc h1, .desc h2, .desc h3, .desc h4 { font-size: 14px; margin: 10px 0 4px; color: var(--oppai-text); }
-      .desc p { margin: 0 0 8px; }
+      .desc.folded { max-height: 320px; overflow: hidden; }
+      .desc.folded::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 80px; background: linear-gradient(to bottom, transparent, var(--oppai-bg)); }
+      .desc h1, .desc h2, .desc h3, .desc h4 { font-size: 15px; margin: 14px 0 6px; color: var(--oppai-text); }
+      .desc p { margin: 0 0 10px; }
       .desc a { color: var(--oppai-primary-bright); }
-      .desc pre, .desc code { font-size: 12px; background: var(--oppai-surface); border-radius: 6px; padding: 2px 5px; white-space: pre-wrap; }
-      .desc ul, .desc ol { padding-left: 20px; margin: 4px 0 8px; }
-      .desc table { border-collapse: collapse; font-size: 12px; }
-      .desc td, .desc th { border: 1px solid var(--oppai-border); padding: 3px 6px; }
-      .files { font-size: 12px; color: var(--oppai-text-dim); display: flex; flex-direction: column; gap: 4px; }
-      .files .f { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-      .files code { font-size: 11px; color: var(--oppai-text-muted); }
-      .actions { margin-top: 14px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+      .desc img { max-width: 100%; border-radius: 10px; }
+      .desc pre, .desc code { font-size: 12.5px; background: var(--oppai-surface); border-radius: 6px; padding: 2px 5px; white-space: pre-wrap; }
+      .desc pre { padding: 10px 12px; }
+      .desc ul, .desc ol { padding-left: 22px; margin: 4px 0 10px; }
+      .desc table { border-collapse: collapse; font-size: 12.5px; }
+      .desc td, .desc th { border: 1px solid var(--oppai-border); padding: 4px 8px; }
+      .unfold { margin-top: 6px; border: none; background: none; color: var(--oppai-primary-bright); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; padding: 4px 0; }
 
-      /* The gallery of posted pictures. */
-      .gal-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; margin-top: 8px; }
-      .gal-grid button { border: none; padding: 0; background: var(--oppai-surface); border-radius: 10px; overflow: hidden; cursor: pointer; position: relative; }
-      .gal-grid img, .gal-grid video { width: 100%; aspect-ratio: 3 / 4; object-fit: cover; display: block; }
-      .gal-grid .has { position: absolute; right: 6px; bottom: 6px; background: rgba(0,0,0,.6); color: #fff; border-radius: 6px; font-size: 10px; padding: 2px 6px; }
+      .mp-side { position: sticky; top: 84px; display: flex; flex-direction: column; gap: 14px; }
+      @media (max-width: 980px) { .mp-side { position: static; } }
+      .side-card { padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+      .side-card .primary-btn { width: 100%; }
+      .install-note { font-size: 12px; line-height: 1.5; color: var(--oppai-text-muted); }
+      .install-note code { font-size: 11.5px; }
+      .facts { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px 14px; margin: 0; font-size: 13px; }
+      .facts dt { color: var(--oppai-text-muted); }
+      .facts dd { margin: 0; color: var(--oppai-text); text-align: right; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; }
+      .words {
+        font-size: 12.5px; line-height: 1.5; color: var(--oppai-text); background: var(--oppai-bg); border: 1px solid var(--oppai-border);
+        border-radius: 12px; padding: 10px 12px; word-break: break-word; display: flex; align-items: flex-start; gap: 8px; justify-content: space-between;
+      }
+      .files { display: flex; flex-direction: column; gap: 6px; }
+      .file { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--oppai-text-dim); min-width: 0; }
+      .file .fn { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--oppai-text); }
+      .file .material-symbols-rounded { font-size: 17px; color: var(--oppai-text-muted); }
+      .tags { display: flex; flex-wrap: wrap; gap: 6px; }
 
-      /* Zoomed picture, with its prompt when there is one. */
-      .zoom {
-        position: fixed; inset: 0; z-index: 90; background: rgba(0, 0, 0, 0.9);
-        display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 360px); cursor: zoom-out;
+      /* The gallery: what people made with it, at each picture's own shape. */
+      .masonry { columns: 5 220px; column-gap: 12px; }
+      @media (max-width: 560px) { .masonry { columns: 2 150px; column-gap: 8px; } }
+      .gcard {
+        display: block; width: 100%; margin: 0 0 12px; padding: 0; border: none; border-radius: var(--oppai-radius-md); overflow: hidden;
+        background: var(--oppai-surface); cursor: pointer; position: relative; break-inside: avoid; color: #fff; font: inherit; text-align: left;
       }
-      .zoom.plain { grid-template-columns: minmax(0, 1fr); place-items: center; }
-      .zoom img, .zoom video { max-width: 100%; max-height: 100vh; object-fit: contain; margin: auto; display: block; }
-      .zoom .pane {
-        background: var(--oppai-surface-2); color: var(--oppai-text); padding: 16px; overflow-y: auto; cursor: default;
-        font-size: 13px; display: flex; flex-direction: column; gap: 10px;
+      .gcard img, .gcard video { width: 100%; height: auto; display: block; }
+      .gcard .foot {
+        position: absolute; left: 0; right: 0; bottom: 0; display: flex; align-items: center; gap: 8px; padding: 26px 10px 8px;
+        background: linear-gradient(to top, rgba(0,0,0,.68), transparent); font-size: 12px; font-weight: 600;
+        opacity: 0; transition: opacity 0.15s ease;
       }
-      @media (max-width: 760px) {
-        .zoom { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; }
-        .zoom .pane { max-height: 45vh; }
+      .gcard:hover .foot, .gcard:focus-visible .foot { opacity: 1; }
+      .gcard .foot .who { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .gcard .foot .stat .material-symbols-rounded { color: #fff; font-size: 15px; }
+      .gcard .mark { position: absolute; right: 8px; top: 8px; }
+      .gcard:focus-visible { outline: 2px solid var(--oppai-primary); outline-offset: 2px; }
+      @media (hover: none) { .gcard .foot { opacity: 1; } }
+
+      /* Comments. */
+      .thread { display: flex; flex-direction: column; gap: 2px; }
+      .cmt { display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 10px; padding: 10px 0; border-top: 1px solid var(--oppai-border); }
+      .cmt.reply { border-top: none; padding-top: 4px; }
+      .cmt:first-child { border-top: none; }
+      .cmt .face { width: 32px; height: 32px; font-size: 13px; }
+      .cmt-head { display: flex; align-items: baseline; gap: 8px; font-size: 13px; flex-wrap: wrap; }
+      .cmt-head b { font-weight: 600; }
+      .cmt-head .when { font-size: 12px; color: var(--oppai-text-muted); }
+      .cmt-body { font-size: 13.5px; line-height: 1.55; color: var(--oppai-text-dim); word-break: break-word; margin-top: 2px; }
+      .cmt-body p { margin: 0 0 6px; }
+      .cmt-body a { color: var(--oppai-primary-bright); }
+      .cmt-body img { max-width: 100%; max-height: 260px; border-radius: 8px; }
+      .cmt-foot { display: flex; align-items: center; gap: 12px; margin-top: 4px; font-size: 12px; color: var(--oppai-text-muted); }
+      .cmt-foot a { color: var(--oppai-text-muted); }
+      .cmt-foot a:hover { color: var(--oppai-text); }
+      .pin { color: var(--oppai-primary); display: inline-flex; align-items: center; gap: 3px; font-size: 11.5px; font-weight: 600; }
+      .pin .material-symbols-rounded { font-size: 14px; }
+      .keynote {
+        display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; border-radius: 12px; font-size: 13px; line-height: 1.5;
+        background: var(--oppai-surface); border: 1px solid var(--oppai-border); color: var(--oppai-text-dim);
       }
-      .pane h4 { margin: 0; font-size: 12px; color: var(--oppai-text-muted); text-transform: uppercase; letter-spacing: .04em; }
-      .pane .p { white-space: pre-wrap; word-break: break-word; background: var(--oppai-surface); border-radius: 8px; padding: 8px 10px; }
-      .pane .kv { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; font-size: 12px; color: var(--oppai-text-dim); }
+      .keynote .material-symbols-rounded { font-size: 19px; color: var(--oppai-primary); }
+      .keynote a { color: var(--oppai-primary-bright); }
+
+      /* ── a picture, opened: the picture on a dark stage, its post beside it ─ */
+      .pv {
+        position: fixed; inset: 0; z-index: 100; display: grid; grid-template-columns: minmax(0, 1fr) 420px;
+        background: #050405; animation: oppai-fade-in 0.16s ease both;
+      }
+      @media (max-width: 900px) { .pv { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 58vh) minmax(0, 1fr); } }
+      .pv-stage { position: relative; min-width: 0; min-height: 0; display: grid; place-items: center; padding: 20px 64px; box-sizing: border-box; }
+      @media (max-width: 900px) { .pv-stage { padding: 12px 48px; } }
+      .pv-stage > img, .pv-stage > video { position: absolute; inset: 20px 64px; width: calc(100% - 128px); height: calc(100% - 40px); object-fit: contain; display: block; }
+      @media (max-width: 900px) { .pv-stage > img, .pv-stage > video { inset: 12px 48px; width: calc(100% - 96px); height: calc(100% - 24px); } }
+      .pv-x, .pv-nav {
+        position: absolute; border: none; cursor: pointer; display: grid; place-items: center; color: #fff;
+        background: rgba(255, 255, 255, .08); backdrop-filter: blur(8px);
+      }
+      .pv-x:hover, .pv-nav:hover:not(:disabled) { background: rgba(255, 255, 255, .16); }
+      .pv-x { left: 14px; top: 14px; width: 40px; height: 40px; border-radius: 20px; }
+      .pv-nav { top: 50%; width: 44px; height: 64px; margin-top: -32px; border-radius: 14px; }
+      .pv-nav.prev { left: 10px; }
+      .pv-nav.next { right: 10px; }
+      .pv-nav:disabled { opacity: 0; pointer-events: none; }
+      .pv-count { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); }
+      .pv-side {
+        min-width: 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; background: var(--oppai-nav);
+        border-left: 1px solid var(--oppai-border); padding: 18px 18px 40px; box-sizing: border-box;
+        display: flex; flex-direction: column; gap: 18px; color: var(--oppai-text);
+      }
+      @media (max-width: 900px) { .pv-side { border-left: none; border-top: 1px solid var(--oppai-border); } }
+      .pv-who { display: flex; align-items: center; gap: 10px; }
+      .pv-who .face { width: 40px; height: 40px; font-size: 15px; }
+      .pv-who .n { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+      .pv-who .n button { border: none; background: none; color: var(--oppai-text); font: inherit; font-size: 15px; font-weight: 650; padding: 0; text-align: left; cursor: pointer; }
+      .pv-who .n button:hover { color: var(--oppai-primary-bright); }
+      .pv-who .n span { font-size: 12px; color: var(--oppai-text-muted); }
+      .reacts { display: flex; flex-wrap: wrap; gap: 6px; }
+      .react {
+        display: inline-flex; align-items: center; gap: 5px; height: 30px; padding: 0 11px; border-radius: 999px; font-size: 13px;
+        background: var(--oppai-surface); border: 1px solid var(--oppai-border); color: var(--oppai-text); font-variant-numeric: tabular-nums;
+      }
+      .react .material-symbols-rounded { font-size: 16px; color: var(--oppai-primary); }
+      .strip { display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); gap: 6px; }
+      .strip button { aspect-ratio: 3 / 4; padding: 0; border: 2px solid transparent; border-radius: 10px; overflow: hidden; background: var(--oppai-surface); cursor: pointer; opacity: .7; }
+      .strip button:hover { opacity: 1; }
+      .strip button.on { opacity: 1; border-color: var(--oppai-primary); }
+      .strip img { width: 100%; height: 100%; object-fit: cover; display: block; }
+      .gen { display: flex; flex-direction: column; gap: 10px; }
+      .gen .p {
+        white-space: pre-wrap; word-break: break-word; background: var(--oppai-bg); border: 1px solid var(--oppai-border); border-radius: 12px;
+        padding: 10px 12px; font-size: 13px; line-height: 1.55; max-height: 220px; overflow-y: auto; color: var(--oppai-text-dim);
+      }
+      .gen .p.neg { max-height: 120px; }
+      .gen .facts { grid-template-columns: repeat(2, auto minmax(0, 1fr)); font-size: 12.5px; }
+      .gen .facts dd { text-align: left; }
+      .res { display: flex; flex-wrap: wrap; gap: 6px; }
+      .res .tag b { font-weight: 600; margin-left: 5px; color: var(--oppai-text-muted); }
+      .acts { display: flex; gap: 8px; flex-wrap: wrap; }
+      .acts .primary-btn { flex: 1; }
+      .side-sec { display: flex; flex-direction: column; gap: 10px; }
+      .side-sec > .kicker { display: flex; align-items: center; gap: 8px; }
+      .side-sec > .kicker .page-sub { text-transform: none; letter-spacing: 0; font-weight: 500; }
+
+      /* A person's pictures. */
+      .person-head { display: flex; align-items: center; gap: 14px; margin-bottom: 20px; flex-wrap: wrap; }
+      .person-head .face { width: 56px; height: 56px; font-size: 22px; }
+      .person-head h1 { margin: 0; font-size: 24px; font-weight: 650; }
+
+      /* A zoomed still. */
+      .zoom { position: fixed; inset: 0; z-index: 100; background: rgba(0, 0, 0, 0.92); display: grid; place-items: center; cursor: zoom-out; }
+      .zoom img { max-width: 100%; max-height: 100vh; object-fit: contain; }
 
       /* Account: a banner with the profile picture over its bottom edge, the way
          the site lays it out, then the profile's own tabs. */
-      .banner { position: relative; margin: 4px 0 52px; }
+      .banner { position: relative; margin: 4px 0 56px; }
       /* The picture clips to its rounded corners; the profile picture, hanging
          over the bottom edge, is a sibling so the clip does not cut it. */
       .banner .art {
-        position: relative; border-radius: 16px; overflow: hidden; background: var(--oppai-surface-2);
+        position: relative; border-radius: var(--oppai-radius-lg); overflow: hidden; background: var(--oppai-surface);
         aspect-ratio: 4 / 1; min-height: 120px; max-height: 260px;
       }
       .banner img.cover { width: 100%; height: 100%; object-fit: cover; display: block; }
       .banner .fade { position: absolute; inset: 0; background: linear-gradient(to top, rgba(0,0,0,.55), transparent 60%); }
-      .who {
-        position: absolute; left: 18px; bottom: -44px; display: flex; align-items: flex-end; gap: 14px;
-      }
+      .who { position: absolute; left: 18px; bottom: -44px; display: flex; align-items: flex-end; gap: 14px; }
       .who img, .who .noface {
         width: 88px; height: 88px; border-radius: 50%; object-fit: cover; background: var(--oppai-surface);
-        border: 4px solid var(--oppai-bg, #141218); display: grid; place-items: center; color: var(--oppai-text-muted);
+        border: 4px solid var(--oppai-bg); display: grid; place-items: center; color: var(--oppai-text-muted);
       }
-      .who .n { font-size: 18px; font-weight: 700; padding-bottom: 10px; }
-      .who .s { font-size: 12px; color: var(--oppai-text-muted); }
-      .banner .profile-link { position: absolute; right: 12px; bottom: 12px; }
-      h3.sec { font-size: 14px; margin: 18px 0 8px; color: var(--oppai-text-dim); }
-      .subtabs { display: flex; gap: 4px; margin: 0 0 12px; border-bottom: 1px solid var(--oppai-border); }
+      .who .n { font-size: 20px; font-weight: 650; padding-bottom: 10px; }
+      .banner .profile-link { position: absolute; right: 12px; bottom: 12px; color: #fff; background: rgba(0,0,0,.4); border-color: transparent; }
+      .subtabs { display: flex; gap: 4px; margin: 0 0 16px; border-bottom: 1px solid var(--oppai-border); overflow-x: auto; scrollbar-width: none; }
       .subtabs button {
-        border: none; background: none; color: var(--oppai-text-dim); font: inherit; font-size: 13px;
-        padding: 9px 12px; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px;
+        border: none; background: none; color: var(--oppai-text-dim); font: inherit; font-size: 14px; flex: none;
+        padding: 10px 14px; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px;
       }
-      .subtabs button.on { color: var(--oppai-text); font-weight: 600; border-bottom-color: var(--oppai-accent); }
-      .post-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; }
+      .subtabs button:hover { color: var(--oppai-text); }
+      .subtabs button.on { color: var(--oppai-text); font-weight: 600; border-bottom-color: var(--oppai-primary); }
+      .post-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 18px 12px; }
       .post {
-        border: none; padding: 0; background: var(--oppai-surface-2); border-radius: 12px; overflow: hidden;
-        cursor: pointer; position: relative; text-align: left; color: var(--oppai-text); font: inherit;
+        border: none; padding: 0; background: none; cursor: pointer; position: relative; text-align: left; color: var(--oppai-text); font: inherit;
+        display: flex; flex-direction: column; gap: 6px;
       }
-      .post img { width: 100%; aspect-ratio: 3 / 4; object-fit: cover; display: block; background: var(--oppai-surface); }
-      .post .pm { padding: 6px 9px 8px; font-size: 11px; color: var(--oppai-text-muted); display: flex; justify-content: space-between; gap: 6px; }
+      .post .art { aspect-ratio: 3 / 4; border-radius: var(--oppai-radius-md); overflow: hidden; background: var(--oppai-surface); position: relative; }
+      .post .pm { font-size: 12px; color: var(--oppai-text-muted); display: flex; justify-content: space-between; gap: 6px; padding: 0 2px; }
       .coll {
         display: grid; grid-template-columns: 64px minmax(0, 1fr) auto; gap: 12px; align-items: center;
-        background: var(--oppai-surface-2); border-radius: 12px; padding: 8px 10px; border: none; color: inherit; font: inherit;
+        background: var(--oppai-surface); border: 1px solid var(--oppai-border); border-radius: 14px; padding: 8px 10px; color: inherit; font: inherit;
         text-align: left; width: 100%; cursor: pointer;
       }
-      .coll img, .coll .noimg { width: 64px; height: 64px; border-radius: 8px; object-fit: cover; background: var(--oppai-surface); display: grid; place-items: center; color: var(--oppai-text-muted); }
-      .coll .t { font-size: 13px; font-weight: 600; }
+      .coll:hover:not(:disabled) { border-color: var(--oppai-border-strong); }
+      .coll img, .coll .noimg { width: 64px; height: 64px; border-radius: 10px; object-fit: cover; background: var(--oppai-surface-2); display: grid; place-items: center; color: var(--oppai-text-muted); }
+      .coll .t { font-size: 13.5px; font-weight: 600; }
       .coll .d { font-size: 12px; color: var(--oppai-text-muted); margin-top: 2px; }
-      .coll:disabled { cursor: default; }
-      .jobs-chip { position: relative; }
-      .jobs-chip .dot {
-        position: absolute; top: -2px; right: -2px; width: 8px; height: 8px; border-radius: 50%;
-        background: var(--oppai-primary-bright); animation: pulse 1.2s ease-in-out infinite;
-      }
-      @keyframes pulse { 50% { opacity: .3; } }
+      .coll:disabled { cursor: default; opacity: .7; }
+      .sub { font-size: 12.5px; color: var(--oppai-text-muted); line-height: 1.5; }
 
       /* Managing an installed model: its versions and the pictures to choose a cover from. */
-      .manage { grid-column: 1 / -1; background: var(--oppai-surface); border-radius: 10px; padding: 10px 12px; margin-top: 4px; }
-      .manage .vlabel { margin-top: 8px; }
+      .vlabel { font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--oppai-text-muted); margin: 14px 0 8px; }
+      .manage { grid-column: 1 / -1; background: var(--oppai-bg); border: 1px solid var(--oppai-border); border-radius: 12px; padding: 12px 14px; margin-top: 4px; }
+      .manage .vlabel { margin-top: 10px; }
+      .manage .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+      .versions-wrap { display: flex; flex-wrap: wrap; gap: 6px; }
       .covers { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 6px; }
       .covers button { border: 2px solid transparent; padding: 0; border-radius: 10px; overflow: hidden; background: var(--oppai-surface-2); cursor: pointer; position: relative; }
-      .covers button.on { border-color: var(--oppai-accent); }
+      .covers button.on { border-color: var(--oppai-primary); }
       .covers img { width: 100%; aspect-ratio: 3 / 4; object-fit: cover; display: block; }
-      .covers .tick { position: absolute; top: 4px; right: 4px; background: var(--oppai-accent); color: var(--oppai-on-accent); border-radius: 50%; width: 18px; height: 18px; display: grid; place-items: center; }
-      .ghost.danger { color: var(--oppai-error, #f2b8b5); }
+      .covers .tick { position: absolute; top: 4px; right: 4px; background: var(--oppai-primary); color: var(--oppai-on-primary); border-radius: 50%; width: 18px; height: 18px; display: grid; place-items: center; }
 
       /* Installed. */
       .rows { display: flex; flex-direction: column; gap: 8px; }
       .row {
-        display: grid; grid-template-columns: 64px minmax(0, 1fr) auto; gap: 12px; align-items: center;
-        background: var(--oppai-surface-2); border-radius: 12px; padding: 8px 10px;
+        display: grid; grid-template-columns: 64px minmax(0, 1fr) auto; gap: 14px; align-items: center;
+        background: var(--oppai-surface); border: 1px solid var(--oppai-border); border-radius: 14px; padding: 10px 12px;
       }
-      .row .ghost.on { background: var(--oppai-surface); }
       @media (max-width: 600px) { .row { grid-template-columns: 64px minmax(0, 1fr); } .row .rb { grid-column: 1 / -1; } }
-      .row img, .row .noimg { width: 64px; height: 84px; border-radius: 8px; object-fit: cover; background: var(--oppai-surface); display: grid; place-items: center; color: var(--oppai-text-muted); }
-      .row .t { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      .row .d { font-size: 12px; color: var(--oppai-text-muted); margin-top: 2px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+      .row img, .row .noimg { width: 64px; height: 84px; border-radius: 10px; object-fit: cover; background: var(--oppai-surface-2); display: grid; place-items: center; color: var(--oppai-text-muted); }
+      .row .t { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .row .d { font-size: 12px; color: var(--oppai-text-muted); margin-top: 3px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
       .row .rb { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
       .upd { color: var(--oppai-primary-bright); font-weight: 600; display: inline-flex; align-items: center; gap: 3px; }
       .previews { display: flex; gap: 4px; margin-top: 6px; }
       .previews img { width: 34px; height: 44px; border-radius: 6px; object-fit: cover; cursor: zoom-in; }
-      .pin { display: flex; gap: 6px; align-items: center; margin-top: 6px; }
-      .pin input { min-width: 0; width: 140px; padding: 6px 8px; font-size: 12px; }
-      .sync-note { font-size: 12px; color: var(--oppai-text-dim); margin: 0 0 10px; }
+      .pin-row { display: flex; gap: 6px; align-items: center; margin-top: 6px; }
+      .pin-row input { min-width: 0; width: 140px; padding: 6px 8px; font-size: 12px; }
+      .sync-note { font-size: 12.5px; color: var(--oppai-text-dim); margin: 0 0 12px; line-height: 1.5; }
     `,
   ];
+
 
   connectedCallback() {
     super.connectedCallback();
     // The first search waits for willUpdate, which knows the mode the host asked for.
     void this.loadCategories();
     this.jobTimer = window.setInterval(() => void this.pollJobs(), 5000);
+    window.addEventListener("keydown", this.onKey);
   }
 
   disconnectedCallback() {
     super.disconnectedCallback();
     if (this.jobTimer) clearInterval(this.jobTimer);
+    window.removeEventListener("keydown", this.onKey);
+    this.sentinelWatch?.disconnect();
   }
 
   private async loadCategories() {
@@ -721,6 +773,9 @@ export class OppaiCivitai extends LitElement {
 
   private async openDetail(m: CivitaiModel | number) {
     const id = typeof m === "number" ? m : m.id;
+    // Where the results were scrolled to, so going back lands on the same row.
+    if (!this.detail && !this.person) this.browseScroll = this.scrollTop;
+    this.person = null;
     if (typeof m !== "number") {
       // Show what the card already knows while the page loads.
       this.detail = m;
@@ -730,10 +785,12 @@ export class OppaiCivitai extends LitElement {
     } else {
       this.detail = null;
     }
-    this.galleryOpen = false;
+    this.descOpen = false;
     this.gallery = [];
     this.galleryCursor = "";
+    this.scrollTo({ top: 0 });
     this.detailLoading = true;
+    void this.loadThread("model", id);
     try {
       const full = await api.civitaiModel(id);
       this.detail = full;
@@ -746,12 +803,18 @@ export class OppaiCivitai extends LitElement {
     } finally {
       this.detailLoading = false;
     }
+    void this.loadGallery(true);
   }
 
   private closeDetail() {
+    const wasOpen = !!this.detail || !!this.person;
     this.detail = null;
-    this.galleryOpen = false;
-    this.picked = null;
+    this.person = null;
+    this.viewing = null;
+    if (wasOpen) {
+      const top = this.browseScroll;
+      void this.updateComplete.then(() => this.scrollTo({ top }));
+    }
   }
 
   private currentVersion(): CivitaiVersion | undefined {
@@ -761,11 +824,18 @@ export class OppaiCivitai extends LitElement {
   private pickVersion(ver: CivitaiVersion) {
     this.versionId = ver.id;
     this.shownImage = ver.images[0] ?? "";
-    if (this.galleryOpen) {
-      this.gallery = [];
-      this.galleryCursor = "";
-      void this.loadGallery(true);
-    }
+    this.gallery = [];
+    this.galleryCursor = "";
+    void this.loadGallery(true);
+  }
+
+  /** The showcase steps through the version's own pictures. */
+  private stepShowcase(delta: number) {
+    const v = this.currentVersion();
+    if (!v?.images.length) return;
+    const i = Math.max(0, v.images.indexOf(this.shownImage));
+    const next = v.images[i + delta];
+    if (next) this.shownImage = next;
   }
 
   private async install(v: CivitaiVersion) {
@@ -784,25 +854,23 @@ export class OppaiCivitai extends LitElement {
     }
   }
 
-  private async loadGallery(reset: boolean, username?: string) {
-    if (this.galleryLoading) return;
+  /** The pictures people posted with the version on screen, a page at a time. */
+  private async loadGallery(reset: boolean) {
+    if (this.galleryLoading || !this.versionId) return;
+    if (!reset && !this.galleryCursor) return;
+    const asked = this.versionId;
     this.galleryLoading = true;
     try {
       const res = await api.civitaiImages({
-        versionId: username ? undefined : this.versionId || undefined,
-        username,
+        versionId: asked,
         sort: this.gallerySort || undefined,
         nsfw: this.nsfw,
         cursor: reset ? undefined : this.galleryCursor || undefined,
       });
-      if (username) {
-        this.myImages = reset ? res.items : [...this.myImages, ...res.items];
-        this.myImagesCursor = res.nextCursor ?? "";
-      } else {
-        this.gallery = reset ? res.items : [...this.gallery, ...res.items];
-        this.galleryCursor = res.nextCursor ?? "";
-        this.promptsNeedKey = res.items.length > 0 && res.withPrompts === 0 && !res.keySet;
-      }
+      if (asked !== this.versionId) return;
+      this.gallery = reset ? res.items : mergeImages(this.gallery, res.items);
+      this.galleryCursor = res.nextCursor ?? "";
+      this.promptsNeedKey = res.items.length > 0 && res.withPrompts === 0 && !res.keySet;
     } catch (e) {
       this.error = (e as Error).message;
     } finally {
@@ -810,16 +878,11 @@ export class OppaiCivitai extends LitElement {
     }
   }
 
-  private toggleGallery() {
-    this.galleryOpen = !this.galleryOpen;
-    if (this.galleryOpen && this.gallery.length === 0) void this.loadGallery(true);
-  }
-
   private usePrompt(img: CivitaiImage) {
     const settings = promptSettingsFrom(img);
     if (!settings) return;
     this.dispatchEvent(new CustomEvent<PromptSettings>("use-prompt", { detail: settings, bubbles: true, composed: true }));
-    this.picked = null;
+    this.viewing = null;
     this.zoomed = "";
   }
 
@@ -831,6 +894,148 @@ export class OppaiCivitai extends LitElement {
     } catch {
       /* clipboard denied; the text is on screen to select */
     }
+  }
+
+  // ── a picture, opened ──
+
+  /** Opens a picture over the page: `list` is what the arrows step through — the
+   *  gallery it was clicked in, or its post. */
+  private openPicture(image: CivitaiImage, list: CivitaiImage[]) {
+    this.viewing = { image, list: list.length ? list : [image] };
+    this.viewTab = "picture";
+    this.copied = false;
+    void this.loadPost(image.postId);
+    void this.loadThread("image", image.id);
+  }
+
+  private showPicture(image: CivitaiImage, list?: CivitaiImage[]) {
+    if (!this.viewing) return;
+    this.viewing = { image, list: list ?? this.viewing.list };
+    this.copied = false;
+    void this.loadPost(image.postId);
+    if (this.viewTab === "picture") void this.loadThread("image", image.id);
+  }
+
+  private stepPicture(delta: number) {
+    if (!this.viewing) return;
+    const { prev, next } = neighbours(this.viewing.list, this.viewing.image.id);
+    const to = delta < 0 ? prev : next;
+    if (to) this.showPicture(to);
+    // Near the end of the gallery it was opened from: the next page, so the arrows go on.
+    if (this.viewing.list === this.gallery && !next?.id && this.galleryCursor) void this.loadGallery(false);
+  }
+
+  /** The rest of a picture's post, once per post. */
+  private async loadPost(postId?: number) {
+    if (!postId || postId <= 0 || this.postPics[postId]) return;
+    this.postPics = { ...this.postPics, [postId]: [] };
+    try {
+      const res = await api.civitaiImages({ postId, sort: "newest", nsfw: this.nsfw });
+      // The feed lists a post newest first; the post was made in the order uploaded.
+      const items = res.items.slice().sort((a, b) => a.id - b.id);
+      this.postPics = { ...this.postPics, [postId]: items };
+      // A gallery picture opened from the post's strip has its full data in here.
+      const v = this.viewing;
+      if (v) {
+        const fresh = items.find((i) => i.id === v.image.id);
+        if (fresh && !v.image.prompt && fresh.prompt) this.viewing = { ...v, image: { ...v.image, ...fresh } };
+      }
+    } catch {
+      /* the strip shows the opened picture alone */
+    }
+  }
+
+  private onKey = (e: KeyboardEvent) => {
+    if (e.defaultPrevented || (e.target as HTMLElement | null)?.closest?.("input, textarea, select")) return;
+    if (this.viewing) {
+      if (e.key === "Escape") { this.viewing = null; e.preventDefault(); }
+      else if (e.key === "ArrowLeft") { this.stepPicture(-1); e.preventDefault(); }
+      else if (e.key === "ArrowRight") { this.stepPicture(1); e.preventDefault(); }
+      return;
+    }
+    if (this.zoomed && e.key === "Escape") { this.zoomed = ""; e.preventDefault(); return; }
+    if ((this.detail || this.person) && e.key === "Escape") { this.closeDetail(); e.preventDefault(); return; }
+    if (this.detail && e.key === "ArrowLeft") this.stepShowcase(-1);
+    if (this.detail && e.key === "ArrowRight") this.stepShowcase(1);
+  };
+
+  // ── comments ──
+
+  private threadOf(entity: CivitaiCommentEntity, id: number): Thread | undefined {
+    return this.threads[`${entity}:${id}`];
+  }
+
+  /** A comment section, the first page or the next; `sort` starts it over in that order. */
+  private async loadThread(entity: CivitaiCommentEntity, id: number, more = false, sort?: ThreadSort) {
+    const key = `${entity}:${id}`;
+    const had = this.threads[key];
+    if (had?.loading || (had && !more && !sort)) return;
+    if (more && !had?.cursor) return;
+    const order = sort ?? had?.sort ?? "newest";
+    const base: Thread = more && had ? had : { items: [], cursor: "", loading: true, error: "", needsKey: false, page: had?.page ?? "", sort: order };
+    this.threads = { ...this.threads, [key]: { ...base, loading: true, sort: order } };
+    try {
+      const res = await api.civitaiThread(entity, id, { cursor: more ? had?.cursor : undefined, sort: order });
+      this.threads = {
+        ...this.threads,
+        [key]: { ...base, items: more ? mergeComments(base.items, res.items) : res.items, cursor: res.nextCursor ?? "", loading: false, page: res.page, sort: order },
+      };
+    } catch (e) {
+      const err = e as Error & { body?: { needsKey?: boolean; page?: string } };
+      this.threads = {
+        ...this.threads,
+        [key]: { ...base, loading: false, error: err.message, needsKey: !!err.body?.needsKey || /API key/.test(err.message), page: err.body?.page ?? base.page, sort: order },
+      };
+    }
+  }
+
+  // ── a person's pictures ──
+
+  private openPerson(username: string) {
+    if (!username) return;
+    if (!this.detail && !this.person) this.browseScroll = this.scrollTop;
+    this.viewing = null;
+    this.detail = null;
+    this.tab = "browse";
+    this.person = { username, items: [], cursor: "", loading: false };
+    this.scrollTo({ top: 0 });
+    void this.loadPerson(true);
+  }
+
+  private async loadPerson(reset: boolean) {
+    const p = this.person;
+    if (!p || p.loading || (!reset && !p.cursor)) return;
+    this.person = { ...p, loading: true };
+    try {
+      const res = await api.civitaiImages({ username: p.username, sort: "newest", nsfw: this.nsfw, cursor: reset ? undefined : p.cursor });
+      if (this.person?.username !== p.username) return;
+      this.person = { ...p, items: reset ? res.items : mergeImages(p.items, res.items), cursor: res.nextCursor ?? "", loading: false };
+    } catch (e) {
+      if (this.person?.username === p.username) this.person = { ...p, loading: false };
+      this.error = (e as Error).message;
+    }
+  }
+
+  /** "Load more" by scrolling: the sentinel under a list, seen, asks for its next page. */
+  private watchSentinels() {
+    this.sentinelWatch?.disconnect();
+    const sentinels = this.renderRoot.querySelectorAll<HTMLElement>(".sentinel");
+    if (!sentinels.length) return;
+    this.sentinelWatch = new IntersectionObserver((entries) => {
+      for (const e of entries) {
+        if (!e.isIntersecting) continue;
+        const which = (e.target as HTMLElement).dataset.feed;
+        if (which === "browse" && this.cursor && !this.loading) void this.search(false);
+        else if (which === "gallery") void this.loadGallery(false);
+        else if (which === "person") void this.loadPerson(false);
+      }
+    }, { root: this, rootMargin: "900px 0px" });
+    sentinels.forEach((s) => this.sentinelWatch!.observe(s));
+  }
+  private sentinelWatch?: IntersectionObserver;
+
+  protected updated() {
+    this.watchSentinels();
   }
 
   // ── the account ──
@@ -1097,51 +1302,54 @@ export class OppaiCivitai extends LitElement {
   // ── render ──
 
   render() {
+    const tabs: [Tab, string, string][] = this.video
+      ? [["browse", "Browse", "explore"], ["account", "My account", "account_circle"]]
+      : [["browse", "Browse", "explore"], ["account", "My account", "account_circle"], ["installed", "Installed", "inventory_2"]];
     return html`
-      <div class="wrap">
-        <div class="topbar">
-          <h2><span class="material-symbols-rounded">travel_explore</span> Civitai</h2>
-          <div class="tabs" role="radiogroup" aria-label="What for">
-            ${(["pictures", "video"] as CivitaiMode[]).map(
-              (m) => html`<button role="radio" aria-checked=${this.mode === m ? "true" : "false"}
-                class=${this.mode === m ? "on" : ""} title=${m === "video" ? "Wan models and LoRAs for ComfyUI's clips" : `Models for ${this.genName}`}
-                @click=${() => (this.mode = m)}>
-                <span class="material-symbols-rounded" style="font-size:16px; vertical-align:-3px;">${m === "video" ? "movie" : "image"}</span>
-                ${m === "video" ? "Video" : "Pictures"}
-              </button>`,
-            )}
-          </div>
-          <div class="tabs" role="tablist">
-            ${(this.video ? ["browse", "account"] as Tab[] : ["browse", "account", "installed"] as Tab[]).map(
-              (t) => html`<button role="tab" aria-selected=${this.tab === t ? "true" : "false"}
-                class=${this.tab === t ? "on" : ""} @click=${() => this.selectTab(t)}>
-                ${t === "browse" ? "Browse" : t === "account" ? "My account" : "Installed"}
-              </button>`,
-            )}
-          </div>
-          <div style="margin-left:auto; display:flex; gap:8px; align-items:center;">
-            ${this.jobs.length ? this.renderJobsChip() : nothing}
-            <button class="close" style="margin-left:0;" @click=${() => this.dispatchEvent(new CustomEvent("close"))}>
-              <span class="material-symbols-rounded" style="font-size:17px;">close</span> Back to studio
-            </button>
-          </div>
+      <header class="page-top">
+        <button class="tool icon bare" title="Back to the studio" aria-label="Back to the studio"
+          @click=${() => this.dispatchEvent(new CustomEvent("close"))}>
+          <span class="material-symbols-rounded">arrow_back</span>
+        </button>
+        <h1 class="page-title"><span class="material-symbols-rounded">travel_explore</span>Civitai</h1>
+        <div class="seg" role="radiogroup" aria-label="What for">
+          ${(["pictures", "video"] as CivitaiMode[]).map(
+            (m) => html`<button role="radio" aria-checked=${this.mode === m ? "true" : "false"}
+              title=${m === "video" ? "Wan models and LoRAs for ComfyUI's clips" : `Models for ${this.genName}`}
+              @click=${() => (this.mode = m)}>
+              <span class="material-symbols-rounded">${m === "video" ? "movie" : "image"}</span>
+              <span class="seg-label">${m === "video" ? "Video" : "Pictures"}</span>
+            </button>`,
+          )}
         </div>
-        ${this.jobs.length && this.jobsOpen
-          ? html`<div class="jobs">
-              ${this.jobs.map(
-                (j) => html`<div class="job">
-                  <span class="material-symbols-rounded" style="font-size:15px;">download</span>
-                  <span class="st ${j.status}">${this.jobLabel(j)}</span>
-                  <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${j.error || j.source}</span>
-                </div>`,
-              )}
-            </div>`
-          : nothing}
-        ${this.tab === "browse" ? this.renderBrowse() : this.tab === "account" ? this.renderAccount() : this.renderInstalled()}
-      </div>
-      ${this.detail ? this.renderDetail(this.detail) : nothing}
-      ${this.picked ? this.renderPicked(this.picked) : this.zoomed
-        ? html`<div class="zoom plain" @click=${() => (this.zoomed = "")}>
+        <div class="seg" role="tablist" aria-label="Pages">
+          ${tabs.map(
+            ([t, label, icon]) => html`<button role="tab" aria-selected=${this.tab === t ? "true" : "false"} @click=${() => this.selectTab(t)}>
+              <span class="material-symbols-rounded">${icon}</span><span class="seg-label">${label}</span>
+            </button>`,
+          )}
+        </div>
+        <span class="page-spacer"></span>
+        ${this.jobs.length ? this.renderJobsChip() : nothing}
+      </header>
+      ${this.jobs.length && this.jobsOpen
+        ? html`<div class="jobs"><div>
+            ${this.jobs.map(
+              (j) => html`<div class="job">
+                <span class="material-symbols-rounded" style="font-size:15px;">download</span>
+                <span class="st ${j.status}">${this.jobLabel(j)}</span>
+                <span class="src">${j.error || j.source}</span>
+              </div>`,
+            )}
+          </div></div>`
+        : nothing}
+      <main class="body">
+        ${this.tab === "browse"
+          ? this.detail ? this.renderModelPage(this.detail) : this.person ? this.renderPerson() : this.renderBrowse()
+          : this.tab === "account" ? this.renderAccount() : this.renderInstalled()}
+      </main>
+      ${this.viewing ? this.renderViewer() : this.zoomed
+        ? html`<div class="zoom" @click=${() => (this.zoomed = "")}>
             <img src=${api.civitaiImageURL(this.zoomed)} alt="Preview" />
           </div>`
         : nothing}
@@ -1156,52 +1364,51 @@ export class OppaiCivitai extends LitElement {
     const label = active.length
       ? active.length === 1 ? this.jobLabel(active[0]) : `${active.length} downloading`
       : `${this.jobs.length} download${this.jobs.length === 1 ? "" : "s"}`;
-    return html`<button class="chip small jobs-chip ${this.jobsOpen ? "on" : ""}"
+    return html`<button class="tool jobs-chip ${this.jobsOpen ? "on" : ""}"
       title=${this.jobsOpen ? "Hide the install log" : "Show the install log"} aria-expanded=${this.jobsOpen ? "true" : "false"}
       @click=${() => (this.jobsOpen = !this.jobsOpen)}>
-      <span class="material-symbols-rounded" style="font-size:15px;">${failed ? "error" : "download"}</span> ${label}
+      <span class="material-symbols-rounded">${failed ? "error" : "download"}</span> ${label}
       ${active.length ? html`<span class="dot"></span>` : nothing}
     </button>`;
   }
 
   private renderBrowse() {
     return html`
-      <div class="controls">
-        <input
-          type="search"
-          placeholder="Search models…"
-          .value=${this.q}
-          @input=${(e: Event) => (this.q = (e.target as HTMLInputElement).value)}
-          @keydown=${(e: KeyboardEvent) => { if (e.key === "Enter") void this.search(true); }}
-        />
-        <select aria-label="Sort" .value=${this.sort} @change=${(e: Event) => this.setAnd("sort", (e.target as HTMLSelectElement).value)}>
+      <div class="filters">
+        <label class="searchbox">
+          <span class="material-symbols-rounded">search</span>
+          <input type="search" placeholder="Search models…" aria-label="Search models" .value=${this.q}
+            @input=${(e: Event) => (this.q = (e.target as HTMLInputElement).value)}
+            @keydown=${(e: KeyboardEvent) => { if (e.key === "Enter") void this.search(true); }} />
+        </label>
+        <select class="tool" aria-label="Sort" .value=${this.sort} @change=${(e: Event) => this.setAnd("sort", (e.target as HTMLSelectElement).value)}>
           ${SORTS.map((s) => html`<option value=${s.id} ?selected=${s.id === this.sort}>${s.label}</option>`)}
         </select>
-        <select aria-label="Period" .value=${this.period} @change=${(e: Event) => this.setAnd("period", (e.target as HTMLSelectElement).value)}>
+        <select class="tool" aria-label="Period" .value=${this.period} @change=${(e: Event) => this.setAnd("period", (e.target as HTMLSelectElement).value)}>
           ${PERIODS.map((p) => html`<option value=${p.id} ?selected=${p.id === this.period}>${p.label}</option>`)}
         </select>
-        <select aria-label="Base model" .value=${this.base} @change=${(e: Event) => this.setAnd("base", (e.target as HTMLSelectElement).value)}>
+        <select class="tool" aria-label="Base model" .value=${this.base} @change=${(e: Event) => this.setAnd("base", (e.target as HTMLSelectElement).value)}>
           ${this.video
             ? html`<option value="">Any Wan</option>
                 ${VIDEO_BASES.map((b) => html`<option value=${b.id} ?selected=${b.id === this.base}>${b.label}</option>`)}`
             : html`<option value="">Any base model</option>
                 ${BASES.map((b) => html`<option value=${b} ?selected=${b === this.base}>${b}</option>`)}`}
         </select>
-        <select aria-label="Category" .value=${this.category} @change=${(e: Event) => this.setAnd("category", (e.target as HTMLSelectElement).value)}>
+        <select class="tool" aria-label="Category" .value=${this.category} @change=${(e: Event) => this.setAnd("category", (e.target as HTMLSelectElement).value)}>
           <option value="">All categories</option>
           ${this.categories.map((c) => html`<option value=${c.name} ?selected=${c.name === this.category}>${c.name} (${fmtCount(c.count)})</option>`)}
         </select>
-        <button class="chip ${this.nsfw ? "on" : ""}" title="Show adult models" aria-pressed=${this.nsfw ? "true" : "false"}
+        <button class="tool" title="Show adult models and pictures" aria-pressed=${this.nsfw ? "true" : "false"}
           @click=${() => { this.nsfw = !this.nsfw; void this.search(true); }}>
-          <span class="material-symbols-rounded" style="font-size:15px;">explicit</span> NSFW
+          <span class="material-symbols-rounded">explicit</span> Adult
         </button>
       </div>
-      <div class="controls">
-        ${(this.video ? VIDEO_TYPES : TYPES).map((t) => html`<button class="chip ${this.type === t.id ? "on" : ""}" @click=${() => this.setAnd("type", t.id)}>${t.label}</button>`)}
+      <div class="chip-row types">
+        ${(this.video ? VIDEO_TYPES : TYPES).map((t) => html`<button class="chip" aria-pressed=${this.type === t.id ? "true" : "false"} @click=${() => this.setAnd("type", t.id)}>${t.label}</button>`)}
         ${this.creator
-          ? html`<button class="chip on" title="Showing one creator's models" @click=${() => this.setAnd("creator", "")}>
-              <span class="material-symbols-rounded" style="font-size:15px;">person</span> ${this.creator}
-              <span class="material-symbols-rounded" style="font-size:15px;">close</span>
+          ? html`<button class="chip" aria-pressed="true" title="Showing one creator's models" @click=${() => this.setAnd("creator", "")}>
+              <span class="material-symbols-rounded">person</span> ${this.creator}
+              <span class="material-symbols-rounded">close</span>
             </button>`
           : nothing}
       </div>
@@ -1211,7 +1418,8 @@ export class OppaiCivitai extends LitElement {
         ? html`<div class="note">Searching Civitai…</div>`
         : this.items.length
           ? this.cursor
-            ? html`<button class="more" @click=${() => this.search(false)}>Load more</button>`
+            ? html`<div class="sentinel" data-feed="browse"></div>
+                <button class="more" @click=${() => this.search(false)}>More models</button>`
             : nothing
           : html`<div class="note">No models matched. Try another search.</div>`}
     `;
@@ -1223,9 +1431,10 @@ export class OppaiCivitai extends LitElement {
    * looked at): a grid of thirty clips all playing is thirty downloads at once, and the
    * CDN answers a burst like that with 429s. The still stays if the clip never loads.
    */
-  private tileMedia(still: string, clip: string | undefined, alt: string, always = false, cls = "") {
-    if (!clip) return html`<img class=${cls} src=${api.civitaiImageURL(still)} alt=${alt} loading="lazy" />`;
-    return html`<video class=${cls} poster=${api.civitaiImageURL(still)} src=${api.civitaiImageURL(clip)} muted loop playsinline
+  private tileMedia(still: string, clip: string | undefined, alt: string, always = false, width = 450) {
+    const poster = api.civitaiImageURL(civitaiSized(still, width));
+    if (!clip) return html`<img src=${poster} alt=${alt} loading="lazy" />`;
+    return html`<video poster=${poster} src=${api.civitaiImageURL(clip)} muted loop playsinline
       preload=${always ? "auto" : "none"} ?autoplay=${always} aria-label=${alt}
       @mouseenter=${(e: Event) => void (e.target as HTMLVideoElement).play().catch(() => {})}
       @mouseleave=${(e: Event) => { if (!always) (e.target as HTMLVideoElement).pause(); }}></video>
@@ -1235,163 +1444,236 @@ export class OppaiCivitai extends LitElement {
   private renderCard(m: CivitaiModel) {
     const img = m.versions[0]?.images[0];
     return html`
-      <button class="card" @click=${() => this.openDetail(m)}
+      <button class="mtile" @click=${() => this.openDetail(m)}
         @mouseenter=${(e: Event) => void (e.currentTarget as HTMLElement).querySelector("video")?.play().catch(() => {})}
         @mouseleave=${(e: Event) => (e.currentTarget as HTMLElement).querySelector("video")?.pause()}>
-        ${img
-          ? this.tileMedia(img, m.versions[0]?.videos?.[0], m.name)
-          : html`<div class="noimg"><span class="material-symbols-rounded" style="font-size:34px;">image</span></div>`}
-        ${m.installed && !this.video ? html`<span class="badge ok"><span class="material-symbols-rounded" style="font-size:13px;">check</span> Installed</span>` : nothing}
-        ${m.nsfw ? html`<span class="badge right">18+</span>` : nothing}
-        <div class="meta">
-          <div class="name">${m.name}</div>
-          <div class="sub">
-            <span>${typeLabel(m.type)}</span>
-            ${m.versions[0]?.base ? html`<span>${m.versions[0].base}</span>` : nothing}
-            <span>⤓ ${fmtCount(m.downloads)}</span>
+        <div class="art">
+          ${img
+            ? this.tileMedia(img, m.versions[0]?.videos?.[0], m.name)
+            : html`<div class="noimg"><span class="material-symbols-rounded" style="font-size:34px;">image</span></div>`}
+          <div class="badges">
+            <span class="badge">${typeLabel(m.type)}</span>
+            ${m.installed && !this.video ? html`<span class="badge ok"><span class="material-symbols-rounded">check</span> Installed</span>` : nothing}
+            ${m.nsfw ? html`<span class="badge right">18+</span>` : nothing}
           </div>
         </div>
+        <span class="name">${m.name}</span>
+        <span class="sub">
+          ${m.versions[0]?.base ? html`<span>${m.versions[0].base}</span>` : nothing}
+          <span class="stat"><span class="material-symbols-rounded">download</span>${fmtCount(m.downloads)}</span>
+          ${m.likes ? html`<span class="stat"><span class="material-symbols-rounded">thumb_up</span>${fmtCount(m.likes)}</span>` : nothing}
+        </span>
       </button>
     `;
   }
 
-  private renderDetail(m: CivitaiModel) {
+  /** A model's page, laid out as the site lays it out: what it is and who made it, its
+   *  versions, its showcase beside what to install, what its creator wrote, what people
+   *  said, and every picture people made with it. */
+  private renderModelPage(m: CivitaiModel) {
     const v = this.currentVersion();
+    const shown = v ? Math.max(0, v.images.indexOf(this.shownImage)) : 0;
+    const long = (m.description?.length ?? 0) > 1400;
+    const site = `https://civitai.com/models/${m.id}${v ? `?modelVersionId=${v.id}` : ""}`;
     return html`
-      <div class="overlay" @click=${(e: Event) => { if (e.target === e.currentTarget) this.closeDetail(); }}>
-        <div class="detail" role="dialog" aria-label=${m.name}>
-          <div>
+      <button class="crumb" @click=${() => this.closeDetail()}>
+        <span class="material-symbols-rounded">arrow_back</span> ${this.creator ? `Models by ${this.creator}` : "All models"}
+      </button>
+      <header class="mp-head">
+        <span class="kicker">${typeLabel(m.type)}${v?.base ? ` · ${v.base}` : ""}${m.nsfw ? " · 18+" : ""}</span>
+        <h1>${m.name}</h1>
+        <div class="mp-meta">
+          ${m.creator
+            ? html`<button class="creator" title="Their other models" @click=${() => { this.closeDetail(); this.setAnd("creator", m.creator ?? ""); }}>
+                ${m.creatorImage ? html`<img src=${api.civitaiImageURL(m.creatorImage)} alt="" />` : html`<span class="face">${m.creator.slice(0, 1)}</span>`}
+                ${m.creator}
+              </button>`
+            : nothing}
+          <span class="stat" title="Downloads"><span class="material-symbols-rounded">download</span>${fmtCount(m.downloads)}</span>
+          <span class="stat" title="Likes"><span class="material-symbols-rounded">thumb_up</span>${fmtCount(m.likes)}</span>
+          ${m.comments ? html`<span class="stat" title="Comments"><span class="material-symbols-rounded">chat_bubble</span>${fmtCount(m.comments)}</span>` : nothing}
+          ${m.collected ? html`<span class="stat" title="Collected"><span class="material-symbols-rounded">bookmarks</span>${fmtCount(m.collected)}</span>` : nothing}
+          <a class="tool" target="_blank" rel="noopener noreferrer" href=${site}>
+            <span class="material-symbols-rounded">open_in_new</span> civitai.com
+          </a>
+        </div>
+      </header>
+      ${m.versions.length > 1
+        ? html`<div class="chip-row versions" role="tablist" aria-label="Versions">
+            ${m.versions.map(
+              (ver) => html`<button class="chip" role="tab" aria-pressed=${ver.id === this.versionId ? "true" : "false"} @click=${() => this.pickVersion(ver)}>
+                ${ver.installed && !this.video ? html`<span class="material-symbols-rounded">check</span>` : nothing}
+                ${ver.name}
+              </button>`,
+            )}
+          </div>`
+        : nothing}
+      <div class="mp-grid">
+        <div class="mp-main">
+          <div class="showcase">
             ${this.shownImage && clipOf(v, this.shownImage)
-              ? html`<video class="big" poster=${api.civitaiImageURL(this.shownImage)} src=${api.civitaiImageURL(clipOf(v, this.shownImage))}
+              ? html`<video poster=${api.civitaiImageURL(this.shownImage)} src=${api.civitaiImageURL(clipOf(v, this.shownImage))}
                   autoplay muted loop playsinline controls aria-label=${m.name}></video>`
               : this.shownImage
-              ? html`<img class="big" src=${api.civitaiImageURL(this.shownImage)} alt=${m.name}
-                  @click=${() => (this.zoomed = this.shownImage)} />`
-              : html`<div class="big" style="display:grid; place-items:center;">
-                  <span class="material-symbols-rounded" style="font-size:40px; color:var(--oppai-text-muted);">image</span>
-                </div>`}
+              ? html`<img src=${api.civitaiImageURL(civitaiSized(this.shownImage, 1400))} alt=${m.name} @click=${() => (this.zoomed = this.shownImage)} />`
+              : html`<span class="material-symbols-rounded" style="font-size:44px; color:var(--oppai-text-muted);">image</span>`}
             ${v && v.images.length > 1
-              ? html`<div class="thumbs">
-                  ${v.images.map(
-                    (u) => html`<img src=${api.civitaiImageURL(u)} class=${u === this.shownImage ? "on" : ""}
-                      alt="Preview" loading="lazy" @click=${() => (this.shownImage = u)} />`,
-                  )}
+              ? html`<button class="nav prev" aria-label="Previous picture" ?disabled=${shown === 0} @click=${() => this.stepShowcase(-1)}>
+                  <span class="material-symbols-rounded">chevron_left</span>
+                </button>
+                <button class="nav next" aria-label="Next picture" ?disabled=${shown >= v.images.length - 1} @click=${() => this.stepShowcase(1)}>
+                  <span class="material-symbols-rounded">chevron_right</span>
+                </button>
+                <span class="badge count">${shown + 1} / ${v.images.length}</span>`
+              : nothing}
+          </div>
+          ${v && v.images.length > 1
+            ? html`<div class="thumbs">
+                ${v.images.map(
+                  (u) => html`<button class=${u === this.shownImage ? "on" : ""} aria-label="Show this picture" @click=${() => (this.shownImage = u)}>
+                    <img src=${api.civitaiImageURL(civitaiSized(u, 160))} alt="" loading="lazy" />
+                  </button>`,
+                )}
+              </div>`
+            : nothing}
+          ${this.detailLoading && !m.description ? html`<div class="note slim">Loading the model page…</div>` : nothing}
+          ${m.description
+            ? html`<section class="block">
+                <div class="sec-head"><h2>About</h2></div>
+                <div class="desc ${long && !this.descOpen ? "folded" : ""}">${unsafeHTML(m.description)}</div>
+                ${long ? html`<button class="unfold" @click=${() => (this.descOpen = !this.descOpen)}>${this.descOpen ? "Show less" : "Show all of it"}</button>` : nothing}
+              </section>`
+            : nothing}
+          ${v?.description && v.description !== m.description
+            ? html`<section class="block">
+                <div class="sec-head"><h2>About ${v.name}</h2></div>
+                <div class="desc">${unsafeHTML(v.description)}</div>
+              </section>`
+            : nothing}
+          <section class="block">
+            <div class="sec-head">
+              <h2>Discussion</h2>
+              ${m.comments ? html`<span class="page-sub">${fmtCount(m.comments)} comments</span>` : nothing}
+              <span class="page-spacer"></span>
+              ${this.renderThreadSorts("model", m.id)}
+            </div>
+            ${this.renderThread("model", m.id)}
+          </section>
+        </div>
+        <aside class="mp-side">
+          <div class="panel side-card">
+            ${v ? this.renderInstallButton(m, v) : nothing}
+            <div class="install-note">${this.installNote(m, v)}</div>
+            ${v
+              ? html`<dl class="facts">
+                  <dt>Version</dt><dd>${v.name}</dd>
+                  <dt>Base model</dt><dd>${v.base || "—"}</dd>
+                  ${v.publishedAt ? html`<dt>Published</dt><dd>${fmtDate(v.publishedAt)}</dd>` : nothing}
+                  ${v.downloads ? html`<dt>Downloads</dt><dd>${fmtCount(v.downloads)}</dd>` : nothing}
+                  ${v.likes ? html`<dt>Likes</dt><dd>${fmtCount(v.likes)}</dd>` : nothing}
+                  ${v.sizeMB ? html`<dt>Size</dt><dd>${fmtSize(v.sizeMB)}</dd>` : nothing}
+                </dl>`
+              : nothing}
+            ${v?.trainedWords.length
+              ? html`<div class="side-sec">
+                  <span class="kicker">Trigger words</span>
+                  <div class="words">
+                    <span>${v.trainedWords.join(", ")}</span>
+                    <button class="tool icon bare" style="width:28px; height:28px;" title="Copy the trigger words"
+                      @click=${() => void navigator.clipboard?.writeText(v.trainedWords.join(", "))}>
+                      <span class="material-symbols-rounded" style="font-size:16px;">content_copy</span>
+                    </button>
+                  </div>
                 </div>`
               : nothing}
             ${v?.files?.length
-              ? html`<div class="vlabel">Files</div>
+              ? html`<div class="side-sec">
+                  <span class="kicker">Files</span>
                   <div class="files">
                     ${v.files.map(
-                      (f) => html`<div class="f">
-                        <span>${f.name}</span>
+                      (f) => html`<div class="file" title=${f.name}>
+                        <span class="material-symbols-rounded">${f.primary ? "star" : "draft"}</span>
+                        <span class="fn">${f.name}</span>
                         <span>${fmtSize(f.sizeMB)}</span>
-                        ${f.format ? html`<span>${f.format}</span>` : nothing}
                         ${f.precision ? html`<span>${f.precision}</span>` : nothing}
-                        ${f.primary ? html`<span class="material-symbols-rounded" title="Primary file" style="font-size:14px;">star</span>` : nothing}
                       </div>`,
                     )}
-                  </div>`
+                  </div>
+                </div>`
               : nothing}
           </div>
-          <div>
-            <h3>${m.name}</h3>
-            <div class="sub">
-              <span>${typeLabel(m.type)}</span>
-              ${m.creator
-                ? html`<button class="creator" title="Show this creator's models" @click=${() => { this.closeDetail(); this.setAnd("creator", m.creator ?? ""); }}>
-                    ${m.creatorImage ? html`<img src=${api.civitaiImageURL(m.creatorImage)} alt="" />` : html`<span class="material-symbols-rounded" style="font-size:16px;">person</span>`}
-                    ${m.creator}
-                  </button>`
-                : nothing}
-              <span>⤓ ${fmtCount(m.downloads)}</span>
-              <span>♥ ${fmtCount(m.likes)}</span>
-              ${m.nsfw ? html`<span>18+</span>` : nothing}
-              <a class="ghost" style="padding:3px 8px; font-size:12px; text-decoration:none;" target="_blank" rel="noopener noreferrer"
-                href=${`https://civitai.com/models/${m.id}${v ? `?modelVersionId=${v.id}` : ""}`}>
-                <span class="material-symbols-rounded" style="font-size:14px;">open_in_new</span> civitai.com
-              </a>
-            </div>
-            ${m.versions.length > 1
-              ? html`<div class="vlabel">Version</div>
-                  <div class="versions">
-                    ${m.versions.map(
-                      (ver) => html`<button class="chip small ${ver.id === this.versionId ? "on" : ""}" @click=${() => this.pickVersion(ver)}>
-                        ${ver.installed && !this.video ? html`<span class="material-symbols-rounded" style="font-size:14px;">check</span>` : nothing}
-                        ${ver.name}<span style="opacity:.7;"> · ${ver.base}</span>
-                      </button>`,
-                    )}
-                  </div>`
-              : v
-                ? html`<div class="vlabel">Version ${v.name} · ${v.base}${v.publishedAt ? ` · ${fmtDate(v.publishedAt)}` : ""}</div>`
-                : nothing}
-            ${v?.trainedWords.length
-              ? html`<div class="vlabel">Trigger words</div>
-                  <div class="words">
-                    <span>${v.trainedWords.join(", ")}</span>
-                    <button class="ghost" style="padding:3px 8px; font-size:12px; flex-shrink:0;" title="Copy the trigger words"
-                      @click=${() => void navigator.clipboard?.writeText(v.trainedWords.join(", "))}>
-                      <span class="material-symbols-rounded" style="font-size:14px;">content_copy</span>
-                    </button>
-                  </div>`
-              : nothing}
-            ${m.tags.length
-              ? html`<div class="vlabel">Tags</div>
-                  <div class="tags">
-                    ${m.tags.slice(0, 14).map((t) => html`<button class="chip small" @click=${() => { this.closeDetail(); this.setAnd("category", t); }}>${t}</button>`)}
-                  </div>`
-              : nothing}
-            ${this.detailLoading && !m.description
-              ? html`<div class="note" style="padding:14px 0;">Loading the model page…</div>`
-              : nothing}
-            ${m.description
-              ? html`<div class="vlabel">About</div>
-                  <div class="desc">${unsafeHTML(m.description)}</div>`
-              : nothing}
-            ${v?.description && v.description !== m.description
-              ? html`<div class="vlabel">About this version</div>
-                  <div class="desc">${unsafeHTML(v.description)}</div>`
-              : nothing}
-            <div class="actions">
-              ${v && this.video
-                ? this.renderComfyInstall(m, v)
-                : v
-                ? v.installed
-                  ? html`<button class="primary" disabled>
-                      <span class="material-symbols-rounded" style="font-size:18px;">check_circle</span> Installed in ${this.genName}
-                    </button>`
-                  : this.canManage
-                    ? html`<button class="primary" ?disabled=${this.installing || !v.downloadUrl} @click=${() => this.install(v)}>
-                        <span class="material-symbols-rounded" style="font-size:18px;">download</span>
-                        Install to ${this.genName}${v.sizeMB ? ` (${fmtSize(v.sizeMB)})` : ""}
-                      </button>`
-                    : nothing
-                : nothing}
-              <button class="ghost" @click=${() => this.toggleGallery()}>
-                <span class="material-symbols-rounded" style="font-size:16px;">photo_library</span>
-                ${this.galleryOpen ? "Hide posted pictures" : "Posted pictures & prompts"}
-              </button>
-            </div>
-            ${this.galleryOpen ? this.renderGallery() : nothing}
-            <div class="sub" style="margin-top:10px;">
-              ${this.video
-                ? this.comfyPlace(m, v).dir
-                  ? html`The server downloads into <code>${this.comfyPlace(m, v).dir}</code>, named so the high- and low-noise
-                      halves read as a pair. Press <b>Refresh</b> under Settings → Image generation → Video to pick them.`
-                  : this.comfyPlace(m, v).problem || html`ComfyUI has no API that takes a download, so installing from here
-                      needs the folder ComfyUI keeps ${this.comfyPlace(m, v).what} in set under Settings → Image generation →
-                      Video.`
-                : !this.canManage
-                ? this.manageNote || "Automatic1111 has no API that takes a download, so installing from here needs its models folder mapped into the OppaiLib container."
-                : this.backend === "invokeai"
-                  ? "InvokeAI downloads the file itself; the cover, description and trigger words follow once it is in."
-                  : this.backend === "comfyui"
-                  ? "The server downloads the file into ComfyUI's folder for it; the cover, description and trigger words land beside it."
-                  : "The server downloads the file into Automatic1111's models folder and asks it to rescan; the cover, description and trigger words follow as A1111's own sidecar files."}
-            </div>
+          ${m.tags.length
+            ? html`<div class="panel side-card">
+                <span class="kicker">Tags</span>
+                <div class="tags">
+                  ${m.tags.slice(0, 20).map((t) => html`<button class="chip small" title="Models in this category" @click=${() => { this.closeDetail(); this.setAnd("category", t); }}>${t}</button>`)}
+                </div>
+              </div>`
+            : nothing}
+        </aside>
+      </div>
+      <section class="block">
+        <div class="sec-head">
+          <h2>Gallery</h2>
+          <span class="page-sub">What people made with ${v ? v.name : "it"}</span>
+          <span class="page-spacer"></span>
+          <div class="chip-row">
+            ${[["", "Most reactions"], ["newest", "Newest"], ["comments", "Most discussed"]].map(
+              ([id, label]) => html`<button class="chip small" aria-pressed=${this.gallerySort === id ? "true" : "false"}
+                @click=${() => { this.gallerySort = id; this.gallery = []; this.galleryCursor = ""; void this.loadGallery(true); }}>${label}</button>`,
+            )}
           </div>
         </div>
-      </div>
+        ${this.promptsNeedKey
+          ? html`<div class="keynote" style="margin-bottom:14px;">
+              <span class="material-symbols-rounded">key</span>
+              <span>Civitai shares the prompt behind a picture, and its comments, only with an API key. Add yours under Settings → Image generation to read them here.</span>
+            </div>`
+          : nothing}
+        ${this.renderMasonry(this.gallery)}
+        ${this.galleryLoading
+          ? html`<div class="note">Loading pictures…</div>`
+          : this.gallery.length
+            ? this.galleryCursor
+              ? html`<div class="sentinel" data-feed="gallery"></div>
+                  <button class="more" @click=${() => this.loadGallery(false)}>More pictures</button>`
+              : nothing
+            : html`<div class="note">Nobody has posted a picture with this version yet.</div>`}
+      </section>
     `;
+  }
+
+  private renderInstallButton(m: CivitaiModel, v: CivitaiVersion) {
+    if (this.video) return this.renderComfyInstall(m, v);
+    if (v.installed) {
+      return html`<button class="primary-btn" disabled>
+        <span class="material-symbols-rounded">check_circle</span> Installed in ${this.genName}
+      </button>`;
+    }
+    if (!this.canManage) return nothing;
+    return html`<button class="primary-btn" ?disabled=${this.installing || !v.downloadUrl} @click=${() => this.install(v)}>
+      <span class="material-symbols-rounded">download</span>
+      Install to ${this.genName}${v.sizeMB ? ` · ${fmtSize(v.sizeMB)}` : ""}
+    </button>`;
+  }
+
+  private installNote(m: CivitaiModel, v: CivitaiVersion | undefined) {
+    if (this.video) {
+      const place = this.comfyPlace(m, v);
+      return place.dir
+        ? html`The server downloads into <code>${place.dir}</code>, named so the high- and low-noise
+            halves read as a pair. Press <b>Refresh</b> under Settings → Image generation → Video to pick them.`
+        : place.problem || html`ComfyUI has no API that takes a download, so installing from here
+            needs the folder ComfyUI keeps ${place.what} in set under Settings → Image generation → Video.`;
+    }
+    if (!this.canManage) {
+      return this.manageNote || "Automatic1111 has no API that takes a download, so installing from here needs its models folder mapped into the OppaiLib container.";
+    }
+    switch (this.backend) {
+      case "invokeai": return "InvokeAI downloads the file itself; the cover, description and trigger words follow once it is in.";
+      case "comfyui": return "The server downloads the file into ComfyUI's folder for it; the cover, description and trigger words land beside it.";
+      default: return "The server downloads the file into Automatic1111's models folder and asks it to rescan; the cover, description and trigger words follow as A1111's own sidecar files.";
+    }
   }
 
   /** The folder a version would be installed into — dir "" when there is none, with
@@ -1410,89 +1692,225 @@ export class OppaiCivitai extends LitElement {
     const twin = v.twin ? m.versions.find((x) => x.id === v.twin) : undefined;
     const size = (v.sizeMB ?? 0) + (twin?.sizeMB ?? 0);
     const label = twin
-      ? `Install the pair to ComfyUI — ${v.stage} and ${twin.stage} noise`
+      ? `Install the pair — ${v.stage} and ${twin.stage} noise`
       : v.stage
-        ? `Install the ${v.stage}-noise half to ComfyUI`
+        ? `Install the ${v.stage}-noise half`
         : "Install to ComfyUI";
-    return html`<button class="primary" ?disabled=${this.installing || !v.downloadUrl} @click=${() => this.install(v)}>
-      <span class="material-symbols-rounded" style="font-size:18px;">download</span>
-      ${label}${size ? ` (${fmtSize(size)})` : ""}
+    return html`<button class="primary-btn" ?disabled=${this.installing || !v.downloadUrl} @click=${() => this.install(v)}>
+      <span class="material-symbols-rounded">download</span>
+      ${label}${size ? ` · ${fmtSize(size)}` : ""}
     </button>`;
   }
 
-  private renderGallery() {
+  /** Pictures at their own shapes, each with who posted it and what people made of it;
+   *  one opens with the rest of `images` to step through. */
+  private renderMasonry(images: CivitaiImage[]) {
+    if (!images.length) return nothing;
+    return html`<div class="masonry">
+      ${images.map((img) => {
+        const r = reactionsOf(img.stats);
+        return html`<button class="gcard" style=${img.width && img.height ? `aspect-ratio:${img.width}/${img.height}` : ""}
+          title=${img.prompt ? "Has its prompt" : ""} @click=${() => this.openPicture(img, images)}
+          @mouseenter=${(e: Event) => void (e.currentTarget as HTMLElement).querySelector("video")?.play().catch(() => {})}
+          @mouseleave=${(e: Event) => (e.currentTarget as HTMLElement).querySelector("video")?.pause()}>
+          ${this.tileMedia(img.url, img.video, "")}
+          ${img.prompt ? html`<span class="badge mark" title="Its prompt is kept"><span class="material-symbols-rounded">description</span></span>` : nothing}
+          <span class="foot">
+            <span class="who">${img.username ?? ""}</span>
+            ${r.total ? html`<span class="stat"><span class="material-symbols-rounded">favorite</span>${compactNumber(r.total)}</span>` : nothing}
+            ${r.comments ? html`<span class="stat"><span class="material-symbols-rounded">chat_bubble</span>${compactNumber(r.comments)}</span>` : nothing}
+          </span>
+        </button>`;
+      })}
+    </div>`;
+  }
+
+  private renderThreadSorts(entity: CivitaiCommentEntity, id: number) {
+    const t = this.threadOf(entity, id);
+    if (!t || t.needsKey || (t.error && !t.items.length)) return nothing;
+    return html`<div class="chip-row">
+      ${(["newest", "oldest", "reactions"] as ThreadSort[]).map(
+        (s) => html`<button class="chip small" aria-pressed=${t.sort === s ? "true" : "false"} @click=${() => this.loadThread(entity, id, false, s)}>
+          ${s === "newest" ? "Newest" : s === "oldest" ? "Oldest" : "Most reactions"}
+        </button>`,
+      )}
+    </div>`;
+  }
+
+  /** A comment section: its threads in reading order, or why it cannot be read here. */
+  private renderThread(entity: CivitaiCommentEntity, id: number) {
+    const t = this.threadOf(entity, id);
+    const page = t?.page || `https://civitai.com/${entity === "model" ? "models" : entity === "post" ? "posts" : "images"}/${id}`;
+    if (!t || (t.loading && !t.items.length)) return html`<div class="note slim">Loading comments…</div>`;
+    if (t.needsKey) {
+      return html`<div class="keynote">
+        <span class="material-symbols-rounded">key</span>
+        <span>Civitai shares comments only with a signed-in account. Add your Civitai API key under Settings → Image generation,
+          or <a href=${page} target="_blank" rel="noopener noreferrer">read them on civitai.com</a>.</span>
+      </div>`;
+    }
+    if (t.error && !t.items.length) {
+      return html`<div class="keynote">
+        <span class="material-symbols-rounded">forum</span>
+        <span>${t.error} <a href=${page} target="_blank" rel="noopener noreferrer">Open on civitai.com</a></span>
+      </div>`;
+    }
+    if (!t.items.length) return html`<div class="note slim">No comments yet.</div>`;
+    return html`<div class="thread">
+      ${t.items.map((c) => html`<article class="cmt ${c.depth ? "reply" : ""}" style=${c.depth ? `margin-left:${Math.min(c.depth, 4) * 26}px` : ""}>
+        ${c.avatar ? html`<img class="face" src=${api.civitaiImageURL(c.avatar)} alt="" loading="lazy" />` : html`<span class="face">${(c.user || "?").slice(0, 1)}</span>`}
+        <div>
+          <div class="cmt-head">
+            ${c.user ? html`<b>${c.user}</b>` : nothing}
+            <span class="when">${timeAgo(c.createdAt)}</span>
+            ${c.pinned ? html`<span class="pin"><span class="material-symbols-rounded">push_pin</span>Pinned</span>` : nothing}
+          </div>
+          <div class="cmt-body">${unsafeHTML(c.html)}</div>
+          <div class="cmt-foot">
+            ${c.likes ? html`<span class="stat"><span class="material-symbols-rounded" style="font-size:15px;">favorite</span>${c.likes}</span>` : nothing}
+            ${c.moreReplies
+              ? html`<a href=${page} target="_blank" rel="noopener noreferrer">${c.moreReplies} more ${c.moreReplies === 1 ? "reply" : "replies"} on civitai.com</a>`
+              : nothing}
+          </div>
+        </div>
+      </article>`)}
+      ${t.cursor
+        ? html`<button class="more" ?disabled=${t.loading} @click=${() => this.loadThread(entity, id, true)}>${t.loading ? "Loading…" : "More comments"}</button>`
+        : nothing}
+    </div>`;
+  }
+
+  /** One picture, opened: on a dark stage, with the rest of its post, who made it and
+   *  how, what people made of it, and what they said. */
+  private renderViewer() {
+    const { image: img, list } = this.viewing!;
+    const { index, prev, next } = neighbours(list, img.id);
+    const settings = promptSettingsFrom(img);
+    const r = reactionsOf(img.stats);
+    const post = img.postId && img.postId > 0 ? postPictures(img, this.postPics[img.postId]) : [img];
+    const date = img.createdAt ? fmtDate(img.createdAt) : "";
     return html`
-      <div class="controls" style="margin-top:10px;">
-        ${[["", "Most reactions"], ["newest", "Newest"], ["comments", "Most comments"]].map(
-          ([id, label]) => html`<button class="chip small ${this.gallerySort === id ? "on" : ""}"
-            @click=${() => { this.gallerySort = id; this.gallery = []; this.galleryCursor = ""; void this.loadGallery(true); }}>${label}</button>`,
-        )}
+      <div class="pv" role="dialog" aria-modal="true" aria-label="Picture">
+        <div class="pv-stage" @click=${(e: Event) => { if (e.target === e.currentTarget) this.viewing = null; }}>
+          ${img.video
+            ? html`<video poster=${api.civitaiImageURL(img.url)} src=${api.civitaiImageURL(img.video)} autoplay muted loop playsinline controls></video>`
+            : html`<img src=${api.civitaiImageURL(img.url)} alt="" />`}
+          <button class="pv-x" title="Close (Esc)" aria-label="Close" @click=${() => (this.viewing = null)}>
+            <span class="material-symbols-rounded">close</span>
+          </button>
+          <button class="pv-nav prev" aria-label="Previous picture" ?disabled=${!prev} @click=${() => this.stepPicture(-1)}>
+            <span class="material-symbols-rounded" style="font-size:28px;">chevron_left</span>
+          </button>
+          <button class="pv-nav next" aria-label="Next picture" ?disabled=${!next} @click=${() => this.stepPicture(1)}>
+            <span class="material-symbols-rounded" style="font-size:28px;">chevron_right</span>
+          </button>
+          ${list.length > 1 ? html`<span class="badge pv-count">${index + 1} / ${list.length}${this.galleryCursor && list === this.gallery ? "+" : ""}</span>` : nothing}
+        </div>
+        <aside class="pv-side">
+          <div class="pv-who">
+            <span class="face">${(img.username || "?").slice(0, 1)}</span>
+            <div class="n">
+              ${img.username
+                ? html`<button title="Everything they posted" @click=${() => this.openPerson(img.username!)}>${img.username}</button>`
+                : html`<b>Someone</b>`}
+              <span>${[date, img.baseModel].filter(Boolean).join(" · ")}</span>
+            </div>
+            <a class="tool icon" title="Open on civitai.com" target="_blank" rel="noopener noreferrer" href=${`https://civitai.com/images/${img.id}`}>
+              <span class="material-symbols-rounded">open_in_new</span>
+            </a>
+          </div>
+          ${r.list.length || r.comments
+            ? html`<div class="reacts">
+                ${r.list.map((x) => html`<span class="react" title=${x.label}><span class="material-symbols-rounded">${x.icon}</span>${compactNumber(x.n)}</span>`)}
+                ${r.comments ? html`<span class="react" title="Comments"><span class="material-symbols-rounded">chat_bubble</span>${compactNumber(r.comments)}</span>` : nothing}
+              </div>`
+            : nothing}
+          ${post.length > 1
+            ? html`<div class="side-sec">
+                <span class="kicker">In this post <span class="page-sub">${post.length} pictures</span></span>
+                <div class="strip">
+                  ${post.map((p) => html`<button class=${p.id === img.id ? "on" : ""} aria-label="Show this picture" @click=${() => this.showPicture(p, post)}>
+                    <img src=${api.civitaiImageURL(civitaiSized(p.url, 160))} alt="" loading="lazy" />
+                  </button>`)}
+                </div>
+              </div>`
+            : nothing}
+          <div class="side-sec gen">
+            <span class="kicker">How it was made</span>
+            ${settings
+              ? html`<div class="p">${settings.prompt}</div>
+                  ${settings.negativePrompt ? html`<span class="kicker" style="font-size:10.5px;">Negative</span><div class="p neg">${settings.negativePrompt}</div>` : nothing}
+                  <dl class="facts">
+                    ${img.model ? html`<dt>Model</dt><dd title=${img.model}>${img.model}</dd>` : nothing}
+                    ${img.sampler ? html`<dt>Sampler</dt><dd title=${img.sampler}>${img.sampler}</dd>` : nothing}
+                    ${settings.steps ? html`<dt>Steps</dt><dd>${settings.steps}</dd>` : nothing}
+                    ${settings.cfgScale ? html`<dt>CFG</dt><dd>${settings.cfgScale}</dd>` : nothing}
+                    ${settings.seed ? html`<dt>Seed</dt><dd>${settings.seed}</dd>` : nothing}
+                    ${settings.width ? html`<dt>Size</dt><dd>${settings.width}×${settings.height}</dd>` : nothing}
+                    ${img.clipSkip ? html`<dt>Clip skip</dt><dd>${img.clipSkip}</dd>` : nothing}
+                    ${img.denoise ? html`<dt>Denoise</dt><dd>${img.denoise}</dd>` : nothing}
+                  </dl>
+                  ${img.resources?.length
+                    ? html`<div class="res">${img.resources.map((x) => html`<span class="tag" title=${x.type ?? ""}>${x.name}${x.weight ? html`<b>${x.weight}</b>` : nothing}</span>`)}</div>`
+                    : nothing}
+                  <div class="acts">
+                    <button class="primary-btn" @click=${() => this.usePrompt(img)}>
+                      <span class="material-symbols-rounded">auto_awesome</span> Use in the studio
+                    </button>
+                    <button class="tool" style="height:42px;" @click=${() => this.copyPrompt(img)}>
+                      <span class="material-symbols-rounded">content_copy</span> ${this.copied ? "Copied" : "Copy"}
+                    </button>
+                  </div>`
+              : html`<div class="sub">${this.promptsNeedKey || !img.prompt
+                  ? "Civitai keeps the prompt behind a picture to itself without an API key — or the person who posted it left it off."
+                  : "No generation data was posted with this picture."}</div>`}
+          </div>
+          <div class="side-sec">
+            <div class="sec-head" style="margin:0;">
+              <span class="kicker">Comments</span>
+              <span class="page-spacer"></span>
+              ${img.postId && img.postId > 0
+                ? html`<div class="seg" role="tablist">
+                    <button role="tab" aria-selected=${this.viewTab === "picture" ? "true" : "false"}
+                      @click=${() => { this.viewTab = "picture"; void this.loadThread("image", img.id); }}>Picture</button>
+                    <button role="tab" aria-selected=${this.viewTab === "post" ? "true" : "false"}
+                      @click=${() => { this.viewTab = "post"; void this.loadThread("post", img.postId!); }}>Post</button>
+                  </div>`
+                : nothing}
+            </div>
+            ${this.viewTab === "post" && img.postId ? this.renderThread("post", img.postId) : this.renderThread("image", img.id)}
+          </div>
+        </aside>
       </div>
-      ${this.promptsNeedKey
-        ? html`<div class="sub" style="margin-top:8px;">
-            Civitai only shares the prompts behind pictures with an API key — add yours under Settings → Image generation to see them here.
-          </div>`
-        : nothing}
-      ${this.gallery.length
-        ? html`<div class="gal-grid">
-            ${this.gallery.map(
-              (img) => html`<button title=${img.prompt ? "Has a prompt" : "No prompt kept"} @click=${() => (this.picked = img)}
-                @mouseenter=${(e: Event) => void (e.currentTarget as HTMLElement).querySelector("video")?.play().catch(() => {})}
-                @mouseleave=${(e: Event) => (e.currentTarget as HTMLElement).querySelector("video")?.pause()}>
-                ${this.tileMedia(img.url, img.video, "")}
-                ${img.prompt ? html`<span class="has">prompt</span>` : nothing}
-              </button>`,
-            )}
-          </div>`
-        : nothing}
-      ${this.galleryLoading
-        ? html`<div class="note" style="padding:12px 0;">Loading pictures…</div>`
-        : this.gallery.length
-          ? this.galleryCursor
-            ? html`<button class="more" style="margin-top:8px;" @click=${() => this.loadGallery(false)}>More pictures</button>`
-            : nothing
-          : html`<div class="note" style="padding:12px 0;">Nobody has posted a picture with this version.</div>`}
     `;
   }
 
-  /** One posted picture, full size, with everything the poster kept about it. */
-  private renderPicked(img: CivitaiImage) {
-    const settings = promptSettingsFrom(img);
+  /** Everything one person posted, newest first. */
+  private renderPerson() {
+    const p = this.person!;
     return html`
-      <div class="zoom ${settings ? "" : "plain"}" @click=${(e: Event) => { if (e.target === e.currentTarget) this.picked = null; }}>
-        ${img.video
-          ? html`<video poster=${api.civitaiImageURL(img.url)} src=${api.civitaiImageURL(img.video)} autoplay muted loop playsinline controls
-              @click=${(e: Event) => e.stopPropagation()}></video>`
-          : html`<img src=${api.civitaiImageURL(img.url)} alt="" @click=${() => (this.picked = null)} />`}
-        ${settings
-          ? html`<div class="pane">
-              <div style="display:flex; align-items:center; gap:8px; justify-content:space-between;">
-                <h4>Prompt${img.username ? ` · by ${img.username}` : ""}</h4>
-                <button class="ghost" style="padding:4px 8px;" @click=${() => (this.picked = null)}>
-                  <span class="material-symbols-rounded" style="font-size:16px;">close</span>
-                </button>
-              </div>
-              <div class="p">${settings.prompt}</div>
-              ${settings.negativePrompt ? html`<h4>Negative</h4><div class="p">${settings.negativePrompt}</div>` : nothing}
-              <div class="kv">
-                ${img.model ? html`<span>Model</span><span>${img.model}</span>` : nothing}
-                ${img.sampler ? html`<span>Sampler</span><span>${img.sampler}${settings.sampler ? "" : " (not in the studio's list)"}</span>` : nothing}
-                ${settings.steps ? html`<span>Steps</span><span>${settings.steps}</span>` : nothing}
-                ${settings.cfgScale ? html`<span>CFG</span><span>${settings.cfgScale}</span>` : nothing}
-                ${settings.seed ? html`<span>Seed</span><span>${settings.seed}</span>` : nothing}
-                ${settings.width ? html`<span>Size</span><span>${settings.width}×${settings.height}</span>` : nothing}
-              </div>
-              <div class="actions" style="margin-top:4px;">
-                <button class="primary" @click=${() => this.usePrompt(img)}>
-                  <span class="material-symbols-rounded" style="font-size:18px;">auto_awesome</span> Use in the studio
-                </button>
-                <button class="ghost" @click=${() => this.copyPrompt(img)}>
-                  <span class="material-symbols-rounded" style="font-size:16px;">content_copy</span> ${this.copied ? "Copied" : "Copy prompt"}
-                </button>
-              </div>
-            </div>`
-          : nothing}
+      <button class="crumb" @click=${() => this.closeDetail()}>
+        <span class="material-symbols-rounded">arrow_back</span> Back
+      </button>
+      <div class="person-head">
+        <span class="face">${p.username.slice(0, 1)}</span>
+        <div style="flex:1; min-width:0;">
+          <h1>${p.username}</h1>
+          <div class="sub">Pictures they posted, newest first</div>
+        </div>
+        <button class="tool" title="Models they published" @click=${() => { const who = p.username; this.closeDetail(); this.setAnd("creator", who); }}>
+          <span class="material-symbols-rounded">deployed_code</span> Their models
+        </button>
+        <a class="tool" target="_blank" rel="noopener noreferrer" href=${`https://civitai.com/user/${encodeURIComponent(p.username)}`}>
+          <span class="material-symbols-rounded">open_in_new</span> Profile
+        </a>
       </div>
+      ${this.renderMasonry(p.items)}
+      ${p.loading
+        ? html`<div class="note">Loading pictures…</div>`
+        : p.items.length
+          ? p.cursor ? html`<div class="sentinel" data-feed="person"></div><button class="more" @click=${() => this.loadPerson(false)}>More pictures</button>` : nothing
+          : html`<div class="note">Nothing they posted shows here${this.nsfw ? "" : " with adult pictures off"}.</div>`}
     `;
   }
 
@@ -1580,8 +1998,10 @@ export class OppaiCivitai extends LitElement {
       <div class="post-grid">
         ${this.posts.map(
           (p) => html`<button class="post" @click=${() => (this.openPost = p)}>
-            ${p.images[0] ? html`<img src=${api.civitaiImageURL(p.images[0].url)} alt="" loading="lazy" />` : nothing}
-            ${p.images.length > 1 ? html`<span class="badge right"><span class="material-symbols-rounded" style="font-size:13px;">photo_library</span> ${p.images.length}</span>` : nothing}
+            <div class="art">
+              ${p.images[0] ? html`<img src=${api.civitaiImageURL(civitaiSized(p.images[0].url, 450))} alt="" loading="lazy" />` : nothing}
+              ${p.images.length > 1 ? html`<div class="badges"><span class="badge right"><span class="material-symbols-rounded">photo_library</span> ${p.images.length}</span></div>` : nothing}
+            </div>
             <div class="pm"><span>${postDate(p)}</span>${p.images.some((i) => i.prompt) ? html`<span>prompt</span>` : nothing}</div>
           </button>`,
         )}
@@ -1609,19 +2029,9 @@ export class OppaiCivitai extends LitElement {
     `;
   }
 
-  /** Pictures as tiles; a tile opens the picture with its prompt. */
+  /** Pictures at their own shapes; one opens in the viewer with the rest to step through. */
   private renderImageGrid(images: CivitaiImage[]) {
-    if (!images.length) return nothing;
-    return html`<div class="gal-grid">
-      ${images.map(
-        (img) => html`<button title=${img.prompt ? "Has a prompt" : "No prompt kept"} @click=${() => (this.picked = img)}
-          @mouseenter=${(e: Event) => void (e.currentTarget as HTMLElement).querySelector("video")?.play().catch(() => {})}
-          @mouseleave=${(e: Event) => (e.currentTarget as HTMLElement).querySelector("video")?.pause()}>
-          ${this.tileMedia(img.url, img.video, "")}
-          ${img.prompt ? html`<span class="has">prompt</span>` : nothing}
-        </button>`,
-      )}
-    </div>`;
+    return this.renderMasonry(images);
   }
 
   private renderCollections() {
@@ -1756,7 +2166,7 @@ export class OppaiCivitai extends LitElement {
               </div>`
             : nothing}
           ${this.pinning === m.key
-            ? html`<div class="pin">
+            ? html`<div class="pin-row">
                 <input type="text" placeholder="Civitai version id" .value=${this.pinVersion}
                   @input=${(e: Event) => (this.pinVersion = (e.target as HTMLInputElement).value)} />
                 <button class="ghost" ?disabled=${!/^\d+$/.test(this.pinVersion.trim())} @click=${() => this.sync(m, Number(this.pinVersion.trim()))}>Link</button>
@@ -1810,7 +2220,7 @@ export class OppaiCivitai extends LitElement {
     return html`
       <div class="manage">
         <div class="vlabel" style="margin-top:0;">Version</div>
-        <div class="versions">
+        <div class="versions-wrap">
           ${page.versions.map(
             (v) => html`<button class="chip small ${v.id === ver?.id ? "on" : ""}" @click=${() => (this.manageVersion = v.id)}>
               ${v.id === c.versionId ? html`<span class="material-symbols-rounded" style="font-size:14px;">check</span>` : nothing}

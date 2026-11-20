@@ -1,17 +1,25 @@
 import { LitElement, css, html, nothing } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
-import { iconStyles } from "../theme.js";
-import { api, type ChubCard } from "../api.js";
-import { CHUB_SORTS, compactCount, saysItHasExpressions, shownTopics } from "../chub-cards.js";
+import { iconStyles, motionStyles } from "../theme.js";
+import { pageStyles } from "./page-styles.js";
+import { api, type ChubCard, type ChubDetails, type ChubGalleryPage } from "../api.js";
+import { CHUB_SORTS, cardSections, compactCount, fillNames, roleplayRuns, saysItHasExpressions, shownTopics } from "../chub-cards.js";
+
+type Tab = "card" | "greetings" | "lorebook" | "expressions" | "gallery";
 
 /**
  * Finding a card on chub.ai, for chat's "Add someone".
  *
- * A search, an order, two switches (adult cards, and only cards with an expression
- * pack — SillyTavern's sprites, which the stage draws), a grid of what came back and
- * a button to have more. Picking a card says so to the host with `chub-pick`; the
- * host imports it, as it imports a card file, and fetches its pack. Everything goes
- * through this server (chub.go): the page may not reach chub itself.
+ * A page over chat, as the library's screens are pages: a search, an order, two
+ * switches (adult cards, and only cards with an expression pack — SillyTavern's
+ * sprites, which the stage draws), and a wall of what came back. A card opens to its
+ * own page before it is added, because choosing someone to talk to is choosing what
+ * they were written as: its art and figures, then the card itself — the creator's
+ * notes, description, personality and scenario, the first message and every other,
+ * the example dialogue, the lorebook, the expression pack, and the pictures people
+ * posted to its gallery (chub_details.go). Picking a card says so to the host with
+ * `chub-pick`; the host imports it, as it imports a card file, and fetches its pack.
+ * Everything goes through this server (chub.go): the page may not reach chub itself.
  */
 @customElement("oppai-chub-browse")
 export class OppaiChubBrowse extends LitElement {
@@ -30,54 +38,155 @@ export class OppaiChubBrowse extends LitElement {
   @state() private total = 0;
   @state() private loading = false;
   @state() private error = "";
+
+  /** The card whose page is open: what the tile knew at once, the rest once fetched. */
+  @state() private open: ChubCard | null = null;
+  @state() private details: ChubDetails | null = null;
+  @state() private detailsError = "";
+  @state() private tab: Tab = "card";
+  @state() private greeting = 0;
+  @state() private unfolded: ReadonlySet<string> = new Set();
+  @state() private gallery: ChubGalleryPage["items"] = [];
+  @state() private galleryPage = 0;
+  @state() private galleryMore = false;
+  @state() private galleryLoading = false;
+  @state() private zoom: { url: string; caption?: string } | null = null;
+
   /** Each search's number, so a slow answer to an old one is not drawn over a new one. */
   private asked = 0;
   private typing = 0;
+  private resultsScroll = 0;
 
-  static styles = [iconStyles, css`
-    :host { position:absolute; inset:0; z-index:60; display:grid; place-items:center; background:rgba(0,0,0,.5); }
-    .card { width:min(1040px,96%); height:min(88%,860px); display:flex; flex-direction:column; border-radius:18px;
-      background:var(--main, var(--md-sys-color-surface)); color:var(--md-sys-color-on-surface); box-shadow:0 20px 60px rgba(0,0,0,.45); overflow:hidden; }
-    .head { display:flex; align-items:center; gap:8px; padding:14px 14px 8px 18px; }
-    .head h2 { margin:0; font-size:17px; flex:1; }
-    .bar { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:0 14px 10px 18px; }
-    .search { flex:1 1 260px; min-width:0; border:0; outline:0; border-radius:999px; padding:9px 14px;
-      background:var(--input, var(--md-sys-color-surface-container-highest)); color:inherit; font:inherit; }
-    select { border:1px solid var(--line, var(--md-sys-color-outline-variant)); border-radius:999px; padding:7px 10px; background:transparent; color:inherit; font:inherit; }
-    label.switch { display:flex; align-items:center; gap:6px; font-size:13px; color:var(--muted, var(--md-sys-color-on-surface-variant)); cursor:pointer; }
-    .icon-btn { width:36px; height:36px; display:grid; place-items:center; border:0; border-radius:50%; background:transparent; color:inherit; cursor:pointer; }
-    .icon-btn:hover { background:var(--hover, var(--md-sys-color-surface-container-high)); }
-    .note { padding:4px 18px 10px; font-size:12px; color:var(--muted, var(--md-sys-color-on-surface-variant)); }
-    .note.bad { color:var(--md-sys-color-error); }
-    /* The scroller and the grid are two boxes: a grid that is itself the flex:1 scroller
-       had its rows squeezed to the box in Edge, each tile cut to the top of its art. */
-    .scroll { flex:1; min-height:0; overflow:auto; }
-    .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); grid-auto-rows:max-content; gap:12px; padding:4px 18px 18px; }
-    .tile { display:flex; flex-direction:column; border-radius:12px; overflow:hidden; background:var(--side, var(--md-sys-color-surface-container-low));
-      border:1px solid var(--line, var(--md-sys-color-outline-variant)); min-width:0; }
-    .art { position:relative; aspect-ratio:3/4; background:var(--input, var(--md-sys-color-surface-container-highest)); }
-    .art img { width:100%; height:100%; object-fit:cover; display:block; }
-    .badges { position:absolute; left:6px; top:6px; display:flex; gap:4px; }
-    .badge { font-size:10px; font-weight:700; padding:2px 6px; border-radius:999px; background:rgba(0,0,0,.6); color:#fff; display:flex; align-items:center; gap:2px; }
-    .badge .material-symbols-rounded { font-size:13px; }
-    .body { flex:1; display:flex; flex-direction:column; gap:4px; padding:9px 10px 10px; min-width:0; }
-    .name { font-weight:700; font-size:14px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .tagline { font-size:12px; color:var(--muted, var(--md-sys-color-on-surface-variant)); display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; min-height:3.6em; }
-    .topics { display:flex; flex-wrap:wrap; gap:4px; }
-    .topic { font-size:10px; padding:1px 6px; border-radius:999px; border:1px solid var(--line, var(--md-sys-color-outline-variant)); color:var(--muted, var(--md-sys-color-on-surface-variant)); }
-    .meta { font-size:11px; color:var(--muted, var(--md-sys-color-on-surface-variant)); }
-    .add { margin-top:auto; border:0; border-radius:999px; padding:7px 10px; font:inherit; font-weight:600; cursor:pointer;
-      background:var(--accent, var(--md-sys-color-primary)); color:var(--on-accent, var(--md-sys-color-on-primary)); display:flex; align-items:center; justify-content:center; gap:4px; }
-    .add[disabled] { opacity:.55; cursor:default; }
-    .add .material-symbols-rounded { font-size:17px; }
-    .more { grid-column:1/-1; justify-self:center; border:1px solid var(--line, var(--md-sys-color-outline-variant)); border-radius:999px; padding:8px 18px; background:transparent; color:inherit; font:inherit; cursor:pointer; }
-    .empty { grid-column:1/-1; text-align:center; padding:40px 0; color:var(--muted, var(--md-sys-color-on-surface-variant)); }
-    @media (max-width:600px) { .card { width:100%; height:100%; border-radius:0; } .grid { grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); padding:4px 12px 12px; } }
+  static styles = [iconStyles, motionStyles, pageStyles, css`
+    :host {
+      position: absolute; inset: 0; z-index: 60; display: flex; flex-direction: column;
+      background: var(--oppai-bg); color: var(--oppai-text); animation: oppai-fade-in 0.16s ease both;
+    }
+    .page-top { flex-wrap: nowrap; }
+    .page-top .searchbox { max-width: 520px; }
+    .scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+    .body { max-width: 1400px; margin: 0 auto; padding: 18px 28px 64px; box-sizing: border-box; }
+    .bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
+    .bar .page-sub { margin-left: auto; }
+    .note-line { font-size: 12.5px; color: var(--oppai-text-muted); }
+    .note-line.bad { color: var(--oppai-error); }
+
+    /* The wall: a card as the library draws a picture, its words under it. */
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 24px 14px; }
+    .tile { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 0; border: none; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+    .art { position: relative; aspect-ratio: 3 / 4; border-radius: var(--oppai-radius-md); overflow: hidden; background: var(--oppai-surface);
+      transition: transform 0.22s var(--oppai-ease-spring), box-shadow 0.22s ease; }
+    .tile:hover .art { transform: translateY(-3px); box-shadow: var(--oppai-shadow-pop); }
+    .tile:focus-visible .art { outline: 2px solid var(--oppai-primary); outline-offset: 2px; }
+    .art img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .badges { position: absolute; left: 8px; top: 8px; right: 8px; display: flex; gap: 5px; pointer-events: none; }
+    .badge { font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 999px; background: rgba(0,0,0,.55); color: #fff;
+      display: inline-flex; align-items: center; gap: 3px; backdrop-filter: blur(6px); }
+    .badge .material-symbols-rounded { font-size: 14px; }
+    .badge.ok { background: var(--oppai-primary); color: var(--oppai-on-primary); margin-left: auto; }
+    .name { font-weight: 600; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 2px; margin-top: 2px; }
+    .tagline { font-size: 12.5px; line-height: 1.4; color: var(--oppai-text-dim); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; padding: 0 2px; }
+    .meta { font-size: 12px; color: var(--oppai-text-muted); display: flex; gap: 10px; flex-wrap: wrap; padding: 0 2px; }
+    .stat { display: inline-flex; align-items: center; gap: 4px; font-variant-numeric: tabular-nums; }
+    .stat .material-symbols-rounded { font-size: 15px; }
+    .more { display: flex; margin: 28px auto 0; height: 40px; padding: 0 22px; border-radius: 12px; align-items: center; gap: 8px;
+      border: 1px solid var(--oppai-border-strong); background: none; color: var(--oppai-text-dim); font: inherit; font-size: 13.5px; cursor: pointer; }
+    .more:hover:not(:disabled) { color: var(--oppai-text); background: var(--oppai-surface); }
+
+    /* A card's page. */
+    .crumb { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px 0 6px; margin: 0 0 16px -6px; border: none;
+      border-radius: 10px; background: none; color: var(--oppai-text-dim); font: inherit; font-size: 13px; cursor: pointer; }
+    .crumb:hover { background: var(--oppai-surface); color: var(--oppai-text); }
+    .crumb .material-symbols-rounded { font-size: 19px; }
+    .hero { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 32px; align-items: start; margin-bottom: 26px; }
+    @media (max-width: 760px) { .hero { grid-template-columns: minmax(0, 1fr); gap: 18px; } .hero .portrait { max-width: 320px; } }
+    .portrait { position: relative; aspect-ratio: 3 / 4; border-radius: var(--oppai-radius-lg); overflow: hidden; background: var(--oppai-surface); cursor: zoom-in; border: none; padding: 0; }
+    .portrait img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .who { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+    .who h1 { margin: 0; font-size: 32px; font-weight: 650; letter-spacing: -0.02em; line-height: 1.1; }
+    .who .line { font-size: 15px; line-height: 1.55; color: var(--oppai-text-dim); }
+    .figures { display: flex; flex-wrap: wrap; gap: 8px; }
+    .fig { display: flex; flex-direction: column; gap: 1px; padding: 9px 14px; border-radius: 14px; background: var(--oppai-surface); border: 1px solid var(--oppai-border); min-width: 84px; }
+    .fig b { font-size: 17px; font-weight: 650; font-variant-numeric: tabular-nums; }
+    .fig span { font-size: 11.5px; color: var(--oppai-text-muted); }
+    .topics { display: flex; flex-wrap: wrap; gap: 6px; }
+    .acts { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 4px; }
+    .acts .primary-btn { min-width: 200px; }
+    .tabs { margin-bottom: 18px; overflow-x: auto; max-width: 100%; scrollbar-width: none; }
+    .seg > button b { font-weight: 500; color: var(--oppai-text-muted); font-variant-numeric: tabular-nums; }
+
+    .sections { display: flex; flex-direction: column; gap: 14px; max-width: 920px; }
+    .sec { padding: 16px 18px; }
+    .sec-label { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+    .sec-label .page-sub { font-size: 12px; }
+    .text { font-size: 14px; line-height: 1.65; color: var(--oppai-text-dim); white-space: pre-wrap; word-break: break-word; position: relative; }
+    .text.folded { max-height: 230px; overflow: hidden; }
+    .text.folded::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 70px; background: linear-gradient(to bottom, transparent, var(--oppai-surface)); }
+    .unfold { margin-top: 6px; border: none; background: none; color: var(--oppai-primary-bright); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; padding: 2px 0; }
+    .act { font-style: italic; color: var(--oppai-text-muted); }
+    .speech { color: var(--oppai-text); }
+
+    /* Greetings, as the first message would arrive. */
+    .greet { max-width: 820px; display: flex; flex-direction: column; gap: 12px; }
+    .greet-pick { margin-bottom: 4px; }
+    .bubble { display: grid; grid-template-columns: 40px minmax(0, 1fr); gap: 12px; align-items: start; }
+    .bubble img { width: 40px; height: 40px; border-radius: 50%; object-fit: cover; object-position: top; background: var(--oppai-surface-2); }
+    .bubble .text { background: var(--oppai-surface); border: 1px solid var(--oppai-border); border-radius: 4px 18px 18px 18px; padding: 12px 16px; }
+
+    .lore { display: flex; flex-direction: column; gap: 10px; max-width: 920px; }
+    .entry { padding: 12px 16px; }
+    .entry-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+    .entry-head b { font-size: 14px; }
+    .flag { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: var(--oppai-selected); color: var(--oppai-primary-bright); }
+    .flag.off { background: var(--oppai-surface-2); color: var(--oppai-text-muted); }
+    .keys { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 8px; }
+
+    .faces { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 12px; }
+    .face { display: flex; flex-direction: column; gap: 6px; border: none; background: none; padding: 0; color: inherit; font: inherit; cursor: zoom-in; }
+    .face .pic { aspect-ratio: 3 / 4; border-radius: var(--oppai-radius-md); overflow: hidden;
+      background: repeating-conic-gradient(var(--oppai-surface) 0 25%, var(--oppai-surface-2) 0 50%) 0 0 / 18px 18px; }
+    .face img { width: 100%; height: 100%; object-fit: contain; display: block; }
+    .face span { font-size: 12.5px; color: var(--oppai-text-dim); text-transform: capitalize; text-align: center; }
+
+    .masonry { columns: 4 220px; column-gap: 12px; }
+    .shot { display: block; width: 100%; margin: 0 0 12px; padding: 0; border: none; border-radius: var(--oppai-radius-md); overflow: hidden; background: var(--oppai-surface); cursor: zoom-in; break-inside: avoid; }
+    .shot img { width: 100%; display: block; }
+
+    .zoom { position: fixed; inset: 0; z-index: 80; background: rgba(4, 3, 5, .94); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 24px; box-sizing: border-box; cursor: zoom-out; animation: oppai-fade-in .14s ease both; }
+    .zoom img { max-width: 100%; max-height: calc(100% - 60px); object-fit: contain; border-radius: 8px; }
+    .zoom p { margin: 0; max-width: 720px; font-size: 13px; line-height: 1.5; color: #d9d3d6; text-align: center; }
+
+    @media (max-width: 720px) {
+      .page-top { flex-wrap: wrap; height: auto; padding: 10px 12px; }
+      .page-top .searchbox { order: 5; flex-basis: 100%; max-width: none; }
+      .body { padding: 14px 12px 56px; }
+      .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 10px; }
+      .who h1 { font-size: 26px; }
+      .masonry { columns: 2 140px; column-gap: 8px; }
+    }
   `];
 
   connectedCallback() {
     super.connectedCallback();
     void this.search(1);
+    window.addEventListener("keydown", this.onKey);
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    window.removeEventListener("keydown", this.onKey);
+  }
+
+  private onKey = (e: KeyboardEvent) => {
+    if (e.key !== "Escape" || e.defaultPrevented) return;
+    e.preventDefault();
+    if (this.zoom) this.zoom = null;
+    else if (this.open) this.back();
+    else this.close();
+  };
+
+  private get scroller(): HTMLElement | null {
+    return this.renderRoot.querySelector(".scroll");
   }
 
   private async search(page: number) {
@@ -87,7 +196,7 @@ export class OppaiChubBrowse extends LitElement {
     try {
       const out = await api.chubSearch({ q: this.query, page, sort: this.sort, nsfw: this.nsfw, expressions: this.expressions });
       if (ask !== this.asked) return;
-      this.items = page === 1 ? out.items : [...this.items, ...out.items];
+      this.items = page === 1 ? out.items : [...this.items, ...out.items.filter((c) => !this.items.some((x) => x.path === c.path))];
       this.page = page; this.more = out.more; this.total = out.total;
     } catch (error) {
       if (ask === this.asked) this.error = (error as Error).message || "chub.ai couldn't be searched.";
@@ -100,7 +209,7 @@ export class OppaiChubBrowse extends LitElement {
   private onQuery(event: Event) {
     this.query = (event.target as HTMLInputElement).value;
     window.clearTimeout(this.typing);
-    this.typing = window.setTimeout(() => void this.search(1), 400);
+    this.typing = window.setTimeout(() => { this.back(); void this.search(1); }, 400);
   }
 
   private close() { this.dispatchEvent(new CustomEvent("close")); }
@@ -109,52 +218,294 @@ export class OppaiChubBrowse extends LitElement {
     this.dispatchEvent(new CustomEvent("chub-pick", { detail: { card } }));
   }
 
+  // ── a card's page ──
+
+  private async openCard(card: ChubCard) {
+    this.resultsScroll = this.scroller?.scrollTop ?? 0;
+    this.open = card;
+    this.details = null;
+    this.detailsError = "";
+    this.tab = "card";
+    this.greeting = 0;
+    this.unfolded = new Set();
+    this.gallery = [];
+    this.galleryPage = 0;
+    this.galleryMore = false;
+    this.scroller?.scrollTo({ top: 0 });
+    try {
+      const d = await api.chubDetails(card.path);
+      if (this.open?.path === card.path) this.details = d;
+    } catch (error) {
+      if (this.open?.path === card.path) this.detailsError = (error as Error).message;
+    }
+  }
+
+  private back() {
+    if (!this.open) return;
+    this.open = null;
+    this.details = null;
+    const top = this.resultsScroll;
+    void this.updateComplete.then(() => this.scroller?.scrollTo({ top }));
+  }
+
+  private async loadGallery() {
+    const d = this.details;
+    if (!d || this.galleryLoading) return;
+    this.galleryLoading = true;
+    try {
+      const page = this.galleryPage + 1;
+      const out = await api.chubGallery(d.id, page);
+      if (this.details?.id !== d.id) return;
+      this.gallery = [...this.gallery, ...out.items];
+      this.galleryPage = page;
+      this.galleryMore = out.more;
+    } catch (error) {
+      this.detailsError = (error as Error).message;
+    } finally {
+      this.galleryLoading = false;
+    }
+  }
+
+  private selectTab(tab: Tab) {
+    this.tab = tab;
+    if (tab === "gallery" && !this.galleryPage) void this.loadGallery();
+  }
+
+  private toggleFold(key: string) {
+    const next = new Set(this.unfolded);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    this.unfolded = next;
+  }
+
+  // ── render ──
+
   render() {
-    return html`<div class="card" role="dialog" aria-modal="true" aria-label="Find a character on chub.ai" @click=${(e: Event) => e.stopPropagation()}>
-      <div class="head">
-        <span class="material-symbols-rounded">travel_explore</span>
-        <h2>Find a character on chub.ai</h2>
-        <button class="icon-btn" title="Close" aria-label="Close" @click=${() => this.close()}><span class="material-symbols-rounded">close</span></button>
+    return html`
+      <header class="page-top" @click=${(e: Event) => e.stopPropagation()}>
+        <button class="tool icon bare" title="Back to chat" aria-label="Back to chat" @click=${() => this.close()}>
+          <span class="material-symbols-rounded">arrow_back</span>
+        </button>
+        <h1 class="page-title"><span class="material-symbols-rounded">travel_explore</span>chub.ai</h1>
+        <label class="searchbox">
+          <span class="material-symbols-rounded">search</span>
+          <input type="search" placeholder="Search names, taglines and tags…" aria-label="Search chub.ai" .value=${this.query} @input=${this.onQuery}
+            @keydown=${(e: KeyboardEvent) => { if (e.key === "Enter") { window.clearTimeout(this.typing); this.back(); void this.search(1); } }} />
+        </label>
+        <span class="page-spacer"></span>
+      </header>
+      <div class="scroll" @click=${(e: Event) => e.stopPropagation()}>
+        <div class="body">${this.open ? this.renderCard(this.open) : this.renderResults()}</div>
       </div>
+      ${this.zoom
+        ? html`<div class="zoom" @click=${(e: Event) => { e.stopPropagation(); this.zoom = null; }}>
+            <img src=${this.zoom.url} alt="" />
+            ${this.zoom.caption ? html`<p>${this.zoom.caption}</p>` : nothing}
+          </div>`
+        : nothing}
+    `;
+  }
+
+  private renderResults() {
+    return html`
       <div class="bar">
-        <input class="search" type="search" placeholder="Search names, taglines and tags…" aria-label="Search chub.ai" .value=${this.query} @input=${this.onQuery}
-          @keydown=${(e: KeyboardEvent) => { if (e.key === "Enter") { window.clearTimeout(this.typing); void this.search(1); } }} />
-        <select aria-label="Order" .value=${this.sort} @change=${(e: Event) => { this.sort = (e.target as HTMLSelectElement).value; void this.search(1); }}>
+        <select class="tool" aria-label="Order" .value=${this.sort} @change=${(e: Event) => { this.sort = (e.target as HTMLSelectElement).value; void this.search(1); }}>
           ${CHUB_SORTS.map((s) => html`<option value=${s.id} ?selected=${s.id === this.sort}>${s.label}</option>`)}
         </select>
-        <label class="switch"><input type="checkbox" .checked=${this.nsfw} @change=${(e: Event) => { this.nsfw = (e.target as HTMLInputElement).checked; void this.search(1); }} />Adult cards</label>
-        <label class="switch"><input type="checkbox" .checked=${this.expressions} @change=${(e: Event) => { this.expressions = (e.target as HTMLInputElement).checked; void this.search(1); }} />With expressions</label>
+        <button class="chip" aria-pressed=${this.nsfw ? "true" : "false"} @click=${() => { this.nsfw = !this.nsfw; void this.search(1); }}>
+          <span class="material-symbols-rounded">explicit</span> Adult cards
+        </button>
+        <button class="chip" aria-pressed=${this.expressions ? "true" : "false"} title="Only cards that come with a SillyTavern expression pack"
+          @click=${() => { this.expressions = !this.expressions; void this.search(1); }}>
+          <span class="material-symbols-rounded">mood</span> With expressions
+        </button>
+        <span class="page-sub note-line ${this.error ? "bad" : ""}">
+          ${this.error || (this.loading && !this.items.length ? "Searching chub.ai…" : `${compactCount(this.total)} cards`)}
+        </span>
       </div>
-      <div class="note ${this.error ? "bad" : ""}">${this.error || (this.loading && !this.items.length ? "Searching chub.ai…" : `${compactCount(this.total)} cards. Adding one imports its card and portrait, and its expression pack when it has one.`)}</div>
-      <div class="scroll"><div class="grid">
-        ${!this.loading && !this.error && !this.items.length ? html`<div class="empty">Nothing on chub.ai matched that.</div>` : nothing}
+      <div class="grid">
         ${this.items.map((card) => this.renderTile(card))}
-        ${this.more ? html`<button class="more" ?disabled=${this.loading} @click=${() => void this.search(this.page + 1)}>${this.loading ? "Loading…" : "Show more"}</button>` : nothing}
-      </div></div>
-    </div>`;
+      </div>
+      ${!this.loading && !this.error && !this.items.length ? html`<div class="empty-note">Nothing on chub.ai matched that.</div>` : nothing}
+      ${this.more ? html`<button class="more" ?disabled=${this.loading} @click=${() => void this.search(this.page + 1)}>${this.loading ? "Loading…" : "More cards"}</button>` : nothing}
+    `;
   }
 
   private renderTile(card: ChubCard) {
-    const busy = this.importing === card.path;
     const added = this.added.has(card.path);
-    return html`<article class="tile">
+    return html`<button class="tile" @click=${() => void this.openCard(card)}>
       <div class="art">
         <img src=${card.avatar} alt="" loading="lazy" @error=${(e: Event) => ((e.target as HTMLImageElement).style.visibility = "hidden")} />
         <div class="badges">
           ${card.nsfw ? html`<span class="badge">18+</span>` : nothing}
           ${saysItHasExpressions(card.topics) ? html`<span class="badge" title="Has an expression pack"><span class="material-symbols-rounded">mood</span></span>` : nothing}
+          ${added ? html`<span class="badge ok"><span class="material-symbols-rounded">check</span>Added</span>` : nothing}
         </div>
       </div>
-      <div class="body">
-        <span class="name" title=${card.name}>${card.name}</span>
-        <span class="tagline">${card.tagline || "No tagline."}</span>
-        <div class="topics">${shownTopics(card.topics).map((t) => html`<span class="topic">${t}</span>`)}</div>
-        <span class="meta">★ ${compactCount(card.stars)} · ${compactCount(card.chats)} chats · ${compactCount(card.tokens)} tokens</span>
-        <button class="add" ?disabled=${busy || !!this.importing || added} @click=${() => this.pick(card)}>
-          <span class="material-symbols-rounded">${added ? "check" : "download"}</span>${added ? "Added" : busy ? "Adding…" : "Add"}
+      <span class="name" title=${card.name}>${card.name}</span>
+      <span class="tagline">${card.tagline || "No tagline."}</span>
+      <span class="meta">
+        <span class="stat"><span class="material-symbols-rounded">star</span>${compactCount(card.stars)}</span>
+        <span class="stat"><span class="material-symbols-rounded">chat_bubble</span>${compactCount(card.chats)}</span>
+        <span class="stat"><span class="material-symbols-rounded">description</span>${compactCount(card.tokens)}</span>
+      </span>
+    </button>`;
+  }
+
+  private renderCard(card: ChubCard) {
+    const d = this.details;
+    const busy = this.importing === card.path;
+    const added = this.added.has(card.path);
+    const name = d?.name || card.name;
+    const topics = shownTopics(card.topics, 14);
+    return html`
+      <button class="crumb" @click=${() => this.back()}><span class="material-symbols-rounded">arrow_back</span> All cards</button>
+      <div class="hero">
+        <button class="portrait" aria-label="See the art full size" @click=${() => (this.zoom = { url: d?.art || card.avatar })}>
+          <img src=${d?.art || card.avatar} alt="" @error=${(e: Event) => { const img = e.target as HTMLImageElement; if (img.src !== new URL(card.avatar, location.href).href) img.src = card.avatar; }} />
         </button>
+        <div class="who">
+          <span class="kicker">by ${d?.creator ?? card.path.split("/")[0]}${card.nsfw ? " · 18+" : ""}</span>
+          <h1>${name}</h1>
+          ${card.tagline ? html`<div class="line">${card.tagline}</div>` : nothing}
+          <div class="figures">
+            ${this.fig(compactCount(card.stars), "stars")}
+            ${d ? this.fig(compactCount(d.favorites), "favourites") : nothing}
+            ${this.fig(compactCount(card.chats), "chats")}
+            ${d?.messages ? this.fig(compactCount(d.messages), "messages") : nothing}
+            ${d?.ratingCount ? this.fig(`${d.rating.toFixed(1)}★`, `${compactCount(d.ratingCount)} ratings`) : nothing}
+            ${this.fig(compactCount(card.tokens), "tokens")}
+            ${d?.forks ? this.fig(compactCount(d.forks), "forks") : nothing}
+          </div>
+          ${topics.length ? html`<div class="topics">${topics.map((t) => html`<span class="tag">${t}</span>`)}</div>` : nothing}
+          <div class="acts">
+            <button class="primary-btn" ?disabled=${busy || !!this.importing || added} @click=${() => this.pick(d ?? card)}>
+              <span class="material-symbols-rounded">${added ? "check" : "person_add"}</span>${added ? "Added to chats" : busy ? "Adding…" : `Add ${name}`}
+            </button>
+            <a class="tool" href=${`https://chub.ai/characters/${card.path}`} target="_blank" rel="noopener noreferrer">
+              <span class="material-symbols-rounded">open_in_new</span> chub.ai
+            </a>
+            ${d?.updated ? html`<span class="page-sub">Updated ${new Date(d.updated).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })}</span>` : nothing}
+          </div>
+          ${d && d.expressions.length ? html`<span class="note-line">Comes with ${d.expressions.length} expressions${d.expressionPack ? ` (${d.expressionPack.replace(/_/g, " ")})` : ""}; they are added with the card.</span>` : nothing}
+        </div>
       </div>
-    </article>`;
+      ${this.detailsError ? html`<div class="err-note">${this.detailsError}</div>` : nothing}
+      ${!d && !this.detailsError ? html`<div class="empty-note">Reading the card…</div>` : nothing}
+      ${d ? this.renderTabs(d) : nothing}
+    `;
+  }
+
+  private fig(value: string, label: string) {
+    return html`<div class="fig"><b>${value}</b><span>${label}</span></div>`;
+  }
+
+  private renderTabs(d: ChubDetails) {
+    const greetings = 1 + d.greetings.length;
+    const tabs: [Tab, string, number | undefined][] = [
+      ["card", "The card", undefined],
+      ["greetings", "Greetings", d.firstMessage ? greetings : d.greetings.length],
+      ["lorebook", "Lorebook", d.lorebook.length + (d.lorebookMore ?? 0)],
+      ["expressions", "Expressions", d.expressions.length],
+      ["gallery", "Gallery", undefined],
+    ];
+    return html`
+      <div class="seg tabs" role="tablist">
+        ${tabs
+          .filter(([id, , n]) => id === "card" || (id === "gallery" ? d.hasGallery : (n ?? 0) > 0))
+          .map(([id, label, n]) => html`<button role="tab" aria-selected=${this.tab === id ? "true" : "false"} @click=${() => this.selectTab(id)}>
+            ${label}${n ? html` <b>${n}</b>` : nothing}
+          </button>`)}
+      </div>
+      ${this.tab === "card" ? this.renderSections(d)
+        : this.tab === "greetings" ? this.renderGreetings(d)
+        : this.tab === "lorebook" ? this.renderLorebook(d)
+        : this.tab === "expressions" ? this.renderExpressions(d)
+        : this.renderGallery()}
+    `;
+  }
+
+  /** Text as a chat draws it: placeholders read out, *actions* and "speech" set apart. */
+  private prose(text: string, name: string) {
+    return roleplayRuns(fillNames(text, name)).map((r) =>
+      r.kind === "action" ? html`<span class="act">${r.text}</span>` : r.kind === "speech" ? html`<span class="speech">${r.text}</span>` : r.text);
+  }
+
+  private folded(key: string, text: string, name: string, limit = 900) {
+    const long = text.length > limit;
+    const open = this.unfolded.has(key);
+    return html`<div class="text ${long && !open ? "folded" : ""}">${this.prose(text, name)}</div>
+      ${long ? html`<button class="unfold" @click=${() => this.toggleFold(key)}>${open ? "Show less" : "Show all of it"}</button>` : nothing}`;
+  }
+
+  private renderSections(d: ChubDetails) {
+    const sections = cardSections(d);
+    if (!sections.length) return html`<div class="empty-note">This card has nothing written in it beyond its greeting.</div>`;
+    return html`<div class="sections">
+      ${sections.map((s) => html`<section class="panel sec">
+        <div class="sec-label"><span class="kicker">${s.label}</span>${s.tokens ? html`<span class="page-sub">${compactCount(s.tokens)} tokens</span>` : nothing}</div>
+        ${this.folded(s.key, s.text, d.name)}
+      </section>`)}
+    </div>`;
+  }
+
+  private renderGreetings(d: ChubDetails) {
+    const all = [d.firstMessage, ...d.greetings].filter((g) => g.trim());
+    const i = Math.min(this.greeting, all.length - 1);
+    if (i < 0) return html`<div class="empty-note">No greeting.</div>`;
+    return html`<div class="greet">
+      ${all.length > 1
+        ? html`<div class="chip-row greet-pick">
+            ${all.map((_, n) => html`<button class="chip small" aria-pressed=${n === i ? "true" : "false"} @click=${() => (this.greeting = n)}>
+              ${n === 0 && d.firstMessage ? "First message" : `Alternate ${d.firstMessage ? n : n + 1}`}
+            </button>`)}
+          </div>`
+        : nothing}
+      <div class="bubble">
+        <img src=${d.avatar} alt="" />
+        <div class="text">${this.prose(all[i], d.name)}</div>
+      </div>
+    </div>`;
+  }
+
+  private renderLorebook(d: ChubDetails) {
+    return html`<div class="lore">
+      ${d.lorebookName ? html`<div class="sec-head"><h3>${d.lorebookName}</h3><span class="page-sub">${d.lorebook.length + (d.lorebookMore ?? 0)} entries</span></div>` : nothing}
+      ${d.lorebook.map((e, n) => html`<article class="panel entry">
+        <div class="entry-head">
+          <b>${e.name || e.keys[0] || `Entry ${n + 1}`}</b>
+          ${e.constant ? html`<span class="flag" title="Always in the prompt">Always on</span>` : nothing}
+          ${e.disabled ? html`<span class="flag off">Off</span>` : nothing}
+        </div>
+        ${e.keys.length ? html`<div class="keys">${e.keys.map((k) => html`<span class="tag">${k}</span>`)}</div>` : nothing}
+        ${this.folded(`lore-${n}`, e.content, d.name, 420)}
+      </article>`)}
+      ${d.lorebookMore ? html`<div class="note-line">${d.lorebookMore} more entries are on chub.ai.</div>` : nothing}
+    </div>`;
+  }
+
+  private renderExpressions(d: ChubDetails) {
+    return html`<div class="faces">
+      ${d.expressions.map((x) => html`<button class="face" @click=${() => (this.zoom = { url: x.url, caption: x.label })}>
+        <div class="pic"><img src=${x.url} alt=${x.label} loading="lazy" /></div>
+        <span>${x.label}</span>
+      </button>`)}
+    </div>`;
+  }
+
+  private renderGallery() {
+    return html`
+      ${this.gallery.length
+        ? html`<div class="masonry">
+            ${this.gallery.map((g) => html`<button class="shot" title=${g.description ?? ""} @click=${() => (this.zoom = { url: g.url, caption: g.description })}>
+              <img src=${g.url} alt=${g.description ?? ""} loading="lazy" />
+            </button>`)}
+          </div>`
+        : nothing}
+      ${this.galleryLoading
+        ? html`<div class="empty-note">Loading the gallery…</div>`
+        : !this.gallery.length ? html`<div class="empty-note">Nobody has posted to this card's gallery.</div>` : nothing}
+      ${this.galleryMore && !this.galleryLoading ? html`<button class="more" @click=${() => void this.loadGallery()}>More pictures</button>` : nothing}
+    `;
   }
 }
 

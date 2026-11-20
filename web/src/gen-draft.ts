@@ -353,3 +353,41 @@ function isRecordOfNumbers(v: unknown): v is Record<string, number> {
     Object.values(v as object).every((x) => typeof x === "number" && Number.isFinite(x));
 }
 
+
+// ── "Picked up where you left off" ─────────────────────────────────────────
+// The studio is rebuilt every time Image, Video and Sprites are crossed between (the
+// Sprites board is a second element, keyed apart), and each rebuild restores the draft.
+// Announcing every restore put the notice back on screen at each switch of mode, which
+// read as the form having been lost and found again when nothing had happened to it.
+// It is news once: the first time this page load finds something it did not start
+// with. Kept here, outside the element, because the element is what does not survive.
+
+let draftAnnounced = false;
+
+/** Whether a stored draft holds anything a person would recognise as their own work:
+ *  words, picked LoRAs, characters or poses, or pictures from the session. Settings
+ *  alone (a size, a sampler) are not worth a notice; they are just how it was left. */
+export function draftWorthNoting(d: GenDraft | null): boolean {
+  if (!d) return false;
+  const typed = !!(d.prompt?.trim() || d.negative?.trim() || d.outfitText?.trim());
+  const picked = Object.keys(d.selectedLoras ?? {}).length > 0 || (d.selectedChars?.length ?? 0) > 0 ||
+    (d.selectedPoses?.length ?? 0) > 0;
+  return typed || picked || (d.shots?.length ?? 0) > 0;
+}
+
+/** True the one time this page load should say the draft was restored. */
+export function announceRestoredDraft(d: GenDraft | null): boolean {
+  if (draftAnnounced || !draftWorthNoting(d)) return false;
+  draftAnnounced = true;
+  return true;
+}
+
+/** Marks the restore as already said, as dismissing the notice or starting fresh does. */
+export function settleDraftNotice(): void {
+  draftAnnounced = true;
+}
+
+/** For the tests: a new page load. */
+export function resetDraftNotice(): void {
+  draftAnnounced = false;
+}

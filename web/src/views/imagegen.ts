@@ -48,7 +48,7 @@ import {
   upscaledInfo,
   type GenInfo,
 } from "../gen-info.js";
-import { clearDraft, loadDraft, saveDraft, type DraftOutfitSlot } from "../gen-draft.js";
+import { announceRestoredDraft, clearDraft, loadDraft, saveDraft, settleDraftNotice, type DraftOutfitSlot } from "../gen-draft.js";
 import { openMenu } from "../context-menu.js";
 import { playExit } from "../motion.js";
 import { downloadGenerationPNG, embedGenerationMetadata } from "../png-metadata.js";
@@ -129,6 +129,7 @@ import {
 } from "../sprite-board.js";
 import { RESOLUTIONS, SCHEDULERS } from "../gen-options.js";
 import { studioStyles } from "./studio-styles.js";
+import { studioDarkroom } from "./studio-darkroom.js";
 import { aspectLabel, megapixels, previewFrame } from "../size-preview.js";
 import "./civitai.js";
 import type { CivitaiMode } from "./civitai.js";
@@ -2075,6 +2076,7 @@ export class OppaiImageGen extends LitElement {
 
     `,
     studioStyles,
+    studioDarkroom,
   ];
 
   connectedCallback() {
@@ -2538,7 +2540,8 @@ export class OppaiImageGen extends LitElement {
     if (d.shots) this.shots = d.shots.map((s) => ({ ...s }));
 
     if (d.scrollTop) this.pendingScroll = d.scrollTop;
-    this.restoredNotice = true;
+    // Once a page load, not once an element: see announceRestoredDraft.
+    this.restoredNotice = announceRestoredDraft(d);
   }
 
   private async loadStatus() {
@@ -5261,7 +5264,7 @@ export class OppaiImageGen extends LitElement {
       <div class="restored">
         <span class="material-symbols-rounded" style="font-size:18px;">history</span>
         <span class="grow">Picked up where you left off.</span>
-        <button class="act" @click=${() => (this.restoredNotice = false)}>Keep it</button>
+        <button class="act" @click=${() => { this.restoredNotice = false; settleDraftNotice(); }}>Keep it</button>
         <button class="act" @click=${this.startFresh}>Start fresh</button>
       </div>
     `;
@@ -5293,6 +5296,7 @@ export class OppaiImageGen extends LitElement {
     this.shots = [];
     this.seed = -1;
     this.restoredNotice = false;
+    settleDraftNotice();
     // The reactive updates above will queue a save of the now-empty state, which is
     // what we want: "start fresh" should survive leaving the tab too.
   };

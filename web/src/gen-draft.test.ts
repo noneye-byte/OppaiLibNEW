@@ -28,7 +28,7 @@ if (typeof DOMException === "undefined") {
   (globalThis as unknown as { DOMException: unknown }).DOMException = class extends Error {};
 }
 
-const { saveDraft, loadDraft, clearDraft } = await import("./gen-draft.ts");
+const { saveDraft, loadDraft, clearDraft, announceRestoredDraft, draftWorthNoting, settleDraftNotice, resetDraftNotice } = await import("./gen-draft.ts");
 
 const KEY = "oppai_gen_draft";
 
@@ -224,4 +224,27 @@ test("a board on the green screen, drawn as pixel art, comes back as it was", ()
   assert.equal(d?.outfitBackground, "green");
   assert.equal(d?.outfitPixel, 8);
   assert.equal(d?.outfitPalette, 32);
+});
+
+test("the restored draft is announced once a page load, however often the studio is rebuilt", () => {
+  resetDraftNotice();
+  const d = { prompt: "a fox in the snow" };
+  assert.equal(announceRestoredDraft(d), true);
+  // Image to Sprites and back rebuilds the element, which restores the draft again.
+  assert.equal(announceRestoredDraft(d), false);
+  assert.equal(announceRestoredDraft(d), false);
+});
+
+test("a draft of settings alone is not announced, and does not use up the one announcement", () => {
+  resetDraftNotice();
+  assert.equal(draftWorthNoting({ steps: 30, width: 832, height: 1216 }), false);
+  assert.equal(announceRestoredDraft({ steps: 30 }), false);
+  assert.equal(announceRestoredDraft({ selectedLoras: { "detail-tweaker": 0.6 } }), true);
+});
+
+test("a notice dismissed before any restore is not shown later in the same page load", () => {
+  resetDraftNotice();
+  settleDraftNotice();
+  assert.equal(announceRestoredDraft({ prompt: "x" }), false);
+  assert.equal(draftWorthNoting(null), false);
 });

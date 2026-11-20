@@ -24,6 +24,8 @@ import {
 } from "../api.js";
 import { expressionSlots, expressionSprites, expressionTitle, packCoverage, type ExpressionFiles } from "../expression-sprites.js";
 import { iconStyles, motionStyles } from "../theme.js";
+// Chat drawn in the darkroom: its token layer pointed at the shell's, last so it wins.
+import { chatDarkroom } from "./chat-darkroom.js";
 import { formatBytes } from "../media-meta.js";
 import { markArrival } from "../motion.js";
 import { isSpeaking, loadSpeakPref, saveSpeakPref, speak, stopSpeaking } from "../speech.js";
@@ -1510,7 +1512,7 @@ export class OppaiChat extends LitElement {
     .inline-link:hover { text-decoration-style:solid; }
     .msg.mine .inline-link,.call-caption .inline-link { color:inherit; }
     @media (prefers-reduced-motion:reduce) { .call,.call-sprite { animation:none; } }
-  `];
+  `, chatDarkroom];
 
   connectedCallback() {
     super.connectedCallback();

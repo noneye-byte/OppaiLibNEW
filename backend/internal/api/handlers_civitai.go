@@ -153,8 +153,10 @@ type civitaiRawModel struct {
 		Image    string `json:"image"`
 	} `json:"creator"`
 	Stats struct {
-		DownloadCount int64 `json:"downloadCount"`
-		ThumbsUpCount int64 `json:"thumbsUpCount"`
+		DownloadCount  int64 `json:"downloadCount"`
+		ThumbsUpCount  int64 `json:"thumbsUpCount"`
+		CommentCount   int64 `json:"commentCount"`
+		CollectedCount int64 `json:"collectedCount"`
 	} `json:"stats"`
 	ModelVersions []civitaiRawVersion `json:"modelVersions"`
 }
@@ -249,6 +251,8 @@ type civitaiModelOut struct {
 	CreatorImage string              `json:"creatorImage,omitempty"`
 	Downloads    int64               `json:"downloads"`
 	Likes        int64               `json:"likes"`
+	Comments     int64               `json:"comments,omitempty"`
+	Collected    int64               `json:"collected,omitempty"`
 	NSFW         bool                `json:"nsfw"`
 	Tags         []string            `json:"tags"`
 	Description  string              `json:"description,omitempty"`
@@ -383,6 +387,7 @@ func civitaiModelOutOf(m civitaiRawModel, installed map[string]string, detail bo
 	model := civitaiModelOut{
 		ID: m.ID, Name: m.Name, Type: m.Type,
 		Creator: m.Creator.Username, Downloads: m.Stats.DownloadCount, Likes: m.Stats.ThumbsUpCount,
+		Comments: m.Stats.CommentCount, Collected: m.Stats.CollectedCount,
 		NSFW: m.NSFW, Tags: m.Tags, Versions: []civitaiVersionOut{},
 	}
 	if civitaiHostAllowed(m.Creator.Image) {
@@ -708,6 +713,65 @@ type civitaiImageOut struct {
 	// Video is the clip a still stands in for, for a post that is one (URL is then
 	// its first frame); "" for a picture.
 	Video string `json:"video,omitempty"`
+	// What people made of it, as the feed counts it — the browser draws a picture the
+	// way the site does, with its reactions and how much it was talked about.
+	Stats *civitaiImageStats `json:"stats,omitempty"`
+	// BaseModel is the family it was made on ("Pony", "Illustrious"), from the feed.
+	BaseModel string `json:"baseModel,omitempty"`
+	// Resources are the models and LoRAs its generation data names, with weights:
+	// the part of a recipe a prompt alone does not carry. Only with an API key, as
+	// the rest of the generation data is.
+	Resources []civitaiResource `json:"resources,omitempty"`
+	ClipSkip  int               `json:"clipSkip,omitempty"`
+	Denoise   float64           `json:"denoise,omitempty"`
+}
+
+type civitaiImageStats struct {
+	Likes    int `json:"likes"`
+	Hearts   int `json:"hearts"`
+	Laughs   int `json:"laughs"`
+	Cries    int `json:"cries"`
+	Comments int `json:"comments"`
+}
+
+type civitaiResource struct {
+	Name   string  `json:"name"`
+	Type   string  `json:"type,omitempty"`
+	Weight float64 `json:"weight,omitempty"`
+}
+
+// civitaiResources reads the resources a picture's meta lists. Two keys carry them: the
+// A1111 parameters' "resources" (names and weights, written by the uploader's tool) and
+// the site's own "civitaiResources" (version ids and names, for pictures made there).
+func civitaiResources(m map[string]any) []civitaiResource {
+	var out []civitaiResource
+	seen := map[string]bool{}
+	add := func(name, kind string, weight float64) {
+		name = strings.TrimSpace(name)
+		key := strings.ToLower(kind + "|" + name)
+		if name == "" || seen[key] || len(out) >= 24 {
+			return
+		}
+		seen[key] = true
+		out = append(out, civitaiResource{Name: name, Type: strings.ToLower(strings.TrimSpace(kind)), Weight: weight})
+	}
+	for _, key := range []string{"resources", "civitaiResources"} {
+		list, _ := m[key].([]any)
+		for _, raw := range list {
+			r, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			name := metaString(r, "name", "modelName")
+			if v := metaString(r, "modelVersionName", "versionName"); v != "" && name != "" && !strings.Contains(name, v) {
+				name += " · " + v
+			} else if name == "" {
+				name = v
+			}
+			add(name, metaString(r, "type"), metaNumber(r, "weight", "strength"))
+		}
+	}
+	return out
 }
 
 func metaString(m map[string]any, keys ...string) string {
@@ -800,6 +864,14 @@ func (s *Server) civitaiImages(ctx context.Context, q civitaiImageQuery) (*civit
 			Username  string `json:"username"`
 			PostID    int64  `json:"postId"`
 			CreatedAt string `json:"createdAt"`
+			BaseModel string `json:"baseModel"`
+			Stats     *struct {
+				Likes    int `json:"likeCount"`
+				Hearts   int `json:"heartCount"`
+				Laughs   int `json:"laughCount"`
+				Cries    int `json:"cryCount"`
+				Comments int `json:"commentCount"`
+			} `json:"stats"`
 			civitaiRawImage
 		} `json:"items"`
 		Metadata struct {
@@ -831,9 +903,15 @@ func (s *Server) civitaiImages(ctx context.Context, q civitaiImageQuery) (*civit
 		img := civitaiImageOut{
 			ID: it.ID, URL: still, Width: it.Width, Height: it.Height,
 			NSFWLevel: int(it.NSFWLevel), Username: it.Username,
-			PostID: it.PostID, CreatedAt: it.CreatedAt, Video: clip,
+			PostID: it.PostID, CreatedAt: it.CreatedAt, Video: clip, BaseModel: it.BaseModel,
+		}
+		if st := it.Stats; st != nil {
+			img.Stats = &civitaiImageStats{Likes: st.Likes, Hearts: st.Hearts, Laughs: st.Laughs, Cries: st.Cries, Comments: st.Comments}
 		}
 		if m := it.Meta; m != nil {
+			img.Resources = civitaiResources(m)
+			img.ClipSkip = int(metaNumber(m, "Clip skip", "clipSkip"))
+			img.Denoise = metaNumber(m, "Denoising strength", "denoise")
 			img.Prompt = metaString(m, "prompt")
 			img.NegativePrompt = metaString(m, "negativePrompt")
 			img.Sampler = metaString(m, "sampler")

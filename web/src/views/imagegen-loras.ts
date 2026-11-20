@@ -257,7 +257,7 @@ export class OppaiLoraPicker extends LitElement {
         background: var(--oppai-surface); color: var(--oppai-text); font: inherit; font-size: 10.5px; font-weight: 600; cursor: pointer;
       }
       .file-to button .material-symbols-rounded { font-size: 18px; color: var(--oppai-primary-bright, var(--oppai-primary)); }
-      .file-to button:hover:not(:disabled) { background: var(--oppai-primary-container); }
+      .file-to button:hover:not(:disabled) { background: var(--oppai-selected); }
       .file-to button:disabled { opacity: 0.4; cursor: default; }
     `,
   ];

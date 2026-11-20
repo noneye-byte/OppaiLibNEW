@@ -1163,6 +1163,43 @@ export interface ChubPage {
   more: boolean;
 }
 
+/** A card's page: everything the card holds, read before it is added. */
+export interface ChubDetails extends ChubCard {
+  id: number;
+  creator: string;
+  /** The full-size art, proxied. */
+  art: string;
+  favorites: number;
+  messages: number;
+  forks: number;
+  rating: number;
+  ratingCount: number;
+  created?: string;
+  updated?: string;
+  tokenCounts?: Record<string, number>;
+  creatorNotes: string;
+  description: string;
+  personality: string;
+  scenario: string;
+  firstMessage: string;
+  greetings: string[];
+  exampleDialogs: string;
+  systemPrompt: string;
+  postHistory: string;
+  lorebookName?: string;
+  lorebook: { name?: string; keys: string[]; content: string; constant?: boolean; disabled?: boolean }[];
+  lorebookMore?: number;
+  expressionPack?: string;
+  expressions: { label: string; url: string }[];
+  hasGallery: boolean;
+}
+
+export interface ChubGalleryPage {
+  items: { id: string; url: string; description?: string; nsfw: boolean }[];
+  total: number;
+  more: boolean;
+}
+
 export interface ChubCharacter {
   path: string;
   card: Record<string, unknown>;
@@ -2267,6 +2304,23 @@ export interface CivitaiComment {
   html: string;
   replies?: number;
   likes?: number;
+  /** How far down a thread it sits (0 on the page itself), and what it answers. A
+   *  section arrives in reading order: each comment, then its replies. */
+  depth?: number;
+  parentId?: number;
+  pinned?: boolean;
+  /** Replies this page did not open; they are read on the site. */
+  moreReplies?: number;
+}
+
+/** What a comment section hangs off on Civitai. */
+export type CivitaiCommentEntity = "model" | "post" | "image";
+
+export interface CivitaiCommentPage {
+  items: CivitaiComment[];
+  nextCursor?: string;
+  /** The page on the site the section belongs to. */
+  page: string;
 }
 
 /** One gallery board: InvokeAI's, or a folder of the studio's own gallery. Board id
@@ -2379,6 +2433,8 @@ export interface CivitaiModel {
   creatorImage?: string;
   downloads: number;
   likes: number;
+  comments?: number;
+  collected?: number;
   nsfw: boolean;
   tags: string[];
   /** Sanitized HTML, detail only. */
@@ -2444,6 +2500,21 @@ export interface CivitaiImage {
   createdAt?: string;
   /** For a clip: the clip, small enough to play in a tile; `url` is its first frame. */
   video?: string;
+  /** Its reactions and comment count, as the feed counts them. */
+  stats?: CivitaiImageStats;
+  baseModel?: string;
+  /** The models and LoRAs its generation data names (with an API key only). */
+  resources?: { name: string; type?: string; weight?: number }[];
+  clipSkip?: number;
+  denoise?: number;
+}
+
+export interface CivitaiImageStats {
+  likes: number;
+  hearts: number;
+  laughs: number;
+  cries: number;
+  comments: number;
 }
 
 /** One upload of several pictures, rebuilt from someone's image feed (Civitai's
@@ -3098,9 +3169,12 @@ async function requestOnce<T>(path: string, opts: RequestInit = {}, timeoutMs = 
     // quiet too: one that lands before the server has registered the run is a 404
     // the caller expects, not "no such generation" for her to announce.
     // ComfyUI's lists are the Video studio's to explain, and are polled while ComfyUI
-    // restarts, when every failure is expected.
+    // restarts, when every failure is expected. Civitai's comments say in place why they
+    // cannot be read (no key, mostly) under every picture opened; announcing that each
+    // time was her repeating the same sentence over the thing it was about.
     if (path !== "/api/auth/login" && path !== "/api/imagegen/generate" && path !== "/api/imagegen/clip" &&
       !path.startsWith("/api/imagegen/progress/") && !path.startsWith("/api/imagegen/comfy/models") &&
+      !path.startsWith("/api/imagegen/civitai/comments") &&
       e instanceof Error && e.message !== "unauthorized") {
       mascotSay(e.message || "Something went wrong.");
     }
@@ -3882,6 +3956,12 @@ export const api = {
       nsfw: query.nsfw ? "1" : "0", expressions: query.expressions ? "1" : "0" });
     return request<ChubPage>(`/api/chub/search?${params}`, {}, 60_000);
   },
+  /** A card's page: its fields, lorebook, expression pack and figures. */
+  chubDetails: (path: string) =>
+    request<ChubDetails>(`/api/chub/details?path=${encodeURIComponent(path)}`, {}, 60_000),
+  /** The pictures people posted to a card's gallery, a page at a time. */
+  chubGallery: (id: number, page: number) =>
+    request<ChubGalleryPage>(`/api/chub/gallery?id=${id}&page=${page}`, {}, 60_000),
   /** One card as a V2 card object, its art as a data URL, and how many expressions it has. */
   chubCharacter: (path: string) =>
     request<ChubCharacter>(`/api/chub/character?path=${encodeURIComponent(path)}`, {}, 90_000),
@@ -4274,6 +4354,13 @@ export const api = {
   /** Make one of the catalogue's pictures the model's cover; the choice survives
    *  a later fetch of the same version. */
   /** Needs a Civitai API key: the site shares comments only with an account. */
+  /** A comment section on Civitai: a model's, a post's or a picture's, threads opened. */
+  civitaiThread: (entity: CivitaiCommentEntity, id: number, opts: { cursor?: string; sort?: "newest" | "oldest" | "reactions" } = {}) => {
+    const p = new URLSearchParams({ entity, id: String(id) });
+    if (opts.cursor) p.set("cursor", opts.cursor);
+    if (opts.sort) p.set("sort", opts.sort);
+    return request<CivitaiCommentPage>(`/api/imagegen/civitai/comments?${p}`, {}, 45_000);
+  },
   civitaiComments: (modelId: number, cursor?: string) =>
     request<{ items: CivitaiComment[]; nextCursor?: string; page: string }>(
       `/api/imagegen/civitai/comments?modelId=${modelId}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`, {}, 45_000),

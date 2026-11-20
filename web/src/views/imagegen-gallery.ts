@@ -324,7 +324,7 @@ export class OppaiInvokeGallery extends LitElement {
         text-align: left; cursor: pointer; outline: 2px solid transparent; outline-offset: -2px;
       }
       .side-item:hover { background: var(--oppai-surface-2); color: var(--oppai-text); }
-      .side-item.on { background: var(--oppai-primary-container); color: var(--oppai-text); }
+      .side-item.on { background: var(--oppai-selected); color: var(--oppai-text); }
       .side-item.drop { outline-color: var(--oppai-accent); background: color-mix(in srgb, var(--oppai-accent) 15%, transparent); }
       .side-item .thumb { width: 38px; height: 38px; flex: none; border-radius: 9px; overflow: hidden; display: grid; place-items: center; background: var(--oppai-surface-2); color: var(--oppai-text-muted); }
       .side-item .thumb img { width: 100%; height: 100%; object-fit: cover; }
@@ -398,7 +398,7 @@ export class OppaiInvokeGallery extends LitElement {
         display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px 4px 9px; border-radius: 12px; border: none;
         background: var(--oppai-surface-2); color: var(--oppai-text); font-size: 11.5px; font-weight: 600; cursor: pointer; text-align: center; line-height: 1.2;
       }
-      .uses button:hover { background: var(--oppai-primary-container); }
+      .uses button:hover { background: var(--oppai-selected); }
       .uses .material-symbols-rounded { font-size: 21px; color: var(--oppai-primary-bright, var(--oppai-primary)); }
       .rowbtns { display: flex; flex-wrap: wrap; gap: 6px; }
       .rowbtns button, .rowbtns select {

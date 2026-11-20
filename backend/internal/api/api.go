@@ -881,6 +881,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/chub/search", s.requireAuth(s.handleChubSearch))
 	mux.HandleFunc("GET /api/chub/avatar", s.requireAuth(s.handleChubAvatar))
 	mux.HandleFunc("GET /api/chub/character", s.requireAuth(s.handleChubCharacter))
+	mux.HandleFunc("GET /api/chub/details", s.requireAuth(s.handleChubDetails))
+	mux.HandleFunc("GET /api/chub/gallery", s.requireAuth(s.handleChubGallery))
 	mux.HandleFunc("POST /api/chub/expressions", s.requireAuth(s.handleChubExpressions))
 	// Libby's card as it ships, so each of her fields can be put back. Read-only.
 	mux.HandleFunc("GET /api/chat/libby-default", s.requireAuth(s.handleLibbyDefaultCard))

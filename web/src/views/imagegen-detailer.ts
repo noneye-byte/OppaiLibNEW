@@ -187,7 +187,7 @@ export class OppaiDetailerPanel extends LitElement {
         height: 30px; border-radius: 9px; border: 1px solid var(--oppai-border-strong); background: transparent; color: var(--oppai-text-dim);
         font: inherit; font-size: 11.5px; font-weight: 600; cursor: pointer;
       }
-      .seg button.on { background: var(--oppai-primary-container); border-color: transparent; color: var(--oppai-text); }
+      .seg button.on { background: var(--oppai-selected); border-color: transparent; color: var(--oppai-primary-bright); }
       .icon-x {
         flex: none; width: 30px; height: 30px; border-radius: 15px; border: none; background: none; color: var(--oppai-text-muted);
         display: grid; place-items: center; cursor: pointer;
@@ -276,7 +276,7 @@ export class OppaiDetailerPanel extends LitElement {
         flex: none; height: 28px; padding: 0 10px; border-radius: 14px; border: none; background: var(--oppai-surface); color: var(--oppai-text-dim);
         font: inherit; font-size: 12px; cursor: pointer;
       }
-      .quick button.on { background: var(--oppai-primary-container); color: var(--oppai-text); }
+      .quick button.on { background: var(--oppai-selected); color: var(--oppai-primary-bright); }
       .shop { display: flex; flex-direction: column; gap: 8px; }
       .item {
         display: grid; grid-template-columns: 74px minmax(0, 1fr); gap: 10px; padding: 8px; border-radius: 16px; background: var(--oppai-surface);
