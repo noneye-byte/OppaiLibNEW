@@ -120,6 +120,7 @@ interface ApiService {
         @Query("q") query: String? = null,
         @Query("favorite") favorite: Int? = null,
         @Query("sort") sort: String? = null,
+        @Query("minRating") minRating: Int? = null,
     ): MediaListResponse
 
     @GET("api/media/{id}")
@@ -541,7 +542,8 @@ interface ApiService {
         @Query("category") category: String? = null,
         @Query("sort") sort: String? = null,
         @Query("period") period: String? = null,
-        @Query("base") base: String? = null,
+        /** Repeated for several: video mode asks for every Wan base at once. */
+        @Query("base") base: List<String>? = null,
         @Query("creator") creator: String? = null,
         @Query("nsfw") nsfw: String? = null,
         @Query("cursor") cursor: String? = null,

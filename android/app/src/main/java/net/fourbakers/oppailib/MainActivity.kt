@@ -57,6 +57,7 @@ import net.fourbakers.oppailib.ui.LibbyPortrait
 import net.fourbakers.oppailib.ui.AppShell
 import net.fourbakers.oppailib.ui.LoginScreen
 import net.fourbakers.oppailib.ui.mascotAsset
+import net.fourbakers.oppailib.ui.theme.Appearance
 import net.fourbakers.oppailib.ui.theme.OppaiTheme
 import net.fourbakers.oppailib.work.ImportWorker
 import net.fourbakers.oppailib.work.UploadWorker
@@ -89,6 +90,8 @@ class MainActivity : FragmentActivity() {
         enableEdgeToEdge()
         requestNotificationsIfNeeded()
         val repo = OppaiApp.from(this).repository
+        Appearance.materialYou = repo.prefs.materialYou
+        Appearance.safe = repo.prefs.safeView
         setContent {
             OppaiTheme {
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {

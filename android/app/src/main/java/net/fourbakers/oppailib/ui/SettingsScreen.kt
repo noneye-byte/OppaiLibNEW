@@ -103,9 +103,9 @@ fun SettingsScreen(repo: Repository, onBack: () -> Unit, onLogout: () -> Unit) {
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("Settings") },
-                navigationIcon = {
+            PageTop(
+                title = "Settings",
+                navigation = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
@@ -116,6 +116,9 @@ fun SettingsScreen(repo: Repository, onBack: () -> Unit, onLogout: () -> Unit) {
         Column(
             Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         ) {
+            SectionHeader("Appearance")
+            AppearanceSection(repo)
+
             SectionHeader("Video")
 
             Text("How the frame fills the screen", style = MaterialTheme.typography.bodyMedium)
@@ -212,8 +215,14 @@ fun SettingsScreen(repo: Repository, onBack: () -> Unit, onLogout: () -> Unit) {
                     )
                 }
             }
-            LibbyOutfitsSection(repo)
-            LibbyBackgroundsSection(repo)
+            // Her wardrobes and rooms moved into her chat (Libby → Her world), as on the
+            // web: they are part of her, not of this phone.
+            Text(
+                "Her outfits and rooms are in Chat → Libby's settings → Her world; her memory, journal and Discord in Her mind.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 10.dp),
+            )
 
             SectionHeader("Library")
             StatsBlock(stats)
@@ -239,8 +248,22 @@ fun SettingsScreen(repo: Repository, onBack: () -> Unit, onLogout: () -> Unit) {
                 modifier = Modifier.padding(top = 4.dp),
             ) { Text("Change password") }
 
+            SectionHeader("Passkeys")
+            PasskeysSection(repo)
+
             SectionHeader("App")
             UpdateBlock(repo = repo, context = context, scope = scope)
+
+            SectionHeader("MCP clients")
+            McpSection(repo)
+
+            SectionHeader("Launchy")
+            LaunchySection(repo)
+
+            if (isAdmin) {
+                SectionHeader("Server")
+                ServerSettingsSection(repo)
+            }
 
             SectionHeader("Storage")
             StorageBlock(repo, isAdmin)
@@ -798,13 +821,8 @@ private fun formatBytes(bytes: Long): String = when {
 
 @Composable
 private fun SectionHeader(title: String) {
-    HorizontalDivider(Modifier.padding(top = 24.dp))
-    Text(
-        title,
-        style = MaterialTheme.typography.titleSmall,
-        color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.padding(top = 16.dp, bottom = 8.dp),
-    )
+    Hairline(Modifier.padding(top = 24.dp))
+    Kicker(title, Modifier.padding(top = 16.dp, bottom = 8.dp))
 }
 
 @Composable

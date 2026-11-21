@@ -80,6 +80,11 @@ ldflags, so there is nothing to edit there.
   for one context, and PixiJS caches textures by URL; two of her on screen (stage and
   settings preview) need `ownShaders` and per-instance texture URLs in
   `views/libby-live2d.ts`, or the first one drawn goes blank.
+- **Android's JSON leaves defaults out.** Repository's `Json` encodes a field only when it
+  differs from its Kotlin default, so a body the server decodes *whole* (`PUT
+  /api/libby/auto`, a wardrobe square's WIP envelope) arrives with Go's zero for every
+  untouched field — quiet hours of 0 to 0, the feature off. Mark such bodies
+  `@EncodeDefault` (`data/WebModels.kt`); a PATCH-shaped one with nullable fields is fine.
 - **`mediaColumns` and `briefColumns`** are the two column lists the media queries share.
   Adding a column to one scan means adding it to that constant, not to a single query.
 

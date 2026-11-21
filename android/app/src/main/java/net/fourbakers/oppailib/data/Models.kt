@@ -985,6 +985,13 @@ data class CivitaiComment(
     val html: String = "",
     val replies: Int = 0,
     val likes: Int = 0,
+    /** How far down a thread it sits (0 on the page itself), and what it answers. A
+     *  section arrives in reading order: each comment, then its replies. */
+    val depth: Int = 0,
+    val parentId: Long = 0,
+    val pinned: Boolean = false,
+    /** Replies this page did not open; they are read on the site. */
+    val moreReplies: Int = 0,
 )
 
 @Serializable
@@ -1096,6 +1103,8 @@ data class CivitaiModel(
     val creatorImage: String = "",
     val downloads: Long = 0,
     val likes: Long = 0,
+    val comments: Long = 0,
+    val collected: Long = 0,
     val nsfw: Boolean = false,
     val tags: List<String> = emptyList(),
     /** Sanitized HTML; the model page only. */
@@ -1124,12 +1133,37 @@ data class CivitaiImage(
     /** The upload this picture was part of, and when. Absent on showcase stills. */
     val postId: Long = 0,
     val createdAt: String = "",
+    /** For a clip: the clip, small enough to play in a tile; [url] is its first frame. */
+    val video: String = "",
+    /** Its reactions and comment count, as the feed counts them. */
+    val stats: CivitaiImageStats? = null,
+    val baseModel: String = "",
+    /** The models and LoRAs its generation data names (with an API key only). */
+    val resources: List<CivitaiResource> = emptyList(),
+    val clipSkip: Int = 0,
+    val denoise: Double = 0.0,
 )
+
+@Serializable
+data class CivitaiImageStats(
+    val likes: Int = 0,
+    val hearts: Int = 0,
+    val laughs: Int = 0,
+    val cries: Int = 0,
+    val comments: Int = 0,
+)
+
+@Serializable
+data class CivitaiResource(val name: String = "", val type: String = "", val weight: Double? = null)
 
 @Serializable
 data class CivitaiImagesResponse(
     val items: List<CivitaiImage> = emptyList(),
     val nextCursor: String = "",
+    /** How many of the page kept their prompt, and whether a key is set: a page of
+     *  pictures with none means the key is what is missing. */
+    val withPrompts: Int = -1,
+    val keySet: Boolean = true,
 )
 
 /** One upload of several pictures, rebuilt from someone's image feed (Civitai's
@@ -1233,7 +1267,15 @@ data class CivitaiCategoriesResponse(val categories: List<CivitaiCategory> = emp
 /** The ids let the server dress the model with the catalogue's cover, description
  *  and trigger words once InvokeAI has the file. */
 @Serializable
-data class CivitaiInstallRequest(val url: String, val modelId: Long = 0, val versionId: Long = 0)
+data class CivitaiInstallRequest(
+    val url: String,
+    val modelId: Long = 0,
+    val versionId: Long = 0,
+    /** "comfy" to install into ComfyUI's folders (the Video studio's models). */
+    val target: String? = null,
+    /** A Wan model's high- and low-noise halves come as a pair; install both. */
+    val pair: Boolean? = null,
+)
 
 /** One model download InvokeAI is running (or has finished). */
 @Serializable

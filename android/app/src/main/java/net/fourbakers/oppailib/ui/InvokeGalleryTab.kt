@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -271,6 +272,11 @@ fun InvokeGalleryTab(
                     onClick = { selecting = !selecting; if (!selecting) selected = emptySet() },
                     modifier = Modifier.padding(start = if (selecting) 0.dp else 0.dp),
                 ) { Text(if (selecting) "Done" else "Select") }
+                // The server keeps this gallery (own), so it can zip it for Civitai.
+                if (own && (!selecting || selected.isNotEmpty())) {
+                    Spacer(Modifier.weight(1f))
+                    GalleryZipButton(repo, if (selecting) selected.toList() else emptyList(), board)
+                }
             }
         }
         if (boards.size > 1) {

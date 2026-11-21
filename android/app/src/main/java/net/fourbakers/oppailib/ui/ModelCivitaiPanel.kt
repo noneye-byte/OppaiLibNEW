@@ -43,7 +43,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import kotlinx.coroutines.launch
-import net.fourbakers.oppailib.data.CivitaiComment
 import net.fourbakers.oppailib.data.CivitaiImage
 import net.fourbakers.oppailib.data.CivitaiModel
 import net.fourbakers.oppailib.data.CivitaiSyncRequest
@@ -83,8 +82,6 @@ fun ModelCivitaiPanel(
     var model by remember(meta.key) { mutableStateOf<CivitaiModel?>(null) }
     var community by remember(meta.key) { mutableStateOf<List<CivitaiImage>>(emptyList()) }
     var communityCursor by remember(meta.key) { mutableStateOf("") }
-    var comments by remember(meta.key) { mutableStateOf<List<CivitaiComment>>(emptyList()) }
-    var commentsCursor by remember(meta.key) { mutableStateOf("") }
     var loaded by remember(meta.key) { mutableStateOf(emptySet<CivitaiPane>()) }
     var loading by remember(meta.key) { mutableStateOf(false) }
     var linking by remember(meta.key) { mutableStateOf(false) }
@@ -109,11 +106,8 @@ fun ModelCivitaiPanel(
                         community = addCommunityPage(if (more) community else emptyList(), page.items, l.creator)
                         communityCursor = page.nextCursor
                     }
-                    CivitaiPane.Comments -> {
-                        val page = repo.api.civitaiComments(l.modelId, if (more) commentsCursor.ifBlank { null } else null)
-                        comments = if (more) (comments + page.items).distinctBy { it.id } else page.items
-                        commentsCursor = page.nextCursor
-                    }
+                    // The thread reads its own pages (CivitaiThread).
+                    CivitaiPane.Comments -> Unit
                     CivitaiPane.None -> Unit
                 }
             }.onSuccess { loaded = loaded + which }
@@ -241,24 +235,7 @@ fun ModelCivitaiPanel(
                     }
                 }
             }
-            CivitaiPane.Comments -> {
-                if (comments.isEmpty()) {
-                    if (problem.isEmpty()) {
-                        Text(
-                            if (loading) "Asking Civitai…" else "Nobody has commented on it yet.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                } else {
-                    comments.forEach { CommentRow(repo, it) }
-                    if (commentsCursor.isNotEmpty()) {
-                        TextButton(onClick = { load(CivitaiPane.Comments, more = true) }, enabled = !loading) {
-                            Text(if (loading) "Loading…" else "More")
-                        }
-                    }
-                }
-            }
+            CivitaiPane.Comments -> link?.let { CivitaiThread(repo, "model", it.modelId) }
             CivitaiPane.None -> Unit
         }
     }
@@ -312,38 +289,6 @@ private fun PictureTile(repo: Repository, url: String, by: String, picked: Boole
                     .background(MaterialTheme.colorScheme.primary)
                     .padding(horizontal = 6.dp),
             )
-        }
-    }
-}
-
-@Composable
-private fun CommentRow(repo: Repository, c: CivitaiComment) {
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-        if (c.avatar.isNotEmpty()) {
-            AsyncImage(
-                model = repo.civitaiImageUrl(c.avatar),
-                imageLoader = repo.imageLoader,
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.size(28.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surfaceVariant),
-            )
-        } else {
-            Spacer(Modifier.size(28.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surfaceVariant))
-        }
-        Column(Modifier.weight(1f)) {
-            Text(
-                listOfNotNull(
-                    c.user.ifBlank { "someone" },
-                    c.createdAt.take(10).ifBlank { null },
-                    c.likes.takeIf { it > 0 }?.let { "♥ $it" },
-                    c.replies.takeIf { it > 0 }?.let { if (it == 1) "1 reply" else "$it replies" },
-                ).joinToString("  ·  "),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(2.dp))
-            // Sanitized on the server: the tags a description keeps, nothing that runs.
-            Text(AnnotatedString.fromHtml(c.html), style = MaterialTheme.typography.bodySmall)
         }
     }
 }

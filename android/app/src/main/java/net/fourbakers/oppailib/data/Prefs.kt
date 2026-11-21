@@ -71,6 +71,54 @@ class Prefs(context: Context) {
         get() = sp.getFloat(KEY_LIBBY_PROGRESSION, .5f).takeIf(LibbyMeter.MULTIPLIERS::contains) ?: .5f
         set(v) = sp.edit().putFloat(KEY_LIBBY_PROGRESSION, v.takeIf(LibbyMeter.MULTIPLIERS::contains) ?: .5f).apply()
 
+    // ── appearance ───────────────────────────────────────────────────────
+
+    /** Follow the wallpaper's colours instead of the darkroom's. Off by default: the
+     *  app is drawn in the web's ink and coral, and Material You is the opt-in it is
+     *  there too. */
+    var materialYou: Boolean
+        get() = sp.getBoolean(KEY_MATERIAL_YOU, false)
+        set(v) = sp.edit().putBoolean(KEY_MATERIAL_YOU, v).apply()
+
+    /** Safe view: explicit tiles veiled, Libby off the screen. Per device, as on the web,
+     *  because which room the phone is in is a fact about the phone. */
+    var safeView: Boolean
+        get() = sp.getBoolean(KEY_SAFE_VIEW, false)
+        set(v) = sp.edit().putBoolean(KEY_SAFE_VIEW, v).apply()
+
+    /** The grid's tile size: "s", "m" or "l". */
+    var density: String
+        get() = sp.getString(KEY_DENSITY, "m")?.takeIf { it in setOf("s", "m", "l") } ?: "m"
+        set(v) = sp.edit().putString(KEY_DENSITY, v).apply()
+
+    /** The lowest star rating the grid shows; 0 for all. */
+    var minRating: Int
+        get() = sp.getInt(KEY_MIN_RATING, 0).coerceIn(0, 5)
+        set(v) = sp.edit().putInt(KEY_MIN_RATING, v.coerceIn(0, 5)).apply()
+
+    /** The library's place: "home", a kind, "favorites", "collections" or "browse". */
+    var libraryScope: String
+        get() = sp.getString(KEY_LIBRARY_SCOPE, null) ?: if (lastFavoritesOnly) "favorites" else lastKind.ifEmpty { "home" }
+        set(v) = sp.edit().putString(KEY_LIBRARY_SCOPE, v).apply()
+
+    /** The studio's last mode — "image", "video" or "sprites" — which Create reopens. */
+    var lastCreate: String
+        get() = sp.getString(KEY_LAST_CREATE, "image") ?: "image"
+        set(v) = sp.edit().putString(KEY_LAST_CREATE, v).apply()
+
+    /**
+     * What this phone has opened, newest first, at most [RECENT_LIMIT]. Home's Keep going
+     * falls back to it where the server has no position, and Libby Suggested leaves these
+     * out (the server cannot know what a device opened briefly).
+     */
+    var recentlyOpened: List<Long>
+        get() = sp.getString(KEY_RECENTS, null)?.split(',')?.mapNotNull { it.toLongOrNull() } ?: emptyList()
+        set(v) = sp.edit().putString(KEY_RECENTS, v.take(RECENT_LIMIT).joinToString(",")).apply()
+
+    fun noteOpened(id: Long) {
+        recentlyOpened = listOf(id) + recentlyOpened.filter { it != id }
+    }
+
     var reauthUsername: String?
         get() = sp.getString(KEY_REAUTH_USER, null)
         private set(v) = sp.edit().putString(KEY_REAUTH_USER, v).apply()
@@ -295,6 +343,7 @@ class Prefs(context: Context) {
         sp.edit().remove(KEY_TOKEN).remove(KEY_REAUTH_USER).remove(KEY_REAUTH_PASSWORD)
             .remove(KEY_LAST_SCREEN).remove(KEY_LAST_KIND).remove(KEY_LAST_FAVORITES)
             .remove(KEY_LAST_VIEWER).remove(KEY_LAST_CHAT).remove(KEY_LAST_BROWSE)
+            .remove(KEY_LIBRARY_SCOPE).remove(KEY_RECENTS).remove(KEY_LAST_CREATE)
             .commit()
     }
 
@@ -335,6 +384,14 @@ class Prefs(context: Context) {
         private const val KEY_LAST_VIEWER = "last_viewer_media"
         private const val KEY_LAST_CHAT = "last_chat_conversation"
         private const val KEY_LAST_BROWSE = "last_browse_feed"
+        private const val KEY_MATERIAL_YOU = "material_you"
+        private const val KEY_SAFE_VIEW = "safe_view"
+        private const val KEY_DENSITY = "grid_density"
+        private const val KEY_MIN_RATING = "min_rating"
+        private const val KEY_LIBRARY_SCOPE = "library_scope"
+        private const val KEY_LAST_CREATE = "last_create"
+        private const val KEY_RECENTS = "recently_opened"
+        const val RECENT_LIMIT = 60
 
         private val pinListSerializer = ListSerializer(PinnedFeed.serializer())
     }

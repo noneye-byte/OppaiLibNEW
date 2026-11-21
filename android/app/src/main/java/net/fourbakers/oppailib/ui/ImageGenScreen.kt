@@ -57,6 +57,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
@@ -91,11 +92,8 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -195,7 +193,14 @@ private typealias ShotState = GenSession.Shot
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit, topLevel: Boolean = false) {
+fun ImageGenScreen(
+    repo: Repository,
+    onBack: () -> Unit,
+    onSaved: () -> Unit,
+    /** "image", "video" or "sprites": the studio Create is in. */
+    mode: String = "image",
+    onMode: (String) -> Unit = {},
+) {
     var status by remember { mutableStateOf<ImageGenStatus?>(null) }
     var statusError by remember { mutableStateOf("") }
     var characters by remember { mutableStateOf<List<GenCharacter>>(emptyList()) }
@@ -273,7 +278,10 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit, to
     val progress = session.progress
     val shots = session.shots
     val error = session.error
-    var tab by remember { mutableStateOf(0) }
+    // A page opened from the header over the studio — "gallery", "civitai" or "train" —
+    // or null for the studio itself. These were tabs beside Create; the web keeps them
+    // behind the header's buttons, so the mode switch is the one row of choices.
+    var page by remember { mutableStateOf<String?>(null) }
     // Bumped after each generation so the Gallery tab reloads: InvokeAI keeps its
     // own copy of everything that just finished.
     var galleryRefresh by remember { mutableStateOf(session.finished) }
@@ -359,7 +367,8 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit, to
         if (p.width > 0 && p.height > 0) setSize(p.width, p.height)
         templateId = ""
         selectedTriggers = emptySet()
-        tab = 0
+        page = null
+        onMode("image")
         repo.report("Prompt loaded into the studio")
     }
 
@@ -580,13 +589,19 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit, to
         }
     }
 
+    // Back from a page goes to the studio; back from the studio leaves (the shell's).
+    androidx.activity.compose.BackHandler(enabled = page != null) { page = null }
+
     Scaffold(topBar = {
-        TopAppBar(
-            title = { Text("Image studio") },
-            // As a tab it has no back arrow; system back still leaves through onBack.
-            navigationIcon = { if (!topLevel) IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-            } },
+        val st = status
+        StudioHeader(
+            mode = mode,
+            onMode = { page = null; onMode(it) },
+            page = page,
+            onPage = { page = it },
+            civitai = st != null && (st.backend == "invokeai" || st.civitai),
+            busy = generating,
+            clipsBusy = VideoSession.state.collectAsState().value.runs.count { !it.done },
         )
     }) { padding ->
         val st = status
@@ -619,22 +634,8 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit, to
                 // models folder set on the server, installed into.
                 val invoke = st.backend == "invokeai"
                 val clips = st.clips.image != null || st.clips.text != null
-                val tabNames = buildList {
-                    add("Create")
-                    if (clips) add("Video")
-                    add("Gallery")
-                    if (invoke || st.civitai) add("Civitai")
-                    add("Train")
-                }
-                if (tabNames.size > 1) {
-                    TabRow(selectedTabIndex = tab.coerceIn(0, tabNames.size - 1)) {
-                        tabNames.forEachIndexed { i, label ->
-                            Tab(selected = tab == i, onClick = { tab = i }, text = { Text(label) })
-                        }
-                    }
-                }
-                when (tabNames.getOrElse(tab) { "Create" }) {
-                    "Gallery" -> InvokeGalleryTab(
+                when {
+                    page == "gallery" -> InvokeGalleryTab(
                         repo = repo,
                         refreshKey = galleryRefresh,
                         board = board,
@@ -643,17 +644,24 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit, to
                         own = !invoke,
                         onAnimate = if (st.clips.image != null) { name ->
                             VideoSession.animate(name)
-                            tab = tabNames.indexOf("Video")
+                            page = null
+                            onMode("video")
                         } else null,
                     )
-                    "Video" -> VideoGenTab(repo, st, board = board, onKept = { galleryRefresh++ })
-                    "Train" -> LoraTrainTab(repo, models = st.models, checkpoint = checkpoint)
-                    "Civitai" -> CivitaiTab(
+                    page == "train" -> LoraTrainTab(repo, models = st.models, checkpoint = checkpoint)
+                    page == "civitai" -> CivitaiTab(
                         repo,
                         backend = st.backend,
                         canManage = st.manageModels,
                         onUsePrompt = { usePrompt(it) },
+                        videoMode = mode == "video",
                     )
+                    mode == "video" -> if (clips) VideoGenTab(repo, st, board = board, onKept = { galleryRefresh++ })
+                        else EmptyNote(
+                            "Clips are made by ComfyUI's Wan video. Set ComfyUI up in the web's Settings and the Video studio opens here.",
+                            icon = Icons.Filled.Movie,
+                        )
+                    mode == "sprites" -> SpritesStudio(repo, st)
                     else -> Column(Modifier.weight(1f).fillMaxWidth()) {
                         // ── the rail: what to draw with, each a sheet ───────────
                         SetupRail(
@@ -818,7 +826,7 @@ fun ImageGenScreen(repo: Repository, onBack: () -> Unit, onSaved: () -> Unit, to
                     Icon(which.icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                     Text(which.label, style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
                     if ((which == SetupSheet.MODELS || which == SetupSheet.LORAS) && (st.civitai || st.backend == "invokeai")) {
-                        TextButton(onClick = { sheet = null; tab = if (st.backend == "invokeai") 2 else 1 }) {
+                        TextButton(onClick = { sheet = null; page = "civitai" }) {
                             Icon(Icons.Filled.TravelExplore, contentDescription = null, Modifier.size(18.dp))
                             Text("  Civitai")
                         }

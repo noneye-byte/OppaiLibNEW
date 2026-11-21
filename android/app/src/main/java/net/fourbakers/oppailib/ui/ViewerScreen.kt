@@ -44,6 +44,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.ArrowDropDown
@@ -166,6 +167,9 @@ fun ViewerScreen(
     // The library hands over the page it has loaded, not the whole collection; this is
     // how the feed asks for the next page as you swipe towards the end of it.
     onNearEnd: () -> Unit = {},
+    /** Seconds into the first item to open at: a bookmarked moment, not "carry on". */
+    startAt: Double = 0.0,
+    onAddToCollection: ((Media) -> Unit)? = null,
 ) {
     if (items.isEmpty()) { onClose(); return }
     HideNavigationBar()
@@ -216,6 +220,13 @@ fun ViewerScreen(
 
     val player = rememberVideoPlayer(repo, settled)
     val comic = rememberComicReader(repo, settled)
+    val startId = remember { items.getOrNull(startIndex)?.id }
+    if (player != null && settled != null) {
+        // A moment asked for wins over where it was left, once, on the item it was for.
+        VideoResume(repo, player, settled.id, if (settled.id == startId) startAt else 0.0)
+    }
+    // What this phone has looked at, for Home's Keep going and Libby's suggestions.
+    LaunchedEffect(settled?.id) { settled?.let { repo.prefs.noteOpened(it.id) } }
 
     // The chrome takes itself away over a playing video. Every touch of it pokes the
     // timer, so it only goes while you're actually just watching.
@@ -259,6 +270,7 @@ fun ViewerScreen(
                     onDetail = { details[it.id] = it },
                     onSearchTag = onSearchTag,
                     onDelete = onDelete,
+                    onAddToCollection = onAddToCollection,
                     upNext = {
                         // Tapping the video raises the chrome; the chrome says what's next.
                         // Only for video: a comic's bottom bar is already a page scrubber,
@@ -289,7 +301,10 @@ fun ViewerScreen(
                 ) {
                     // Per-kind controls, sat directly above the metadata bar.
                     when {
-                        current.kind == "video" && player != null -> VideoControls(player) { poke++ }
+                        current.kind == "video" && player != null -> Column {
+                            VideoMoments(repo, player, current.id) { poke++ }
+                            VideoControls(player) { poke++ }
+                        }
                         current.kind == "comic" && comic != null -> ComicControls(comic)
                     }
                 }
@@ -927,11 +942,25 @@ private fun rememberComicReader(repo: Repository, media: Media?): ComicReader? {
     }
 
     val count = info?.pages ?: 0
+    // Restored before anything is written, so the page the pager starts on is not taken
+    // for the page you reached.
+    var restored by remember(media.id) { mutableStateOf(false) }
     LaunchedEffect(media.id, count) {
-        if (count > 0) pages.scrollToPage((repo.prefs.comicPage(media.id) - 1).coerceIn(0, count - 1))
+        if (count <= 0) return@LaunchedEffect
+        // The phone's own memory opens the reader at once; the server's, which is the
+        // same on every device, corrects it a moment later.
+        pages.scrollToPage((repo.prefs.comicPage(media.id) - 1).coerceIn(0, count - 1))
+        savedComicPage(repo, media.id)?.let { p ->
+            if (p in 1..count && p - 1 != pages.currentPage) pages.scrollToPage(p - 1)
+        }
+        restored = true
     }
-    LaunchedEffect(media.id, pages.settledPage, count) {
-        if (count > 0) repo.prefs.setComicPage(media.id, pages.settledPage + 1)
+    LaunchedEffect(media.id, pages.settledPage, count, restored) {
+        if (count <= 0 || !restored) return@LaunchedEffect
+        repo.prefs.setComicPage(media.id, pages.settledPage + 1)
+        // Settled for a moment, not flicked past.
+        kotlinx.coroutines.delay(800)
+        saveComicPage(repo, media.id, pages.settledPage + 1)
     }
 
     return ComicReader(
@@ -1377,6 +1406,7 @@ private fun Chrome(
     onDetail: (Media) -> Unit,
     onSearchTag: (String) -> Unit,
     onDelete: (Media) -> Unit,
+    onAddToCollection: ((Media) -> Unit)?,
     /** The "up next" carousel, drawn above the controls. Empty for kinds that get none. */
     upNext: @Composable () -> Unit,
     controls: @Composable () -> Unit,
@@ -1385,8 +1415,10 @@ private fun Chrome(
     var describing by remember { mutableStateOf(false) }
     var menu by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf(false) }
+    var recipe by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    if (recipe) GenerationDialog(repo, media.id) { recipe = false }
 
     /**
      * Sends an edit and adopts what comes back. The response is the row as it now
@@ -1501,6 +1533,16 @@ private fun Chrome(
                             },
                         )
                     }
+                    if (onAddToCollection != null) DropdownMenuItem(
+                        text = { Text("Add to collection…") },
+                        leadingIcon = { Icon(Icons.AutoMirrored.Filled.PlaylistAdd, contentDescription = null) },
+                        onClick = { menu = false; onAddToCollection(media) },
+                    )
+                    if (media.kind == "image" || media.kind == "gif" || media.kind == "video") DropdownMenuItem(
+                        text = { Text("How it was made") },
+                        leadingIcon = { Icon(Icons.Filled.Info, contentDescription = null) },
+                        onClick = { menu = false; recipe = true },
+                    )
                     DropdownMenuItem(
                         text = { Text("Edit details") },
                         leadingIcon = { Icon(Icons.Filled.Edit, contentDescription = null) },

@@ -75,6 +75,17 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.runtime.derivedStateOf
+import net.fourbakers.oppailib.data.civitaiSized
+import net.fourbakers.oppailib.data.civitaiVideoBases
+import net.fourbakers.oppailib.data.compactNumber
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.height
 import coil.compose.AsyncImage
 import kotlinx.coroutines.launch
 import net.fourbakers.oppailib.data.CivitaiCategory
@@ -104,7 +115,7 @@ private val civitaiSorts = listOf(
     "" to "Most downloaded", "rated" to "Highest rated", "liked" to "Most liked", "newest" to "Newest",
     "collected" to "Most collected", "discussed" to "Most discussed", "images" to "Most images",
 )
-private val civitaiImageSorts = listOf("" to "Most reactions", "newest" to "Newest", "comments" to "Most comments")
+internal val civitaiImageSorts = listOf("" to "Most reactions", "newest" to "Newest", "comments" to "Most comments")
 private val civitaiPeriods = listOf(
     "" to "All time", "year" to "Year", "month" to "Month", "week" to "Week", "day" to "Today",
 )
@@ -137,9 +148,11 @@ fun CivitaiTab(
     backend: String = "invokeai",
     canManage: Boolean = true,
     onUsePrompt: (PromptSettings) -> Unit,
+    /** Opened from the Video studio: browse Wan models and video LoRAs first. */
+    videoMode: Boolean = false,
 ) {
     CompositionLocalProvider(LocalCivitaiTarget provides CivitaiTarget(backend, canManage)) {
-        CivitaiTabBody(repo, onUsePrompt)
+        CivitaiTabBody(repo, onUsePrompt, videoMode)
     }
 }
 
@@ -154,39 +167,39 @@ private data class CivitaiTarget(val backend: String, val canManage: Boolean) {
 private val LocalCivitaiTarget = staticCompositionLocalOf { CivitaiTarget("invokeai", true) }
 
 @Composable
-private fun CivitaiTabBody(repo: Repository, onUsePrompt: (PromptSettings) -> Unit) {
+private fun CivitaiTabBody(repo: Repository, onUsePrompt: (PromptSettings) -> Unit, startVideo: Boolean) {
     val target = LocalCivitaiTarget.current
     var page by remember { mutableStateOf(0) }
+    // Pictures or Video: video mode searches Wan's models and installs them, both halves
+    // of a pair, into ComfyUI for the Video studio.
+    var video by remember { mutableStateOf(startVideo) }
     var jobs by remember { mutableStateOf<List<InstallJob>>(emptyList()) }
     var jobsOpen by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     suspend fun pollJobs() {
-        runCatching { repo.api.civitaiInstalls() }
+        runCatching { repo.web.civitaiInstalls(if (video) "comfy" else null) }
             .onSuccess { jobs = it.jobs.filter { j -> j.status != "cancelled" }.take(4) }
     }
-    LaunchedEffect(Unit) { pollJobs() }
+    LaunchedEffect(video) { jobs = emptyList(); pollJobs() }
 
     fun install(m: CivitaiModel, v: CivitaiVersion) {
         scope.launch {
-            runCatching { repo.api.civitaiInstall(CivitaiInstallRequest(v.downloadUrl, m.id, v.id)) }
+            val req = if (video) CivitaiInstallRequest(v.downloadUrl, m.id, v.id, target = "comfy", pair = true)
+                else CivitaiInstallRequest(v.downloadUrl, m.id, v.id)
+            runCatching { repo.api.civitaiInstall(req) }
                 .onSuccess {
-                    repo.report(target.installing)
+                    repo.report(if (video) "ComfyUI is downloading it — both halves of the pair when it has two" else target.installing)
                     pollJobs()
                 }
                 .onFailure { repo.report(it.message ?: "Couldn't start the install") }
         }
     }
 
-    Column(Modifier.fillMaxSize().padding(horizontal = 14.dp)) {
-        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(top = 6.dp)) {
-            listOf("Browse", "Account", "Installed").forEachIndexed { i, label ->
-                SegmentedButton(
-                    selected = page == i,
-                    onClick = { page = i },
-                    shape = SegmentedButtonDefaults.itemShape(index = i, count = 3),
-                ) { Text(label) }
-            }
+    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+        Row(Modifier.fillMaxWidth().padding(top = 8.dp).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Segmented(listOf(false to "Pictures", true to "Video"), video, { video = it; page = 0 })
+            Segmented(listOf(0 to "Browse", 1 to "Account", 2 to "Installed"), page, { page = it })
         }
         if (jobs.isNotEmpty()) {
             // One line says how the downloads are doing; the log itself only unfolds
@@ -226,7 +239,7 @@ private fun CivitaiTabBody(repo: Repository, onUsePrompt: (PromptSettings) -> Un
             }
         }
         when (page) {
-            0 -> CivitaiBrowse(repo, onInstall = ::install, onUsePrompt = onUsePrompt)
+            0 -> CivitaiBrowse(repo, onInstall = ::install, onUsePrompt = onUsePrompt, video = video)
             1 -> CivitaiAccount(repo, onUsePrompt = onUsePrompt)
             else -> CivitaiInstalledList(repo, onJobs = { scope.launch { pollJobs() } })
         }
@@ -238,6 +251,7 @@ private fun CivitaiBrowse(
     repo: Repository,
     onInstall: (CivitaiModel, CivitaiVersion) -> Unit,
     onUsePrompt: (PromptSettings) -> Unit,
+    video: Boolean = false,
 ) {
     var query by remember { mutableStateOf("") }
     var type by remember { mutableStateOf("") }
@@ -253,10 +267,12 @@ private fun CivitaiBrowse(
     var cursor by remember { mutableStateOf("") }
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
-    var detailId by remember { mutableStateOf(0L) }
-    var detailSeed by remember { mutableStateOf<CivitaiModel?>(null) }
+    // What is open over the results: a model's page or a person's pictures, as a stack,
+    // so back from a person reached through a model is that model again.
+    var stack by remember { mutableStateOf<List<CivitaiOpen>>(emptyList()) }
     var me by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
+    val grid = rememberLazyGridState()
 
     suspend fun search(reset: Boolean) {
         loading = true
@@ -268,7 +284,7 @@ private fun CivitaiBrowse(
                 category = category.ifBlank { null },
                 sort = sort.ifBlank { null },
                 period = period.ifBlank { null },
-                base = base.ifBlank { null },
+                base = base.ifBlank { null }?.let { listOf(it) } ?: if (video) civitaiVideoBases.map { it.first } else null,
                 creator = creator.ifBlank { null },
                 nsfw = if (nsfw) null else "0",
                 cursor = if (reset) null else cursor.ifBlank { null },
@@ -282,126 +298,129 @@ private fun CivitaiBrowse(
         loading = false
     }
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(video) {
+        type = if (video) "video" else ""
+        base = ""
+        category = ""
+        stack = emptyList()
         runCatching { repo.api.civitaiCategories() }.onSuccess { categories = it.categories.take(24) }
         // Whose key this is, if there is one — for a "mine" chip. Quietly nothing otherwise.
         runCatching { repo.api.civitaiMe() }.onSuccess { me = it.username }
         search(reset = true)
     }
 
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        OutlinedTextField(
-            value = query,
-            onValueChange = { query = it },
-            placeholder = { Text("Search Civitai…") },
-            singleLine = true,
-            modifier = Modifier.weight(1f),
-        )
-        IconButton(onClick = { scope.launch { search(reset = true) } }) {
-            Icon(Icons.Filled.Search, contentDescription = "Search")
-        }
-    }
-    Row(
-        Modifier.horizontalScroll(rememberScrollState()).padding(vertical = 6.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        FilterChip(selected = showFilters, onClick = { showFilters = !showFilters }, label = { Text("Filters") })
-        civitaiTypes.forEach { (id, label) ->
-            FilterChip(
-                selected = type == id,
-                onClick = { type = id; scope.launch { search(reset = true) } },
-                label = { Text(label) },
+    fun again() { scope.launch { search(reset = true) } }
+
+    when (val top = stack.lastOrNull()) {
+        is CivitaiOpen.Model -> {
+            CivitaiModelPage(
+                repo = repo, id = top.id, seed = top.seed, nsfw = nsfw, canManage = LocalCivitaiTarget.current.canManage,
+                onBack = { stack = stack.dropLast(1) },
+                onInstall = onInstall,
+                onUsePrompt = onUsePrompt,
+                onCreator = { name -> creator = name; stack = emptyList(); again() },
+                onPerson = { name -> stack = stack + CivitaiOpen.Person(name) },
+                onTag = { tag -> query = tag; stack = emptyList(); again() },
             )
+            return
+        }
+        is CivitaiOpen.Person -> {
+            CivitaiPersonPage(
+                repo = repo, username = top.name, nsfw = nsfw,
+                onBack = { stack = stack.dropLast(1) },
+                onModels = { name -> creator = name; stack = emptyList(); again() },
+                onUsePrompt = onUsePrompt,
+                onPerson = { name -> stack = stack + CivitaiOpen.Person(name) },
+            )
+            return
+        }
+        null -> {}
+    }
+
+    SearchBox(
+        value = query,
+        onValueChange = { query = it },
+        placeholder = if (video) "Search Wan models and LoRAs…" else "Search Civitai…",
+        onSearch = { again() },
+        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+        trailing = { ToolButton(Icons.Filled.Search, "Search", { again() }, bare = true) },
+    )
+    Spacer(Modifier.height(8.dp))
+    InkChipRow(padding = PaddingValues(0.dp)) {
+        InkChip("Filters", showFilters, { showFilters = !showFilters }, icon = Icons.Filled.Tune, small = true)
+        (if (video) civitaiVideoTypes else civitaiTypes).forEach { (id, label) ->
+            InkChip(label, type == id, { type = id; again() }, small = true)
         }
         if (creator.isNotEmpty()) {
-            FilterChip(
-                selected = true,
-                onClick = { creator = ""; scope.launch { search(reset = true) } },
-                label = { Text("by $creator ✕") },
-            )
+            InkChip("by $creator", true, { creator = ""; again() }, icon = Icons.Filled.Close, small = true)
         } else if (me.isNotEmpty()) {
-            FilterChip(
-                selected = false,
-                onClick = { creator = me; scope.launch { search(reset = true) } },
-                label = { Text("Mine") },
-            )
+            InkChip("Mine", false, { creator = me; again() }, small = true)
         }
     }
+    Spacer(Modifier.height(6.dp))
     // Sorting is the filter people reach for most, so it stays out of the fold.
-    Row(Modifier.horizontalScroll(rememberScrollState()).padding(bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        civitaiSorts.forEach { (id, label) ->
-            FilterChip(selected = sort == id, onClick = { sort = id; scope.launch { search(reset = true) } }, label = { Text(label) })
-        }
+    InkChipRow(padding = PaddingValues(0.dp)) {
+        civitaiSorts.forEach { (id, label) -> InkChip(label, sort == id, { sort = id; again() }, small = true) }
     }
     if (showFilters) {
-        Row(Modifier.horizontalScroll(rememberScrollState()).padding(bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            civitaiPeriods.forEach { (id, label) ->
-                FilterChip(selected = period == id, onClick = { period = id; scope.launch { search(reset = true) } }, label = { Text(label) })
-            }
-            FilterChip(selected = nsfw, onClick = { nsfw = !nsfw; scope.launch { search(reset = true) } }, label = { Text("NSFW") })
+        Spacer(Modifier.height(6.dp))
+        InkChipRow(padding = PaddingValues(0.dp)) {
+            civitaiPeriods.forEach { (id, label) -> InkChip(label, period == id, { period = id; again() }, small = true) }
+            InkChip("NSFW", nsfw, { nsfw = !nsfw; again() }, small = true)
         }
-        Row(Modifier.horizontalScroll(rememberScrollState()).padding(bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(selected = base.isEmpty(), onClick = { base = ""; scope.launch { search(reset = true) } }, label = { Text("Any base") })
-            civitaiBases.forEach { b ->
-                FilterChip(selected = base == b, onClick = { base = b; scope.launch { search(reset = true) } }, label = { Text(b) })
-            }
+        Spacer(Modifier.height(6.dp))
+        InkChipRow(padding = PaddingValues(0.dp)) {
+            InkChip(if (video) "Every Wan" else "Any base", base.isEmpty(), { base = ""; again() }, small = true)
+            if (video) civitaiVideoBases.forEach { (id, label) -> InkChip(label, base == id, { base = id; again() }, small = true) }
+            else civitaiBases.forEach { b -> InkChip(b, base == b, { base = b; again() }, small = true) }
         }
-        if (categories.isNotEmpty()) {
-            Row(Modifier.horizontalScroll(rememberScrollState()).padding(bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(selected = category.isEmpty(), onClick = { category = ""; scope.launch { search(reset = true) } }, label = { Text("All categories") })
-                categories.forEach { c ->
-                    FilterChip(selected = category == c.name, onClick = { category = c.name; scope.launch { search(reset = true) } }, label = { Text(c.name) })
-                }
+        if (categories.isNotEmpty() && !video) {
+            Spacer(Modifier.height(6.dp))
+            InkChipRow(padding = PaddingValues(0.dp)) {
+                InkChip("All categories", category.isEmpty(), { category = ""; again() }, small = true)
+                categories.forEach { c -> InkChip(c.name, category == c.name, { category = c.name; again() }, small = true) }
             }
         }
     }
     if (error.isNotEmpty()) {
-        Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+        Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 6.dp))
     }
+    // The results load on as they are scrolled, the way the site's do.
+    val nearEnd by remember { derivedStateOf { (grid.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0) >= items.size - 6 } }
+    LaunchedEffect(nearEnd, items.size) { if (nearEnd && items.isNotEmpty() && cursor.isNotEmpty() && !loading) search(reset = false) }
     LazyVerticalGrid(
-        columns = GridCells.Adaptive(minSize = 130.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        state = grid,
+        columns = GridCells.Adaptive(minSize = 150.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
-        modifier = Modifier.fillMaxSize().padding(top = 4.dp),
+        contentPadding = PaddingValues(top = 10.dp, bottom = 24.dp),
+        modifier = Modifier.fillMaxSize(),
     ) {
         items(items, key = { it.id }) { m ->
-            CivitaiModelCard(repo, m) { detailSeed = m; detailId = m.id }
-        }
-        if (!loading && cursor.isNotEmpty()) {
-            item(span = { GridItemSpan(maxLineSpan) }) {
-                OutlinedButton(
-                    onClick = { scope.launch { search(reset = false) } },
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
-                ) { Text("Load more") }
-            }
+            CivitaiModelCard(repo, m) { stack = listOf(CivitaiOpen.Model(m.id, m)) }
         }
         if (loading) {
             item(span = { GridItemSpan(maxLineSpan) }) {
-                Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator()
-                }
+                Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(Modifier.size(24.dp)) }
             }
         }
-    }
-
-    if (detailId != 0L) {
-        CivitaiDetailDialog(
-            repo = repo,
-            id = detailId,
-            seed = detailSeed,
-            nsfw = nsfw,
-            onInstall = onInstall,
-            onUsePrompt = onUsePrompt,
-            onCreator = { name -> creator = name; detailId = 0L; scope.launch { search(reset = true) } },
-            onTag = { tag -> category = tag; detailId = 0L; scope.launch { search(reset = true) } },
-            onDismiss = { detailId = 0L },
-        )
+        if (!loading && items.isEmpty() && error.isEmpty()) {
+            item(span = { GridItemSpan(maxLineSpan) }) { EmptyNote("Nothing on Civitai matched.") }
+        }
     }
 }
 
+/** What Browse has open over its results. */
+private sealed interface CivitaiOpen {
+    data class Model(val id: Long, val seed: CivitaiModel?) : CivitaiOpen
+    data class Person(val name: String) : CivitaiOpen
+}
+
+private val civitaiVideoTypes = listOf("video" to "Models & LoRAs", "checkpoint" to "Models", "lora" to "LoRAs")
+
 /**
- * One model's page. Opens on what the card already knew and fills in the rest —
- * description, files, every version's install state — from the server.
+ * One model's page, over whatever opened it: the Account tab's models. Browse shows the
+ * same page in place (CivitaiPages.kt), with a way on to the people in it.
  */
 @Composable
 private fun CivitaiDetailDialog(
@@ -415,253 +434,15 @@ private fun CivitaiDetailDialog(
     onTag: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    var model by remember { mutableStateOf(seed) }
-    var versionId by remember { mutableStateOf(seed?.versions?.firstOrNull()?.id ?: 0L) }
-    var shown by remember { mutableStateOf(seed?.versions?.firstOrNull()?.images?.firstOrNull() ?: "") }
-    var zoomed by remember { mutableStateOf("") }
-    var galleryOpen by remember { mutableStateOf(false) }
-    var loadError by remember { mutableStateOf("") }
-    val clipboard = LocalClipboardManager.current
-
-    LaunchedEffect(id) {
-        runCatching { repo.api.civitaiModel(id) }
-            .onSuccess { full ->
-                model = full
-                val v = full.versions.find { it.id == versionId } ?: full.versions.firstOrNull()
-                versionId = v?.id ?: 0L
-                if (shown.isEmpty()) shown = v?.images?.firstOrNull() ?: ""
-            }
-            .onFailure { loadError = it.message ?: "Couldn't load the model page" }
-    }
-
-    val m = model
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Surface(shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth(0.94f).fillMaxHeight(0.92f)) {
-            if (m == null) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    if (loadError.isNotEmpty()) Text(loadError, color = MaterialTheme.colorScheme.error) else CircularProgressIndicator()
-                }
-                return@Surface
-            }
-            val v = m.versions.find { it.id == versionId }
-            Column(Modifier.fillMaxSize()) {
-                Column(
-                    Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Text(m.name, style = MaterialTheme.typography.titleMedium)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            "${typeLabel(m.type)} · ⤓ ${m.downloads} · ♥ ${m.likes}${if (m.nsfw) " · 18+" else ""}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        if (m.creator.isNotEmpty()) {
-                            Text(
-                                "by ${m.creator}",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.clickable { onCreator(m.creator) },
-                            )
-                        }
-                    }
-                    if (shown.isNotEmpty()) {
-                        AsyncImage(
-                            model = repo.civitaiImageUrl(shown),
-                            imageLoader = repo.imageLoader,
-                            contentDescription = m.name,
-                            contentScale = ContentScale.Fit,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .aspectRatio(3f / 4f)
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(MaterialTheme.colorScheme.surfaceVariant)
-                                .clickable { zoomed = shown },
-                        )
-                    }
-                    if ((v?.images?.size ?: 0) > 1) {
-                        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            v!!.images.forEach { u ->
-                                AsyncImage(
-                                    model = repo.civitaiImageUrl(u),
-                                    imageLoader = repo.imageLoader,
-                                    contentDescription = null,
-                                    contentScale = ContentScale.Crop,
-                                    modifier = Modifier.size(52.dp, 68.dp).clip(RoundedCornerShape(8.dp)).clickable { shown = u },
-                                )
-                            }
-                        }
-                    }
-                    if (m.versions.size > 1) {
-                        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            m.versions.forEach { ver ->
-                                FilterChip(
-                                    selected = versionId == ver.id,
-                                    onClick = { versionId = ver.id; shown = ver.images.firstOrNull() ?: shown },
-                                    leadingIcon = if (ver.installed) ({ Icon(Icons.Filled.Check, null, Modifier.size(14.dp)) }) else null,
-                                    label = { Text("${ver.name} · ${ver.base}") },
-                                )
-                            }
-                        }
-                    } else if (v != null) {
-                        Text("Version ${v.name} · ${v.base}", style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    if (v != null && v.trainedWords.isNotEmpty()) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                "Triggers: ${v.trainedWords.joinToString(", ")}",
-                                style = MaterialTheme.typography.bodySmall,
-                                modifier = Modifier.weight(1f),
-                            )
-                            IconButton(onClick = { clipboard.setText(AnnotatedString(v.trainedWords.joinToString(", "))) }) {
-                                Icon(Icons.Filled.ContentCopy, contentDescription = "Copy trigger words", Modifier.size(16.dp))
-                            }
-                        }
-                    }
-                    if (m.tags.isNotEmpty()) {
-                        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            m.tags.take(12).forEach { t ->
-                                FilterChip(selected = false, onClick = { onTag(t) }, label = { Text(t) })
-                            }
-                        }
-                    }
-                    if (m.description.isNotEmpty()) {
-                        Text("About", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        // Sanitized by the server to a handful of tags; fromHtml renders those.
-                        Text(AnnotatedString.fromHtml(m.description), style = MaterialTheme.typography.bodySmall)
-                    }
-                    if (v != null && v.description.isNotEmpty() && v.description != m.description) {
-                        Text("About this version", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text(AnnotatedString.fromHtml(v.description), style = MaterialTheme.typography.bodySmall)
-                    }
-                    if (v != null && v.files.isNotEmpty()) {
-                        Text("Files", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        v.files.forEach { f ->
-                            Text(
-                                listOf(f.name, fmtSize(f.sizeMB), f.format, f.precision, if (f.primary) "primary" else "")
-                                    .filter { it.isNotBlank() }.joinToString(" · "),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                    if (loadError.isNotEmpty()) {
-                        Text(loadError, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                    }
-                }
-                Row(
-                    Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    if (v != null) {
-                        if (v.installed) {
-                            Button(onClick = {}, enabled = false) {
-                                Icon(Icons.Filled.Check, contentDescription = null, Modifier.size(16.dp))
-                                Text("  Installed")
-                            }
-                        } else if (LocalCivitaiTarget.current.canManage) {
-                            Button(onClick = { onInstall(m, v); onDismiss() }, enabled = v.downloadUrl.isNotEmpty()) {
-                                Icon(Icons.Filled.Download, contentDescription = null, Modifier.size(16.dp))
-                                Text(if (v.sizeMB > 0) "  Install (${fmtSize(v.sizeMB)})" else "  Install")
-                            }
-                        }
-                        OutlinedButton(onClick = { galleryOpen = true }) { Text("Pictures") }
-                    }
-                    Spacer(Modifier.weight(1f))
-                    TextButton(onClick = onDismiss) { Text("Close") }
-                }
-            }
-        }
-    }
-    if (zoomed.isNotEmpty()) {
-        Dialog(onDismissRequest = { zoomed = "" }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-            AsyncImage(
-                model = repo.civitaiImageUrl(zoomed),
-                imageLoader = repo.imageLoader,
-                contentDescription = null,
-                contentScale = ContentScale.Fit,
-                modifier = Modifier.fillMaxSize().background(Color.Black).clickable { zoomed = "" },
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+        Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).windowInsetsPadding(WindowInsets.systemBars)) {
+            CivitaiModelPage(
+                repo = repo, id = id, seed = seed, nsfw = nsfw, canManage = LocalCivitaiTarget.current.canManage,
+                onBack = onDismiss, onInstall = onInstall, onUsePrompt = { onUsePrompt(it); onDismiss() },
+                onCreator = onCreator, onPerson = onCreator, onTag = onTag,
             )
         }
     }
-    if (galleryOpen && versionId != 0L) {
-        CivitaiGalleryDialog(repo, versionId, nsfw, onUsePrompt = { onUsePrompt(it); galleryOpen = false; onDismiss() }, onDismiss = { galleryOpen = false })
-    }
-}
-
-/** The pictures people posted with a version, and the prompt behind a tapped one. */
-@Composable
-private fun CivitaiGalleryDialog(
-    repo: Repository,
-    versionId: Long,
-    nsfw: Boolean,
-    onUsePrompt: (PromptSettings) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    var images by remember { mutableStateOf<List<CivitaiImage>>(emptyList()) }
-    var cursor by remember { mutableStateOf("") }
-    var loading by remember { mutableStateOf(false) }
-    var sort by remember { mutableStateOf("") }
-    var picked by remember { mutableStateOf<CivitaiImage?>(null) }
-    val scope = rememberCoroutineScope()
-
-    suspend fun load(reset: Boolean) {
-        loading = true
-        runCatching {
-            repo.api.civitaiImages(versionId = versionId, sort = sort.ifBlank { null }, nsfw = if (nsfw) null else "0", cursor = if (reset) null else cursor.ifBlank { null })
-        }.onSuccess { res ->
-            images = (if (reset) res.items else images + res.items).distinctBy { it.id }
-            cursor = res.nextCursor
-        }.onFailure { repo.report(it.message ?: "Couldn't load the pictures") }
-        loading = false
-    }
-    LaunchedEffect(versionId, sort) { load(reset = true) }
-
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Surface(shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth(0.94f).fillMaxHeight(0.92f)) {
-            Column(Modifier.fillMaxSize().padding(12.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Posted pictures", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-                    IconButton(onClick = onDismiss) { Icon(Icons.Filled.Close, contentDescription = "Close") }
-                }
-                Row(Modifier.horizontalScroll(rememberScrollState()).padding(bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    civitaiImageSorts.forEach { (id, label) ->
-                        FilterChip(selected = sort == id, onClick = { sort = id }, label = { Text(label) })
-                    }
-                }
-                LazyVerticalGrid(
-                    columns = GridCells.Adaptive(minSize = 110.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.weight(1f),
-                ) {
-                    items(images, key = { it.id }) { img ->
-                        CivitaiImageTile(repo, img, onClick = { picked = img })
-                    }
-                    if (!loading && cursor.isNotEmpty()) {
-                        item(span = { GridItemSpan(maxLineSpan) }) {
-                            OutlinedButton(onClick = { scope.launch { load(reset = false) } }, modifier = Modifier.fillMaxWidth()) { Text("More") }
-                        }
-                    }
-                    if (loading) {
-                        item(span = { GridItemSpan(maxLineSpan) }) {
-                            Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
-                        }
-                    }
-                    if (!loading && images.isEmpty()) {
-                        item(span = { GridItemSpan(maxLineSpan) }) {
-                            Text("Nobody has posted a picture with this version.", style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp))
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    picked?.let { img -> CivitaiPickedDialog(repo, img, onUsePrompt = onUsePrompt, onDismiss = { picked = null }) }
 }
 
 /** One picture in a grid, flagged when the poster kept the prompt. */
@@ -689,65 +470,10 @@ private fun CivitaiImageTile(repo: Repository, img: CivitaiImage, onClick: () ->
     }
 }
 
-/** One posted picture, full size, with everything the poster kept about it. */
+/** One posted picture, with its post, its reactions, its recipe and its comments. */
 @Composable
 private fun CivitaiPickedDialog(repo: Repository, img: CivitaiImage, onUsePrompt: (PromptSettings) -> Unit, onDismiss: () -> Unit) {
-    val clipboard = LocalClipboardManager.current
-    run {
-        val settings = CivitaiPrompt.from(img)
-        Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-            Surface(shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth(0.94f).fillMaxHeight(0.92f)) {
-                Column(Modifier.fillMaxSize()) {
-                    Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        AsyncImage(
-                            model = repo.civitaiImageUrl(img.url),
-                            imageLoader = repo.imageLoader,
-                            contentDescription = null,
-                            contentScale = ContentScale.Fit,
-                            modifier = Modifier.fillMaxWidth().heightIn(max = 420.dp).clip(RoundedCornerShape(12.dp)).background(Color.Black),
-                        )
-                        if (settings != null) {
-                            Text("Prompt${if (img.username.isNotEmpty()) " · by ${img.username}" else ""}", style = MaterialTheme.typography.labelLarge,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text(settings.prompt, style = MaterialTheme.typography.bodySmall)
-                            if (settings.negativePrompt.isNotEmpty()) {
-                                Text("Negative", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Text(settings.negativePrompt, style = MaterialTheme.typography.bodySmall)
-                            }
-                            val facts = buildList {
-                                if (img.model.isNotEmpty()) add("Model ${img.model}")
-                                if (img.sampler.isNotEmpty()) add("Sampler ${img.sampler}${if (settings.sampler.isEmpty()) " (not in the studio's list)" else ""}")
-                                if (settings.steps > 0) add("Steps ${settings.steps}")
-                                if (settings.cfgScale > 0) add("CFG ${settings.cfgScale}")
-                                if (settings.seed > 0) add("Seed ${settings.seed}")
-                                if (settings.width > 0) add("${settings.width}×${settings.height}")
-                            }
-                            if (facts.isNotEmpty()) {
-                                Text(facts.joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                        } else {
-                            Text("The poster kept no prompt for this one.", style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                    }
-                    Row(Modifier.padding(horizontal = 12.dp, vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        if (settings != null) {
-                            Button(onClick = { onUsePrompt(settings) }) {
-                                Icon(Icons.Filled.AutoAwesome, contentDescription = null, Modifier.size(16.dp))
-                                Text("  Use in studio")
-                            }
-                            OutlinedButton(onClick = { clipboard.setText(AnnotatedString(settings.prompt)); repo.report("Prompt copied") }) {
-                                Icon(Icons.Filled.ContentCopy, contentDescription = null, Modifier.size(16.dp))
-                                Text("  Copy")
-                            }
-                        }
-                        Spacer(Modifier.weight(1f))
-                        TextButton(onClick = onDismiss) { Text("Close") }
-                    }
-                }
-            }
-        }
-    }
+    CivitaiPictureViewer(repo = repo, list = listOf(img), start = 0, onDismiss = onDismiss, onUsePrompt = onUsePrompt, onPerson = { onDismiss() })
 }
 
 /**
@@ -1102,57 +828,37 @@ private fun CivitaiImageGrid(
     }
 }
 
-/** One model of the catalogue as a card: first preview, name, type and base. */
+/** One model of the catalogue as a card: its first preview, its name, type and base. */
 @Composable
 private fun CivitaiModelCard(repo: Repository, m: CivitaiModel, onClick: () -> Unit) {
-    Surface(
-        shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        modifier = Modifier.clickable(onClick = onClick),
-    ) {
-        Column {
-            Box {
-                val img = m.versions.firstOrNull()?.images?.firstOrNull()
-                if (img != null) {
-                    AsyncImage(
-                        model = repo.civitaiImageUrl(img),
-                        imageLoader = repo.imageLoader,
-                        contentDescription = m.name,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxWidth().aspectRatio(3f / 4f),
-                    )
-                } else {
-                    Box(Modifier.fillMaxWidth().aspectRatio(3f / 4f)) {}
-                }
-                if (m.installed) {
-                    Text(
-                        "Installed",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onPrimary,
-                        modifier = Modifier
-                            .padding(6.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(MaterialTheme.colorScheme.primary)
-                            .padding(horizontal = 6.dp, vertical = 2.dp),
-                    )
-                }
-            }
-            Text(
-                m.name,
-                style = MaterialTheme.typography.labelMedium,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+    Column(Modifier.clip(RoundedCornerShape(12.dp)).clickable(onClick = onClick)) {
+        Box(Modifier.fillMaxWidth().aspectRatio(3f / 4f).clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceContainer)) {
+            val img = m.versions.firstOrNull()?.images?.firstOrNull()
+            if (img != null) AsyncImage(
+                model = repo.civitaiImageUrl(civitaiSized(img, 450)),
+                imageLoader = repo.imageLoader,
+                contentDescription = m.name,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
             )
-            Text(
-                "${typeLabel(m.type)} · ${m.versions.firstOrNull()?.base ?: ""} · ⤓ ${m.downloads}",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(start = 8.dp, end = 8.dp, bottom = 6.dp),
-            )
+            if (m.installed) TileBadge("Installed", Modifier.padding(6.dp), icon = Icons.Filled.Check, color = MaterialTheme.colorScheme.primary.copy(alpha = 0.9f))
+            TileBadge(typeLabel(m.type), Modifier.align(Alignment.BottomStart).padding(6.dp))
         }
+        Text(
+            m.name,
+            style = MaterialTheme.typography.labelLarge,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(start = 2.dp, end = 2.dp, top = 6.dp),
+        )
+        Text(
+            listOfNotNull(m.versions.firstOrNull()?.base?.takeIf { it.isNotBlank() }, "⤓ ${compactNumber(m.downloads)}", "♥ ${compactNumber(m.likes)}").joinToString(" · "),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(horizontal = 2.dp),
+        )
     }
 }
 
@@ -1492,11 +1198,11 @@ private fun CivitaiManageDialog(
     }
 }
 
-private fun typeLabel(t: String): String = when (t) {
+internal fun typeLabel(t: String): String = when (t) {
     "LORA" -> "LoRA"
     "TextualInversion" -> "Embedding"
     "Controlnet" -> "ControlNet"
     else -> t
 }
 
-private fun fmtSize(mb: Long): String = if (mb >= 1024) String.format("%.1f GB", mb / 1024.0) else "$mb MB"
+internal fun fmtSize(mb: Long): String = if (mb >= 1024) String.format("%.1f GB", mb / 1024.0) else "$mb MB"

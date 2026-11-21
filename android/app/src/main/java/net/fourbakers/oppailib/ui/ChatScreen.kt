@@ -51,6 +51,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Compress
+import androidx.compose.material.icons.filled.Stop
+import net.fourbakers.oppailib.data.AutoTrigger
+import net.fourbakers.oppailib.data.CompressRequest
+import net.fourbakers.oppailib.data.RoleContent
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -227,11 +232,17 @@ import java.util.Date
 import java.util.Locale
 import java.util.UUID
 
+/**
+ * Chat's own names for its colours, pointed at the darkroom's (as chat-darkroom.ts does on
+ * the web): the conversation on the page's ink, cards and her bubbles a step up from
+ * it, the fields a step further, and the one coral accent. Yours are lit with the accent
+ * (primaryContainer) rather than filled with it.
+ */
 internal object ChatColors {
     val rail: Color @Composable get() = MaterialTheme.colorScheme.surface
-    val side: Color @Composable get() = MaterialTheme.colorScheme.surfaceVariant
+    val side: Color @Composable get() = MaterialTheme.colorScheme.surfaceContainer
     val main: Color @Composable get() = MaterialTheme.colorScheme.background
-    val input: Color @Composable get() = MaterialTheme.colorScheme.surfaceVariant
+    val input: Color @Composable get() = MaterialTheme.colorScheme.surfaceContainerHigh
     val text: Color @Composable get() = MaterialTheme.colorScheme.onSurface
     val muted: Color @Composable get() = MaterialTheme.colorScheme.onSurfaceVariant
     val accent: Color @Composable get() = MaterialTheme.colorScheme.primary
@@ -245,6 +256,15 @@ private val chatModes = listOf(
     ChatMode("horny", "horny", "mischievous"),
 )
 private fun chatID() = UUID.randomUUID().toString().replace("-", "")
+
+/** How long the chat stays quiet after her message before she may fill it (chat.ts). */
+private const val IDLE_NUDGE_MS = 210_000L
+
+/** Compressing: past COMPRESS_AT messages the older part is summarised, keeping the
+ *  newest COMPRESS_KEEP; fewer than COMPRESS_MIN older ones are not worth a summary. */
+private const val COMPRESS_AT = 140
+private const val COMPRESS_KEEP = 40
+private const val COMPRESS_MIN = 20
 
 /** How long an incoming call rings before it counts as missed. */
 private const val RING_MS = 40_000L
@@ -397,6 +417,10 @@ fun ChatScreen(
     var conversationId by remember { mutableStateOf("") }
     var draft by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
+    var compressing by remember { mutableStateOf(false) }
+    // Her one unprompted nudge per quiet stretch has been spent; sending ends the stretch.
+    var idleNudged by remember { mutableStateOf(false) }
+    var pendingAskedAt by remember { mutableStateOf(0L) }
     var typingPhase by remember { mutableStateOf(TypingPhase.IDLE) }
     var message by remember { mutableStateOf("") }
     var settingsOpen by remember { mutableStateOf(false) }
@@ -935,6 +959,96 @@ fun ChatScreen(
         // The items the burst attaches accumulate and ride the one turn that answers it.
         turnItems = turnItems + items.map { it.id }
         readThenReply(convo.id, text.length)
+        idleNudged = false
+        // Someone answering is the signal she was not being ignored, so her back-off is
+        // cleared rather than carried. Fire and forget: it must never delay the reply.
+        if (char.id == "libby") scope.launch { runCatching { repo.web.libbyAutoAnswered() } }
+    }
+
+    /**
+     * Compressing a conversation (chat.ts's compressConversation): the older part is
+     * summarised into its notes, which ride every turn, and the messages it stands for
+     * leave the log. The server refuses a conversation past 300 messages and the prompt
+     * holds a few dozen, so past [COMPRESS_AT] it happens on its own, quietly. The ids to
+     * drop are fixed before the request, so a reply landing meanwhile is kept.
+     */
+    fun compress(convoId: String, auto: Boolean) {
+        val ws = workspace ?: return
+        val convo = ws.conversations.firstOrNull { it.id == convoId } ?: return
+        if (compressing || status?.enabled != true) {
+            if (!auto && status?.enabled != true) message = "Compressing needs a loaded model."
+            return
+        }
+        val older = convo.messages.dropLast(COMPRESS_KEEP)
+        val said = older.filter { it.thought.isBlank() }
+        if (said.size < COMPRESS_MIN) {
+            if (!auto) message = "There isn't enough of this conversation to compress yet."
+            return
+        }
+        compressing = true
+        if (!auto) message = "Compressing the older part of this conversation…"
+        scope.launch {
+            runCatching {
+                repo.web.compressChat(CompressRequest(convo.characterId, convo.summary.ifBlank { null }, said.map { RoleContent(it.role, it.content) }))
+            }.onSuccess { r ->
+                val drop = older.mapTo(HashSet()) { it.id }
+                val latest = workspace
+                if (latest != null) save(latest.copy(conversations = latest.conversations.map {
+                    if (it.id == convoId) it.copy(messages = it.messages.filterNot { m -> m.id in drop }, summary = r.summary, summarizedAt = System.currentTimeMillis()) else it
+                }))
+                if (!auto) message = "Compressed ${older.size} older messages into her notes."
+            }.onFailure { if (!auto) message = it.message ?: "Couldn't compress the conversation." }
+            compressing = false
+        }
+    }
+
+    // Long conversations are tidied on their own once a reply has landed.
+    LaunchedEffect(currentConversation(workspace)?.messages?.size, busy) {
+        val convo = currentConversation(workspace) ?: return@LaunchedEffect
+        if (!busy && convo.messages.size > COMPRESS_AT) compress(convo.id, auto = true)
+    }
+
+    // Her speaking first (chat.ts's armIdle/idleNudge). The phone keeps the timer — only
+    // it knows the screen is being looked at — and the server decides: quiet hours, how
+    // often, and how long she keeps trying before giving up on being answered. One nudge
+    // per quiet stretch, only after *her* message, only with a model loaded.
+    val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(conversationId, currentConversation(workspace)?.messages?.lastOrNull()?.id, busy, inbox, status?.enabled) {
+        if (busy || inbox || idleNudged || status?.enabled != true) return@LaunchedEffect
+        val ws = workspace ?: return@LaunchedEffect
+        val convo = currentConversation(ws) ?: return@LaunchedEffect
+        val char = currentCharacter(ws) ?: return@LaunchedEffect
+        val last = convo.messages.lastOrNull() ?: return@LaunchedEffect
+        if (char.id != "libby" || last.role != "assistant") return@LaunchedEffect
+        var wait = IDLE_NUDGE_MS
+        while (true) {
+            delay(wait)
+            if (busy) return@LaunchedEffect
+            // A phone in a pocket is not someone at the screen; wait for them to look.
+            if (!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) { wait = IDLE_NUDGE_MS; continue }
+            val d = runCatching { repo.web.libbyAutoCheck(AutoTrigger("idle")) }.getOrNull() ?: return@LaunchedEffect
+            if (d.allow) break
+            wait = if (d.retryAfterSec > 0) minOf(d.retryAfterSec * 1000, 30 * 60_000L) else IDLE_NUDGE_MS
+        }
+        val live = currentConversation(workspace) ?: return@LaunchedEffect
+        if (live.id != convo.id || live.messages.lastOrNull()?.id != last.id) return@LaunchedEffect
+        idleNudged = true
+        generate(live, char, "", emptyList(), "", task = "autonomous")
+        runCatching { repo.web.libbyAutoSent(AutoTrigger("idle", "the conversation went quiet after her message")) }
+    }
+    // Anything she has been meaning to say — the morning after — asked once as her
+    // conversation opens, and said in one turn when the server says she may.
+    LaunchedEffect(conversationId, status?.enabled, inbox) {
+        if (inbox || status?.enabled != true) return@LaunchedEffect
+        val ws = workspace ?: return@LaunchedEffect
+        val convo = currentConversation(ws) ?: return@LaunchedEffect
+        val char = currentCharacter(ws) ?: return@LaunchedEffect
+        if (char.id != "libby" || System.currentTimeMillis() - pendingAskedAt < 60_000) return@LaunchedEffect
+        pendingAskedAt = System.currentTimeMillis()
+        val due = runCatching { repo.web.libbyAutoPending().pending }.getOrNull()?.firstOrNull { it.decision.allow } ?: return@LaunchedEffect
+        if (busy || conversationId != convo.id) return@LaunchedEffect
+        generate(currentConversation(workspace) ?: return@LaunchedEffect, char, "", emptyList(), "", task = due.trigger)
+        runCatching { repo.web.libbyAutoSent(AutoTrigger(due.trigger, due.detail)) }
     }
 
     /** Puts your emoji on one of her messages, or takes it off again if it is the same
@@ -1192,6 +1306,8 @@ fun ChatScreen(
                     DropdownMenu(expanded = overflowOpen, onDismissRequest = { overflowOpen = false }) {
                         DropdownMenuItem(text = { Text("Chat settings") }, leadingIcon = { Icon(Icons.Filled.Settings, null) }, onClick = { overflowOpen = false; settingsOpen = true })
                         DropdownMenuItem(text = { Text("New conversation") }, leadingIcon = { Icon(Icons.Filled.AddComment, null) }, onClick = { overflowOpen = false; save(newConversation(ws, char)) })
+                        DropdownMenuItem(text = { Text(if (compressing) "Compressing…" else "Compress older messages") }, leadingIcon = { Icon(Icons.Filled.Compress, null) },
+                            enabled = !compressing && convo.messages.size > COMPRESS_KEEP + COMPRESS_MIN, onClick = { overflowOpen = false; compress(convo.id, auto = false) })
                         DropdownMenuItem(text = { Text("Clear messages") }, leadingIcon = { Icon(Icons.Filled.DeleteSweep, null) }, enabled = convo.messages.isNotEmpty(), onClick = { overflowOpen = false; updateConversation { it.copy(messages = emptyList(), title = "New conversation") } })
                         DropdownMenuItem(text = { Text("Delete conversation", color = ChatColors.danger) }, leadingIcon = { Icon(Icons.Filled.Delete, null, tint = ChatColors.danger) }, onClick = { overflowOpen = false; confirmDelete = convo })
                     }
@@ -1441,9 +1557,15 @@ fun ChatScreen(
                     )
                 }
                 val canSend = (draft.isNotBlank() || pendingPhoto != null) && !busy
-                IconButton(
+                // While she is writing the button stops her: the turn returns what it had.
+                if (busy && status?.enabled == true) IconButton(
+                    onClick = { scope.launch { runCatching { repo.web.stopChat() } } },
+                    modifier = Modifier.padding(start = 7.dp).size(44.dp).clip(RoundedCornerShape(12.dp)).background(ChatColors.input),
+                ) {
+                    Icon(Icons.Filled.Stop, "Stop her reply", tint = ChatColors.text)
+                } else IconButton(
                     onClick = { sendMessage() }, enabled = canSend,
-                    modifier = Modifier.padding(start = 7.dp).size(48.dp).clip(CircleShape)
+                    modifier = Modifier.padding(start = 7.dp).size(44.dp).clip(RoundedCornerShape(12.dp))
                         .background(if (canSend) ChatColors.accent else ChatColors.input),
                 ) {
                     Icon(
@@ -2304,10 +2426,31 @@ private fun ChatSettings(
     var advancedOptions by remember(convo.id) { mutableStateOf(convo.options.toString()) }
     // The sheet is full of text fields, so it has to give way to the keyboard as well.
     Column(Modifier.fillMaxWidth().fillMaxHeight(.9f).imePadding().navigationBarsPadding().verticalScroll(rememberScrollState()).padding(start = 16.dp, end = 16.dp, bottom = 32.dp)) {
-        Text("Chat settings", fontSize = 22.sp, fontWeight = FontWeight.Bold)
-        Text("Character, model, images, and your shared profile", color = ChatColors.muted, fontSize = 12.sp, modifier = Modifier.padding(bottom = 10.dp))
-        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(5.dp)) { listOf("character", "generation", "images", "profile").forEach { name -> Text(name.replaceFirstChar(Char::uppercase), color = if (tab == name) MaterialTheme.colorScheme.onPrimary else ChatColors.text, modifier = Modifier.clip(RoundedCornerShape(5.dp)).background(if (tab == name) ChatColors.accent else ChatColors.input).clickable { onTab(name) }.padding(horizontal = 11.dp, vertical = 7.dp)) } }
-        when (tab) {
+        // Libby is more than a card, and her settings are laid out that way (chat.ts's
+        // LIBBY_TABS): a life, a world (what she wears, where she is), a mind (what she
+        // remembers and wants, where you stand, when she speaks first, her Discord), her
+        // pictures and her reaction shelf. A friend is a card, its pictures and the model.
+        val libby = char.id == "libby"
+        val tabs = if (libby) listOf(
+            "character" to "Libby", "world" to "Her world", "mind" to "Her mind", "images" to "Her pictures",
+            "reactions" to "Reaction images", "generation" to "Model & generation", "profile" to "Your profile",
+        ) else listOf("character" to "Character card", "images" to "Images", "generation" to "Model & generation", "profile" to "Your profile")
+        val shown = tabs.firstOrNull { it.first == tab }?.first ?: "character"
+        Text(if (libby) "Libby" else char.name.ifBlank { "Chat settings" }, style = MaterialTheme.typography.headlineSmall)
+        Text(if (libby) "Her life, her world, her mind — and the model she runs on" else "The card, its pictures, the model and your profile",
+            color = ChatColors.muted, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(bottom = 10.dp))
+        InkChipRow(padding = androidx.compose.foundation.layout.PaddingValues(0.dp)) {
+            tabs.forEach { (id, label) -> InkChip(label, shown == id, { onTab(id) }, small = true) }
+        }
+        when (shown) {
+            "world" -> Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                LibbyOutfitsSection(repo)
+                LibbyBackgroundsSection(repo)
+            }
+            "mind" -> Column(Modifier.fillMaxWidth().padding(top = 4.dp)) {
+                LibbyMindTab(repo) { LibbyMemorySection(repo) }
+            }
+            "reactions" -> Column(Modifier.fillMaxWidth().padding(top = 4.dp)) { LibbyStickersTab(repo) }
             "character" -> Column(Modifier.fillMaxWidth().padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 TextField(char.name, { onCharacter(char.copy(name = it)) }, label = { Text("Name") }, modifier = Modifier.fillMaxWidth())
                 TextField(char.description, { onCharacter(char.copy(description = it)) }, label = { Text("Description") }, maxLines = 2, modifier = Modifier.fillMaxWidth())
@@ -2365,12 +2508,12 @@ private fun ChatSettings(
                     if (uploading) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
                     Text(if (uploading) "  Scanning…" else "Upload and scan")
                 }
-                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) { ws.images.filter { it.characterId == char.id }.forEach { image -> Column(Modifier.width(110.dp)) { AsyncImage(repo.chatImageUrl(image.id), image.name, imageLoader = repo.imageLoader, modifier = Modifier.size(110.dp).clip(RoundedCornerShape(7.dp))); Text(image.tags.joinToString().ifBlank { "No tags" }, fontSize = 10.sp, maxLines = 2); TextButton(onClick = { onDeleteImage(image) }) { Text("Delete", color = ChatColors.danger) } } } }
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) { ws.images.filter { it.characterId == char.id }.forEach { image -> Column(Modifier.width(110.dp)) { AsyncImage(repo.chatImageUrl(image.id), image.name, imageLoader = repo.imageLoader, modifier = Modifier.size(110.dp).clip(RoundedCornerShape(10.dp))); Text(image.tags.joinToString().ifBlank { "No tags" }, fontSize = 10.sp, maxLines = 2); TextButton(onClick = { onDeleteImage(image) }) { Text("Delete", color = ChatColors.danger) } } } }
+                ChatGalleryExport(repo, char.id, libby)
             }
             "profile" -> Column(Modifier.fillMaxWidth().padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 TextField(ws.profile.displayName, { onProfile(ws.profile.copy(displayName = it)) }, label = { Text("Display name") }, modifier = Modifier.fillMaxWidth())
                 TextField(ws.profile.persona, { onProfile(ws.profile.copy(persona = it)) }, label = { Text("Your persona") }, maxLines = 4, modifier = Modifier.fillMaxWidth())
-                LibbyMemorySection(repo)
             }
         }
     }
@@ -2592,7 +2735,7 @@ private fun ChatMessageRow(
         if (!bubble && last) ChatStamp(entry.at, friend, ChatColors.muted, Modifier.padding(horizontal = 4.dp))
         if (bubble) Column(
             Modifier.widthIn(max = 320.dp).clip(shape)
-                .background(if (friend) ChatColors.side else MaterialTheme.colorScheme.primaryContainer)
+                .background(if (friend) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.primaryContainer)
                 .combinedClickable(onClick = {}, onLongClick = { onHold(entry) })
                 .padding(horizontal = 13.dp, vertical = 8.dp, )
                 .padding(bottom = if (entry.reactions.isNotEmpty()) 8.dp else 0.dp),

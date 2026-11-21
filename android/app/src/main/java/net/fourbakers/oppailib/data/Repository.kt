@@ -55,6 +55,10 @@ class Repository(private val appContext: Context, val prefs: Prefs) {
     @Volatile lateinit var api: ApiService
         private set
 
+    /** The endpoints the phone shares with the web since 0.97; see WebApi. */
+    @Volatile lateinit var web: WebApi
+        private set
+
     /**
      * Runs one of her turns and emits each event as the server sends it. The body is
      * read on IO line by line, so her texts and the camera's progress arrive while the
@@ -112,6 +116,9 @@ class Repository(private val appContext: Context, val prefs: Prefs) {
      * so tiles should always ask for this rather than streaming the full original.
      */
     fun thumbUrl(id: Long): String = "${baseUrl}api/media/$id/thumb"
+
+    /** A moment's frame: the still at the bookmarked second. */
+    fun bookmarkThumbUrl(id: Long): String = "${baseUrl}api/bookmarks/$id/thumb"
 
     /** A single comic page, 1-based to match what the reader shows the user. */
     fun pageUrl(id: Long, page: Int): String = "${baseUrl}api/media/$id/page/$page"
@@ -335,12 +342,13 @@ class Repository(private val appContext: Context, val prefs: Prefs) {
         val client = okHttp()
         gameClient = gameOkHttp()
         val contentType = "application/json".toMediaTypeOrNull()!!
-        api = Retrofit.Builder()
+        val retrofit = Retrofit.Builder()
             .baseUrl(baseUrl)
             .client(client)
             .addConverterFactory(json.asConverterFactory(contentType))
             .build()
-            .create(ApiService::class.java)
+        api = retrofit.create(ApiService::class.java)
+        web = retrofit.create(WebApi::class.java)
         imageLoader = ImageLoader.Builder(appContext)
             .okHttpClient(client)
             .components {
