@@ -59,14 +59,22 @@ ARG ORT_VERSION=1.26.0
 # contract, and docs/AI.md for swapping in something else.
 ARG MODEL_REPO=fancyfeast/joytag
 ARG MODEL_LABELS=top_tags.txt
-RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
+# The runtime comes from Microsoft's NuGet package, not the GitHub release. On
+# 2026-11-27 github.com/microsoft/onnxruntime stopped answering (404, the whole
+# repository) and every image build failed here; NuGet carries the same CPU build, and
+# its linux-x64 native folder holds the one file the server loads
+# (ONNXRUNTIME_LIB_PATH below). The package is every platform at once, ~130 MB, of
+# which this keeps 23 MB. ORT_SHA256 is the .nupkg's, matched against NuGet's own
+# published SHA-512 when it was pinned — change it with ORT_VERSION.
+ARG ORT_SHA256=50cc3772668f04b8373ad65a36793f94699bc4e818f6e691fc68f1578c38ce42
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates unzip \
     && rm -rf /var/lib/apt/lists/*
 RUN mkdir -p /out/lib /out/models \
-    && curl -fsSL -o /tmp/ort.tgz \
-        "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-${ORT_VERSION}.tgz" \
-    && tar -xzf /tmp/ort.tgz -C /tmp \
-    && cp -a /tmp/onnxruntime-linux-x64-${ORT_VERSION}/lib/libonnxruntime.so* /out/lib/ \
-    && rm -rf /tmp/ort.tgz /tmp/onnxruntime-linux-x64-${ORT_VERSION}
+    && curl -fsSL --retry 5 --retry-all-errors -o /tmp/ort.nupkg \
+        "https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/${ORT_VERSION}/microsoft.ml.onnxruntime.${ORT_VERSION}.nupkg" \
+    && echo "${ORT_SHA256}  /tmp/ort.nupkg" | sha256sum -c - \
+    && unzip -j /tmp/ort.nupkg 'runtimes/linux-x64/native/libonnxruntime.so' -d /out/lib/ \
+    && rm -f /tmp/ort.nupkg
 # Hugging Face drops long transfers. A truncated model.onnx would bake a corrupt
 # model into the image that only fails at the first inference, so resume on
 # failure and sanity-check the sizes before the layer is committed. (These are
