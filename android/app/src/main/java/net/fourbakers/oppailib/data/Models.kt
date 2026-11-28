@@ -830,6 +830,10 @@ data class ChatConversation(
     val rev: Long = 0,
     /** The scene she planned, while it is under way. */
     val scene: LibbyScene? = null,
+    /** A one-shot: a scene you set, played once and forgotten (the server's
+        libby_oneshot.go). Carried so a save from the phone keeps it — the server keeps it
+        anyway, but this is how the phone knows to draw it as one. */
+    val oneShot: LibbyOneShot? = null,
 )
 
 @Serializable

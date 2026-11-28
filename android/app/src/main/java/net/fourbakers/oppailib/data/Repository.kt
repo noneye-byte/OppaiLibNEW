@@ -10,7 +10,10 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
@@ -50,6 +53,9 @@ class Repository(private val appContext: Context, val prefs: Prefs) {
     private val _libraryChanges = MutableSharedFlow<Unit>(extraBufferCapacity = 4)
     val libraryChanges = _libraryChanges.asSharedFlow()
     private val httpCache = Cache(File(appContext.cacheDir, "http"), 64L * 1024 * 1024)
+
+    /** For work that outlives whatever asked for it — dropping a share key on sign-out. */
+    private val background = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     @Volatile private var baseUrl: String = normalize(prefs.serverUrl ?: "http://10.0.2.2:8080/")
     @Volatile lateinit var api: ApiService
@@ -230,8 +236,33 @@ class Repository(private val appContext: Context, val prefs: Prefs) {
      * lock screen exists to prevent.
      */
     fun clearSession() {
+        // A sign-out someone chose leaves nothing behind that can still add to the
+        // library: the share key is dropped on the server as well as here.
+        val key = prefs.shareKey
         prefs.clearSession()
         BrowseMemory.clear()
+        if (key != null) background.launch { runCatching { web.dropShareKey("Bearer $key") } }
+    }
+
+    /**
+     * The session ending because the app left the screen, with no biometric lock to bring
+     * it back: signed out as [clearSession] is, but the share key stays, since a share is
+     * made from another app with this one in the background.
+     */
+    fun leaveSession() {
+        prefs.clearSession(keepShareKey = true)
+        BrowseMemory.clear()
+    }
+
+    /**
+     * Makes sure this phone holds a share key, asking the server for one while signed in.
+     * Quiet when it cannot: a server older than share keys answers 404, and the phone then
+     * shares on its session as it always did.
+     */
+    suspend fun ensureShareKey() {
+        if (prefs.shareKey != null || !hasSession) return
+        val name = listOf(Build.MANUFACTURER, Build.MODEL).filter { it.isNotBlank() }.distinct().joinToString(" ").ifBlank { "Phone" }
+        runCatching { web.createShareKey(CollectionName(name.take(80))) }.onSuccess { if (it.key.isNotBlank()) prefs.shareKey = it.key }
     }
     /** Surfaces a message from Libby. [emotion] is her pose — default "surprised"
         (a worried reaction) since most reports are failures; pass "happy" for wins. */
@@ -278,10 +309,31 @@ class Repository(private val appContext: Context, val prefs: Prefs) {
             .readTimeout(10, TimeUnit.MINUTES)
             .writeTimeout(5, TimeUnit.MINUTES)
             .addInterceptor { chain ->
-                val req = chain.request().newBuilder()
-                prefs.token?.let { req.header("Authorization", "Bearer $it") }
+                val original = chain.request()
+                val req = original.newBuilder()
+                // What adds to the library goes on the share key when there is one, so an
+                // upload or a shared link carries on after the app has left the screen and
+                // ended its session (see Prefs.shareKey). Everything else is the session's.
+                // A request that names its own credential keeps it.
+                val shareKey = prefs.shareKey?.takeIf { isSharePath(original.url.encodedPath) }
+                val usedShareKey = original.header("Authorization") == null && shareKey != null
+                when {
+                    original.header("Authorization") != null -> {}
+                    usedShareKey -> req.header("Authorization", "Bearer $shareKey")
+                    else -> prefs.token?.let { req.header("Authorization", "Bearer $it") }
+                }
                 try {
-                    val response = chain.proceed(req.build())
+                    var response = chain.proceed(req.build())
+                    if (usedShareKey && response.code == 401) {
+                        // Revoked from another device: forget it, and try the session once,
+                        // which is what the phone used before it had a key.
+                        prefs.shareKey = null
+                        val token = prefs.token
+                        if (token != null) {
+                            response.close()
+                            response = chain.proceed(original.newBuilder().header("Authorization", "Bearer $token").build())
+                        }
+                    }
                     if (!response.isSuccessful && shouldReportFailure(response.request, response.code)) {
                         _errors.tryEmit(MascotSay("The server returned ${response.code}. Please try again."))
                     }
@@ -376,6 +428,15 @@ class Repository(private val appContext: Context, val prefs: Prefs) {
 
     companion object {
         private const val PAGE_PREFETCH = 4
+
+        /** The routes a share key opens, as the server's shareKeyPath has them. */
+        private val SHARE_PATH = Regex("^/api/(uploads(/[A-Za-z0-9_-]+(/chunk/[0-9]+|/complete)?)?|scrape|scrape/import)$")
+
+        /** From its /api/ on, so a server behind a path prefix is matched the same. */
+        internal fun isSharePath(path: String): Boolean {
+            val at = path.indexOf("/api/")
+            return at >= 0 && SHARE_PATH.matches(path.substring(at))
+        }
 
         /** Requests whose failure is represented by the content that asked for them.
          * A missing thumbnail or a source item pruned upstream should leave a blank

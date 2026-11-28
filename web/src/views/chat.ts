@@ -942,6 +942,12 @@ export class OppaiChat extends LitElement {
     .scene-chip { display:flex; align-items:center; gap:8px; margin:8px 16px 0; padding:6px 12px; border-radius:12px; font-size:12px;
       background:color-mix(in srgb,var(--accent) 10%,transparent); border:1px solid color-mix(in srgb,var(--accent) 30%,transparent); }
     .scene-chip strong { font-weight:650; }
+    /* A one-shot says so for as long as it is open, with the way out beside it. */
+    .scene-chip.one-shot { flex-wrap:wrap; }
+    .scene-chip.one-shot .scene-say { flex:1 1 200px; min-width:0; }
+    .scene-chip.one-shot .scene-end { margin-left:auto; border:0; border-radius:10px; padding:4px 10px; font:inherit; font-weight:650; cursor:pointer;
+      background:color-mix(in srgb,var(--accent) 18%,transparent); color:inherit; }
+    .chat-name .one-shot-mark { font-size:14px; vertical-align:-2px; opacity:.75; }
     .scene-beats { display:flex; gap:3px; margin-left:auto; }
     .scene-beats i { width:14px; height:4px; border-radius:2px; background:var(--line); }
     .scene-beats i.done { background:var(--accent); }
@@ -2105,7 +2111,9 @@ export class OppaiChat extends LitElement {
     }
     if (this.idleNudged) return;
     const conversation = this.activeConversation;
-    if (!conversation || conversation.characterId !== "libby") return;
+    // Her texting first is counted against her life with them (the server's auto state),
+    // and a one-shot is not part of that.
+    if (!conversation || conversation.characterId !== "libby" || conversation.oneShot) return;
     // Only break a silence that followed *her* — going quiet after your own message is
     // you thinking, not a lull for her to fill.
     const last = conversation.messages[conversation.messages.length - 1];
@@ -2191,7 +2199,8 @@ export class OppaiChat extends LitElement {
   private pendingAsked = 0;
   private async sayWhatIsPending() {
     const conversation = this.activeConversation;
-    if (!conversation || conversation.characterId !== "libby" || !this.status?.enabled) return;
+    // The morning after belongs to her life with them, which a one-shot is not part of.
+    if (!conversation || conversation.characterId !== "libby" || conversation.oneShot || !this.status?.enabled) return;
     if (Date.now() - this.pendingAsked < 60_000) return;
     this.pendingAsked = Date.now();
     let pending;
@@ -2226,6 +2235,45 @@ export class OppaiChat extends LitElement {
     this.workspace.conversations.push(conversation); this.conversationID = conversation.id;
     this.mobileNavOpen = false;
     this.touchWorkspace(); if (save) this.say(`Started a new chat with ${character.name}.`); this.armIdle(); void this.scrollToEnd(false);
+  }
+
+  /**
+   * A one-shot: she asks for the scene, their first message sets it, and nothing of it
+   * is kept — no memory, no bond, no journal, no recap — and the conversation itself
+   * goes when it is ended. The server does all of that (libby_oneshot.go); this makes
+   * the conversation and asks for her opening line. It needs a model: the built-in
+   * replies cannot play a scene someone else wrote.
+   */
+  private async newOneShot(characterID = this.characterID || "libby") {
+    const character = this.liveCharacter(characterID); if (!character) return;
+    if (!this.status?.enabled) {
+      try { this.status = await api.chatStatus(); } catch { /* Said below. */ }
+    }
+    if (!this.status?.enabled) { this.say(`A one-shot needs a model loaded — ${character.name} plays the scene you set, and the built-in replies can't.`, true); return; }
+    this.pickerOpen = false; this.mobileNavOpen = false;
+    this.characterID = character.id;
+    const now = Date.now();
+    const conversation: ChatConversation = {
+      id:newID(), characterId:character.id, title:"One-shot", mode:character.defaultMode || "sweet",
+      emotion:"neutral", intensity:1, progress:1,
+      options:{ ...(this.workspace.defaults ?? defaultOptions()) },
+      messages:[], createdAt:now, updatedAt:now, oneShot:{},
+    };
+    this.workspace.conversations.push(conversation); this.conversationID = conversation.id;
+    this.touchWorkspace(); void this.scrollToEnd(false);
+    await this.generateReply(conversation.id, "", { continuation:true, task:"oneshot" });
+  }
+
+  /** Ends a one-shot: the conversation is deleted, which is the last of it. */
+  private endOneShot(id: string) {
+    const conversation = this.workspace.conversations.find((item) => item.id === id); if (!conversation) return;
+    if (conversation.messages.some((m) => m.role === "user") && !confirm("End this one-shot? It's deleted, and nothing of it is remembered.")) return;
+    const characterID = conversation.characterId;
+    this.workspace.conversations = this.workspace.conversations.filter((item) => item.id !== id);
+    const next = this.conversationsFor(characterID).find((item) => !item.oneShot);
+    if (next) this.activateConversation(next.id); else { this.characterID = characterID; this.newConversation(false); }
+    this.touchWorkspace();
+    this.say("The one-shot is over — gone, and not remembered.");
   }
 
   private clearConversation() {
@@ -2782,7 +2830,7 @@ export class OppaiChat extends LitElement {
     try {
       await api.libbyTurn({
         conversationId: conversationID,
-        conversation: { characterId: conversation.characterId, title: conversation.title, mode: conversation.mode },
+        conversation: { characterId: conversation.characterId, title: conversation.title, mode: conversation.mode, oneShot: conversation.oneShot ? true : undefined },
         messages: options.continuation ? [] : unsentMessages(conversation.messages),
         redo: options.redo || undefined,
         truncateAfter: options.truncateAfter || undefined,
@@ -3729,7 +3777,7 @@ export class OppaiChat extends LitElement {
       return html`<div class="chat-wrap ${conversation.id === this.conversationID ? "on" : ""}" data-id=${conversation.id}>
         <button class="chat-row" @click=${() => this.activateConversation(conversation.id)} aria-current=${conversation.id === this.conversationID ? "page" : "false"}>
           ${this.avatar(character, "chat-avatar")}
-          <span class="chat-name">${character.name}${several ? html` <small>· ${conversation.title}</small>` : nothing}</span>
+          <span class="chat-name">${conversation.oneShot ? html`<span class="material-symbols-rounded one-shot-mark" title="One-shot — not remembered">theaters</span> ` : nothing}${character.name}${several || conversation.oneShot ? html` <small>· ${conversation.title}</small>` : nothing}</span>
           <span class="chat-time">${listTimeOf(conversation.updatedAt)}</span>
           <span class="chat-preview">${last
             ? html`${last.role === "user" ? "You: " : ""}${last.imageId && !last.content.trim() ? html`<span class="material-symbols-rounded">photo_camera</span>Photo` : previewText(last.content)}`
@@ -3786,6 +3834,12 @@ export class OppaiChat extends LitElement {
               @click=${() => this.removeCharacter(character.id)}><span class="material-symbols-rounded">delete</span></button>`}
           </div>
         </div>`)}
+      <div class="pick-cat">Play</div>
+      <button class="pick add" @click=${() => void this.newOneShot("libby")}>
+        <span class="pick-avatar"><span class="material-symbols-rounded">theaters</span></span>
+        <span class="pick-name">A one-shot</span>
+        <span class="pick-sub">Libby asks for a scene and plays it — nothing of it is remembered</span>
+      </button>
       <div class="pick-cat">Add someone</div>
       <button class="pick add" @click=${() => { this.pickerOpen = false; this.addCharacter(); }}>
         <span class="pick-avatar"><span class="material-symbols-rounded">person_add</span></span>
@@ -5294,6 +5348,7 @@ export class OppaiChat extends LitElement {
       ? [
           { label:"Open", icon:"forum", run:() => this.activateConversation(rowID) },
           { label:"New conversation", icon:"add_comment", run:() => this.newConversation() },
+          { label:"New one-shot", icon:"theaters", run:() => void this.newOneShot() },
           { label:"Compress older messages", icon:"history", run:() => void this.compressConversation(rowID) },
           { label:"Export conversation…", icon:"download", run:() => this.exportConversation(rowID) },
           menuDivider,
@@ -5311,6 +5366,8 @@ export class OppaiChat extends LitElement {
           { label:this.speakOn ? "Stop reading aloud" : "Read replies aloud", icon:this.speakOn ? "volume_off" : "volume_up", run:() => this.toggleSpeak() },
           menuDivider,
           { label:"New conversation", icon:"add_comment", run:() => this.newConversation() },
+          { label:"New one-shot", icon:"theaters", run:() => void this.newOneShot() },
+          ...(conversation?.oneShot ? [{ label:"End this one-shot", icon:"close", run:() => this.endOneShot(conversation.id) }] : []),
           { label:"Compress older messages", icon:"history", disabled:!conversation, run:() => conversation && void this.compressConversation(conversation.id) },
           { label:"Chat settings", icon:"tune", run:() => { this.settingsOpen = true; this.editorTab = "character"; } },
           { label:"Refresh model status", icon:"sync", run:() => void this.refreshModels() },
@@ -5526,6 +5583,19 @@ export class OppaiChat extends LitElement {
     </button><div class="voice-words">${message.content}</div>`;
   }
 
+  /** A one-shot's strip: what it is, the scene once it is set, and the way out. */
+  private renderOneShotBar(conversation: ChatConversation) {
+    if (!conversation.oneShot) return nothing;
+    const scene = conversation.oneShot.prompt || conversation.messages.find((m) => m.role === "user")?.content || "";
+    return html`<div class="scene-chip one-shot" role="status">
+      <span class="material-symbols-rounded" aria-hidden="true">theaters</span>
+      <span class="scene-say">${scene
+        ? html`<strong>One-shot</strong> · ${excerptOf(scene)}`
+        : html`<strong>One-shot</strong> · set the scene in your first message. Nothing of it is remembered.`}</span>
+      <button type="button" class="scene-end" title="End the one-shot — it's deleted and not remembered" @click=${() => this.endOneShot(conversation.id)}>End</button>
+    </div>`;
+  }
+
   /** The scene she planned, while it is under way: what it is, and how far in. */
   private renderSceneChip(conversation: ChatConversation) {
     const scene = conversation.scene;
@@ -5665,6 +5735,7 @@ export class OppaiChat extends LitElement {
         ${this.status?.modelBackend && !this.status.enabled ? html`<div class="backend-state" role="status"><strong>Text generation offline.</strong> ${this.status.message || "Load a model in text-generation-webui, then refresh status."}</div>` : nothing}
         ${hero}
         ${this.renderAutopilotBar(character)}
+        ${this.renderOneShotBar(conversation)}
         ${this.renderSceneChip(conversation)}
         <section class="log">${messages.length ? nothing : html`<div class="intro">${this.avatar(character,"intro-avatar")}<h2>${character.name}</h2><p>${character.description || `This is the beginning of your conversation with ${character.name}.`}</p><p>${online?`Running on ${this.status!.model}.`:character.id === "libby" ? "Libby is using built-in local replies." : "Connect a local model to start chatting."}</p></div>`}
           ${conversation.summary ? html`<details class="summary-note"><summary>Earlier messages were compressed into ${character.name}'s notes${conversation.summarizedAt ? ` · ${listTimeOf(conversation.summarizedAt)}` : ""}</summary><p>${conversation.summary}</p></details>` : nothing}

@@ -70,6 +70,7 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.TravelExplore
+import androidx.compose.material.icons.filled.TheaterComedy
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Gif
 import androidx.compose.material.icons.filled.Image
@@ -179,6 +180,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import net.fourbakers.oppailib.data.ChatReaction
 import net.fourbakers.oppailib.data.ConversationShell
+import net.fourbakers.oppailib.data.LibbyOneShot
 import net.fourbakers.oppailib.data.LibbyStory
 import net.fourbakers.oppailib.data.RateRequest
 import net.fourbakers.oppailib.data.LibbyTurnRequest
@@ -481,6 +483,8 @@ fun ChatScreen(
     var overflowOpen by remember { mutableStateOf(false) }
     // A conversation pending a delete confirmation, so a mis-tap doesn't wipe history.
     var confirmDelete by remember { mutableStateOf<ChatConversation?>(null) }
+    // A one-shot waiting on "End it?", the same guard against a mis-tap.
+    var confirmEnd by remember { mutableStateOf<ChatConversation?>(null) }
     var saveJob by remember { mutableStateOf<Job?>(null) }
     // Which of the two panes is up. Chat opens on the conversation this phone was last
     // in — reopening a messaging app onto a list of chats you have to search for the one
@@ -526,6 +530,23 @@ fun ChatScreen(
         return ws.copy(conversations = ws.conversations + convo)
     }
 
+    /**
+     * A one-shot (the server's libby_oneshot.go): no greeting, because her first line is
+     * her asking for the scene, and your first message sets it. Nothing of it is kept —
+     * no memory, bond, journal or recap — and ending it deletes it.
+     */
+    fun newOneShot(ws: ChatWorkspace, char: ChatCharacter): ChatConversation {
+        val now = System.currentTimeMillis()
+        val convo = ChatConversation(
+            id = chatID(), characterId = char.id, title = "One-shot", mode = char.defaultMode, emotion = "neutral",
+            intensity = 1, progress = 1.0, options = baseOptions(), messages = emptyList(), createdAt = now, updatedAt = now,
+            oneShot = LibbyOneShot(),
+        )
+        characterId = char.id; conversationId = convo.id
+        save(ws.copy(conversations = ws.conversations + convo))
+        return convo
+    }
+
     fun updateConversation(transform: (ChatConversation) -> ChatConversation) {
         val ws = workspace ?: return
         save(ws.copy(conversations = ws.conversations.map { if (it.id == conversationId) transform(it).copy(updatedAt = System.currentTimeMillis()) else it }))
@@ -545,7 +566,9 @@ fun ChatScreen(
         val target = ws.conversations.firstOrNull { it.id == id } ?: return
         val remaining = ws.conversations.filterNot { it.id == id }
         if (conversationId != id) { save(ws.copy(conversations = remaining)); return }
-        val nextSame = remaining.filter { it.characterId == target.characterId }.maxByOrNull { it.updatedAt }
+        // An ordinary conversation to land on: a one-shot left over is not where anyone
+        // expects to be put after deleting something else.
+        val nextSame = remaining.filter { it.characterId == target.characterId && it.oneShot == null }.maxByOrNull { it.updatedAt }
         if (nextSame != null) { conversationId = nextSame.id; save(ws.copy(conversations = remaining)) }
         else {
             val char = ws.characters.firstOrNull { it.id == target.characterId }
@@ -794,7 +817,7 @@ fun ChatScreen(
             }
             val request = LibbyTurnRequest(
                 conversationId = pending.id,
-                conversation = ConversationShell(pending.characterId, pending.title, pending.mode),
+                conversation = ConversationShell(pending.characterId, pending.title, pending.mode, oneShot = pending.oneShot != null),
                 messages = if (task.isNotBlank()) emptyList() else unsentMessages(pending.messages),
                 redo = redo, truncateAfter = truncateAfter, nudge = nudge, task = task,
                 call = callOpen,
@@ -1012,6 +1035,30 @@ fun ChatScreen(
     // it knows the screen is being looked at — and the server decides: quiet hours, how
     // often, and how long she keeps trying before giving up on being answered. One nudge
     // per quiet stretch, only after *her* message, only with a model loaded.
+    /** Starts a one-shot and asks her for the scene. It needs a model: the built-in
+        replies cannot play a scene someone else wrote. */
+    fun startOneShot(friendId: String) {
+        val ws = workspace ?: return
+        val friend = ws.characters.firstOrNull { it.id == friendId } ?: return
+        scope.launch {
+            if (status?.enabled != true) runCatching { repo.api.chatStatus() }.getOrNull()?.let { status = it }
+            if (status?.enabled != true) {
+                message = "A one-shot needs a model loaded — ${friend.name} plays the scene you set, and the built-in replies can't."
+                return@launch
+            }
+            val latest = workspace ?: return@launch
+            val shot = newOneShot(latest, friend)
+            inbox = false
+            generate(shot, friend, "", emptyList(), "", task = "oneshot")
+        }
+    }
+
+    /** Ends a one-shot, which deletes it; asked first once anything has been played. */
+    fun endOneShot(convo: ChatConversation) {
+        if (convo.messages.any { it.role == "user" }) confirmEnd = convo
+        else { deleteConversation(convo.id); message = "The one-shot is over — gone, and not remembered." }
+    }
+
     val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
     LaunchedEffect(conversationId, currentConversation(workspace)?.messages?.lastOrNull()?.id, busy, inbox, status?.enabled) {
         if (busy || inbox || idleNudged || status?.enabled != true) return@LaunchedEffect
@@ -1019,7 +1066,8 @@ fun ChatScreen(
         val convo = currentConversation(ws) ?: return@LaunchedEffect
         val char = currentCharacter(ws) ?: return@LaunchedEffect
         val last = convo.messages.lastOrNull() ?: return@LaunchedEffect
-        if (char.id != "libby" || last.role != "assistant") return@LaunchedEffect
+        // Her texting first counts against her life with you, which a one-shot is not part of.
+        if (char.id != "libby" || last.role != "assistant" || convo.oneShot != null) return@LaunchedEffect
         var wait = IDLE_NUDGE_MS
         while (true) {
             delay(wait)
@@ -1043,7 +1091,7 @@ fun ChatScreen(
         val ws = workspace ?: return@LaunchedEffect
         val convo = currentConversation(ws) ?: return@LaunchedEffect
         val char = currentCharacter(ws) ?: return@LaunchedEffect
-        if (char.id != "libby" || System.currentTimeMillis() - pendingAskedAt < 60_000) return@LaunchedEffect
+        if (char.id != "libby" || convo.oneShot != null || System.currentTimeMillis() - pendingAskedAt < 60_000) return@LaunchedEffect
         pendingAskedAt = System.currentTimeMillis()
         val due = runCatching { repo.web.libbyAutoPending().pending }.getOrNull()?.firstOrNull { it.decision.allow } ?: return@LaunchedEffect
         if (busy || conversationId != convo.id) return@LaunchedEffect
@@ -1145,6 +1193,15 @@ fun ChatScreen(
         delay(RING_MS)
         if (incomingCall) { incomingCall = false; message = "Missed a call from ${currentCharacter(workspace)?.name ?: "her"}." }
     }
+    confirmEnd?.let { shot ->
+        AlertDialog(
+            onDismissRequest = { confirmEnd = null },
+            title = { Text("End this one-shot?") },
+            text = { Text("It's deleted, and nothing of it is remembered.") },
+            confirmButton = { Button(onClick = { deleteConversation(shot.id); confirmEnd = null; message = "The one-shot is over — gone, and not remembered." }) { Text("End it") } },
+            dismissButton = { TextButton(onClick = { confirmEnd = null }) { Text("Keep playing") } },
+        )
+    }
     confirmDelete?.let { pending ->
         AlertDialog(
             onDismissRequest = { confirmDelete = null },
@@ -1244,6 +1301,7 @@ fun ChatScreen(
             onChub = { chubOpen = true },
             onSettings = { settingsOpen = true },
             onDelete = { confirmDelete = it },
+            onOneShot = { startOneShot("libby") },
         )
 
         // The activity draws edge to edge, so without this the header sits under the
@@ -1306,6 +1364,8 @@ fun ChatScreen(
                     DropdownMenu(expanded = overflowOpen, onDismissRequest = { overflowOpen = false }) {
                         DropdownMenuItem(text = { Text("Chat settings") }, leadingIcon = { Icon(Icons.Filled.Settings, null) }, onClick = { overflowOpen = false; settingsOpen = true })
                         DropdownMenuItem(text = { Text("New conversation") }, leadingIcon = { Icon(Icons.Filled.AddComment, null) }, onClick = { overflowOpen = false; save(newConversation(ws, char)) })
+                        DropdownMenuItem(text = { Text("New one-shot") }, leadingIcon = { Icon(Icons.Filled.TheaterComedy, null) }, onClick = { overflowOpen = false; startOneShot(char.id) })
+                        if (convo.oneShot != null) DropdownMenuItem(text = { Text("End this one-shot") }, leadingIcon = { Icon(Icons.Filled.Close, null) }, onClick = { overflowOpen = false; endOneShot(convo) })
                         DropdownMenuItem(text = { Text(if (compressing) "Compressing…" else "Compress older messages") }, leadingIcon = { Icon(Icons.Filled.Compress, null) },
                             enabled = !compressing && convo.messages.size > COMPRESS_KEEP + COMPRESS_MIN, onClick = { overflowOpen = false; compress(convo.id, auto = false) })
                         DropdownMenuItem(text = { Text("Clear messages") }, leadingIcon = { Icon(Icons.Filled.DeleteSweep, null) }, enabled = convo.messages.isNotEmpty(), onClick = { overflowOpen = false; updateConversation { it.copy(messages = emptyList(), title = "New conversation") } })
@@ -1341,6 +1401,7 @@ fun ChatScreen(
                     chatModes.forEach { mode -> FilterChip(selected = convo.mode == mode.id, onClick = { updateConversation { it.copy(mode = mode.id) } }, label = { Text(mode.label.replaceFirstChar(Char::uppercase)) }) }
                 }
             }
+            convo.oneShot?.let { shot -> OneShotBar(shot, convo, onEnd = { endOneShot(convo) }) }
             if (status?.enabled != true) {
                 val needsModel = char.id != "libby"
                 val backendMessage = status?.message?.takeIf { it.isNotBlank() }
@@ -2122,6 +2183,7 @@ private fun ChatInbox(
     onChub: () -> Unit,
     onSettings: () -> Unit,
     onDelete: (ChatConversation) -> Unit,
+    onOneShot: () -> Unit,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     var holdOn by remember { mutableStateOf<ChatConversation?>(null) }
@@ -2153,6 +2215,10 @@ private fun ChatInbox(
             Box {
                 IconButton(onClick = { menuOpen = true }) { Icon(Icons.Filled.MoreVert, "More", tint = ChatColors.muted) }
                 DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    DropdownMenuItem(
+                        text = { Text("Play a one-shot") }, leadingIcon = { Icon(Icons.Filled.TheaterComedy, null) },
+                        onClick = { menuOpen = false; onOneShot() },
+                    )
                     DropdownMenuItem(text = { Text("Add a friend") }, leadingIcon = { Icon(Icons.Filled.PersonAdd, null) }, onClick = { menuOpen = false; onAddFriend() })
                     DropdownMenuItem(text = { Text("Import a character card") }, leadingIcon = { Icon(Icons.Filled.Download, null) }, onClick = { menuOpen = false; onImport() })
                     DropdownMenuItem(text = { Text("Find one on chub.ai") }, leadingIcon = { Icon(Icons.Filled.TravelExplore, null) }, onClick = { menuOpen = false; onChub() })
@@ -2227,7 +2293,7 @@ private fun ChatInbox(
                         // The conversation's own name earns a line only when there is more
                         // than one with this person; otherwise the friend's name says it all
                         // and a second line of "New conversation" is noise.
-                        showTitle = ws.conversations.count { it.characterId == convo.characterId } > 1,
+                        showTitle = convo.oneShot != null || ws.conversations.count { it.characterId == convo.characterId } > 1,
                         selected = convo.id == openId,
                         onClick = { onOpen(convo.id) },
                         onHold = { holdOn = convo },
@@ -2292,6 +2358,9 @@ private fun ChatInboxRow(
         if (friend != null) ChatAvatar(repo, friend, Modifier.size(50.dp).clip(CircleShape))
         Column(Modifier.weight(1f).padding(start = 12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
+                if (convo.oneShot != null) {
+                    Icon(Icons.Filled.TheaterComedy, "One-shot — not remembered", tint = ChatColors.muted, modifier = Modifier.padding(end = 4.dp).size(15.dp))
+                }
                 Text(
                     friend?.name ?: "Conversation", color = ChatColors.text, fontWeight = FontWeight.SemiBold,
                     fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
@@ -2309,6 +2378,27 @@ private fun ChatInboxRow(
                 )
             }
         }
+    }
+}
+
+/** A one-shot's strip over the log: what it is, the scene once it is set, and the way out. */
+@Composable
+private fun OneShotBar(shot: LibbyOneShot, convo: ChatConversation, onEnd: () -> Unit) {
+    val scene = shot.prompt.ifBlank { convo.messages.firstOrNull { it.role == "user" }?.content.orEmpty() }
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp)
+            .clip(RoundedCornerShape(12.dp)).background(ChatColors.accent.copy(alpha = .12f))
+            .padding(start = 12.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Filled.TheaterComedy, null, tint = ChatColors.accent, modifier = Modifier.size(18.dp))
+        Text(
+            if (scene.isBlank()) "One-shot · set the scene in your first message. Nothing of it is remembered."
+            else "One-shot · ${scene.replace('\n', ' ')}",
+            color = ChatColors.text, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f).padding(start = 8.dp),
+        )
+        TextButton(onClick = onEnd) { Text("End", color = ChatColors.accent, fontWeight = FontWeight.SemiBold) }
     }
 }
 

@@ -175,7 +175,8 @@ func (s *Server) writeLibbyJournal(userID int64, j libbyJournal) error {
 // unreflected is where the new part of a conversation starts, and whether there is
 // enough of it. force skips the quiet and the minimum, for "write one now".
 func unreflected(conv chatConversation, mark reflectedMark, now time.Time, force bool) (int, bool) {
-	if conv.CharacterID != "libby" || len(conv.Messages) == 0 {
+	// Nothing is written about a one-shot: it was played to be forgotten.
+	if conv.CharacterID != "libby" || len(conv.Messages) == 0 || conv.forgotten() {
 		return 0, false
 	}
 	last := conv.Messages[len(conv.Messages)-1]
@@ -218,6 +219,8 @@ func (s *Server) startReflecting() {
 	defer ticker.Stop()
 	for range ticker.C {
 		s.reflectSweep(context.Background())
+		// One-shots left alone go on the same clock. See libby_oneshot.go.
+		s.forgetStaleOneShots(time.Now())
 	}
 }
 
@@ -617,7 +620,7 @@ func (s *Server) handleReflectNow(w http.ResponseWriter, r *http.Request) {
 	var latest *chatConversation
 	for i := range ws.Conversations {
 		c := &ws.Conversations[i]
-		if c.CharacterID != "libby" || len(c.Messages) == 0 {
+		if c.CharacterID != "libby" || len(c.Messages) == 0 || c.forgotten() {
 			continue
 		}
 		if latest == nil || c.Messages[len(c.Messages)-1].At > latest.Messages[len(latest.Messages)-1].At {

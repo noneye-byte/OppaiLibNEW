@@ -38,6 +38,8 @@ type Server struct {
 	scraper  *scraper.Engine
 	sources  *sources.Registry
 	ai       *ai.Manager
+	// loraFrameTagger stands in for ai on Launchy's LoRA frames, in tests; nil in use.
+	loraFrameTagger frameTagger
 	settings *settings.Store
 	kek      []byte
 	log      *slog.Logger
@@ -830,6 +832,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/mcp/keys", s.requireAuth(s.handleCreateMCPKey))
 	mux.HandleFunc("GET /api/mcp/keys", s.requireAuth(s.handleListMCPKeys))
 	mux.HandleFunc("DELETE /api/mcp/keys/{id}", s.requireAuth(s.handleRevokeMCPKey))
+	// The phone's key for what is shared to it, which outlives the session the phone
+	// ends whenever it leaves the screen. See share_keys.go.
+	mux.HandleFunc("POST /api/share/key", s.requireAuth(s.handleCreateShareKey))
+	mux.HandleFunc("DELETE /api/share/key", s.requireAuth(s.handleDropShareKey))
+	mux.HandleFunc("GET /api/share/keys", s.requireAuth(s.handleListShareKeys))
+	mux.HandleFunc("DELETE /api/share/keys/{id}", s.requireAuth(s.handleRevokeShareKey))
 	mux.HandleFunc("GET /api/launchy/keys", s.requireAuth(s.handleListLaunchyKeys))
 	mux.HandleFunc("DELETE /api/launchy/keys/{id}", s.requireAuth(s.handleRevokeLaunchyKey))
 	mux.HandleFunc("DELETE /api/launchy/key", s.requireAuth(s.handleUnlinkLaunchy))
@@ -839,6 +847,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/launchy/games/{id}", s.requireAuth(s.handleLaunchyUnpairGame))
 	mux.HandleFunc("GET /api/launchy/removed", s.requireAuth(s.handleLaunchyRemovals))
 	mux.HandleFunc("DELETE /api/launchy/removed", s.requireAuth(s.handleForgetLaunchyRemovals))
+	// LoRA pictures the launcher collects from a running game: the training set by
+	// name (made if there is none), and a picture into it. The same handlers as the
+	// Train screen's, under the launcher's door so its key reaches them and nothing
+	// else of the sets: it can add pictures, never list, read, rename or delete them.
+	mux.HandleFunc("POST /api/launchy/train-sets", s.requireAuth(s.handleTrainSetCreate))
+	mux.HandleFunc("POST /api/launchy/train-sets/{id}/pictures", s.requireAuth(s.handleLaunchyTrainUpload))
 
 	// Playing an imported HTML5 game build in place. See handlers_webgame.go for why
 	// serving a game's own scripts from this origin is safe.

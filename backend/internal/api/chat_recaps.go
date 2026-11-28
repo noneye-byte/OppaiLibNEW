@@ -72,7 +72,8 @@ func spokenChatMessages(convo chatConversation) []storedChatMessage {
 func conversationRecaps(ws chatWorkspace, characterID, currentID string, now time.Time) string {
 	var others []chatConversation
 	for _, convo := range ws.Conversations {
-		if convo.CharacterID != characterID || convo.ID == currentID {
+		// A one-shot was played to be forgotten; see libby_oneshot.go.
+		if convo.CharacterID != characterID || convo.ID == currentID || convo.forgotten() {
 			continue
 		}
 		if len(spokenChatMessages(convo)) < recapMinMessages {

@@ -38,8 +38,24 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- Appear in Android's share sheet for both links and media files. The
-                 activity forwards URLs to the scraper and uploads content Uris. -->
+            <!-- The share sheet's direct target, which Android reads off the launcher
+                 activity. See res/xml/shortcuts.xml. -->
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
+        </activity>
+
+        <!-- Appear in Android's share sheet for both links and media files. The share
+             activity has no screen: it queues uploads and link imports and closes, so a
+             share never opens the library in the middle of another app. It hands over to
+             MainActivity only when the phone has no way in yet and needs a sign-in. -->
+        <activity
+            android:name=".ShareActivity"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.NoDisplay">
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />

@@ -196,7 +196,7 @@ func (s *Server) postStory(ctx context.Context, userID int64) (libbyStory, error
 	// Where she last was and what she last had on, so the story is of the same woman.
 	var latest chatConversation
 	for _, c := range ws.Conversations {
-		if c.CharacterID == "libby" && c.UpdatedAt > latest.UpdatedAt {
+		if c.CharacterID == "libby" && !c.forgotten() && c.UpdatedAt > latest.UpdatedAt {
 			latest = c
 		}
 	}

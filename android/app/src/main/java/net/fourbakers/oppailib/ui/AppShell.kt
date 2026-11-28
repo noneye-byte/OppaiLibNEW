@@ -24,6 +24,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.DeveloperBoard
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.FaceRetouchingNatural
@@ -75,6 +76,7 @@ import net.fourbakers.oppailib.ui.theme.Appearance
 import net.fourbakers.oppailib.ui.theme.LocalInk
 import net.fourbakers.oppailib.work.DownloadQueue
 import net.fourbakers.oppailib.work.ImportWorker
+import net.fourbakers.oppailib.work.ShareIntake
 
 /**
  * The app's three places — the library, chat and the studios — in the order the app is
@@ -137,6 +139,7 @@ fun AppShell(repo: Repository, onLogout: () -> Unit) {
     var showSettings by remember { mutableStateOf(false) }
     var showDownloads by remember { mutableStateOf(resumeTo == SCREEN_DOWNLOADS) }
     var moreOpen by remember { mutableStateOf(false) }
+    var showGpu by remember { mutableStateOf(false) }
     var createMode by remember { mutableStateOf(repo.prefs.lastCreate) }
     var user by remember { mutableStateOf<User?>(null) }
     val holds = remember { NavigationBarHolds() }
@@ -151,7 +154,13 @@ fun AppShell(repo: Repository, onLogout: () -> Unit) {
     }
     val context = LocalContext.current
 
-    LaunchedEffect(Unit) { user = runCatching { repo.api.me() }.getOrNull() }
+    LaunchedEffect(Unit) {
+        user = runCatching { repo.api.me() }.getOrNull()
+        // Signed in: make sure the phone can take a share without opening, and that the
+        // share sheet offers it where shares are likely to go. See ShareActivity.
+        repo.ensureShareKey()
+        ShareIntake.publishShareTarget(context)
+    }
 
     // Anything landing in the library — an upload finishing, a save from Browse, an
     // import worker completing — marks the grid stale, whichever place is up, so it is
@@ -189,6 +198,10 @@ fun AppShell(repo: Repository, onLogout: () -> Unit) {
         DownloadsScreen(onBack = { showDownloads = false })
         return
     }
+    if (showGpu) {
+        GpuScreen(repo = repo, isAdmin = user?.isAdmin == true, onBack = { showGpu = false })
+        return
+    }
 
     fun openInLibrary(id: Long, fromChat: Boolean) {
         returnToChat = fromChat
@@ -212,6 +225,7 @@ fun AppShell(repo: Repository, onLogout: () -> Unit) {
             onBrowse = { moreOpen = false; library.scope = SCOPE_BROWSE; place = Place.LIBRARY },
             onGames = { moreOpen = false; library.scope = "game"; library.findGames = true; place = Place.LIBRARY },
             onDownloads = { moreOpen = false; showDownloads = true },
+            onGpu = { moreOpen = false; showGpu = true },
             onSettings = { moreOpen = false; showSettings = true },
             onLogout = { moreOpen = false; onLogout() },
         )
@@ -361,6 +375,7 @@ private fun MoreSheet(
     onBrowse: () -> Unit,
     onGames: () -> Unit,
     onDownloads: () -> Unit,
+    onGpu: () -> Unit,
     onSettings: () -> Unit,
     onLogout: () -> Unit,
 ) {
@@ -385,6 +400,7 @@ private fun MoreSheet(
             LitRow(Icons.Filled.Image, "Image studio", false, { onCreate("image") })
             LitRow(Icons.Filled.Movie, "Video studio", false, { onCreate("video") })
             LitRow(Icons.Filled.FaceRetouchingNatural, "Sprites", false, { onCreate("sprites") })
+            LitRow(Icons.Filled.DeveloperBoard, "Graphics card", false, onGpu)
             Kicker("Find", Modifier.padding(start = 14.dp, top = 10.dp, bottom = 2.dp))
             LitRow(Icons.Filled.Explore, "Browse sources", false, onBrowse)
             LitRow(Icons.Filled.SportsEsports, "Find games", false, onGames)

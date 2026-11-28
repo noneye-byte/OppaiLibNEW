@@ -3,6 +3,7 @@ package net.fourbakers.oppailib.data
 import retrofit2.http.Body
 import retrofit2.http.DELETE
 import retrofit2.http.GET
+import retrofit2.http.Header
 import retrofit2.http.PATCH
 import retrofit2.http.POST
 import retrofit2.http.PUT
@@ -302,6 +303,21 @@ interface WebApi {
 
     @GET("api/launchy/keys")
     suspend fun launchyKeys(): AccessKeys
+
+    /** This phone's share key, which survives the session (share_keys.go). [CollectionName]
+        is the body's shape: `{name}`, the phone's model. Shown in this answer only. */
+    @POST("api/share/key")
+    suspend fun createShareKey(@Body body: CollectionName): NewKey
+
+    /** The key revoking itself on sign-out. Sent on the key, not the session. */
+    @DELETE("api/share/key")
+    suspend fun dropShareKey(@Header("Authorization") bearer: String)
+
+    @GET("api/share/keys")
+    suspend fun shareKeys(): AccessKeys
+
+    @DELETE("api/share/keys/{id}")
+    suspend fun revokeShareKey(@Path("id") id: Long)
 
     @DELETE("api/launchy/keys/{id}")
     suspend fun revokeLaunchyKey(@Path("id") id: Long)

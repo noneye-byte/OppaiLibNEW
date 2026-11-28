@@ -301,6 +301,30 @@ private fun KeyRow(k: AccessKey, onRevoke: () -> Unit) {
     }
 }
 
+/**
+ * The phones that can take a share without being opened: each holds a key that adds to
+ * the library and reads nothing of it (the server's share_keys.go). A lost phone is
+ * revoked here; this one fetches a new key the next time it is signed in.
+ */
+@Composable
+internal fun ShareKeysSection(repo: Repository) {
+    var keys by remember { mutableStateOf<List<AccessKey>?>(null) }
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(Unit) { keys = runCatching { repo.web.shareKeys().items }.getOrNull() }
+    Text(
+        if (repo.prefs.shareKey != null) "This phone takes shares from any app straight into the upload queue, even while OppaiLib is locked. Its key can add to the library and can't read anything in it."
+        else "This phone opens OppaiLib to take a share. Sign in again to give it a share key, so a share goes straight to the queue.",
+        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    keys?.forEach { k ->
+        KeyRow(k) {
+            scope.launch {
+                runCatching { repo.web.revokeShareKey(k.id) }.onSuccess { keys = keys?.filterNot { it.id == k.id } }
+            }
+        }
+    }
+}
+
 /** Keys for MCP clients: each opens the library's read-only tools at /api/mcp. */
 @Composable
 internal fun McpSection(repo: Repository) {

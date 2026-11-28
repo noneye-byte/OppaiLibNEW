@@ -145,7 +145,7 @@ func (s *Server) handleLibbyWatch(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case req.ConversationID != "" && c.ID == req.ConversationID:
 			conv = c
-		case req.ConversationID == "" && c.CharacterID == "libby" && (conv == nil || c.UpdatedAt > conv.UpdatedAt):
+		case req.ConversationID == "" && c.CharacterID == "libby" && !c.forgotten() && (conv == nil || c.UpdatedAt > conv.UpdatedAt):
 			conv = c
 		}
 	}

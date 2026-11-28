@@ -372,6 +372,8 @@ behind any router.
 | DELETE | `/api/launchy/games/{id}` | unpairs because the launcher no longer has it; the game stays, and is not offered to the PC again |
 | GET | `/api/launchy/removed` | `{removed, declined}` — how many games the sync keeps out on purpose |
 | DELETE | `/api/launchy/removed` | lets them all sync again |
+| POST | `/api/launchy/train-sets` | `{name}` → the training set by that name (any capitals), made if there is none — `{id, name, count, …}` as `/api/imagegen/train-sets` gives. Launchy's LoRA capture files a game's pictures into a set named after it |
+| POST | `/api/launchy/train-sets/{id}/pictures` | as `/api/imagegen/train-sets/{id}/pictures`: multipart `file` (+ `source`, + `want`) → `{id, existed, checked}`, 201 or 200 for a picture already in the set; 400 once the set holds 400. `want` is `characters` or `backgrounds`: the tagger looks first, and a frame with nobody in it (or someone in it) is not stored → 200 `{skipped, checked: true}`; a kept one keeps the tagger's tags. With tagging off or only the heuristic tagger nothing is checked (`checked: false`) and every frame is kept. The key adds pictures and cannot list, read, rename or delete sets |
 
 `meta` names the launcher's own entry (`launchyId`) and always carries what only the
 PC knows — `installed`, `version`, `playSeconds`, `lastPlayed`, `launchCount`. The
@@ -640,7 +642,7 @@ part a client has to send or read to keep up with her.
 
 | Method | Path | Notes |
 |--------|------|-------|
-| POST | `/api/libby/turn` | One of her turns, run on the server and streamed as Server-Sent Events (or, with `Accept: application/json`, every event at the end as `{events:[{event, data}]}`). Body: `{conversationId, conversation?, messages?, redo?, truncateAfter?, nudge?, task?, cue?, call?, outfit?, timeZone?, viewing?, link?, sharedMediaIds?, debug?}`. `messages` are your new texts (ids the server already has are updated in place, not repeated); `conversation: {characterId, title, mode}` creates a conversation the client has not saved yet; `redo` takes her last reply back first and `truncateAfter: <message id>` drops everything after one of yours; `task: "autonomous"` is her speaking first and `"afterglow"` the morning after; `cue` is a one-off instruction that is never stored; `timeZone` is the device's IANA zone (`Europe/London`), which sets the hour Libby is told it is and the light her pictures are taken in — the server's own clock when it is absent or unknown. Events, in order as they happen: `turn {rev, messages}` (yours, as stored), `status {phase}` (`typing`, `photo`, `clip`, `room`), `camera {jobId, what?, progress: {phase, percent, preview?, of}}`, `message {message, rev, images?}` (one of hers — a text, a picture or set, a thought, a voice note, a card — resent when amended; `images` are the gallery records of its pictures), `react {to, emoji, rev}`, `call {action: ring\|hang_up}`, `room {background}`, `notice {text}` (the context window had to give), `state {emotion, intensity, activity, background, wearing, scene, messageId, rev}`, `done {rev, sampling, context, timing, debug?, calls?}` (`timing: {ms, rounds:[{round, ms, promptTokens, replyTokens, calls, cachedTokens?, readTokens?, readMs?, writeMs?}]}` — the `cached`/`read` figures are llama.cpp's `timings`, when the backend passes them on), and `error {message, status}`. A comment line arrives every 15 s while she works. Her actions are tool calls — see "How a turn works" below |
+| POST | `/api/libby/turn` | One of her turns, run on the server and streamed as Server-Sent Events (or, with `Accept: application/json`, every event at the end as `{events:[{event, data}]}`). Body: `{conversationId, conversation?, messages?, redo?, truncateAfter?, nudge?, task?, cue?, call?, outfit?, timeZone?, viewing?, link?, sharedMediaIds?, debug?}`. `messages` are your new texts (ids the server already has are updated in place, not repeated); `conversation: {characterId, title, mode, oneShot?}` creates a conversation the client has not saved yet (`oneShot: true` makes it a one-shot — see below); `redo` takes her last reply back first and `truncateAfter: <message id>` drops everything after one of yours; `task: "autonomous"` is her speaking first, `"afterglow"` the morning after and `"oneshot"` her opening a one-shot by asking for the scene; `cue` is a one-off instruction that is never stored; `timeZone` is the device's IANA zone (`Europe/London`), which sets the hour Libby is told it is and the light her pictures are taken in — the server's own clock when it is absent or unknown. Events, in order as they happen: `turn {rev, messages}` (yours, as stored), `status {phase}` (`typing`, `photo`, `clip`, `room`), `camera {jobId, what?, progress: {phase, percent, preview?, of}}`, `message {message, rev, images?}` (one of hers — a text, a picture or set, a thought, a voice note, a card — resent when amended; `images` are the gallery records of its pictures), `react {to, emoji, rev}`, `call {action: ring\|hang_up}`, `room {background}`, `notice {text}` (the context window had to give), `state {emotion, intensity, activity, background, wearing, scene, messageId, rev}`, `done {rev, sampling, context, timing, debug?, calls?}` (`timing: {ms, rounds:[{round, ms, promptTokens, replyTokens, calls, cachedTokens?, readTokens?, readMs?, writeMs?}]}` — the `cached`/`read` figures are llama.cpp's `timings`, when the backend passes them on), and `error {message, status}`. A comment line arrives every 15 s while she works. Her actions are tool calls — see "How a turn works" below |
 | — | `ephemeral` turns | the same endpoint with `{ephemeral: true, characterId, mode, emotion, intensity, history:[{role, content}], cue?, viewing?}`: the browse-together drawer. She answers with her whole self and nothing is filed in a conversation |
 | POST | `/api/libby/photos/{id}/rate` | `{rating: "love"\|"like"\|"dislike"\|""}` on a picture of her → `{image, sendWeights}`. Each of the picture's tags is leaned (×1.18 love, ×1.07 like, ×0.82 dislike, bounded between rarely and often; changing a rating replaces it rather than stacking) |
 | POST | `/api/libby/photos/{id}/keep` | files the picture in the library as a picture of her → `{id}` |
@@ -684,6 +686,24 @@ part a client has to send or read to keep up with her.
 A remembered boundary (memory kind `boundary`) rules intimate states out server-side
 the way the heat floor does: "no toys" refuses `set_state` with `activity: vibrator` on
 the turn the model forgets it, and the state is left out of the tool's vocabulary.
+
+### One-shots
+
+A conversation with `oneShot: {prompt?}` is a scene they set, played once and forgotten
+(`api/libby_oneshot.go`). It is made one at birth — by the turn's `conversation.oneShot`
+or a workspace save of a new conversation carrying it — and stays one: a later save
+cannot add or drop it. Its first turn is `task: "oneshot"` with no messages, and she asks
+for the scene; their first message is the scene, which the server records as `prompt` and
+keeps at the head of her prompt for the rest of it. Nothing of hers is read into one —
+what she remembers about them, her wants, the bond, her journal, the other
+conversations, the library — and nothing of it is kept: no `remember`, `recall` or
+library tools are offered, nothing she says is filed as a fact, the bond does not move,
+no room is made for it, it is never reflected on, recapped, searched by `recall`, chosen
+as "her latest conversation" by stories, the viewer or `/api/libby/send`, and the
+clients do not let her text first into one. Her state inside it (mood, heat, activity,
+clothes, a planned scene) moves as in any conversation. The limits she remembers are
+still honoured. Pictures she takes in one still go to her gallery. A one-shot untouched
+for 12 hours is deleted on the reflection sweep; ending one deletes it.
 
 ### How a turn works
 
@@ -771,6 +791,20 @@ Libby's turn calls in-process (`backend/internal/mcp`, `api/library_mcp.go`).
 | POST | `/api/mcp/keys` | (session) `{name}` → `{key, id, name}`; the key is shown this once |
 | GET | `/api/mcp/keys` | (session) → `{items:[{id, name, hint, createdAt, lastUsedAt?}], tools}` |
 | DELETE | `/api/mcp/keys/{id}` | (session) revoke one |
+
+### A phone's share key
+
+The phone ends its session whenever the app leaves the screen, which is exactly when a
+share from another app is being uploaded. A share key (`api/share_keys.go`) opens what
+adding needs and nothing that shows anything: `/api/uploads` and every route under it,
+`POST /api/scrape` and `POST /api/scrape/import`. Anything else answers 403.
+
+| Method | Path | Notes |
+|--------|------|-------|
+| POST | `/api/share/key` | (session) `{name}` → 201 `{key, id, name}`; the key is shown this once. One per name: asking again replaces the key of that name. A key cannot make one (403) |
+| DELETE | `/api/share/key` | (the key) the phone dropping its own key on sign-out → 204 |
+| GET | `/api/share/keys` | (session) → `{items:[{id, name, hint, createdAt, lastUsedAt?}]}` |
+| DELETE | `/api/share/keys/{id}` | (session) revoke one — a lost phone. Share keys only (404 for any other kind) |
 
 An MCP key opens `/api/mcp` and nothing else. Tools: `search_library {query, kind?,
 limit?}`, `library_item {item}` (a title or `#id`: tags, the vision model's description,

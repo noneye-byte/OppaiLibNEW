@@ -73,6 +73,10 @@ func keyScopeAllows(scope string, r *http.Request) bool {
 		// key list beside it.
 		return r.URL.Path == "/api/mcp"
 	}
+	if scope == scopeShare {
+		// A phone's share key adds to the library and reads nothing of it. See share_keys.go.
+		return shareKeyPath.MatchString(r.URL.Path)
+	}
 	if scope != scopeLaunchy {
 		return false
 	}
@@ -96,6 +100,9 @@ func (s *Server) serveWithKey(w http.ResponseWriter, r *http.Request, key string
 		msg := "this key only opens Launchy's part of the server"
 		if row.Scope == scopeMCP {
 			msg = "this key only opens the MCP endpoint, /api/mcp"
+		}
+		if row.Scope == scopeShare {
+			msg = "this key only adds what is shared to the phone"
 		}
 		writeErr(w, http.StatusForbidden, msg)
 		return

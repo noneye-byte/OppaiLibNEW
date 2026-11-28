@@ -126,7 +126,7 @@ func (s *Server) handleLibbySend(w http.ResponseWriter, r *http.Request) {
 		// Her most recent chat, whichever screen it was had on.
 		for i := range ws.Conversations {
 			c := ws.Conversations[i]
-			if c.CharacterID != "libby" {
+			if c.CharacterID != "libby" || c.forgotten() {
 				continue
 			}
 			if at < 0 || c.UpdatedAt > ws.Conversations[at].UpdatedAt {

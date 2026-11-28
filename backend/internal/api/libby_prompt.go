@@ -118,6 +118,11 @@ func (s *Server) buildTurnPrompt(ctx context.Context, cur settings.Settings, v *
 		weight = 1
 	}
 	head += fmt.Sprintf("\nTreat the character-card prompt strength as %.2f.", weight)
+	// A one-shot's scene holds still for the whole of it, so it is head, not late.
+	forgotten := v.conv.forgotten()
+	if forgotten {
+		head += oneShotDirective(oneShotScene(v.conv))
+	}
 	// late is what this turn says that the last one did not: it goes to the late note,
 	// after the conversation, so the head stays the prefix the backend has cached (see
 	// fitChatTurnCached). Nothing that moves from turn to turn may be added to head.
@@ -169,17 +174,22 @@ func (s *Server) buildTurnPrompt(ctx context.Context, cur settings.Settings, v *
 		journal, _ := s.readLibbyJournal(v.userID)
 		s.chatMu.Unlock()
 		p.taste = buildLibbyTaste(character.Kinks+" "+character.Tastes, wantTexts(wants))
-		addStable("what she remembers about you", rankMemoryList, memoryPromptBlock(store))
+		// Who she is stays in a one-shot, and so do the limits read above, which are
+		// theirs; what she knows of them, their history and the other conversations stay
+		// out of a scene that is its own thing.
 		addStable("who she is", rankSelfFacts, selfPromptBlock(store))
-		addStable("her own wants", rankWantsList, wantsPromptBlock(wants))
-		add("your history together", rankBond, bondPromptBlock(bond, time.Now()))
-		addDeferred("her journal", rankJournal, journalPromptBlock(journal, time.Now()), signals.past || len(in.Messages) <= 2)
-		if chatTask(strings.ToLower(strings.TrimSpace(in.Task))) == taskAfterglow {
-			late.WriteString(afterglowDirective(bond, time.Now()))
-		}
-		addDeferred("your other conversations", rankRecaps, conversationRecaps(v.ws, character.ID, v.conv.ID, time.Now()), signals.past || len(in.Messages) <= 2)
-		if signals.past {
-			add("what she does not remember", rankPastHonesty, pastHonestyDirective)
+		if !forgotten {
+			addStable("what she remembers about you", rankMemoryList, memoryPromptBlock(store))
+			addStable("her own wants", rankWantsList, wantsPromptBlock(wants))
+			add("your history together", rankBond, bondPromptBlock(bond, time.Now()))
+			addDeferred("her journal", rankJournal, journalPromptBlock(journal, time.Now()), signals.past || len(in.Messages) <= 2)
+			if chatTask(strings.ToLower(strings.TrimSpace(in.Task))) == taskAfterglow {
+				late.WriteString(afterglowDirective(bond, time.Now()))
+			}
+			addDeferred("your other conversations", rankRecaps, conversationRecaps(v.ws, character.ID, v.conv.ID, time.Now()), signals.past || len(in.Messages) <= 2)
+			if signals.past {
+				add("what she does not remember", rankPastHonesty, pastHonestyDirective)
+			}
 		}
 		feedSignals := signals
 		if libraryToolsOffered(toolLevelFor(limit)) {
@@ -187,11 +197,16 @@ func (s *Server) buildTurnPrompt(ctx context.Context, cur settings.Settings, v *
 			// and fed: only the facts and what they had on a moment ago stay, with a line
 			// telling her to look.
 			feedSignals = pulledFeedSignals(signals)
-			addStable("how to read the shelves", rankLibraryFacts, libraryPullNote)
+			if !forgotten {
+				addStable("how to read the shelves", rankLibraryFacts, libraryPullNote)
+			}
 		}
-		for _, section := range s.libraryFeed(ctx, feedSignals, feedChoice{shown: p.sentLib, taste: p.taste, weights: v.ws.SendWeights, userID: v.userID}) {
-			section.Late = true
-			p.sections = append(p.sections, section)
+		// The shelves are not part of a one-shot's scene.
+		if !forgotten {
+			for _, section := range s.libraryFeed(ctx, feedSignals, feedChoice{shown: p.sentLib, taste: p.taste, weights: v.ws.SendWeights, userID: v.userID}) {
+				section.Late = true
+				p.sections = append(p.sections, section)
+			}
 		}
 		// What their ratings say they like in her pictures, for the shots she frames.
 		if liked := likedTags(v.ws.SendWeights, 8); len(liked) > 0 && cur.ImageGenEnabled {
@@ -258,9 +273,9 @@ func (s *Server) buildTurnPrompt(ctx context.Context, cur settings.Settings, v *
 	}
 	if isLibby {
 		addDeferred("what she is doing", rankActivity, "\n\n"+activityToolDirective(v.conv.Intensity, v.conv.Activity, p.limits), true)
-		addDeferred("where she is", rankActivity, "\n\n"+placeToolDirective(p.rooms, v.conv.Background, canCamera),
+		addDeferred("where she is", rankActivity, "\n\n"+placeToolDirective(p.rooms, v.conv.Background, canCamera && !forgotten),
 			in.Call || signals.place || v.conv.Intensity >= 3 || v.conv.Background == "")
-		if signals.act || signals.actFollowUp {
+		if (signals.act || signals.actFollowUp) && !forgotten {
 			text := "\n\nWhen they want something done to the collection, offer it with the offer tool — it is a card they approve, so say you are offering, never that it is done."
 			if signals.actFollowUp {
 				text += "\n" + actionFollowUpDirective
@@ -297,7 +312,7 @@ func (s *Server) buildTurnPrompt(ctx context.Context, cur settings.Settings, v *
 	if isLibby {
 		state := s.gatherServerState(ctx, cur, model, limit, resolveModelTier(cur.ChatModelTier, model), p.caps.Server, p.serverTurn)
 		p.caps.Models = state.Models
-		if p.serverTurn || len(state.alarms()) > 0 {
+		if (p.serverTurn || len(state.alarms()) > 0) && !forgotten {
 			add("how the server is doing", rankServer, state.render(p.serverTurn))
 		}
 	}
@@ -362,11 +377,12 @@ func (s *Server) buildTurnPrompt(ctx context.Context, cur settings.Settings, v *
 		places:     places,
 		scene:      v.conv.Scene != nil,
 		level:      toolLevelFor(limit),
+		forgetful:  forgotten,
 	}
 	if canCamera && isLibby {
 		p.tools.loras = cur.LibbyCameraLoras
 	}
-	if isLibby {
+	if isLibby && !forgotten {
 		p.tools.library = s.libbyLibraryToolset(p.tools.level)
 	}
 	if isLibby {
@@ -379,7 +395,7 @@ func (s *Server) buildTurnPrompt(ctx context.Context, cur settings.Settings, v *
 	}
 	// Offering is for turns about acting on the library or the server, as the offer
 	// directive always was; on the rest the tool is a couple of hundred tokens of nothing.
-	if signals.act || signals.actFollowUp || p.serverTurn {
+	if (signals.act || signals.actFollowUp || p.serverTurn) && !forgotten {
 		p.tools.offers = offerVerbs(p.caps)
 	}
 	return p

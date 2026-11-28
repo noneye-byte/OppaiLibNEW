@@ -115,7 +115,8 @@ func (t *turnRun) execSetState(args map[string]any) string {
 		if id, ok := resolveBackground(place, t.p.rooms); ok {
 			t.background = id
 			done = append(done, "moved")
-		} else if t.p.tools.camera && !shotIsRefused(place) {
+		} else if t.p.tools.camera && !t.v.conv.forgotten() && !shotIsRefused(place) {
+			// A room made in a one-shot would outlive it, as a place she can be ever after.
 			t.pendingRoom = truncateRunes(place, 120)
 			done = append(done, "moving somewhere new — it is being made")
 		} else {
@@ -335,6 +336,9 @@ func (t *turnRun) execRemember(args map[string]any) string {
 	if !t.isLibby {
 		return "Noted."
 	}
+	if t.v.conv.forgotten() {
+		return "Nothing from a one-shot is kept."
+	}
 	text := truncateRunes(argString(args, "text"), 300)
 	if text == "" {
 		return "Nothing to keep."
@@ -364,7 +368,7 @@ func (t *turnRun) execRemember(args map[string]any) string {
 func (t *turnRun) execRecall(args map[string]any) string {
 	query := argString(args, "query")
 	words := requestWords(query)
-	if len(words) == 0 || !t.isLibby {
+	if len(words) == 0 || !t.isLibby || t.v.conv.forgotten() {
 		return "You don't remember anything about that."
 	}
 	s := t.s
@@ -397,7 +401,7 @@ func (t *turnRun) execRecall(args map[string]any) string {
 		}
 	}
 	for _, c := range t.v.ws.Conversations {
-		if c.ID == t.v.conv.ID || c.CharacterID != t.v.character.ID {
+		if c.ID == t.v.conv.ID || c.CharacterID != t.v.character.ID || c.forgotten() {
 			continue
 		}
 		for _, m := range c.Messages {

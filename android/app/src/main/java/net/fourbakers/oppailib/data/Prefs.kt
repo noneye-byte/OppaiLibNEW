@@ -38,6 +38,17 @@ class Prefs(context: Context) {
         // UI signed in while the durable preference still has no session.
         set(v) { sp.edit().putString(KEY_TOKEN, v).commit() }
 
+    /**
+     * This phone's share key (the server's share_keys.go): what an upload or a shared
+     * link is sent on, because the session is ended every time the app leaves the screen
+     * and a share is, by its nature, the app leaving the screen. It can only add to the
+     * library, so it outlives the lock and the sign-out-on-leave; a deliberate sign-out
+     * drops it.
+     */
+    var shareKey: String?
+        get() = sp.getString(KEY_SHARE_KEY, null)
+        set(v) { sp.edit().apply { if (v == null) remove(KEY_SHARE_KEY) else putString(KEY_SHARE_KEY, v) }.commit() }
+
     var biometricLock: Boolean
         get() = sp.getBoolean(KEY_BIOMETRIC, false)
         set(v) = sp.edit().putBoolean(KEY_BIOMETRIC, v).apply()
@@ -336,7 +347,9 @@ class Prefs(context: Context) {
             else putString(KEY_GEN_DRAFT, Json.encodeToString(GenDraft.serializer(), v))
         }.apply()
 
-    fun clearSession() {
+    /** [keepShareKey] is the session ending because the app left the screen, which a
+        share key is made to outlive; a sign-out someone chose takes it too. */
+    fun clearSession(keepShareKey: Boolean = false) {
         // Where you were is part of the session, not of the device. Signing out and
         // handing the phone over must not drop the next person straight back into the
         // last conversation, board, or open video.
@@ -344,6 +357,7 @@ class Prefs(context: Context) {
             .remove(KEY_LAST_SCREEN).remove(KEY_LAST_KIND).remove(KEY_LAST_FAVORITES)
             .remove(KEY_LAST_VIEWER).remove(KEY_LAST_CHAT).remove(KEY_LAST_BROWSE)
             .remove(KEY_LIBRARY_SCOPE).remove(KEY_RECENTS).remove(KEY_LAST_CREATE)
+            .apply { if (!keepShareKey) remove(KEY_SHARE_KEY) }
             .commit()
     }
 
@@ -354,6 +368,7 @@ class Prefs(context: Context) {
 
         private const val KEY_SERVER = "server_url"
         private const val KEY_TOKEN = "token"
+        private const val KEY_SHARE_KEY = "share_key"
         private const val KEY_BIOMETRIC = "biometric_lock"
         private const val KEY_HIDE_LIBBY = "hide_libby"
         private const val KEY_LIBBY_OUTFIT = "libby_outfit"

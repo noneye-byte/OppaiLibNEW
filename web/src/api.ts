@@ -1064,7 +1064,7 @@ export interface LibbyStory {
 export interface LibbyTurnRequest {
   conversationId: string;
   /** A conversation this client created and has not saved yet. */
-  conversation?: { characterId: string; title: string; mode: string };
+  conversation?: { characterId: string; title: string; mode: string; oneShot?: boolean };
   messages?: StoredChatMessage[];
   redo?: boolean;
   /** Drop everything after this message of yours before answering it. */
@@ -1122,6 +1122,10 @@ export interface ChatConversation {
   rev?: number;
   /** The scene she planned, while it is under way. */
   scene?: LibbyScene;
+  /** A one-shot: a scene they set, played once and forgotten. `prompt` is the scene,
+      recorded by the server from their first message. Set at creation and never after —
+      the server keeps it whatever a save sends. See libby_oneshot.go. */
+  oneShot?: { prompt?: string };
 }
 
 /** Which reference picture of her: in her usual clothes, or in nothing. */

@@ -3,7 +3,6 @@ package net.fourbakers.oppailib
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
@@ -51,16 +50,13 @@ import androidx.lifecycle.lifecycleScope
 import net.fourbakers.oppailib.data.LibbyMeter
 import net.fourbakers.oppailib.data.LibbyVoice
 import net.fourbakers.oppailib.data.Repository
-import net.fourbakers.oppailib.data.ScrapeImportRequest
-import net.fourbakers.oppailib.data.UrlRequest
 import net.fourbakers.oppailib.ui.LibbyPortrait
 import net.fourbakers.oppailib.ui.AppShell
 import net.fourbakers.oppailib.ui.LoginScreen
 import net.fourbakers.oppailib.ui.mascotAsset
 import net.fourbakers.oppailib.ui.theme.Appearance
 import net.fourbakers.oppailib.ui.theme.OppaiTheme
-import net.fourbakers.oppailib.work.ImportWorker
-import net.fourbakers.oppailib.work.UploadWorker
+import net.fourbakers.oppailib.work.ShareIntake
 import kotlinx.coroutines.launch
 
 class MainActivity : FragmentActivity() {
@@ -113,9 +109,13 @@ class MainActivity : FragmentActivity() {
         acceptShareIntent(intent, OppaiApp.from(this).repository)
     }
 
+    /**
+     * A share that reached the app itself rather than the share activity: forwarded here
+     * because the phone had no way in yet (see ShareActivity). Held until a sign-in or an
+     * unlock, then queued exactly as the share activity queues one.
+     */
     private fun acceptShareIntent(intent: Intent?, repo: Repository) {
-        val action = intent?.action
-        if (action != Intent.ACTION_SEND && action != Intent.ACTION_SEND_MULTIPLE) return
+        if (!ShareIntake.isShare(intent)) return
         pendingShare = Intent(intent)
         if (repo.hasSession) consumePendingShare(repo)
     }
@@ -125,86 +125,23 @@ class MainActivity : FragmentActivity() {
         if (!repo.hasSession) return
         pendingShare = null
         lifecycleScope.launch {
-            // Shared files go to the upload queue rather than being copied into the
-            // cache and posted from here. Sharing a video out of the gallery is the
-            // single commonest way a large file reaches this app, and it was the worst
-            // served: a full second copy on a phone that may not have room, sent as
-            // one request from an activity that Android is free to kill the moment the
-            // user goes back to what they were doing.
-            //
-            // The read grant that came with the share is asked to be persisted. Most
-            // apps do not offer one, so this usually fails — which is fine, because the
-            // worker starts immediately and the grant outlives it. If the process is
-            // killed before it finishes, the queue says so plainly rather than
-            // retrying against a URI it can no longer open.
-            val uris = sharedUris(shared)
-            for (uri in uris) {
-                runCatching {
-                    contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                }
-            }
-            val uploaded = if (uris.isEmpty()) 0 else UploadWorker.enqueue(this@MainActivity, uris)
-
-            val urls = URL_PATTERN.findAll(shared.getStringExtra(Intent.EXTRA_TEXT).orEmpty())
-                .map { it.value.trimEnd('.', ',', ')', ']', '}') }.distinct().toList()
-            var queued = 0
-            for (url in urls) {
-                runCatching {
-                    val result = repo.api.scrape(UrlRequest(url))
-                    if (result.mediaUrls.isEmpty()) error("No media found at $url")
-                    ImportWorker.scrapeImport(
-                        this@MainActivity,
-                        ScrapeImportRequest(
-                            url = url,
-                            mediaUrls = result.mediaUrls,
-                            title = result.title,
-                            tags = result.tags,
-                            categorizedTags = result.categorizedTags,
-                        ),
-                        result.title.ifBlank { "Shared link" },
-                    )
-                }.onSuccess { queued++ }
-                    .onFailure { repo.report(it.message ?: "Couldn't import the shared link.") }
-            }
-            // No notifyLibraryChanged here: nothing has landed yet. The upload worker
-            // announces the library change when a file actually finishes, which is
-            // minutes later for the long videos this path exists to carry.
-            if (uploaded + queued > 0) {
+            // A key first, so the queued work is not standing on the session that ends
+            // the moment the user goes back to the app they shared from.
+            repo.ensureShareKey()
+            val queued = ShareIntake.accept(this@MainActivity, shared)
+            // No notifyLibraryChanged here: nothing has landed yet. The workers announce
+            // the library change when a file actually finishes.
+            if (queued.total > 0) {
                 // Adding to the library warms Libby up, and she reacts in whatever
                 // state that leaves her in (see LibbyVoice) rather than reciting a
                 // fixed line every time.
-                LibbyMeter.bump(if (uploaded + queued > 1) 2 else 1)
-                val reaction = LibbyVoice.react(LibbyVoice.Event.IMPORT, count = uploaded + queued)
-                val detail = buildString {
-                    if (uploaded > 0) append("Queued $uploaded shared file${if (uploaded == 1) "" else "s"} to upload.")
-                    if (queued > 0) {
-                        if (isNotEmpty()) append(' ')
-                        append("Queued $queued shared link${if (queued == 1) "" else "s"}.")
-                    }
-                }
-                repo.report("${reaction.message} $detail", reaction.emotion)
+                LibbyMeter.bump(if (queued.total > 1) 2 else 1)
+                val reaction = LibbyVoice.react(LibbyVoice.Event.IMPORT, count = queued.total)
+                repo.report("${reaction.message} ${ShareIntake.summary(queued)}", reaction.emotion)
+            } else {
+                repo.report(ShareIntake.summary(queued))
             }
         }
-    }
-
-    @Suppress("DEPRECATION")
-    private fun sharedUris(intent: Intent): List<Uri> {
-        val out = linkedSetOf<Uri>()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)?.let(out::add)
-            intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java)?.let(out::addAll)
-        } else {
-            intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)?.let(out::add)
-            intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)?.let(out::addAll)
-        }
-        intent.clipData?.let { clip ->
-            for (i in 0 until clip.itemCount) clip.getItemAt(i).uri?.let(out::add)
-        }
-        return out.toList()
-    }
-
-    companion object {
-        private val URL_PATTERN = Regex("https?://[^\\s<>]+", RegexOption.IGNORE_CASE)
     }
 
     /**
@@ -314,6 +251,10 @@ private fun AppRoot(
                         locked = false
                         authed = true
                         mascotMessage = "Welcome back!"; mascotEmotion = "happy"
+                        // A share that came in while locked was waiting on exactly this;
+                        // it used to wait for a sign-in through the login form only, and
+                        // with the biometric lock on that never came, so it was dropped.
+                        onAuthenticated()
                     } else {
                         locked = false
                         authed = false
@@ -346,7 +287,9 @@ private fun AppRoot(
                         repo.closeSessionForReauth()
                         closeInProgress = false
                         if (!repo.prefs.biometricLock) {
-                            repo.clearSession()
+                            // Signed out for leaving the screen, not by choice: the share
+                            // key stays, since sharing is done from another app.
+                            repo.leaveSession()
                             locked = false
                             authed = false
                         } else if (resumePending) {

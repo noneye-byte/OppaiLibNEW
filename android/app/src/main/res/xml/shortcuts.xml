@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The share sheet's direct row: ShareIntake.publishShareTarget pushes the one shortcut
+     that carries this category, and Android puts it among the places a share is likely
+     to go. The target is the share activity, which queues and closes. -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <share-target android:targetClass="net.fourbakers.oppailib.ShareActivity">
+        <data android:mimeType="*/*" />
+        <category android:name="net.fourbakers.oppailib.category.ADD_TO_LIBRARY" />
+    </share-target>
+</shortcuts>

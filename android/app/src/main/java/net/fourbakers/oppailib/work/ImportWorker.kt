@@ -19,6 +19,7 @@ import net.fourbakers.oppailib.OppaiApp
 import net.fourbakers.oppailib.data.ImportResponse
 import net.fourbakers.oppailib.data.ScrapeImportRequest
 import net.fourbakers.oppailib.data.SourceSaveRequest
+import net.fourbakers.oppailib.data.UrlRequest
 
 /**
  * Imports that the server answers slowly: saving a whole 4chan thread as a comic, or
@@ -66,6 +67,21 @@ class ImportWorker(context: Context, params: androidx.work.WorkerParameters) :
                     json.decodeFromString<SourceSaveRequest>(payload),
                 )
                 JOB_SCRAPE -> repo.api.scrapeImport(json.decodeFromString<ScrapeImportRequest>(payload))
+                JOB_LINK -> {
+                    // A link shared to the phone: read here rather than by the screen that
+                    // received it, which closes the moment the share is queued.
+                    val result = repo.api.scrape(UrlRequest(payload))
+                    if (result.mediaUrls.isEmpty()) {
+                        Notifications.complete(applicationContext, "Nothing to save at that link", "OppaiLib found no pictures or video at $payload.")
+                        return Result.failure()
+                    }
+                    repo.api.scrapeImport(
+                        ScrapeImportRequest(
+                            url = payload, mediaUrls = result.mediaUrls, title = result.title,
+                            tags = result.tags, categorizedTags = result.categorizedTags,
+                        ),
+                    )
+                }
                 else -> return Result.failure()
             }
         }
@@ -108,6 +124,7 @@ class ImportWorker(context: Context, params: androidx.work.WorkerParameters) :
 
         private const val JOB_SOURCE = "source"
         private const val JOB_SCRAPE = "scrape"
+        private const val JOB_LINK = "link"
 
         private val json = Json { ignoreUnknownKeys = true }
 
@@ -133,6 +150,11 @@ class ImportWorker(context: Context, params: androidx.work.WorkerParameters) :
                     KEY_LABEL to label,
                 ),
             )
+        }
+
+        /** A link shared to the phone: found and imported by the worker, start to end. */
+        fun shareLink(context: Context, url: String) {
+            enqueue(context, workDataOf(KEY_JOB to JOB_LINK, KEY_PAYLOAD to url, KEY_LABEL to url.substringAfter("://").take(60)))
         }
 
         private fun enqueue(context: Context, data: Data) {

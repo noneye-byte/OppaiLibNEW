@@ -40,7 +40,16 @@ data class LibbyTurnRequest(
 )
 
 @Serializable
-data class ConversationShell(val characterId: String, val title: String, val mode: String)
+data class ConversationShell(
+    val characterId: String, val title: String, val mode: String,
+    /** A one-shot, made as one: see [LibbyOneShot]. Encoded only when true. */
+    val oneShot: Boolean = false,
+)
+
+/** Marks a one-shot: a scene you set in your first message, played once, and kept out
+ *  of everything she remembers. [prompt] is that scene, recorded by the server. */
+@Serializable
+data class LibbyOneShot(val prompt: String = "")
 
 /** A scene she planned and is playing through, a beat at a time. */
 @Serializable

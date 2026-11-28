@@ -56,6 +56,9 @@ type toolsetOptions struct {
 	// level is how much of the window the tools may take: toolsFull, toolsLean or
 	// toolsMinimal. See toolLevelFor.
 	level int
+	// forgetful is a one-shot (libby_oneshot.go): nothing to remember with, nothing to
+	// recall, the library left out of the scene, and no new rooms.
+	forgetful bool
 }
 
 // Tool levels. Every tool's definition is rendered into the prompt by the backend, and
@@ -193,7 +196,7 @@ func libbyToolset(o toolsetOptions) []llmTool {
 		if len(o.places) > 0 {
 			place += " (" + strings.Join(o.places, ", ") + ")"
 		}
-		if o.camera {
+		if o.camera && !o.forgetful {
 			place += ", or somewhere new in a few words and it will be made for you"
 		}
 		state["place"] = str(place + ".")
@@ -242,7 +245,7 @@ func libbyToolset(o toolsetOptions) []llmTool {
 		}
 		tools = append(tools, tool(toolSendSaved, desc, map[string]any{"query": str("What it should show.")}, "query"))
 	}
-	if o.libby {
+	if o.libby && !o.forgetful {
 		tools = append(tools, o.library...)
 		tools = append(tools, tool(toolSendLibrary,
 			"Hand them something from the library — a video, gif, picture, comic or game — as a card they can open. Name it by its title from a search, or describe it.",

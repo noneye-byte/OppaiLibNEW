@@ -18,6 +18,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AspectRatio
@@ -61,6 +64,10 @@ import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CloseFullscreen
+import androidx.compose.material.icons.filled.OpenInFull
+import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Accessibility
 import androidx.compose.material.icons.filled.Edit
@@ -85,6 +92,8 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.FilledIconButton
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -107,6 +116,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -191,7 +201,7 @@ private typealias ShotState = GenSession.Shot
  * composable does. Leaving and coming back finds the prompt, the picks and the
  * pictures where they were, and a run still going is still going.
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun ImageGenScreen(
     repo: Repository,
@@ -663,8 +673,12 @@ fun ImageGenScreen(
                         )
                     mode == "sprites" -> SpritesStudio(repo, st)
                     else -> Column(Modifier.weight(1f).fillMaxWidth()) {
+                        // While the keyboard is up the rail and the recipe give their
+                        // rows to the canvas: what is being typed is the prompt, and
+                        // the two are a tap away once the keyboard goes.
+                        val typing = WindowInsets.isImeVisible
                         // ── the rail: what to draw with, each a sheet ───────────
-                        SetupRail(
+                        if (!typing) SetupRail(
                             badges = mapOf(
                                 SetupSheet.LORAS to loraWeights.size,
                                 SetupSheet.LOOK to selectedChars.size + selectedPoses.size,
@@ -675,7 +689,7 @@ fun ImageGenScreen(
                         )
                         // ── the recipe: what the next picture is made with ──────
                         val model = st.models.find { it.title == checkpoint }
-                        RecipeStrip(
+                        if (!typing) RecipeStrip(
                             repo = repo,
                             backendLabel = when (st.backend) {
                                 "invokeai" -> "InvokeAI"
@@ -1680,13 +1694,23 @@ private fun EmptyCanvas(invoke: Boolean) {
 }
 
 /**
- * The prompt, its suggestions, the LoRAs' trigger words, how many pictures, and the
- * button. The suggestions are one strip over the field they belong to, the way a
- * keyboard's are. They were a list of six rows there, which with the keyboard up was
- * taller than the room left and pushed the field — and what was being typed — off the
- * bottom of the screen.
+ * The prompt, its negative, their suggestions, the LoRAs' trigger words, how many
+ * pictures, and the button.
+ *
+ * The prompt and the negative used to be two boxes stacked one over the other — up to
+ * five lines and three — with the trigger words and a row of buttons under them, all
+ * pinned above the keyboard. With the keyboard up that was the whole screen: the canvas
+ * went, and so did the rail and the recipe, and what was being typed sat under a
+ * negative nobody was editing. Now there is one box, and two tabs say which of the two
+ * it holds; the negative's tab says how many terms it has, so it is not forgotten. The
+ * button sits beside the box like a send button, so typing costs two rows, not five, and
+ * the expand toggle gives a long prompt the room to be read when that is what is wanted.
+ *
+ * The suggestions are one strip over the box, the way a keyboard's are. They were a
+ * list of six rows there, which with the keyboard up was taller than the room left and
+ * pushed the field — and what was being typed — off the bottom of the screen.
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun Composer(
     prompt: TextFieldValue,
@@ -1710,79 +1734,127 @@ private fun Composer(
     onGenerate: () -> Unit,
     onCancel: () -> Unit,
 ) {
-    var negativeOpen by remember { mutableStateOf(negative.text.isNotBlank()) }
+    // Which of the two the box holds: true for the prompt.
+    var onPromptTab by remember { mutableStateOf(true) }
+    var expanded by remember { mutableStateOf(false) }
+    var countOpen by remember { mutableStateOf(false) }
+    val typing = WindowInsets.isImeVisible
+    val negativeTerms = negative.text.split(',').count { it.isNotBlank() }
     Surface(
-        shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
+        shape = RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp),
         color = MaterialTheme.colorScheme.surfaceContainer,
         shadowElevation = 10.dp,
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(
-            Modifier.fillMaxWidth().imePadding().padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            Modifier.fillMaxWidth().imePadding().padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             if (error.isNotEmpty()) {
                 Text(
                     error,
                     color = MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodySmall,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.clickable { GenSession.clearError() },
                 )
             }
-            if (completions.isNotEmpty() && completionsFor) CompletionList(completions, onAccept, onDismissCompletions)
-            OutlinedTextField(
-                value = prompt,
-                onValueChange = onPrompt,
-                placeholder = { Text("Describe it — tags complete as you type, and so do <lora: and __") },
-                minLines = 2,
-                maxLines = 5,
-                shape = RoundedCornerShape(18.dp),
-                modifier = Modifier.fillMaxWidth(),
-            )
-            if (negativeOpen) {
-                if (completions.isNotEmpty() && !completionsFor) CompletionList(completions, onAccept, onDismissCompletions)
-                OutlinedTextField(
-                    value = negative,
-                    onValueChange = onNegative,
-                    label = { Text("Negative") },
-                    maxLines = 3,
-                    shape = RoundedCornerShape(18.dp),
-                    modifier = Modifier.fillMaxWidth(),
-                )
+            // ── which box, how many, and room to read ──────────────────────────
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                ComposerTab("Prompt", onPromptTab) { onPromptTab = true; onDismissCompletions() }
+                ComposerTab(if (negativeTerms > 0) "Negative · $negativeTerms" else "Negative", !onPromptTab) {
+                    onPromptTab = false; onDismissCompletions()
+                }
+                Box(Modifier.weight(1f))
+                Box {
+                    AssistChip(
+                        onClick = { countOpen = true },
+                        label = { Text("×$count") },
+                        leadingIcon = { Icon(Icons.Filled.PhotoLibrary, contentDescription = null, Modifier.size(16.dp)) },
+                    )
+                    DropdownMenu(expanded = countOpen, onDismissRequest = { countOpen = false }) {
+                        (1..4).forEach { n ->
+                            DropdownMenuItem(
+                                text = { Text(if (n == 1) "1 picture" else "$n pictures") },
+                                onClick = { onCount(n); countOpen = false },
+                                trailingIcon = if (n == count) ({ Icon(Icons.Filled.Check, contentDescription = null) }) else null,
+                            )
+                        }
+                    }
+                }
+                IconButton(onClick = { expanded = !expanded }, modifier = Modifier.size(36.dp)) {
+                    Icon(
+                        if (expanded) Icons.Filled.CloseFullscreen else Icons.Filled.OpenInFull,
+                        contentDescription = if (expanded) "Make the box smaller" else "Make the box bigger",
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
             }
-            if (triggers.isNotEmpty()) {
+            if (completions.isNotEmpty() && completionsFor == onPromptTab) CompletionList(completions, onAccept, onDismissCompletions)
+            // ── the box, and the button beside it ──────────────────────────────
+            Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                val lines = when {
+                    expanded -> 6 to 14
+                    typing -> 1 to 3
+                    else -> 2 to 4
+                }
+                OutlinedTextField(
+                    value = if (onPromptTab) prompt else negative,
+                    onValueChange = if (onPromptTab) onPrompt else onNegative,
+                    placeholder = {
+                        Text(
+                            if (onPromptTab) "Describe it — tags complete as you type, and so do <lora: and __"
+                            else "What to keep out — bad hands, blurry, watermark…",
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    },
+                    minLines = lines.first,
+                    maxLines = lines.second,
+                    shape = RoundedCornerShape(18.dp),
+                    modifier = Modifier.weight(1f),
+                )
+                if (generating) {
+                    FilledTonalIconButton(onClick = onCancel, enabled = !cancelling, modifier = Modifier.size(52.dp)) {
+                        Box(contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator(Modifier.size(40.dp), strokeWidth = 2.dp)
+                            Icon(Icons.Filled.Stop, contentDescription = if (cancelling) "Stopping" else "Cancel", Modifier.size(20.dp))
+                        }
+                    }
+                } else {
+                    FilledIconButton(onClick = onGenerate, enabled = canGenerate, modifier = Modifier.size(52.dp)) {
+                        Icon(Icons.Filled.AutoAwesome, contentDescription = generateLabel)
+                    }
+                }
+            }
+            // The trigger words are for choosing between runs, not while typing one.
+            if (triggers.isNotEmpty() && !typing) {
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     items(triggers) { phrase ->
                         FilterChip(selected = phrase in selectedTriggers, onClick = { onToggleTrigger(phrase) }, label = { Text(phrase) })
                     }
                 }
             }
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(selected = negativeOpen, onClick = { negativeOpen = !negativeOpen }, label = { Text("Negative") })
-                SingleChoiceSegmentedButtonRow(Modifier.width(150.dp)) {
-                    (1..4).forEach { n ->
-                        SegmentedButton(
-                            selected = count == n,
-                            onClick = { onCount(n) },
-                            shape = SegmentedButtonDefaults.itemShape(index = n - 1, count = 4),
-                            icon = {},
-                        ) { Text(n.toString()) }
-                    }
-                }
-                Box(Modifier.weight(1f))
-                if (generating) {
-                    OutlinedButton(onClick = onCancel, enabled = !cancelling, modifier = Modifier.height(48.dp)) {
-                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                        Text(if (cancelling) "  Stopping…" else "  Cancel")
-                    }
-                } else {
-                    Button(onClick = onGenerate, enabled = canGenerate, modifier = Modifier.height(48.dp)) {
-                        Icon(Icons.Filled.AutoAwesome, contentDescription = null, Modifier.size(18.dp))
-                        Text("  $generateLabel")
-                    }
-                }
-            }
         }
+    }
+}
+
+/** One of the composer's two tabs: which text the box is holding. */
+@Composable
+private fun ComposerTab(label: String, on: Boolean, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(10.dp),
+        color = if (on) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
+            color = if (on) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+        )
     }
 }
 

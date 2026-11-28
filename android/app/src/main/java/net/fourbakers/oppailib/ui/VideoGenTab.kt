@@ -124,6 +124,9 @@ fun VideoGenTab(repo: Repository, status: ImageGenStatus, board: String, onKept:
                 else "A woman with silver hair in a red dress turns to the camera and waves")
             },
             minLines = 3,
+            // Grows with what is written, up to a point, then scrolls inside itself; the
+            // form under it stays where it was.
+            maxLines = 7,
             modifier = Modifier.fillMaxWidth(),
         )
 

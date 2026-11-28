@@ -254,6 +254,9 @@ fun SettingsScreen(repo: Repository, onBack: () -> Unit, onLogout: () -> Unit) {
             SectionHeader("App")
             UpdateBlock(repo = repo, context = context, scope = scope)
 
+            SectionHeader("Sharing to OppaiLib")
+            ShareKeysSection(repo)
+
             SectionHeader("MCP clients")
             McpSection(repo)
 

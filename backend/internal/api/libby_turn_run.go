@@ -313,7 +313,8 @@ func (t *turnRun) speak(text string, texts int, detailed bool) bool {
 		t.post(msg)
 	}
 	t.said = append(t.said, text)
-	if t.isLibby {
+	// What she says of herself in a one-shot may be the part she is playing.
+	if t.isLibby && !t.v.conv.forgotten() {
 		if facts := captureSelfFacts(text); len(facts) > 0 {
 			s.chatMu.Lock()
 			if _, err := s.appendLibbyMemories(t.userID, asSelfFacts(facts)); err != nil {
@@ -445,7 +446,8 @@ func (t *turnRun) settle() {
 			s.log.Info("libby: couldn't make the room she moved to", "place", t.pendingRoom, "err", err)
 		}
 	}
-	if t.isLibby {
+	// A one-shot leaves the bond and what she knows of them as they were.
+	if t.isLibby && !v.conv.forgotten() {
 		s.chatMu.Lock()
 		if _, err := s.updateLibbyBond(t.userID, t.emotion, t.intensity, t.petname); err != nil {
 			s.log.Debug("libby bond", "err", err)
@@ -462,6 +464,11 @@ func (t *turnRun) settle() {
 	rev, err := t.write(func(c *chatConversation, rev int64) {
 		c.Emotion, c.Intensity, c.Progress = t.emotion, t.intensity, float64(t.intensity)
 		c.Activity, c.Background, c.Wearing, c.Scene = t.activity, t.background, t.wearing, t.scene
+		// The scene a one-shot was set with, recorded the turn it was set, so it is still
+		// at the head of her prompt when the message that set it has left the window.
+		if c.OneShot != nil && c.OneShot.Prompt == "" {
+			c.OneShot.Prompt = truncateRunes(oneShotScene(*c), maxChatText)
+		}
 		for i := range c.Messages {
 			if c.Messages[i].ID == last {
 				c.Messages[i].Mood, c.Messages[i].Heat, c.Messages[i].Rev = t.emotion, t.intensity, rev

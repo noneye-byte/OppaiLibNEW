@@ -460,6 +460,9 @@ func newTurnView(ws chatWorkspace, conv chatConversation, userID int64, isAdmin 
 	// A turn with no message to answer — her speaking first, a nudge — still needs a
 	// user line for the template, and it is the instruction, never stored.
 	switch {
+	case req.Task == taskOneShot && len(messages) == 0 && conv.forgotten():
+		// A one-shot opens with her asking for the scene. See libby_oneshot.go.
+		messages = append(messages, chatMessage{Role: "user", Content: oneShotOpenerCue})
 	case req.Task == "autonomous" || (len(messages) == 0 && req.Task != ""):
 		messages = append(messages, chatMessage{Role: "user", Content: "(Continue the scene on your own. Speak or act again without waiting for a reply, and do not answer for me.)"})
 	case req.Nudge != "":

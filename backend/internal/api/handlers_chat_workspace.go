@@ -226,6 +226,9 @@ type chatConversation struct {
 	Rev int64 `json:"rev,omitempty"`
 	// Scene is a scene she planned and is playing through. See libby_scene.go.
 	Scene *libbyScene `json:"scene,omitempty"`
+	// OneShot makes this a scene they set, played once and forgotten: nothing of hers
+	// is read into it and nothing of it is kept. See libby_oneshot.go.
+	OneShot *libbyOneShot `json:"oneShot,omitempty"`
 }
 
 type chatImage struct {
@@ -942,6 +945,7 @@ func validateChatWorkspace(ws *chatWorkspace) error {
 			c.Rev = 0
 		}
 		c.Scene = normalizeScene(c.Scene)
+		c.OneShot = normalizeOneShot(c.OneShot)
 		for j := range c.Messages {
 			m := &c.Messages[j]
 			if !validChatID(m.ID, false) || (m.Role != "user" && m.Role != "assistant") {

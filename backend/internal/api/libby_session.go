@@ -42,6 +42,13 @@ func mergeServerTurns(ws *chatWorkspace, old chatWorkspace) {
 	for i := range ws.Conversations {
 		c := &ws.Conversations[i]
 		prev, ok := stored[c.ID]
+		// A one-shot is one from the moment it is made, and its scene is the server's to
+		// record. No save turns one into an ordinary conversation — which would start
+		// filing it away — or the reverse, and a client that predates the field cannot
+		// drop it by omission.
+		if ok {
+			c.OneShot = prev.OneShot
+		}
 		if !ok || prev.Rev <= c.Rev {
 			if ok && prev.Rev > 0 {
 				c.Rev = prev.Rev
@@ -84,6 +91,8 @@ type conversationShell struct {
 	CharacterID string `json:"characterId"`
 	Title       string `json:"title"`
 	Mode        string `json:"mode"`
+	// OneShot makes it a one-shot (libby_oneshot.go). Only at birth: see mergeServerTurns.
+	OneShot bool `json:"oneShot,omitempty"`
 }
 
 // findConversation returns the conversation's index, creating it from the shell when it
@@ -112,11 +121,15 @@ func findConversation(ws *chatWorkspace, id string, shell *conversationShell) (i
 	if _, ok := libbyModes[mode]; !ok {
 		mode = "sweet"
 	}
-	ws.Conversations = append(ws.Conversations, chatConversation{
+	conv := chatConversation{
 		ID: id, CharacterID: shell.CharacterID, Title: title, Mode: mode,
 		Emotion: "neutral", Intensity: 1, Progress: 1,
 		Messages: []storedChatMessage{}, CreatedAt: now, UpdatedAt: now,
-	})
+	}
+	if shell.OneShot {
+		conv.OneShot = &libbyOneShot{}
+	}
+	ws.Conversations = append(ws.Conversations, conv)
 	return len(ws.Conversations) - 1, nil
 }
 

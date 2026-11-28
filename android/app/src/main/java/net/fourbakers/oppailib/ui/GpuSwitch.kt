@@ -46,7 +46,7 @@ import net.fourbakers.oppailib.ui.theme.LocalInk
  *  headers which otherwise have no need of it. Provided by MainActivity's root. */
 internal val LocalRepo = staticCompositionLocalOf<Repository?> { null }
 
-private fun toolIcon(id: String): ImageVector = when (id) {
+internal fun toolIcon(id: String): ImageVector = when (id) {
     "chat" -> Icons.AutoMirrored.Filled.Chat
     "images" -> Icons.Filled.Image
     "video" -> Icons.Filled.Movie
@@ -54,10 +54,17 @@ private fun toolIcon(id: String): ImageVector = when (id) {
     else -> Icons.Filled.RecordVoiceOver
 }
 
+/** "12.4 GB of 32 GB in use", or null when the card's size is not known. */
+internal fun vramLine(state: GpuState): String? = state.vramTotal?.takeIf { it > 0 }?.let { total ->
+    val free = state.vramFree ?: 0
+    "${bytesLabel((total - free).coerceAtLeast(0))} of ${bytesLabel(total)} in use"
+}
+
 /**
  * The studio header's graphics-card switch (gpu-switch.ts on the web): which of her chat
  * model, the image generator and ComfyUI has the card, and a way to give it to another;
- * below that, a restart for each AI tool.
+ * below that, a restart for each AI tool. The whole of it, and more, is the GPU screen
+ * under More (GpuScreen.kt); this is the quick version where the work is.
  *
  * The server moves the card on its own as work starts; this is for the times it can't
  * know — an evening of clips after one of pictures, where the first clip would spend its
@@ -70,12 +77,7 @@ internal fun GpuSwitchChip() {
     val repo = LocalRepo.current ?: return
     var card by remember { mutableStateOf<GpuState?>(null) }
     var open by remember { mutableStateOf(false) }
-    var moving by remember { mutableStateOf("") }
-    var problems by remember { mutableStateOf<List<String>>(emptyList()) }
     var tools by remember { mutableStateOf<AiRestartState?>(null) }
-    var restarting by remember { mutableStateOf("") }
-    var note by remember { mutableStateOf("") }
-    val scope = rememberCoroutineScope()
     LaunchedEffect(Unit) { card = runCatching { repo.web.gpuState() }.getOrNull() }
     LaunchedEffect(open) {
         if (open) {
@@ -92,79 +94,96 @@ internal fun GpuSwitchChip() {
     if (open) ModalBottomSheet(onDismissRequest = { open = false }, containerColor = LocalInk.current.nav) {
         Column(Modifier.padding(horizontal = 12.dp).padding(bottom = 18.dp)) {
             Text("The graphics card", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp))
-            val vram = state.vramTotal?.takeIf { it > 0 }?.let { total ->
-                val free = state.vramFree ?: 0
-                "${bytesLabel((total - free).coerceAtLeast(0))} of ${bytesLabel(total)} in use"
-            }
             Text(
-                listOfNotNull(state.busy?.takeIf { it.isNotBlank() }?.let { "Busy: $it" }, vram).joinToString(" · ").ifEmpty { "Give it to the program you are about to use." },
+                listOfNotNull(state.busy?.takeIf { it.isNotBlank() }?.let { "Busy: $it" }, vramLine(state)).joinToString(" · ").ifEmpty { "Give it to the program you are about to use." },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 12.dp),
             )
             Spacer(Modifier.size(8.dp))
-            state.apps.filter { it.set }.forEach { app ->
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    LitRow(
-                        toolIcon(app.id),
-                        app.name,
-                        app.holding,
-                        {
-                            if (app.holding || moving.isNotEmpty() || !app.canTake) return@LitRow
-                            moving = app.id
-                            problems = emptyList()
-                            scope.launch {
-                                runCatching { repo.web.gpuSwitch(GpuSwitchRequest(app.id)) }
-                                    .onSuccess { card = it.state; problems = it.problems }
-                                    .onFailure { problems = listOf(it.serverMessage("Couldn't move the card.")) }
-                                moving = ""
-                            }
-                        },
-                        modifier = Modifier.weight(1f),
-                        note = when {
-                            moving == app.id -> "Moving…"
-                            app.holding -> "Has it"
-                            !app.canTake -> app.detail.ifBlank { "Can't take it" }
-                            else -> "Give it"
-                        },
-                    )
-                    if (moving == app.id) CircularProgressIndicator(Modifier.padding(end = 12.dp).size(18.dp), strokeWidth = 2.dp)
-                }
-            }
-            problems.forEach { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp)) }
+            GpuHandOffRows(repo, state, onState = { card = it })
             val t = tools
             if (t != null && t.tools.any { it.set }) {
                 Hairline(Modifier.padding(vertical = 10.dp))
                 Kicker("Restart", Modifier.padding(horizontal = 14.dp, vertical = 4.dp))
-                t.tools.filter { it.set }.forEach { tool ->
-                    Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(toolIcon(tool.id), contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
-                        Spacer(Modifier.width(14.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(tool.name, style = MaterialTheme.typography.bodyMedium)
-                            if (tool.how.isEmpty() && tool.detail.isNotBlank()) {
-                                Text(tool.detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                        }
-                        if (restarting == tool.id) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                        else TextButton(enabled = tool.how.isNotEmpty() && restarting.isEmpty(), onClick = {
-                            restarting = tool.id
-                            note = ""
-                            scope.launch {
-                                runCatching { repo.web.aiRestart(tool.id) }
-                                    .onSuccess { note = it.message.ifBlank { "${tool.name} restarted." } }
-                                    .onFailure { note = it.serverMessage("Couldn't restart ${tool.name}.") }
-                                restarting = ""
-                            }
-                        }) {
-                            Icon(Icons.Filled.RestartAlt, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text("Restart")
-                        }
-                    }
-                }
-                if (note.isNotBlank()) Text(note, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp))
+                AiRestartRows(repo, t)
             }
         }
     }
+}
+
+/**
+ * One row per program that can have the card, lit on the one that does; tapping another
+ * gives it the card. [onState] is handed the card as the hand-over left it.
+ */
+@Composable
+internal fun GpuHandOffRows(repo: Repository, state: GpuState, onState: (GpuState) -> Unit) {
+    var moving by remember { mutableStateOf("") }
+    var problems by remember { mutableStateOf<List<String>>(emptyList()) }
+    val scope = rememberCoroutineScope()
+    state.apps.filter { it.set }.forEach { app ->
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            LitRow(
+                toolIcon(app.id),
+                app.name,
+                app.holding,
+                {
+                    if (app.holding || moving.isNotEmpty() || !app.canTake) return@LitRow
+                    moving = app.id
+                    problems = emptyList()
+                    scope.launch {
+                        runCatching { repo.web.gpuSwitch(GpuSwitchRequest(app.id)) }
+                            .onSuccess { onState(it.state); problems = it.problems }
+                            .onFailure { problems = listOf(it.serverMessage("Couldn't move the card.")) }
+                        moving = ""
+                    }
+                },
+                modifier = Modifier.weight(1f),
+                note = when {
+                    moving == app.id -> "Moving…"
+                    app.holding -> "Has it"
+                    !app.canTake -> app.detail.ifBlank { "Can't take it" }
+                    else -> "Give it"
+                },
+            )
+            if (moving == app.id) CircularProgressIndicator(Modifier.padding(end = 12.dp).size(18.dp), strokeWidth = 2.dp)
+        }
+    }
+    problems.forEach { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp)) }
+}
+
+/** A restart for each AI tool that is set up, or why it cannot be restarted from here. */
+@Composable
+internal fun AiRestartRows(repo: Repository, tools: AiRestartState) {
+    var restarting by remember { mutableStateOf("") }
+    var note by remember { mutableStateOf("") }
+    val scope = rememberCoroutineScope()
+    tools.tools.filter { it.set }.forEach { tool ->
+        Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(toolIcon(tool.id), contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                Text(tool.name, style = MaterialTheme.typography.bodyMedium)
+                if (tool.how.isEmpty() && tool.detail.isNotBlank()) {
+                    Text(tool.detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            if (restarting == tool.id) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+            else TextButton(enabled = tool.how.isNotEmpty() && restarting.isEmpty(), onClick = {
+                restarting = tool.id
+                note = ""
+                scope.launch {
+                    runCatching { repo.web.aiRestart(tool.id) }
+                        .onSuccess { note = it.message.ifBlank { "${tool.name} restarted." } }
+                        .onFailure { note = it.serverMessage("Couldn't restart ${tool.name}.") }
+                    restarting = ""
+                }
+            }) {
+                Icon(Icons.Filled.RestartAlt, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("Restart")
+            }
+        }
+    }
+    if (note.isNotBlank()) Text(note, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp))
 }
